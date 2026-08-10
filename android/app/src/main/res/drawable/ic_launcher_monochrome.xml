@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Same glyph as the foreground; the launcher keeps only its alpha and tints
+     it with the system palette, so the fill colour here is irrelevant. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M38,26 H70 A14,14 0 0 1 84,40 V56 A14,14 0 0 1 70,70 H38 A14,14 0 0 1 24,56 V40 A14,14 0 0 1 38,26 Z M40,60 H58 L38,80 Z" />
+</vector>

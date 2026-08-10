@@ -1,0 +1,76 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:maichat/models/appearance.dart';
+import 'package:maichat/models/conversation.dart';
+import 'package:maichat/models/message.dart';
+import 'package:maichat/models/settings.dart';
+
+void main() {
+  test('conversation survives a JSON round trip', () {
+    final original = Conversation.empty()
+      ..title = 'Tides'
+      ..messages.addAll([
+        ChatMessage(role: 'user', content: 'hi'),
+        ChatMessage(role: 'assistant', content: 'hello'),
+        ChatMessage(role: 'assistant', content: 'boom', error: true),
+      ]);
+
+    final restored = Conversation.fromJson(original.toJson());
+
+    expect(restored.id, original.id);
+    expect(restored.title, 'Tides');
+    expect(restored.messages.length, 3);
+    expect(restored.messages[1].content, 'hello');
+    expect(restored.messages[2].error, isTrue);
+    expect(restored.messages[0].isUser, isTrue);
+  });
+
+  test('retitleFrom collapses whitespace and truncates long prompts', () {
+    final short = Conversation.empty()..retitleFrom('  hello   there \n');
+    expect(short.title, 'hello there');
+
+    final long = Conversation.empty()..retitleFrom('x' * 80);
+    expect(long.title.length, 43);
+    expect(long.title.endsWith('...'), isTrue);
+  });
+
+  test('retitleFrom ignores blank input', () {
+    final conversation = Conversation.empty()..retitleFrom('   ');
+    expect(conversation.title, 'New chat');
+  });
+
+  test('settings are only configured once a model is chosen', () {
+    const bare = AppSettings();
+    expect(bare.isConfigured, isFalse);
+    expect(bare.baseUrl, AppSettings.defaultBaseUrl);
+    expect(bare.copyWith(model: 'gpt-4o-mini').isConfigured, isTrue);
+  });
+
+  test('settings survive a JSON round trip', () {
+    const original = AppSettings(
+      baseUrl: 'https://host.tld/v1',
+      apiKey: 'sk-test',
+      model: 'm',
+    );
+    final restored = AppSettings.fromJson(original.toJson());
+    expect(restored.baseUrl, 'https://host.tld/v1');
+    expect(restored.apiKey, 'sk-test');
+    expect(restored.model, 'm');
+  });
+
+  test('appearance follows the system until told otherwise', () {
+    const fresh = Appearance();
+    expect(fresh.dynamicColor, isTrue);
+    expect(fresh.mode, AppThemeMode.system);
+  });
+
+  test('appearance survives a JSON round trip', () {
+    const original = Appearance(dynamicColor: false, mode: AppThemeMode.dark);
+    expect(Appearance.fromJson(original.toJson()), original);
+  });
+
+  test('an unknown stored theme mode falls back to the system setting', () {
+    final restored = Appearance.fromJson(<String, dynamic>{'mode': 'sepia'});
+    expect(restored.mode, AppThemeMode.system);
+    expect(restored.dynamicColor, isTrue);
+  });
+}

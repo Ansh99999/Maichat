@@ -1,0 +1,244 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../state/app_state.dart';
+import 'settings/about_settings_page.dart';
+import 'settings/appearance_settings_page.dart';
+import 'settings/provider_settings_page.dart';
+import 'settings/setting_anchors.dart';
+
+/// The settings hub, laid out the Android way: a search bar that jumps to any
+/// individual setting, then a short list of sections you drill into.
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: ListView(
+        padding: EdgeInsets.only(bottom: 16 + bottom),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: const _SettingsSearch(),
+          ),
+          _SectionTile(
+            icon: Icons.dns_outlined,
+            title: 'Provider',
+            subtitle: _providerSummary(state),
+            onTap: () => _open(context, const ProviderSettingsPage()),
+          ),
+          _SectionTile(
+            icon: Icons.palette_outlined,
+            title: 'Appearance',
+            subtitle: _appearanceSummary(state),
+            onTap: () => _open(context, const AppearanceSettingsPage()),
+          ),
+          _SectionTile(
+            icon: Icons.info_outline,
+            title: 'About',
+            subtitle: 'Version ${AboutSettingsPage.version} · Storage',
+            onTap: () => _open(context, const AboutSettingsPage()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _providerSummary(AppState state) {
+    final settings = state.settings;
+    final host = Uri.tryParse(settings.baseUrl)?.host ?? '';
+    final model = settings.model.trim();
+    if (host.isEmpty && model.isEmpty) return 'Not set up yet';
+    if (model.isEmpty) return '$host · no model selected';
+    return host.isEmpty ? model : '$host · $model';
+  }
+
+  static String _appearanceSummary(AppState state) {
+    final a = state.appearance;
+    return a.dynamicColor
+        ? '${a.mode.label} · System colours'
+        : a.mode.label;
+  }
+
+  static void _open(BuildContext context, Widget page) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => page),
+    );
+  }
+}
+
+/// A top-level category row: tinted icon, title, current-value summary and the
+/// chevron that says "there is more inside".
+class _SectionTile extends StatelessWidget {
+  const _SectionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: scheme.secondaryContainer,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: scheme.onSecondaryContainer, size: 22),
+      ),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
+    );
+  }
+}
+
+/// One searchable setting: what it is called, where it lives, and how to reach
+/// it. [keywords] are extra words a user might type that are not in [title].
+class _SearchEntry {
+  const _SearchEntry({
+    required this.title,
+    required this.section,
+    required this.icon,
+    required this.keywords,
+    required this.builder,
+  });
+
+  final String title;
+  final String section;
+  final IconData icon;
+  final String keywords;
+  final Widget Function() builder;
+
+  bool matches(String needle) =>
+      title.toLowerCase().contains(needle) ||
+      section.toLowerCase().contains(needle) ||
+      keywords.toLowerCase().contains(needle);
+}
+
+/// Every individual setting, flattened so search can jump straight to it — the
+/// destination page flashes the row via [SettingAnchor].
+const List<_SearchEntry> _searchIndex = [
+  _SearchEntry(
+    title: 'Base URL',
+    section: 'Provider',
+    icon: Icons.link,
+    keywords: 'endpoint server host address api openai compatible v1',
+    builder: _baseUrlPage,
+  ),
+  _SearchEntry(
+    title: 'API key',
+    section: 'Provider',
+    icon: Icons.key_outlined,
+    keywords: 'token secret credential auth bearer password',
+    builder: _apiKeyPage,
+  ),
+  _SearchEntry(
+    title: 'Model',
+    section: 'Provider',
+    icon: Icons.memory_outlined,
+    keywords: 'gpt llm chat completion browse',
+    builder: _modelPage,
+  ),
+  _SearchEntry(
+    title: 'Theme',
+    section: 'Appearance',
+    icon: Icons.brightness_6_outlined,
+    keywords: 'dark light night system mode brightness',
+    builder: _themePage,
+  ),
+  _SearchEntry(
+    title: 'Use system colours',
+    section: 'Appearance',
+    icon: Icons.palette_outlined,
+    keywords: 'material you dynamic color colour wallpaper palette',
+    builder: _systemColoursPage,
+  ),
+  _SearchEntry(
+    title: 'Storage',
+    section: 'About',
+    icon: Icons.sd_storage_outlined,
+    keywords: 'data privacy where saved unencrypted',
+    builder: _storagePage,
+  ),
+  _SearchEntry(
+    title: 'Version',
+    section: 'About',
+    icon: Icons.info_outline,
+    keywords: 'build number release',
+    builder: _versionPage,
+  ),
+];
+
+// Const tear-offs so the index above stays a compile-time constant.
+Widget _baseUrlPage() =>
+    const ProviderSettingsPage(highlight: SettingAnchor.baseUrl);
+Widget _apiKeyPage() =>
+    const ProviderSettingsPage(highlight: SettingAnchor.apiKey);
+Widget _modelPage() =>
+    const ProviderSettingsPage(highlight: SettingAnchor.model);
+Widget _themePage() =>
+    const AppearanceSettingsPage(highlight: SettingAnchor.theme);
+Widget _systemColoursPage() =>
+    const AppearanceSettingsPage(highlight: SettingAnchor.systemColours);
+Widget _storagePage() =>
+    const AboutSettingsPage(highlight: SettingAnchor.storage);
+Widget _versionPage() =>
+    const AboutSettingsPage(highlight: SettingAnchor.version);
+
+/// The Material 3 search bar that expands into a full-screen view of matching
+/// settings; tapping a result closes the view and drills into its page.
+class _SettingsSearch extends StatelessWidget {
+  const _SettingsSearch();
+
+  @override
+  Widget build(BuildContext context) {
+    return SearchAnchor.bar(
+      barHintText: 'Search settings',
+      barLeading: const Icon(Icons.search),
+      suggestionsBuilder: (context, controller) {
+        final needle = controller.text.trim().toLowerCase();
+        final results = needle.isEmpty
+            ? _searchIndex
+            : _searchIndex.where((e) => e.matches(needle)).toList();
+        if (results.isEmpty) {
+          return const [
+            Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: Text('No settings match that')),
+            ),
+          ];
+        }
+        return [
+          for (final entry in results)
+            ListTile(
+              leading: Icon(entry.icon),
+              title: Text(entry.title),
+              subtitle: Text(entry.section),
+              onTap: () {
+                controller.closeView('');
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => entry.builder()),
+                );
+              },
+            ),
+        ];
+      },
+    );
+  }
+}

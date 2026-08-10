@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ dark: same idea as drawable-v31, at the dark end of the
+     system's neutral ramp. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/system_neutral1_900" />
+</layer-list>
