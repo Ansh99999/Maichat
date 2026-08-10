@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'models/appearance.dart';
-import 'screens/chat_screen.dart';
+import 'screens/home_screen.dart';
 import 'state/app_state.dart';
 
 void main() {
@@ -39,7 +39,7 @@ class MaiChatApp extends StatelessWidget {
                 themeMode: _themeMode(appearance.mode),
                 theme: _theme(wanted ? lightDynamic : null, Brightness.light),
                 darkTheme: _theme(wanted ? darkDynamic : null, Brightness.dark),
-                home: const ChatScreen(),
+                home: const HomeScreen(),
               );
             },
           );

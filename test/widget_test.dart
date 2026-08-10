@@ -11,9 +11,15 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('MaiChat'), findsOneWidget);
+    // The home hub greets by name and prompts setup while unconfigured.
+    // A large app bar renders its title in both the collapsed and expanded
+    // slots, so more than one match is expected.
+    expect(find.text('MaiChat'), findsWidgets);
     expect(find.text('Open settings'), findsOneWidget);
-    // Nothing typed yet, so the send button stays disabled.
+
+    // Opening a fresh chat lands on the composer with a disabled send button.
+    await tester.tap(find.text('New chat'));
+    await tester.pumpAndSettle();
     final send = tester.widget<IconButton>(
       find.ancestor(
         of: find.byIcon(Icons.arrow_upward),
@@ -70,7 +76,7 @@ void main() {
     expect(keyField().obscureText, isFalse);
   });
 
-  testWidgets('the drawer lists saved chats', (tester) async {
+  testWidgets('the home screen lists saved chats', (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{
       'flutter.conversations':
           '[{"id":"1","title":"Tides","updatedAt":"2026-01-01T00:00:00.000",'
@@ -79,16 +85,10 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    tester.state<ScaffoldState>(find.byType(Scaffold)).openDrawer();
-    await tester.pumpAndSettle();
-
-    expect(find.text('Chats'), findsOneWidget);
-    // The restored thread is both the app bar title and a drawer entry.
-    expect(
-      find.descendant(of: find.byType(Drawer), matching: find.text('Tides')),
-      findsOneWidget,
-    );
-    expect(find.text('hi'), findsWidgets);
+    // The restored thread shows up as a card under the recent-chats header.
+    expect(find.text('Recent chats'), findsOneWidget);
+    expect(find.text('Tides'), findsOneWidget);
+    expect(find.text('hi'), findsOneWidget);
   });
 
   testWidgets('a stored dark preference is applied on launch', (tester) async {

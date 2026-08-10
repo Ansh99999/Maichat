@@ -60,7 +60,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (state.streaming) _scrollToEnd();
 
     return Scaffold(
-      drawer: _ConversationDrawer(onSettings: _openSettings),
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -225,113 +224,5 @@ class _EmptyState extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _ConversationDrawer extends StatelessWidget {
-  const _ConversationDrawer({required this.onSettings});
-
-  final VoidCallback onSettings;
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final conversations = state.conversations;
-    return Drawer(
-      child: SafeArea(
-        child: Column(
-          children: [
-            ListTile(
-              title: Text(
-                'Chats',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              trailing: IconButton(
-                tooltip: 'New chat',
-                icon: const Icon(Icons.add),
-                onPressed: state.streaming
-                    ? null
-                    : () {
-                        state.newConversation();
-                        Navigator.of(context).pop();
-                      },
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: conversations.isEmpty
-                  ? const Center(child: Text('No chats yet'))
-                  : ListView.builder(
-                      itemCount: conversations.length,
-                      itemBuilder: (context, index) => _tile(
-                        context,
-                        state,
-                        conversations[index],
-                      ),
-                    ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text('Settings'),
-              onTap: () {
-                Navigator.of(context).pop();
-                onSettings();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _tile(BuildContext context, AppState state, Conversation c) {
-    final selected = c.id == state.active.id;
-    final preview = c.messages.isEmpty ? 'Empty' : c.messages.last.content;
-    return ListTile(
-      selected: selected,
-      title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        preview.replaceAll(RegExp(r'\s+'), ' ').trim(),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: IconButton(
-        tooltip: 'Delete chat',
-        icon: const Icon(Icons.delete_outline),
-        onPressed: () => _confirmDelete(context, state, c),
-      ),
-      onTap: state.streaming
-          ? null
-          : () {
-              state.selectConversation(c.id);
-              Navigator.of(context).pop();
-            },
-    );
-  }
-
-  Future<void> _confirmDelete(
-    BuildContext context,
-    AppState state,
-    Conversation c,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete chat?'),
-        content: Text('"${c.title}" will be removed permanently.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed ?? false) await state.deleteConversation(c.id);
   }
 }
