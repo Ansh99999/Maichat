@@ -1,86 +1,122 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:provider/provider.dart' hide Provider;
 
-import '../../models/settings.dart';
+import '../../models/provider.dart';
 import '../../services/chat_client.dart';
 import '../../state/app_state.dart';
-import 'setting_anchors.dart';
-import 'setting_highlight.dart';
+import '../../widgets/model_picker.dart';
 
-/// Where the endpoint lives: base URL, credential and the model to talk to.
-///
-/// [highlight] is set when the user arrived here from a search result, so the
-/// matching field is focused and flashed.
+/// Editor for a single provider: its name, API format, base URL, credential and
+/// the model to talk to. Opened for a new provider (null) or an existing one.
 class ProviderSettingsPage extends StatefulWidget {
-  const ProviderSettingsPage({super.key, this.highlight});
+  const ProviderSettingsPage({super.key, this.provider});
 
-  final SettingAnchor? highlight;
+  final Provider? provider;
 
   @override
   State<ProviderSettingsPage> createState() => _ProviderSettingsPageState();
 }
 
 class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
+  late final TextEditingController _name;
   late final TextEditingController _baseUrl;
   late final TextEditingController _apiKey;
   late final TextEditingController _model;
-  final FocusNode _baseUrlFocus = FocusNode();
-  final FocusNode _apiKeyFocus = FocusNode();
-  final FocusNode _modelFocus = FocusNode();
+  late ProviderKind _kind;
   bool _revealKey = false;
   bool _loadingModels = false;
+
+  bool get _isNew => widget.provider == null;
 
   @override
   void initState() {
     super.initState();
-    final settings = context.read<AppState>().settings;
-    _baseUrl = TextEditingController(text: settings.baseUrl);
-    _apiKey = TextEditingController(text: settings.apiKey);
-    _model = TextEditingController(text: settings.model);
-    // Land the cursor on whatever the search sent us to.
-    final focus = switch (widget.highlight) {
-      SettingAnchor.baseUrl => _baseUrlFocus,
-      SettingAnchor.apiKey => _apiKeyFocus,
-      SettingAnchor.model => _modelFocus,
-      _ => null,
-    };
-    if (focus != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) focus.requestFocus();
-      });
-    }
+    final p = widget.provider;
+    _kind = p?.kind ?? ProviderKind.openai;
+    _name = TextEditingController(text: p?.name ?? '');
+    _baseUrl = TextEditingController(text: p?.baseUrl ?? _kind.defaultBaseUrl);
+    _apiKey = TextEditingController(text: p?.apiKey ?? '');
+    _model = TextEditingController(text: p?.model ?? '');
   }
 
   @override
   void dispose() {
+    _name.dispose();
     _baseUrl.dispose();
     _apiKey.dispose();
     _model.dispose();
-    _baseUrlFocus.dispose();
-    _apiKeyFocus.dispose();
-    _modelFocus.dispose();
     super.dispose();
   }
 
-  AppSettings get _current => AppSettings(
+  /// Switching format swaps in that format's default base URL, but only when
+  /// the field is still a default (never clobbering a URL the user typed).
+  void _changeKind(ProviderKind next) {
+    if (next == _kind) return;
+    final current = _baseUrl.text.trim();
+    final wasDefault = current.isEmpty ||
+        ProviderKind.values.any((k) => k.defaultBaseUrl == current);
+    setState(() {
+      _kind = next;
+      if (wasDefault) _baseUrl.text = next.defaultBaseUrl;
+    });
+  }
+
+  Provider get _current => Provider(
+        id: widget.provider?.id ??
+            DateTime.now().microsecondsSinceEpoch.toString(),
+        name: _name.text.trim(),
+        kind: _kind,
         baseUrl: _baseUrl.text.trim().isEmpty
-            ? AppSettings.defaultBaseUrl
+            ? _kind.defaultBaseUrl
             : _baseUrl.text.trim(),
         apiKey: _apiKey.text.trim(),
         model: _model.text.trim(),
       );
 
-  Future<void> _save() => context.read<AppState>().updateSettings(_current);
+  Future<void> _save() async {
+    final state = context.read<AppState>();
+    final provider = _current;
+    if (_isNew) {
+      await state.addProvider(provider);
+    } else {
+      await state.updateProvider(provider);
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
 
-  /// Persists what is on screen, then asks the host what it can serve.
+  Future<void> _delete() async {
+    final existing = widget.provider;
+    if (existing == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete provider?'),
+        content: Text('"${existing.displayName}" will be removed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (!(confirmed ?? false) || !mounted) return;
+    await context.read<AppState>().deleteProvider(existing.id);
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  /// Asks the host — using whatever is on screen — what models it can serve.
   Future<void> _browseModels() async {
     final state = context.read<AppState>();
     setState(() => _loadingModels = true);
-    await state.updateSettings(_current);
     List<String>? models;
     String? error;
     try {
-      models = await state.fetchModels();
+      models = await state.fetchModels(_current);
     } on ChatApiException catch (e) {
       error = e.message;
     } finally {
@@ -95,15 +131,13 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (context) => _ModelPicker(
+      builder: (context) => ModelPicker(
         models: models!,
         selected: _model.text.trim(),
       ),
     );
     if (picked == null || !mounted) return;
-    _model.text = picked;
-    await _save();
-    if (mounted) _toast('Model set to $picked');
+    setState(() => _model.text = picked);
   }
 
   void _toast(String message) {
@@ -111,11 +145,20 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
       SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
     );
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Provider')),
+      appBar: AppBar(
+        title: Text(_isNew ? 'Add provider' : 'Edit provider'),
+        actions: [
+          if (!_isNew)
+            IconButton(
+              tooltip: 'Delete provider',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _delete,
+            ),
+        ],
+      ),
       body: ListView(
         padding: EdgeInsets.fromLTRB(
           16,
@@ -124,58 +167,76 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
           16 + MediaQuery.paddingOf(context).bottom,
         ),
         children: [
-          SettingHighlight(
-            active: widget.highlight == SettingAnchor.baseUrl,
-            child: TextField(
-              controller: _baseUrl,
-              focusNode: _baseUrlFocus,
-              keyboardType: TextInputType.url,
-              autocorrect: false,
-              decoration: const InputDecoration(
-                labelText: 'Base URL',
-                hintText: AppSettings.defaultBaseUrl,
-                helperText: 'OpenAI-compatible root, usually ending in /v1',
-                prefixIcon: Icon(Icons.link),
+          TextField(
+            controller: _name,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              hintText: 'My provider',
+              helperText: 'Shown when you pick a provider',
+              prefixIcon: Icon(Icons.badge_outlined),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text('API format', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          SegmentedButton<ProviderKind>(
+            segments: const [
+              ButtonSegment(
+                value: ProviderKind.openai,
+                label: Text('OpenAI'),
+                icon: Icon(Icons.api),
               ),
+              ButtonSegment(
+                value: ProviderKind.anthropic,
+                label: Text('Anthropic'),
+                icon: Icon(Icons.auto_awesome_outlined),
+              ),
+            ],
+            selected: {_kind},
+            onSelectionChanged: (s) => _changeKind(s.first),
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _baseUrl,
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            decoration: InputDecoration(
+              labelText: 'Base URL',
+              hintText: _kind.defaultBaseUrl,
+              helperText: _kind == ProviderKind.anthropic
+                  ? 'Anthropic API root, usually ending in /v1'
+                  : 'OpenAI-compatible root, usually ending in /v1',
+              prefixIcon: const Icon(Icons.link),
             ),
           ),
           const SizedBox(height: 16),
-          SettingHighlight(
-            active: widget.highlight == SettingAnchor.apiKey,
-            child: TextField(
-              controller: _apiKey,
-              focusNode: _apiKeyFocus,
-              obscureText: !_revealKey,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: InputDecoration(
-                labelText: 'API key',
-                prefixIcon: const Icon(Icons.key_outlined),
-                suffixIcon: IconButton(
-                  tooltip: _revealKey ? 'Hide key' : 'Show key',
-                  icon: Icon(
-                    _revealKey
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined,
-                  ),
-                  onPressed: () => setState(() => _revealKey = !_revealKey),
+          TextField(
+            controller: _apiKey,
+            obscureText: !_revealKey,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: InputDecoration(
+              labelText: 'API key',
+              prefixIcon: const Icon(Icons.key_outlined),
+              suffixIcon: IconButton(
+                tooltip: _revealKey ? 'Hide key' : 'Show key',
+                icon: Icon(
+                  _revealKey
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
                 ),
+                onPressed: () => setState(() => _revealKey = !_revealKey),
               ),
             ),
           ),
           const SizedBox(height: 16),
-          SettingHighlight(
-            active: widget.highlight == SettingAnchor.model,
-            child: _modelField(),
-          ),
+          _modelField(),
           const SizedBox(height: 24),
           FilledButton.icon(
-            onPressed: () async {
-              await _save();
-              if (mounted) _toast('Saved');
-            },
+            onPressed: _save,
             icon: const Icon(Icons.check),
-            label: const Text('Save'),
+            label: Text(_isNew ? 'Add provider' : 'Save'),
           ),
         ],
       ),
@@ -185,11 +246,12 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
   Widget _modelField() {
     return TextField(
       controller: _model,
-      focusNode: _modelFocus,
       autocorrect: false,
       decoration: InputDecoration(
         labelText: 'Model',
-        hintText: 'gpt-4o-mini',
+        hintText: _kind == ProviderKind.anthropic
+            ? 'claude-sonnet-4-5'
+            : 'gpt-4o-mini',
         helperText: 'Type an id, or browse what the host offers',
         prefixIcon: const Icon(Icons.memory_outlined),
         suffixIcon: _loadingModels
@@ -207,79 +269,6 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
                 onPressed: _browseModels,
               ),
       ),
-    );
-  }
-}
-
-/// Bottom sheet listing the host's model ids, with a filter box because some
-/// endpoints return hundreds.
-class _ModelPicker extends StatefulWidget {
-  const _ModelPicker({required this.models, required this.selected});
-
-  final List<String> models;
-  final String selected;
-
-  @override
-  State<_ModelPicker> createState() => _ModelPickerState();
-}
-
-class _ModelPickerState extends State<_ModelPicker> {
-  String _filter = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final needle = _filter.trim().toLowerCase();
-    final visible = needle.isEmpty
-        ? widget.models
-        : widget.models
-            .where((m) => m.toLowerCase().contains(needle))
-            .toList(growable: false);
-
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: SizedBox(
-          height: MediaQuery.sizeOf(context).height * 0.7,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: TextField(
-                  autofocus: false,
-                  decoration: const InputDecoration(
-                    labelText: 'Filter',
-                    prefixIcon: Icon(Icons.search),
-                    isDense: true,
-                  ),
-                  onChanged: (value) => setState(() => _filter = value),
-                ),
-              ),
-              Expanded(child: _list(visible)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _list(List<String> visible) {
-    if (visible.isEmpty) {
-      return const Center(child: Text('Nothing matches that filter'));
-    }
-    return ListView.builder(
-      itemCount: visible.length,
-      itemBuilder: (context, index) {
-        final model = visible[index];
-        final isSelected = model == widget.selected;
-        return ListTile(
-          title: Text(model),
-          selected: isSelected,
-          trailing: isSelected ? const Icon(Icons.check) : null,
-          onTap: () => Navigator.of(context).pop(model),
-        );
-      },
     );
   }
 }

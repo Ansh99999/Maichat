@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:provider/provider.dart' hide Provider;
 
 import '../models/conversation.dart';
+import '../models/provider.dart';
+import '../services/chat_client.dart';
 import '../state/app_state.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/model_picker.dart';
 import 'settings_screen.dart';
 
-/// The one screen you land on: a thread, a composer, and a drawer of threads.
+/// A single conversation: the thread, a composer, and a tap-through to the
+/// quick provider/model picker. Opened on top of the home hub.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -28,7 +32,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _send(AppState state) async {
     final text = _input.text;
     if (text.trim().isEmpty || state.streaming) return;
-    if (!state.settings.isConfigured) {
+    if (!state.isConfigured) {
       _openSettings();
       return;
     }
@@ -40,6 +44,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _openSettings() => Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+      );
+
+  void _openQuickSettings() => showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (_) => _QuickSettingsSheet(onManage: () {
+          Navigator.of(context).pop();
+          _openSettings();
+        }),
       );
 
   /// Sticks to the newest message after the frame that added it.
@@ -58,26 +72,50 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
+    final active = state.activeProvider;
+    final subtitle = active == null
+        ? null
+        : '${active.displayName}${active.model.trim().isEmpty ? '' : ' · ${active.model.trim()}'}';
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              conversation.isEmpty ? 'MaiChat' : conversation.title,
-              overflow: TextOverflow.ellipsis,
+        title: InkWell(
+          onTap: _openQuickSettings,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  conversation.isEmpty ? 'MaiChat' : conversation.title,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (subtitle != null)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          subtitle,
+                          style: Theme.of(context).textTheme.labelSmall,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const Icon(Icons.arrow_drop_down, size: 16),
+                    ],
+                  ),
+              ],
             ),
-            if (state.settings.model.isNotEmpty)
-              Text(
-                state.settings.model,
-                style: Theme.of(context).textTheme.labelSmall,
-                overflow: TextOverflow.ellipsis,
-              ),
-          ],
+          ),
         ),
         actions: [
+          IconButton(
+            tooltip: 'Quick settings',
+            onPressed: _openQuickSettings,
+            icon: const Icon(Icons.tune),
+          ),
           IconButton(
             tooltip: 'New chat',
             onPressed: state.streaming ? null : state.newConversation,
@@ -96,7 +134,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Expanded(
               child: conversation.isEmpty
                   ? _EmptyState(
-                      configured: state.settings.isConfigured,
+                      configured: state.isConfigured,
                       onSettings: _openSettings,
                     )
                   : _messageList(conversation, state),
@@ -206,7 +244,7 @@ class _EmptyState extends StatelessWidget {
             Text(
               configured
                   ? 'Say something to get started.'
-                  : 'Add a base URL, API key and model to start chatting.',
+                  : 'Add a provider with a model to start chatting.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: scheme.onSurfaceVariant,
@@ -220,6 +258,137 @@ class _EmptyState extends StatelessWidget {
                 label: const Text('Open settings'),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The chat-screen quick picker: switch the active provider and choose its
+/// model without leaving the conversation. "Manage providers" drops into the
+/// full settings for adding, editing or deleting.
+class _QuickSettingsSheet extends StatefulWidget {
+  const _QuickSettingsSheet({required this.onManage});
+
+  final VoidCallback onManage;
+
+  @override
+  State<_QuickSettingsSheet> createState() => _QuickSettingsSheetState();
+}
+
+class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
+  bool _loadingModels = false;
+
+  Future<void> _browseModels(AppState state, Provider active) async {
+    setState(() => _loadingModels = true);
+    List<String>? models;
+    String? error;
+    try {
+      models = await state.fetchModels(active);
+    } on ChatApiException catch (e) {
+      error = e.message;
+    } finally {
+      if (mounted) setState(() => _loadingModels = false);
+    }
+    if (!mounted) return;
+    if (error != null || models == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error ?? 'Could not list models.')),
+      );
+      return;
+    }
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => ModelPicker(
+        models: models!,
+        selected: active.model.trim(),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await state.setActiveModel(picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final providers = state.providers;
+    final active = state.activeProvider;
+    final bottom = MediaQuery.paddingOf(context).bottom;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text(
+                'Provider',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            if (providers.isEmpty)
+              const ListTile(
+                leading: Icon(Icons.dns_outlined),
+                title: Text('No providers yet'),
+                subtitle: Text('Add one to start chatting'),
+              )
+            else
+              Flexible(
+                child: RadioGroup<String>(
+                  groupValue: active?.id,
+                  onChanged: (id) {
+                    if (id != null) state.selectProvider(id);
+                  },
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final provider in providers)
+                        RadioListTile<String>(
+                          value: provider.id,
+                          title: Text(
+                            provider.displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            provider.kind.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            const Divider(height: 1),
+            if (active != null)
+              ListTile(
+                leading: const Icon(Icons.memory_outlined),
+                title: const Text('Model'),
+                subtitle: Text(
+                  active.model.trim().isEmpty ? 'None selected' : active.model,
+                ),
+                trailing: _loadingModels
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.expand_more),
+                onTap:
+                    _loadingModels ? null : () => _browseModels(state, active),
+              ),
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Manage providers'),
+              onTap: widget.onManage,
+            ),
           ],
         ),
       ),

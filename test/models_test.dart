@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/appearance.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
+import 'package:maichat/models/provider.dart';
 import 'package:maichat/models/settings.dart';
 
 void main() {
@@ -55,6 +56,42 @@ void main() {
     expect(restored.baseUrl, 'https://host.tld/v1');
     expect(restored.apiKey, 'sk-test');
     expect(restored.model, 'm');
+  });
+
+  test('a provider is only configured once it has a URL and a model', () {
+    final bare = Provider.create(ProviderKind.openai);
+    expect(bare.baseUrl, ProviderKind.openai.defaultBaseUrl);
+    expect(bare.isConfigured, isFalse);
+    expect(bare.copyWith(model: 'gpt-4o-mini').isConfigured, isTrue);
+  });
+
+  test('provider survives a JSON round trip', () {
+    final original = Provider(
+      id: 'p1',
+      name: 'Work',
+      kind: ProviderKind.anthropic,
+      baseUrl: 'https://host.tld/v1',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-5',
+    );
+    final restored = Provider.fromJson(original.toJson());
+    expect(restored.id, 'p1');
+    expect(restored.name, 'Work');
+    expect(restored.kind, ProviderKind.anthropic);
+    expect(restored.baseUrl, 'https://host.tld/v1');
+    expect(restored.apiKey, 'sk-test');
+    expect(restored.model, 'claude-sonnet-4-5');
+  });
+
+  test('an unknown stored provider kind falls back to OpenAI-compatible', () {
+    expect(ProviderKind.byName('mystery'), ProviderKind.openai);
+    expect(ProviderKind.byName(null), ProviderKind.openai);
+    expect(ProviderKind.byName('anthropic'), ProviderKind.anthropic);
+  });
+
+  test('an unnamed provider shows its format label instead', () {
+    final unnamed = Provider.create(ProviderKind.anthropic).copyWith(name: '  ');
+    expect(unnamed.displayName, ProviderKind.anthropic.label);
   });
 
   test('appearance follows the system until told otherwise', () {

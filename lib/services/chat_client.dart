@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/message.dart';
-import '../models/settings.dart';
+import '../models/provider.dart';
 
 /// Raised for anything the user can act on: bad key, bad URL, dead host.
 class ChatApiException implements Exception {
@@ -14,8 +14,10 @@ class ChatApiException implements Exception {
   String toString() => message;
 }
 
-/// Minimal client for the OpenAI-compatible `/chat/completions` and `/models`
-/// endpoints. Streaming is done over server-sent events.
+/// Minimal client for chat and model listing. Speaks two wire formats depending
+/// on the provider's [ProviderKind]: the OpenAI-compatible `/chat/completions`
+/// and `/models` endpoints, and Anthropic's `/messages` and `/models`. Streaming
+/// is done over server-sent events in both.
 class ChatClient {
   http.Client? _active;
 
@@ -36,33 +38,69 @@ class ChatClient {
     return uri;
   }
 
-  Map<String, String> _headers(AppSettings settings, {bool stream = false}) => {
-        'Content-Type': 'application/json',
-        if (settings.apiKey.trim().isNotEmpty)
-          'Authorization': 'Bearer ${settings.apiKey.trim()}',
-        if (stream) 'Accept': 'text/event-stream',
+  /// Auth and content headers for [provider], keyed by its wire format:
+  /// Anthropic wants `x-api-key` + a version header; OpenAI wants a bearer.
+  Map<String, String> _headers(Provider provider, {bool stream = false}) {
+    final key = provider.apiKey.trim();
+    final anthropic = provider.kind == ProviderKind.anthropic;
+    return {
+      'Content-Type': 'application/json',
+      if (stream) 'Accept': 'text/event-stream',
+      if (anthropic) 'anthropic-version': '2023-06-01',
+      if (key.isNotEmpty)
+        if (anthropic) 'x-api-key': key else 'Authorization': 'Bearer $key',
+    };
+  }
+
+  /// The request body for a chat turn, shaped for the provider's format.
+  Object _body(Provider provider, List<ChatMessage> history) {
+    final model = provider.model.trim();
+    if (provider.kind == ProviderKind.anthropic) {
+      // Anthropic carries the system prompt separately and requires a token
+      // ceiling; only user/assistant turns go in `messages`.
+      final system = history
+          .where((m) => m.role == 'system')
+          .map((m) => m.content)
+          .join('\n')
+          .trim();
+      final turns = history
+          .where((m) => m.role != 'system')
+          .map((m) => m.toApi())
+          .toList(growable: false);
+      return {
+        'model': model,
+        'max_tokens': 4096,
+        'stream': true,
+        if (system.isNotEmpty) 'system': system,
+        'messages': turns,
       };
+    }
+    return {
+      'model': model,
+      'stream': true,
+      'messages': history.map((m) => m.toApi()).toList(growable: false),
+    };
+  }
 
   /// Streams assistant text deltas for [history] until the model stops.
   Stream<String> streamChat({
-    required AppSettings settings,
+    required Provider provider,
     required List<ChatMessage> history,
   }) async* {
-    if (settings.model.trim().isEmpty) {
+    if (provider.model.trim().isEmpty) {
       throw ChatApiException('Pick a model in Settings first.');
     }
-    final uri = endpoint(settings.baseUrl, '/chat/completions');
+    final anthropic = provider.kind == ProviderKind.anthropic;
+    final uri = endpoint(
+      provider.baseUrl,
+      anthropic ? '/messages' : '/chat/completions',
+    );
     final client = http.Client();
     _active = client;
     try {
       final request = http.Request('POST', uri)
-        ..headers.addAll(_headers(settings, stream: true))
-        ..body = jsonEncode({
-          'model': settings.model.trim(),
-          'stream': true,
-          'messages':
-              history.map((m) => m.toApi()).toList(growable: false),
-        });
+        ..headers.addAll(_headers(provider, stream: true))
+        ..body = jsonEncode(_body(provider, history));
 
       final response = await client.send(request);
       if (response.statusCode != 200) {
@@ -78,9 +116,16 @@ class ChatClient {
         if (!line.startsWith('data:')) continue;
         final payload = line.substring(5).trim();
         if (payload.isEmpty) continue;
-        if (payload == '[DONE]') break;
-        final delta = _extractDelta(payload);
-        if (delta != null && delta.isNotEmpty) yield delta;
+        if (anthropic) {
+          final event = _extractAnthropicDelta(payload);
+          if (event.stop) break;
+          final text = event.text;
+          if (text != null && text.isNotEmpty) yield text;
+        } else {
+          if (payload == '[DONE]') break;
+          final delta = _extractDelta(payload);
+          if (delta != null && delta.isNotEmpty) yield delta;
+        }
       }
     } on ChatApiException {
       rethrow;
@@ -98,12 +143,12 @@ class ChatClient {
     _active = null;
   }
 
-  /// Fetches selectable model ids from `/models`.
-  Future<List<String>> listModels(AppSettings settings) async {
-    final uri = endpoint(settings.baseUrl, '/models');
+  /// Fetches selectable model ids from the provider's `/models` endpoint.
+  Future<List<String>> listModels(Provider provider) async {
+    final uri = endpoint(provider.baseUrl, '/models');
     try {
       final response =
-          await http.get(uri, headers: _headers(settings)).timeout(
+          await http.get(uri, headers: _headers(provider)).timeout(
                 const Duration(seconds: 30),
               );
       if (response.statusCode != 200) {
@@ -160,6 +205,32 @@ class ChatClient {
       rethrow;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Pulls the text delta out of one Anthropic SSE chunk. Returns whether the
+  /// stream has ended ([stop]) alongside any [text] to append. Anthropic ends
+  /// with a `message_stop` event rather than OpenAI's `[DONE]` sentinel.
+  static ({String? text, bool stop}) _extractAnthropicDelta(String payload) {
+    try {
+      final json = jsonDecode(payload);
+      if (json is! Map<String, dynamic>) return (text: null, stop: false);
+      final type = json['type'];
+      if (type == 'error') {
+        throw ChatApiException(_describeErrorBody(json));
+      }
+      if (type == 'message_stop') return (text: null, stop: true);
+      if (type == 'content_block_delta') {
+        final delta = json['delta'];
+        if (delta is Map<String, dynamic> && delta['text'] is String) {
+          return (text: delta['text'] as String, stop: false);
+        }
+      }
+      return (text: null, stop: false);
+    } on ChatApiException {
+      rethrow;
+    } catch (_) {
+      return (text: null, stop: false);
     }
   }
 

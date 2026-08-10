@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/main.dart';
@@ -29,7 +31,7 @@ void main() {
     expect(send.onPressed, isNull);
   });
 
-  testWidgets('settings screen exposes URL, key and model fields',
+  testWidgets('adding a provider exposes name, URL, key and model fields',
       (tester) async {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
@@ -37,14 +39,19 @@ void main() {
     await tester.tap(find.text('Open settings'));
     await tester.pumpAndSettle();
 
-    // The hub lists sections; the endpoint fields live inside "Provider".
-    await tester.tap(find.text('Provider'));
+    // The hub lists sections; providers live behind "Providers".
+    await tester.tap(find.text('Providers'));
     await tester.pumpAndSettle();
 
+    // No providers yet, so add one to reach the editor fields.
+    await tester.tap(find.text('Add provider'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Name'), findsOneWidget);
     expect(find.text('Base URL'), findsOneWidget);
     expect(find.text('API key'), findsOneWidget);
     expect(find.text('Model'), findsOneWidget);
-    // Appears twice: as the field's value and as its hint.
+    // The OpenAI default fills the URL field and its hint.
     expect(find.text('https://api.openai.com/v1'), findsWidgets);
   });
 
@@ -60,7 +67,11 @@ void main() {
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Provider'));
+    await tester.tap(find.text('Providers'));
+    await tester.pumpAndSettle();
+
+    // The legacy config migrated into one provider named after its host.
+    await tester.tap(find.text('host.tld'));
     await tester.pumpAndSettle();
 
     TextField keyField() => tester.widget<TextField>(
@@ -135,5 +146,52 @@ void main() {
       prefs.getString('appearance'),
       '{"dynamicColor":false,"mode":"light"}',
     );
+  });
+
+  testWidgets('quick settings lists providers and switches the active one',
+      (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'flutter.providers': jsonEncode({
+        'providers': [
+          {
+            'id': '1',
+            'name': 'First',
+            'kind': 'openai',
+            'baseUrl': 'https://a/v1',
+            'apiKey': '',
+            'model': 'm1',
+          },
+          {
+            'id': '2',
+            'name': 'Second',
+            'kind': 'anthropic',
+            'baseUrl': 'https://b/v1',
+            'apiKey': '',
+            'model': 'm2',
+          },
+        ],
+        'activeId': '1',
+      }),
+    });
+    await tester.pumpWidget(const MaiChatApp());
+    await tester.pumpAndSettle();
+
+    // Home reflects the active provider.
+    expect(find.text('First'), findsWidgets);
+
+    // Open a chat, then the quick-settings sheet.
+    await tester.tap(find.text('New chat'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+
+    // Both providers are listed; the active one's model shows in the Model row.
+    expect(find.text('Second'), findsOneWidget);
+    expect(find.text('m1'), findsOneWidget);
+
+    // Switching makes the other provider active and updates the model row.
+    await tester.tap(find.text('Second'));
+    await tester.pumpAndSettle();
+    expect(find.text('m2'), findsWidgets);
   });
 }

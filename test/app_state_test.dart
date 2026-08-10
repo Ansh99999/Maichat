@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/message.dart';
-import 'package:maichat/models/settings.dart';
+import 'package:maichat/models/provider.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,12 +12,14 @@ class FakeClient extends ChatClient {
   final List<String> deltas;
   final String? failure;
   List<ChatMessage>? lastHistory;
+  Provider? lastProvider;
 
   @override
   Stream<String> streamChat({
-    required AppSettings settings,
+    required Provider provider,
     required List<ChatMessage> history,
   }) async* {
+    lastProvider = provider;
     lastHistory = List<ChatMessage>.from(history);
     if (failure != null) throw ChatApiException(failure!);
     for (final delta in deltas) {
@@ -26,16 +28,23 @@ class FakeClient extends ChatClient {
   }
 
   @override
-  Future<List<String>> listModels(AppSettings settings) async => ['b', 'a'];
+  Future<List<String>> listModels(Provider provider) async => ['b', 'a'];
 }
+
+Provider _provider({String id = 'p', String model = 'm'}) => Provider(
+      id: id,
+      name: 'Test',
+      kind: ProviderKind.openai,
+      baseUrl: 'https://host.tld/v1',
+      apiKey: '',
+      model: model,
+    );
 
 Future<AppState> _state(FakeClient client) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final state = AppState(client: client);
   await state.init();
-  await state.updateSettings(
-    const AppSettings(baseUrl: 'https://host.tld/v1', model: 'm'),
-  );
+  await state.addProvider(_provider());
   return state;
 }
 
@@ -62,6 +71,7 @@ void main() {
     expect(client.lastHistory, hasLength(1));
     expect(client.lastHistory!.single.role, 'user');
     expect(client.lastHistory!.single.content, 'first');
+    expect(client.lastProvider!.model, 'm');
     expect(state.active.title, 'first');
   });
 
@@ -84,16 +94,27 @@ void main() {
     expect(state.active.messages.last.content, contains('empty response'));
   });
 
+  test('nothing is sent when no provider is configured', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final state = AppState(client: FakeClient(deltas: ['x']));
+    await state.init();
+
+    await state.send('hi');
+
+    expect(state.isConfigured, isFalse);
+    expect(state.conversations, isEmpty);
+  });
+
   test('errored turns are not resent as context', () async {
     final client = FakeClient(failure: 'boom');
     final state = await _state(client);
     await state.send('one');
 
     final second = FakeClient(deltas: ['fine']);
-    final resumed = AppState(client: second);
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    final resumed = AppState(client: second);
     await resumed.init();
-    await resumed.updateSettings(state.settings);
+    await resumed.addProvider(_provider(id: 'p2'));
     resumed.active.messages.addAll(state.active.messages);
     await resumed.send('two');
 
@@ -138,7 +159,7 @@ void main() {
     expect(state.active.title, 'older');
   });
 
-  test('conversations reload from storage', () async {
+  test('conversations and providers reload from storage', () async {
     final state = await _state(FakeClient(deltas: ['saved']));
     await state.send('persist me');
 
@@ -147,6 +168,61 @@ void main() {
 
     expect(reopened.conversations, hasLength(1));
     expect(reopened.active.messages.last.content, 'saved');
-    expect(reopened.settings.model, 'm');
+    expect(reopened.activeProvider?.model, 'm');
+  });
+
+  test('providers can be added, selected, updated and deleted', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final state = AppState(client: FakeClient());
+    await state.init();
+
+    await state.addProvider(_provider(id: 'a', model: 'm1'));
+    await state.addProvider(
+      Provider(
+        id: 'b',
+        name: 'B',
+        kind: ProviderKind.anthropic,
+        baseUrl: 'https://b/v1',
+        apiKey: '',
+        model: 'm2',
+      ),
+    );
+
+    // The most recently added becomes active.
+    expect(state.providers, hasLength(2));
+    expect(state.activeProvider?.id, 'b');
+
+    await state.selectProvider('a');
+    expect(state.activeProvider?.id, 'a');
+
+    await state.setActiveModel('m1x');
+    expect(state.activeProvider?.model, 'm1x');
+
+    await state.updateProvider(state.activeProvider!.copyWith(name: 'A2'));
+    expect(state.activeProvider?.name, 'A2');
+    expect(state.activeProvider?.model, 'm1x');
+
+    // Deleting the active provider reassigns the active pointer.
+    await state.deleteProvider('a');
+    expect(state.providers, hasLength(1));
+    expect(state.activeProvider?.id, 'b');
+  });
+
+  test('a legacy settings blob migrates to one active provider', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'flutter.settings':
+          '{"baseUrl":"https://host.tld/v1","apiKey":"sk","model":"m"}',
+    });
+    final state = AppState(client: FakeClient());
+    await state.init();
+
+    expect(state.providers, hasLength(1));
+    final migrated = state.providers.single;
+    expect(migrated.kind, ProviderKind.openai);
+    expect(migrated.baseUrl, 'https://host.tld/v1');
+    expect(migrated.apiKey, 'sk');
+    expect(migrated.model, 'm');
+    expect(state.activeProvider?.id, migrated.id);
+    expect(state.isConfigured, isTrue);
   });
 }

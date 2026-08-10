@@ -76,7 +76,7 @@ class HomeScreen extends StatelessWidget {
           if (chats.isEmpty)
             SliverFillRemaining(
               hasScrollBody: false,
-              child: _EmptyHome(configured: state.settings.isConfigured),
+              child: _EmptyHome(configured: state.isConfigured),
             )
           else
             SliverPadding(
@@ -152,9 +152,9 @@ class _ProviderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final settings = state.settings;
+    final active = state.activeProvider;
 
-    if (!settings.isConfigured) {
+    if (active == null || !active.isConfigured) {
       return Card(
         color: scheme.primaryContainer,
         elevation: 0,
@@ -180,7 +180,9 @@ class _ProviderCard extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Add a base URL, API key and model before you can chat.',
+                active == null
+                    ? 'Add an OpenAI-compatible or Anthropic provider to chat.'
+                    : 'Add a base URL, API key and model before you can chat.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: scheme.onPrimaryContainer,
                     ),
@@ -200,18 +202,22 @@ class _ProviderCard extends StatelessWidget {
       );
     }
 
-    final host = Uri.tryParse(settings.baseUrl)?.host ?? settings.baseUrl;
+    final model = active.model.trim();
     return Card(
       color: scheme.surfaceContainerHighest,
       elevation: 0,
       child: ListTile(
         leading: Icon(Icons.cloud_done_outlined, color: scheme.primary),
         title: Text(
-          settings.model.isEmpty ? 'No model selected' : settings.model,
+          active.displayName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        subtitle: Text(host, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text(
+          '${active.kind.label} · ${model.isEmpty ? 'no model' : model}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         trailing: const Icon(Icons.chevron_right),
         onTap: onSettings,
       ),

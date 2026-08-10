@@ -3,21 +3,25 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/message.dart';
-import 'package:maichat/models/settings.dart';
+import 'package:maichat/models/provider.dart';
 import 'package:maichat/services/chat_client.dart';
 
 /// Exercises the real HTTP/SSE path against a loopback server, so parsing and
 /// error mapping are covered rather than mocked away.
 void main() {
   late HttpServer server;
-  late AppSettings settings;
+  late Provider provider;
   final requests = <Map<String, dynamic>>[];
 
   Future<void> serve(
-    Future<void> Function(HttpRequest request) handler,
-  ) async {
+    Future<void> Function(HttpRequest request) handler, {
+    ProviderKind kind = ProviderKind.openai,
+  }) async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    settings = AppSettings(
+    provider = Provider(
+      id: 'p',
+      name: 'Test',
+      kind: kind,
       baseUrl: 'http://127.0.0.1:${server.port}/v1',
       apiKey: 'sk-test',
       model: 'test-model',
@@ -58,7 +62,7 @@ void main() {
 
     final text = await ChatClient()
         .streamChat(
-          settings: settings,
+          provider: provider,
           history: [ChatMessage(role: 'user', content: 'hi')],
         )
         .join();
@@ -66,6 +70,7 @@ void main() {
     expect(text, 'Hello, world');
     expect(requests.single['model'], 'test-model');
     expect(requests.single['stream'], isTrue);
+    expect(requests.single.containsKey('max_tokens'), isFalse);
     expect(requests.single['messages'], [
       {'role': 'user', 'content': 'hi'},
     ]);
@@ -81,12 +86,112 @@ void main() {
 
     await ChatClient()
         .streamChat(
-          settings: settings,
+          provider: provider,
           history: [ChatMessage(role: 'user', content: 'hi')],
         )
         .drain<void>();
 
     expect(auth, 'Bearer sk-test');
+  });
+
+  test('parses Anthropic content_block_delta events and stops at message_stop',
+      () async {
+    await serve(
+      kind: ProviderKind.anthropic,
+      (request) async {
+        request.response.headers.contentType =
+            ContentType('text', 'event-stream');
+        void event(String type, Map<String, dynamic> body) => request.response
+            .write('event: $type\ndata: ${jsonEncode(body)}\n\n');
+        event('content_block_delta', {
+          'type': 'content_block_delta',
+          'delta': {'type': 'text_delta', 'text': 'Hel'},
+        });
+        event('content_block_delta', {
+          'type': 'content_block_delta',
+          'delta': {'type': 'text_delta', 'text': 'lo'},
+        });
+        event('message_stop', {'type': 'message_stop'});
+        // Anything after message_stop must be ignored.
+        event('content_block_delta', {
+          'type': 'content_block_delta',
+          'delta': {'type': 'text_delta', 'text': ' ignored'},
+        });
+        await request.response.close();
+      },
+    );
+
+    final text = await ChatClient()
+        .streamChat(
+          provider: provider,
+          history: [ChatMessage(role: 'user', content: 'hi')],
+        )
+        .join();
+
+    expect(text, 'Hello');
+    expect(requests.single['model'], 'test-model');
+    expect(requests.single['max_tokens'], 4096);
+    expect(requests.single['stream'], isTrue);
+    expect(requests.single['messages'], [
+      {'role': 'user', 'content': 'hi'},
+    ]);
+  });
+
+  test('Anthropic sends x-api-key and a version header, not a bearer',
+      () async {
+    String? key;
+    String? version;
+    String? auth;
+    await serve(
+      kind: ProviderKind.anthropic,
+      (request) async {
+        key = request.headers.value('x-api-key');
+        version = request.headers.value('anthropic-version');
+        auth = request.headers.value(HttpHeaders.authorizationHeader);
+        request.response
+            .write('data: ${jsonEncode({'type': 'message_stop'})}\n\n');
+        await request.response.close();
+      },
+    );
+
+    await ChatClient()
+        .streamChat(
+          provider: provider,
+          history: [ChatMessage(role: 'user', content: 'hi')],
+        )
+        .drain<void>();
+
+    expect(key, 'sk-test');
+    expect(version, '2023-06-01');
+    expect(auth, isNull);
+  });
+
+  test('surfaces an Anthropic error event', () async {
+    await serve(
+      kind: ProviderKind.anthropic,
+      (request) async {
+        request.response.write(
+          'data: ${jsonEncode({
+                'type': 'error',
+                'error': {'message': 'overloaded'},
+              })}\n\n',
+        );
+        await request.response.close();
+      },
+    );
+
+    await expectLater(
+      ChatClient()
+          .streamChat(
+            provider: provider,
+            history: [ChatMessage(role: 'user', content: 'hi')],
+          )
+          .drain<void>(),
+      throwsA(
+        isA<ChatApiException>()
+            .having((e) => e.message, 'message', contains('overloaded')),
+      ),
+    );
   });
 
   test('maps a 401 to an actionable message including the host detail',
@@ -102,7 +207,7 @@ void main() {
     await expectLater(
       ChatClient()
           .streamChat(
-            settings: settings,
+            provider: provider,
             history: [ChatMessage(role: 'user', content: 'hi')],
           )
           .drain<void>(),
@@ -127,7 +232,7 @@ void main() {
     await expectLater(
       ChatClient()
           .streamChat(
-            settings: settings,
+            provider: provider,
             history: [ChatMessage(role: 'user', content: 'hi')],
           )
           .drain<void>(),
@@ -152,19 +257,17 @@ void main() {
       await request.response.close();
     });
 
-    expect(await ChatClient().listModels(settings), ['alpha', 'zeta']);
+    expect(await ChatClient().listModels(provider), ['alpha', 'zeta']);
   });
 
   test('reports an unreachable host rather than throwing raw socket errors',
       () async {
     await serve((request) async => request.response.close());
-    final port = server.port;
+    final dead = provider;
     await server.close(force: true);
 
     await expectLater(
-      ChatClient().listModels(
-        AppSettings(baseUrl: 'http://127.0.0.1:$port/v1', model: 'm'),
-      ),
+      ChatClient().listModels(dead),
       throwsA(isA<ChatApiException>()),
     );
   });

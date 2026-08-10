@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
-import 'settings/provider_settings_page.dart';
+import 'settings/providers_settings_page.dart';
 import 'settings/setting_anchors.dart';
 
 /// The settings hub, laid out the Android way: a search bar that jumps to any
@@ -27,9 +27,9 @@ class SettingsScreen extends StatelessWidget {
           ),
           _SectionTile(
             icon: Icons.dns_outlined,
-            title: 'Provider',
+            title: 'Providers',
             subtitle: _providerSummary(state),
-            onTap: () => _open(context, const ProviderSettingsPage()),
+            onTap: () => _open(context, const ProvidersSettingsPage()),
           ),
           _SectionTile(
             icon: Icons.palette_outlined,
@@ -49,12 +49,15 @@ class SettingsScreen extends StatelessWidget {
   }
 
   static String _providerSummary(AppState state) {
-    final settings = state.settings;
-    final host = Uri.tryParse(settings.baseUrl)?.host ?? '';
-    final model = settings.model.trim();
-    if (host.isEmpty && model.isEmpty) return 'Not set up yet';
-    if (model.isEmpty) return '$host · no model selected';
-    return host.isEmpty ? model : '$host · $model';
+    final active = state.activeProvider;
+    if (active == null) return 'Not set up yet';
+    final count = state.providers.length;
+    final suffix = count > 1 ? ' · +${count - 1} more' : '';
+    final model = active.model.trim();
+    final label = model.isEmpty
+        ? '${active.displayName} · no model'
+        : '${active.displayName} · $model';
+    return '$label$suffix';
   }
 
   static String _appearanceSummary(AppState state) {
@@ -135,25 +138,39 @@ class _SearchEntry {
 /// destination page flashes the row via [SettingAnchor].
 const List<_SearchEntry> _searchIndex = [
   _SearchEntry(
+    title: 'Provider name',
+    section: 'Providers',
+    icon: Icons.badge_outlined,
+    keywords: 'label title rename friendly',
+    builder: _providersPage,
+  ),
+  _SearchEntry(
+    title: 'API format',
+    section: 'Providers',
+    icon: Icons.swap_horiz,
+    keywords: 'type openai compatible anthropic claude style wire protocol',
+    builder: _providersPage,
+  ),
+  _SearchEntry(
     title: 'Base URL',
-    section: 'Provider',
+    section: 'Providers',
     icon: Icons.link,
     keywords: 'endpoint server host address api openai compatible v1',
-    builder: _baseUrlPage,
+    builder: _providersPage,
   ),
   _SearchEntry(
     title: 'API key',
-    section: 'Provider',
+    section: 'Providers',
     icon: Icons.key_outlined,
     keywords: 'token secret credential auth bearer password',
-    builder: _apiKeyPage,
+    builder: _providersPage,
   ),
   _SearchEntry(
     title: 'Model',
-    section: 'Provider',
+    section: 'Providers',
     icon: Icons.memory_outlined,
-    keywords: 'gpt llm chat completion browse',
-    builder: _modelPage,
+    keywords: 'gpt claude llm chat completion browse',
+    builder: _providersPage,
   ),
   _SearchEntry(
     title: 'Theme',
@@ -186,12 +203,7 @@ const List<_SearchEntry> _searchIndex = [
 ];
 
 // Const tear-offs so the index above stays a compile-time constant.
-Widget _baseUrlPage() =>
-    const ProviderSettingsPage(highlight: SettingAnchor.baseUrl);
-Widget _apiKeyPage() =>
-    const ProviderSettingsPage(highlight: SettingAnchor.apiKey);
-Widget _modelPage() =>
-    const ProviderSettingsPage(highlight: SettingAnchor.model);
+Widget _providersPage() => const ProvidersSettingsPage();
 Widget _themePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.theme);
 Widget _systemColoursPage() =>
