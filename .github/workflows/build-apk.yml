@@ -39,6 +39,29 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Set up release signing
+        # Decodes the keystore and writes android/key.properties from repo
+        # secrets so the release build is signed with the real key (upgradable
+        # in place). With no secret present (e.g. a fork), it no-ops and the
+        # Gradle config falls back to debug signing.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No keystore secret configured; building debug-signed."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/maichat-release.jks
+          cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=maichat-release.jks
+          EOF
+
       - name: Analyze
         run: flutter analyze
 
