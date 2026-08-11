@@ -388,6 +388,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
     final visible = _visible(all);
     final starred = visible.where((c) => c.starred).toList();
     final others = visible.where((c) => !c.starred).toList();
+    final hasStar = starred.isNotEmpty;
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
@@ -402,16 +403,29 @@ class _CharactersScreenState extends State<CharactersScreen> {
               icon: const Icon(Icons.add),
               label: const Text('Add'),
             ),
-      body: Column(
-        children: [
-          _searchAndControls(tags),
-          Expanded(
-            child: all.isEmpty
-                ? _EmptyRoster(onAdd: _showImportSheet)
-                : visible.isEmpty
-                    ? const _NoMatches()
-                    : _content(state, starred, others, bottom),
-          ),
+      // The search bar and controls ride at the top of the scroll view (not a
+      // fixed header), so they scroll away as the roster is browsed.
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: _searchAndControls(tags)),
+          if (all.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _EmptyRoster(onAdd: _showImportSheet),
+            )
+          else if (visible.isEmpty)
+            const SliverFillRemaining(hasScrollBody: false, child: _NoMatches())
+          else ...[
+            if (hasStar) ...[
+              _header('Starred'),
+              _grid(state, starred),
+            ],
+            if (others.isNotEmpty) ...[
+              if (hasStar) _header('All characters'),
+              _grid(state, others),
+            ],
+            SliverToBoxAdapter(child: SizedBox(height: 96 + bottom)),
+          ],
         ],
       ),
     );
@@ -518,28 +532,6 @@ class _CharactersScreenState extends State<CharactersScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _content(
-    AppState state,
-    List<Character> starred,
-    List<Character> others,
-    double bottom,
-  ) {
-    final hasStar = starred.isNotEmpty;
-    return CustomScrollView(
-      slivers: [
-        if (hasStar) ...[
-          _header('Starred'),
-          _grid(state, starred),
-        ],
-        if (others.isNotEmpty) ...[
-          if (hasStar) _header('All characters'),
-          _grid(state, others),
-        ],
-        SliverToBoxAdapter(child: SizedBox(height: 96 + bottom)),
-      ],
     );
   }
 
