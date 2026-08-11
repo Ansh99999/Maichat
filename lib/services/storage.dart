@@ -37,6 +37,7 @@ class Storage {
   static const _activeKey = 'activeConversation';
   static const _presetsKey = 'presets';
   static const _globalVarsKey = 'macroGlobals';
+  static const _modelCacheKey = 'modelCache';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -228,4 +229,26 @@ class Storage {
 
   Future<void> saveGlobalVars(Map<String, String> vars) async =>
       (await _prefs).setString(_globalVarsKey, jsonEncode(vars));
+
+  /// The last model list fetched per provider id, so the picker need not hit
+  /// the network every time it opens.
+  Future<Map<String, List<String>>> loadModelCache() async {
+    final raw = (await _prefs).getString(_modelCacheKey);
+    if (raw == null) return <String, List<String>>{};
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map) {
+        return json.map((k, v) => MapEntry(
+              k.toString(),
+              (v as List?)?.map((e) => e.toString()).toList() ?? <String>[],
+            ));
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <String, List<String>>{};
+  }
+
+  Future<void> saveModelCache(Map<String, List<String>> cache) async =>
+      (await _prefs).setString(_modelCacheKey, jsonEncode(cache));
 }

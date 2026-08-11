@@ -14,7 +14,7 @@ import '../screens/settings_screen.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
-enum DrawerSection { home, chats, characters }
+enum DrawerSection { home, chats, characters, presets }
 
 /// The navigation drawer shared by the top-level sections (Home and Chats).
 ///
@@ -58,6 +58,15 @@ class AppDrawer extends StatelessWidget {
     if (selected != DrawerSection.characters) {
       Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const CharactersScreen()));
+    }
+  }
+
+  /// Opens the Presets area, unless it is already the host screen.
+  void _goPresets(BuildContext context) {
+    Navigator.of(context).pop();
+    if (selected != DrawerSection.presets) {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => const PresetsScreen()));
     }
   }
 
@@ -122,7 +131,8 @@ class AppDrawer extends StatelessWidget {
                   _NavItem(
                     icon: Icons.tune_outlined,
                     label: 'Presets',
-                    onTap: () => _go(context, const PresetsScreen()),
+                    selected: selected == DrawerSection.presets,
+                    onTap: () => _goPresets(context),
                   ),
                 ],
               ),

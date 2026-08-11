@@ -32,6 +32,7 @@ class AppState extends ChangeNotifier {
   final List<Character> _characters = <Character>[];
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
+  final Map<String, List<String>> _modelCache = <String, List<String>>{};
   String? _defaultPresetId;
   final PromptBuilder _prompts = PromptBuilder(macros: DefaultMacroEngine());
   String? _activeProviderId;
@@ -112,6 +113,9 @@ class AppState extends ChangeNotifier {
     _globalVars
       ..clear()
       ..addAll(await _storage.loadGlobalVars());
+    _modelCache
+      ..clear()
+      ..addAll(await _storage.loadModelCache());
     final stored = await _storage.loadConversations()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _conversations
@@ -572,6 +576,20 @@ class AppState extends ChangeNotifier {
       throw ChatApiException('Add a provider first.');
     }
     return _client.listModels(target);
+  }
+
+  /// The last model list fetched for [providerId], or empty if none cached.
+  List<String> cachedModels(String? providerId) =>
+      providerId == null ? const [] : (_modelCache[providerId] ?? const []);
+
+  /// Fetches [provider]'s model list, caches it (persisted) for later opens,
+  /// and returns it. Used by the model picker's refresh.
+  Future<List<String>> refreshModels(Provider provider) async {
+    final models = await _client.listModels(provider);
+    _modelCache[provider.id] = models;
+    notifyListeners();
+    await _storage.saveModelCache(_modelCache);
+    return models;
   }
 
   void _replaceLast(

@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../models/preset.dart';
 import '../../services/preset_io.dart';
 import '../../state/app_state.dart';
+import '../../widgets/app_drawer.dart';
 import 'preset_edit_screen.dart';
 
 /// The Presets area: a search bar, New/Import actions, and the preset list.
@@ -81,6 +82,7 @@ class _PresetsScreenState extends State<PresetsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Presets')),
+      drawer: const AppDrawer(selected: DrawerSection.presets),
       body: Column(
         children: [
           Padding(
@@ -184,47 +186,53 @@ class _PresetTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final band = preset.colorBand != null ? Color(preset.colorBand!) : scheme.primary;
     final model = preset.model.trim();
     final subtitle = [
       if (model.isNotEmpty) model else 'no model',
       '${preset.prompts.length} blocks',
     ].join(' · ');
 
-    return ListTile(
-      onTap: onTap,
-      leading: Container(
-        width: 6,
-        height: 40,
-        decoration: BoxDecoration(
-          color: band,
-          borderRadius: BorderRadius.circular(3),
-        ),
-      ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              preset.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    // The preset's colour tints the whole row background (a gentle blend over
+    // the surface so text stays legible in light and dark).
+    final tint = preset.colorBand != null
+        ? Color.alphaBlend(
+            Color(preset.colorBand!).withValues(alpha: 0.16),
+            scheme.surface,
+          )
+        : scheme.surfaceContainerLow;
+
+    return Card(
+      elevation: 0,
+      color: tint,
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        onTap: onTap,
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                preset.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          ),
-          if (isDefault) ...[
-            const SizedBox(width: 8),
-            _DefaultChip(),
+            if (isDefault) ...[
+              const SizedBox(width: 8),
+              _DefaultChip(),
+            ],
           ],
-        ],
-      ),
-      subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-      trailing: PopupMenuButton<String>(
-        onSelected: (v) => _onAction(context, v),
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'copy', child: Text('Duplicate')),
-          PopupMenuItem(value: 'download', child: Text('Download')),
-          PopupMenuItem(value: 'default', child: Text('Set as default')),
-          PopupMenuItem(value: 'delete', child: Text('Delete')),
-        ],
+        ),
+        subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+        trailing: PopupMenuButton<String>(
+          onSelected: (v) => _onAction(context, v),
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'copy', child: Text('Duplicate')),
+            PopupMenuItem(value: 'download', child: Text('Download')),
+            PopupMenuItem(value: 'default', child: Text('Set as default')),
+            PopupMenuItem(value: 'delete', child: Text('Delete')),
+          ],
+        ),
       ),
     );
   }

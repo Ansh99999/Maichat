@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-/// A labelled slider with its current value shown on the right — the workhorse
-/// control for the preset editor's numeric settings.
-class PresetSlider extends StatelessWidget {
+/// A labelled slider with an editable numeric field on the right — the
+/// workhorse control for the preset editor. The field and slider stay in sync;
+/// typing a value clamps it into range.
+class PresetSlider extends StatefulWidget {
   const PresetSlider({
     super.key,
     required this.label,
@@ -11,7 +13,7 @@ class PresetSlider extends StatelessWidget {
     required this.max,
     required this.onChanged,
     this.divisions,
-    this.format,
+    this.integer = false,
   });
 
   final String label;
@@ -20,35 +22,93 @@ class PresetSlider extends StatelessWidget {
   final double max;
   final ValueChanged<double> onChanged;
   final int? divisions;
-  final String Function(double)? format;
+
+  /// Whether the value is a whole number (formats/parses without decimals).
+  final bool integer;
+
+  @override
+  State<PresetSlider> createState() => _PresetSliderState();
+}
+
+class _PresetSliderState extends State<PresetSlider> {
+  late final TextEditingController _field =
+      TextEditingController(text: _format(widget.value));
+  final FocusNode _focus = FocusNode();
+
+  String _format(double v) =>
+      widget.integer || v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(2);
+
+  @override
+  void didUpdateWidget(PresetSlider old) {
+    super.didUpdateWidget(old);
+    // Reflect external/slider-driven changes into the field, unless the user is
+    // mid-edit in it.
+    if (!_focus.hasFocus && _format(widget.value) != _field.text) {
+      _field.text = _format(widget.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    _field.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _commitField(String text) {
+    final parsed = double.tryParse(text.trim());
+    if (parsed == null) {
+      _field.text = _format(widget.value);
+      return;
+    }
+    final clamped = parsed.clamp(widget.min, widget.max).toDouble();
+    widget.onChanged(clamped);
+    _field.text = _format(clamped);
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final shown = (format ?? _defaultFormat)(value);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(widget.label, style: theme.textTheme.bodyMedium),
         Row(
           children: [
-            Expanded(child: Text(label, style: theme.textTheme.bodyMedium)),
-            Text(shown, style: theme.textTheme.labelLarge),
+            Expanded(
+              child: Slider(
+                value: widget.value.clamp(widget.min, widget.max),
+                min: widget.min,
+                max: widget.max,
+                divisions: widget.divisions,
+                label: _format(widget.value),
+                onChanged: widget.onChanged,
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 68,
+              child: TextField(
+                controller: _field,
+                focusNode: _focus,
+                textAlign: TextAlign.center,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
+                ],
+                decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                ),
+                onSubmitted: _commitField,
+                onEditingComplete: () => _commitField(_field.text),
+              ),
+            ),
           ],
-        ),
-        Slider(
-          value: value.clamp(min, max),
-          min: min,
-          max: max,
-          divisions: divisions,
-          label: shown,
-          onChanged: onChanged,
         ),
       ],
     );
   }
-
-  static String _defaultFormat(double v) =>
-      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 }
 
 /// A labelled on/off switch with an optional explanatory subtitle.
