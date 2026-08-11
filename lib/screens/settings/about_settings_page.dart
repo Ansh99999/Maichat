@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app_info.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
 
@@ -10,7 +11,7 @@ class AboutSettingsPage extends StatelessWidget {
   final SettingAnchor? highlight;
 
   /// Kept in step with the `version:` line in pubspec.yaml.
-  static const String version = '1.6.4';
+  static const String version = kAppVersion;
 
   @override
   Widget build(BuildContext context) {

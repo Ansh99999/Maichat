@@ -23,7 +23,7 @@ subprojects {
 // built-in Kotlin — but its library module never gets it, so its Kotlin
 // sources (FilePickerPlugin) don't compile. Supply the plugin ourselves.
 subprojects {
-    if (name == "file_picker") {
+    if (name == "file_picker" || name == "url_launcher_android") {
         plugins.apply("org.jetbrains.kotlin.android")
     }
 }

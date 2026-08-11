@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
+import '../app_info.dart';
 import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/conversation.dart';
@@ -7,15 +10,18 @@ import '../models/message.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../services/storage.dart';
+import '../services/update_service.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
-  AppState({Storage? storage, ChatClient? client})
+  AppState({Storage? storage, ChatClient? client, UpdateService? updateService})
       : _storage = storage ?? Storage(),
-        _client = client ?? ChatClient();
+        _client = client ?? ChatClient(),
+        _updateService = updateService ?? UpdateService();
 
   final Storage _storage;
   final ChatClient _client;
+  final UpdateService _updateService;
 
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
@@ -26,6 +32,7 @@ class AppState extends ChangeNotifier {
   bool _ready = false;
   bool _streaming = false;
   bool _stopRequested = false;
+  UpdateInfo? _availableUpdate;
 
   List<Conversation> get conversations => List.unmodifiable(_conversations);
   List<Provider> get providers => List.unmodifiable(_providers);
@@ -33,6 +40,9 @@ class AppState extends ChangeNotifier {
   Appearance get appearance => _appearance;
   bool get ready => _ready;
   bool get streaming => _streaming;
+
+  /// A newer release found on GitHub, or null when up to date / not yet checked.
+  UpdateInfo? get availableUpdate => _availableUpdate;
 
   /// The provider chat and model listing talk to, or null when none is set up.
   Provider? get activeProvider {
@@ -85,6 +95,18 @@ class AppState extends ChangeNotifier {
     _activeId = await _storage.loadActiveId();
     _ready = true;
     notifyListeners();
+    // Best-effort, non-blocking: surfaces an update affordance if one exists.
+    unawaited(checkForUpdates());
+  }
+
+  /// Asks GitHub whether a newer release exists and, if so, exposes it via
+  /// [availableUpdate]. Silent on any failure.
+  Future<void> checkForUpdates() async {
+    final info = await _updateService.checkLatest(kAppVersion);
+    if (info != null) {
+      _availableUpdate = info;
+      notifyListeners();
+    }
   }
 
   Future<void> _persistProviders() =>

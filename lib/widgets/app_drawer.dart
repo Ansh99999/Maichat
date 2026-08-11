@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/appearance.dart';
+import '../services/update_service.dart';
 import '../state/app_state.dart';
 import '../screens/characters_screen.dart';
 import '../screens/chats_screen.dart';
@@ -210,6 +212,12 @@ class _DrawerFooter extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          if (state.availableUpdate != null)
+            IconButton(
+              tooltip: 'Update available',
+              icon: Icon(Icons.system_update, color: scheme.primary),
+              onPressed: () => _showUpdate(context, state.availableUpdate!),
+            ),
           Text(
             'v${AboutSettingsPage.version}',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -219,5 +227,56 @@ class _DrawerFooter extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// A little dialog describing the newer release, with a button that opens the
+  /// APK download (or the release page) in the browser so the user can install.
+  Future<void> _showUpdate(BuildContext context, UpdateInfo update) async {
+    final notes = update.notes.trim();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Update available'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Version ${update.version} is available '
+                '(you have ${AboutSettingsPage.version}).'),
+            if (notes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 180),
+                child: SingleChildScrollView(
+                  child: Text(
+                    notes,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !context.mounted) return;
+    final uri = Uri.tryParse(update.downloadUrl);
+    final ok = uri != null &&
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open ${update.downloadUrl}')),
+      );
+    }
   }
 }
