@@ -133,6 +133,41 @@ Future<void> confirmDeleteCharacter(
 /// or a clipboard copy — both permission-free.
 Future<void> exportCharacter(BuildContext context, Character character) async {
   final json = CharacterCodec.exportTavernV2(character);
+  final safe = _safeName(character.displayName);
+  await _offerExport(
+    context,
+    json: json,
+    fileName: '${safe.isEmpty ? 'character' : safe}.json',
+    subtitle: 'SillyTavern v2 card',
+  );
+}
+
+/// Exports several characters as one `.json` array of v2 cards (bulk export
+/// that the file importer reads back). A single selection defers to
+/// [exportCharacter].
+Future<void> exportCharacters(
+    BuildContext context, List<Character> characters) async {
+  if (characters.isEmpty) return;
+  if (characters.length == 1) {
+    await exportCharacter(context, characters.single);
+    return;
+  }
+  final json = CharacterCodec.exportTavernV2Many(characters);
+  await _offerExport(
+    context,
+    json: json,
+    fileName: 'characters-${characters.length}.json',
+    subtitle: '${characters.length} SillyTavern v2 cards',
+  );
+}
+
+/// The shared save-to-file / copy-to-clipboard chooser for exports.
+Future<void> _offerExport(
+  BuildContext context, {
+  required String json,
+  required String fileName,
+  required String subtitle,
+}) async {
   final choice = await showModalBottomSheet<String>(
     context: context,
     showDragHandle: true,
@@ -143,7 +178,7 @@ Future<void> exportCharacter(BuildContext context, Character character) async {
           ListTile(
             leading: const Icon(Icons.save_alt_outlined),
             title: const Text('Save as .json file'),
-            subtitle: const Text('SillyTavern v2 card'),
+            subtitle: Text(subtitle),
             onTap: () => Navigator.of(context).pop('file'),
           ),
           ListTile(
@@ -161,21 +196,17 @@ Future<void> exportCharacter(BuildContext context, Character character) async {
     await Clipboard.setData(ClipboardData(text: json));
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Card JSON copied to clipboard.')),
+        const SnackBar(content: Text('Copied to clipboard.')),
       );
     }
     return;
   }
 
-  final safeName = character.displayName
-      .replaceAll(RegExp(r'[^A-Za-z0-9 _-]'), '')
-      .trim()
-      .replaceAll(RegExp(r'\s+'), '_');
   String? path;
   try {
     path = await FilePicker.saveFile(
       dialogTitle: 'Save character card',
-      fileName: '${safeName.isEmpty ? 'character' : safeName}.json',
+      fileName: fileName,
       bytes: Uint8List.fromList(utf8.encode(json)),
       type: FileType.custom,
       allowedExtensions: const ['json'],
@@ -190,3 +221,8 @@ Future<void> exportCharacter(BuildContext context, Character character) async {
     ),
   );
 }
+
+String _safeName(String s) => s
+    .replaceAll(RegExp(r'[^A-Za-z0-9 _-]'), '')
+    .trim()
+    .replaceAll(RegExp(r'\s+'), '_');

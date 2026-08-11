@@ -42,10 +42,11 @@ abstract class CharacterSource {
   String get inputHint => '';
 
   /// Fetches raw card bytes for [input] (the pasted text / URL; empty for
-  /// [SourceInputKind.none]). Returns null when the user cancelled (e.g. closed
-  /// the file picker) so the caller can quietly do nothing. Throws
-  /// [CharacterParseException] on user-facing failures.
-  Future<SourcePayload?> fetch(String input);
+  /// [SourceInputKind.none]). Returns one payload per file — the file source
+  /// can return several (bulk import); the others return zero or one. An empty
+  /// list means the user cancelled. Throws [CharacterParseException] on
+  /// user-facing failures.
+  Future<List<SourcePayload>> fetch(String input);
 }
 
 /// The ordered list of import sources shown in the picker. Add a plugin here to
@@ -69,7 +70,8 @@ const Map<String, String> _browserHeaders = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-/// Import from a local `.json` or `.png` character card on the device.
+/// Import from local `.json`/`.png` character cards on the device — one or
+/// several at once (bulk import).
 class FileSource extends CharacterSource {
   const FileSource();
   @override
@@ -77,26 +79,32 @@ class FileSource extends CharacterSource {
   @override
   String get label => 'From file';
   @override
-  String get description => 'Pick a .json or .png card from this device';
+  String get description => 'Pick one or more .json / .png cards';
   @override
   IconData get icon => Icons.folder_open_outlined;
   @override
   SourceInputKind get inputKind => SourceInputKind.none;
 
   @override
-  Future<SourcePayload?> fetch(String input) async {
+  Future<List<SourcePayload>> fetch(String input) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['json', 'png', 'charx', 'card'],
       withData: true,
+      allowMultiple: true,
     );
-    if (result == null || result.files.isEmpty) return null; // cancelled
-    final file = result.files.first;
-    final bytes = file.bytes;
-    if (bytes == null || bytes.isEmpty) {
-      throw CharacterParseException('Could not read that file.');
+    if (result == null || result.files.isEmpty) return const []; // cancelled
+    final payloads = <SourcePayload>[];
+    for (final file in result.files) {
+      final bytes = file.bytes;
+      if (bytes != null && bytes.isNotEmpty) {
+        payloads.add(SourcePayload(bytes, filename: file.name));
+      }
     }
-    return SourcePayload(bytes, filename: file.name);
+    if (payloads.isEmpty) {
+      throw CharacterParseException('Could not read the selected file(s).');
+    }
+    return payloads;
   }
 }
 
@@ -118,12 +126,12 @@ class PasteSource extends CharacterSource {
   String get inputHint => 'Paste character JSON here';
 
   @override
-  Future<SourcePayload?> fetch(String input) async {
+  Future<List<SourcePayload>> fetch(String input) async {
     final text = input.trim();
     if (text.isEmpty) {
       throw CharacterParseException('Paste a character card first.');
     }
-    return SourcePayload(Uint8List.fromList(utf8.encode(text)));
+    return [SourcePayload(Uint8List.fromList(utf8.encode(text)))];
   }
 }
 
@@ -147,7 +155,8 @@ class UrlSource extends CharacterSource {
   String get inputHint => 'https://example.com/character.png';
 
   @override
-  Future<SourcePayload?> fetch(String input) => fetchUrl(input);
+  Future<List<SourcePayload>> fetch(String input) async =>
+      [await fetchUrl(input)];
 
   /// Resolves [input] to card bytes, routing known hosts to their download API.
   static Future<SourcePayload> fetchUrl(String input) async {
@@ -329,6 +338,7 @@ class JannyAiSource extends CharacterSource {
       'or "Paste JSON".';
 
   @override
-  Future<SourcePayload?> fetch(String input) => UrlSource.fetchUrl(input);
+  Future<List<SourcePayload>> fetch(String input) async =>
+      [await UrlSource.fetchUrl(input)];
 }
 

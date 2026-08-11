@@ -10,7 +10,7 @@ class AboutSettingsPage extends StatelessWidget {
   final SettingAnchor? highlight;
 
   /// Kept in step with the `version:` line in pubspec.yaml.
-  static const String version = '1.6.3';
+  static const String version = '1.6.4';
 
   @override
   Widget build(BuildContext context) {

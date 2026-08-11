@@ -157,6 +157,15 @@ class AppState extends ChangeNotifier {
     await _persistCharacters();
   }
 
+  /// Adds several characters at once (bulk import), newest first, persisting
+  /// once.
+  Future<void> addCharacters(List<Character> characters) async {
+    if (characters.isEmpty) return;
+    _characters.insertAll(0, characters);
+    notifyListeners();
+    await _persistCharacters();
+  }
+
   /// Replaces the stored character sharing [character]'s id, or adds it when
   /// there is no match yet.
   Future<void> saveCharacter(Character character) async {

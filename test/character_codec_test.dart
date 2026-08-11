@@ -213,4 +213,37 @@ void main() {
     expect(prompt, isNot(contains('{{char}}')));
     expect(c.resolvedGreeting(userName: 'Sam'), 'Halt, Sam!');
   });
+
+  test('parseCards reads a JSON array of cards (bulk import)', () {
+    final cards = [
+      {'name': 'One', 'description': 'first', 'first_mes': 'hi'},
+      {
+        'spec': 'chara_card_v2',
+        'spec_version': '2.0',
+        'data': {'name': 'Two', 'first_mes': 'yo'},
+      },
+    ];
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(cards)));
+    final parsed = CharacterCodec.parseCards(bytes);
+    expect(parsed, hasLength(2));
+    expect(parsed.map((c) => c.name), containsAll(['One', 'Two']));
+  });
+
+  test('parseCards reads a single card object too', () {
+    final bytes = Uint8List.fromList(
+      utf8.encode(jsonEncode({'name': 'Solo', 'first_mes': 'hi'})),
+    );
+    expect(CharacterCodec.parseCards(bytes), hasLength(1));
+  });
+
+  test('exportTavernV2Many round-trips through parseCards', () {
+    final many = [
+      Character(id: 'a', name: 'Ann', description: 'aa'),
+      Character(id: 'b', name: 'Bob', firstMes: 'hey'),
+    ];
+    final json = CharacterCodec.exportTavernV2Many(many);
+    final bytes = Uint8List.fromList(utf8.encode(json));
+    final back = CharacterCodec.parseCards(bytes);
+    expect(back.map((c) => c.name), containsAllInOrder(['Ann', 'Bob']));
+  });
 }

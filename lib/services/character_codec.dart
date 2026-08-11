@@ -59,8 +59,55 @@ class CharacterCodec {
     return parseJson(text);
   }
 
-  /// Parses a JSON card string in any accepted shape, dispatching on the
-  /// fields present.
+  /// Parses raw bytes into one or more cards: a PNG holds a single card, while
+  /// JSON may be a single card object or an array of them (a bulk export).
+  static List<Character> parseCards(Uint8List bytes, {String? filename}) {
+    if (bytes.isEmpty) {
+      throw CharacterParseException('That file is empty.');
+    }
+    if (_looksLikePng(bytes)) {
+      return [parseBytes(bytes, filename: filename)];
+    }
+    final String text;
+    try {
+      text = utf8.decode(bytes, allowMalformed: true).trim();
+    } catch (_) {
+      throw CharacterParseException('That file is not a character card.');
+    }
+    if (text.isEmpty) {
+      throw CharacterParseException('There is nothing to import.');
+    }
+    Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } catch (_) {
+      throw CharacterParseException(
+        "That doesn't look like a character card (not valid JSON).",
+      );
+    }
+    if (decoded is List) {
+      final cards = <Character>[];
+      for (final entry in decoded) {
+        if (entry is Map<String, dynamic>) {
+          try {
+            cards.add(_parseMap(entry));
+          } catch (_) {
+            // Skip an unreadable entry rather than failing the whole batch.
+          }
+        }
+      }
+      if (cards.isEmpty) {
+        throw CharacterParseException('That file has no character cards in it.');
+      }
+      return cards;
+    }
+    if (decoded is Map<String, dynamic>) return [_parseMap(decoded)];
+    throw CharacterParseException(
+      'A character card should be a JSON object or array.',
+    );
+  }
+
+  /// Parses a JSON card string in any accepted shape.
   static Character parseJson(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
@@ -79,8 +126,11 @@ class CharacterCodec {
         'A character card should be a JSON object.',
       );
     }
-    final map = decoded;
+    return _parseMap(decoded);
+  }
 
+  /// Dispatches a decoded card map to the right format parser.
+  static Character _parseMap(Map<String, dynamic> map) {
     // SillyTavern v2/v3: the real card lives under `data`, tagged by `spec`.
     final spec = _str(map, 'spec').toLowerCase();
     final data = map['data'];
@@ -114,7 +164,15 @@ class CharacterCodec {
 
   /// Serialises [c] as a pretty-printed SillyTavern v2 card. The core fields are
   /// mirrored at the top level so v1-only readers still work.
-  static String exportTavernV2(Character c) {
+  static String exportTavernV2(Character c) =>
+      const JsonEncoder.withIndent('  ').convert(_v2Card(c));
+
+  /// Serialises several characters as a JSON array of v2 cards (a bulk export
+  /// that [parseCards] reads back).
+  static String exportTavernV2Many(List<Character> cs) =>
+      const JsonEncoder.withIndent('  ').convert(cs.map(_v2Card).toList());
+
+  static Map<String, dynamic> _v2Card(Character c) {
     final data = <String, dynamic>{
       'name': c.name,
       'description': c.description,
@@ -131,7 +189,7 @@ class CharacterCodec {
       'character_version': c.characterVersion,
       'extensions': <String, dynamic>{},
     };
-    final card = <String, dynamic>{
+    return <String, dynamic>{
       'spec': 'chara_card_v2',
       'spec_version': '2.0',
       'data': data,
@@ -142,7 +200,6 @@ class CharacterCodec {
       'first_mes': c.firstMes,
       'mes_example': c.mesExample,
     };
-    return const JsonEncoder.withIndent('  ').convert(card);
   }
 
   // --- Tavern (v1/v2/v3) ---------------------------------------------------

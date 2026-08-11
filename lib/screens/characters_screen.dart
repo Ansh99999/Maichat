@@ -182,7 +182,9 @@ class _CharactersScreenState extends State<CharactersScreen> {
     );
   }
 
-  /// Collects any input the source needs, fetches, parses and stores the card.
+  /// Collects any input the source needs, fetches, parses and stores the
+  /// card(s). A file source may return several files, and a single JSON file
+  /// may itself hold an array — both fan out into multiple characters.
   Future<void> _runSource(CharacterSource source) async {
     // Capture context-derived objects up front so nothing is read across the
     // input/fetch async gaps.
@@ -197,16 +199,34 @@ class _CharactersScreenState extends State<CharactersScreen> {
     }
 
     try {
-      final payload = await source.fetch(input);
-      if (payload == null) return; // e.g. file picker cancelled
-      final character =
-          CharacterCodec.parseBytes(payload.bytes, filename: payload.filename);
-      await state.addCharacter(character);
+      final payloads = await source.fetch(input);
+      if (payloads.isEmpty) return; // e.g. file picker cancelled
+      final imported = <Character>[];
+      String? firstError;
+      for (final payload in payloads) {
+        try {
+          imported.addAll(
+            CharacterCodec.parseCards(payload.bytes, filename: payload.filename),
+          );
+        } on CharacterParseException catch (e) {
+          firstError ??= e.message;
+        }
+      }
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Imported ${character.displayName}.')),
-      );
-      openCharacterDetail(context, character.id);
+      if (imported.isEmpty) {
+        messenger.showSnackBar(SnackBar(
+          content: Text(firstError ?? 'Could not import that character.'),
+        ));
+        return;
+      }
+      await state.addCharacters(imported);
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text(imported.length == 1
+            ? 'Imported ${imported.single.displayName}.'
+            : 'Imported ${imported.length} characters.'),
+      ));
+      if (imported.length == 1) openCharacterDetail(context, imported.single.id);
     } on CharacterParseException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
@@ -422,12 +442,24 @@ class _CharactersScreenState extends State<CharactersScreen> {
         title: Text('${_selection.length} selected'),
         actions: [
           IconButton(
+            tooltip: 'Export selected',
+            icon: const Icon(Icons.download_outlined),
+            onPressed: _selection.isEmpty ? null : () => _exportSelected(state),
+          ),
+          IconButton(
             tooltip: 'Delete selected',
             icon: const Icon(Icons.delete_outline),
             onPressed: _selection.isEmpty ? null : () => _deleteSelected(state),
           ),
         ],
       );
+
+  Future<void> _exportSelected(AppState state) async {
+    final chosen =
+        state.characters.where((c) => _selection.contains(c.id)).toList();
+    if (chosen.isEmpty) return;
+    await exportCharacters(context, chosen);
+  }
 
   Widget _searchAndControls(List<String> tags) {
     return Padding(
