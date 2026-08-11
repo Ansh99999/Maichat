@@ -6,9 +6,10 @@ import 'package:maichat/models/preset.dart';
 import 'package:maichat/models/prompt_block.dart';
 import 'package:maichat/services/preset_io.dart';
 
-/// The real SillyTavern default chat-completion preset, read from disk.
-const _stDefaultPath =
-    '/home/ubuntu/SillyTavern/default/content/presets/openai/Default.json';
+/// The real SillyTavern default chat-completion preset, vendored into the repo
+/// under test/fixtures so the suite runs anywhere (CI included), not just where
+/// a local SillyTavern checkout exists.
+const _stDefaultPath = 'test/fixtures/st_openai_default.json';
 
 Map<String, dynamic> _loadStDefault() {
   final text = File(_stDefaultPath).readAsStringSync();
