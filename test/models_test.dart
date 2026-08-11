@@ -98,16 +98,31 @@ void main() {
     const fresh = Appearance();
     expect(fresh.dynamicColor, isTrue);
     expect(fresh.mode, AppThemeMode.system);
+    expect(fresh.seedColor, kDefaultSeedColor);
   });
 
   test('appearance survives a JSON round trip', () {
-    const original = Appearance(dynamicColor: false, mode: AppThemeMode.dark);
-    expect(Appearance.fromJson(original.toJson()), original);
+    const original = Appearance(
+      dynamicColor: false,
+      mode: AppThemeMode.dark,
+      seedColor: 0xFF10B981,
+    );
+    final restored = Appearance.fromJson(original.toJson());
+    expect(restored, original);
+    expect(restored.seedColor, 0xFF10B981);
   });
 
   test('an unknown stored theme mode falls back to the system setting', () {
     final restored = Appearance.fromJson(<String, dynamic>{'mode': 'sepia'});
     expect(restored.mode, AppThemeMode.system);
     expect(restored.dynamicColor, isTrue);
+  });
+
+  test('a stored appearance without a seed keeps the default colour', () {
+    final restored = Appearance.fromJson(<String, dynamic>{
+      'dynamicColor': false,
+      'mode': 'dark',
+    });
+    expect(restored.seedColor, kDefaultSeedColor);
   });
 }

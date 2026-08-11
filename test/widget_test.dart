@@ -146,7 +146,7 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(
       prefs.getString('appearance'),
-      '{"dynamicColor":false,"mode":"light"}',
+      '{"dynamicColor":false,"mode":"light","seedColor":4286340351}',
     );
   });
 

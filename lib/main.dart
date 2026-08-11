@@ -18,10 +18,6 @@ void main() {
 class MaiChatApp extends StatelessWidget {
   const MaiChatApp({super.key});
 
-  /// Used when the platform has no palette to offer, or when the user turns
-  /// system colours off.
-  static const Color _seed = Color(0xFF7C5CFF);
-
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<AppState>(
@@ -33,12 +29,15 @@ class MaiChatApp extends StatelessWidget {
             builder: (context, state, _) {
               final appearance = state.appearance;
               final wanted = appearance.dynamicColor;
+              final seed = Color(appearance.seedColor);
               return MaterialApp(
                 title: 'MaiChat',
                 debugShowCheckedModeBanner: false,
                 themeMode: _themeMode(appearance.mode),
-                theme: _theme(wanted ? lightDynamic : null, Brightness.light),
-                darkTheme: _theme(wanted ? darkDynamic : null, Brightness.dark),
+                theme:
+                    _theme(wanted ? lightDynamic : null, Brightness.light, seed),
+                darkTheme:
+                    _theme(wanted ? darkDynamic : null, Brightness.dark, seed),
                 home: const HomeScreen(),
               );
             },
@@ -56,10 +55,15 @@ class MaiChatApp extends StatelessWidget {
 
   /// [dynamicScheme] is the OS palette when there is one. It is harmonized so
   /// the error and container roles are nudged towards the wallpaper hue rather
-  /// than clashing with it.
-  static ThemeData _theme(ColorScheme? dynamicScheme, Brightness brightness) {
+  /// than clashing with it. [seed] is the user's chosen colour, used when there
+  /// is no dynamic scheme.
+  static ThemeData _theme(
+    ColorScheme? dynamicScheme,
+    Brightness brightness,
+    Color seed,
+  ) {
     final scheme = dynamicScheme?.harmonized() ??
-        ColorScheme.fromSeed(seedColor: _seed, brightness: brightness);
+        ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
     return ThemeData(
       colorScheme: scheme,
       useMaterial3: true,

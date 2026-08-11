@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/appearance.dart';
 import '../../state/app_state.dart';
+import '../../widgets/color_picker.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
 
@@ -77,6 +78,44 @@ class AppearanceSettingsPage extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ),
+          const Divider(height: 8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.color_lens_outlined),
+                    const SizedBox(width: 16),
+                    Text(
+                      'Theme colour',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  appearance.dynamicColor
+                      ? 'Turn off system colours to build a theme from your '
+                          'own colour.'
+                      : 'Pick a colour to generate the light and dark theme, '
+                          'or tap the last swatch for a custom colour.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 16),
+                ThemeColorPicker(
+                  value: Color(appearance.seedColor),
+                  enabled: !appearance.dynamicColor,
+                  onChanged: (color) => state.updateAppearance(
+                    appearance.copyWith(seedColor: color.toARGB32()),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
