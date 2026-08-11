@@ -153,6 +153,33 @@ class AppState extends ChangeNotifier {
     _storage.saveActiveId(id);
   }
 
+  /// Renames a thread and persists it — the "edit chat" action.
+  Future<void> renameConversation(String id, String title) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return;
+    for (final conversation in _conversations) {
+      if (conversation.id == id) {
+        conversation.title = trimmed;
+        conversation.updatedAt = DateTime.now();
+        break;
+      }
+    }
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
+  /// Empties the active thread but keeps it around — the "restart chat"
+  /// action. Any in-flight reply is aborted first.
+  Future<void> restartConversation() async {
+    if (_streaming) stop();
+    final conversation = active;
+    conversation.messages.clear();
+    conversation.title = 'New chat';
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
   Future<void> deleteConversation(String id) async {
     if (id == active.id && _streaming) stop();
     _conversations.removeWhere((c) => c.id == id);

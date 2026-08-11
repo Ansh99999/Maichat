@@ -3,23 +3,49 @@ import 'package:provider/provider.dart';
 
 import '../models/appearance.dart';
 import '../state/app_state.dart';
+import '../screens/chats_screen.dart';
 import '../screens/section_screen.dart';
 import '../screens/settings/about_settings_page.dart';
 import '../screens/settings_screen.dart';
 
-/// The navigation drawer behind the home screen's hamburger.
+/// Which top-level destination is currently on screen, so the drawer can show
+/// it selected.
+enum DrawerSection { home, chats }
+
+/// The navigation drawer shared by the top-level sections (Home and Chats).
 ///
 /// Follows the Material 3 navigation-drawer spec: a rounded sheet of
-/// pill-shaped destinations up top (Profile … Presets), and a quiet utility
+/// pill-shaped destinations up top (Home … Presets), and a quiet utility
 /// row pinned to the bottom (settings, theme, notifications) with the app
-/// version tucked beside it. Destinations push their own detail screen; the
-/// current one — Chats, i.e. this home hub — is shown selected.
+/// version tucked beside it. Home is the landing section; the others push
+/// their own detail screen.
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+  const AppDrawer({super.key, this.selected = DrawerSection.home});
 
+  /// The destination the host screen represents, drawn selected.
+  final DrawerSection selected;
+
+  /// Closes the drawer, then pushes [screen] on top.
   void _go(BuildContext context, Widget screen) {
-    Navigator.of(context).pop(); // close the drawer first
+    Navigator.of(context).pop();
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+  }
+
+  /// Returns to the landing Home screen (the first route).
+  void _goHome(BuildContext context) {
+    Navigator.of(context).pop();
+    if (selected != DrawerSection.home) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
+  }
+
+  /// Opens the Chats list, unless it is already the host screen.
+  void _goChats(BuildContext context) {
+    Navigator.of(context).pop();
+    if (selected != DrawerSection.chats) {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => const ChatsScreen()));
+    }
   }
 
   @override
@@ -47,10 +73,10 @@ class AppDrawer extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 children: [
                   _NavItem(
-                    icon: Icons.person_outline,
-                    label: 'Profile',
-                    onTap: () => _go(context,
-                        const SectionScreen(title: 'Profile', icon: Icons.person_outline)),
+                    icon: Icons.home_outlined,
+                    label: 'Home',
+                    selected: selected == DrawerSection.home,
+                    onTap: () => _goHome(context),
                   ),
                   _NavItem(
                     icon: Icons.people_alt_outlined,
@@ -63,8 +89,8 @@ class AppDrawer extends StatelessWidget {
                   _NavItem(
                     icon: Icons.chat_bubble_outline,
                     label: 'Chats',
-                    selected: true,
-                    onTap: () => Navigator.of(context).pop(), // already home
+                    selected: selected == DrawerSection.chats,
+                    onTap: () => _goChats(context),
                   ),
                   _NavItem(
                     icon: Icons.local_library_outlined,

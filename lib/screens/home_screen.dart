@@ -5,26 +5,32 @@ import '../models/conversation.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
 import 'chat_screen.dart';
+import 'chats_screen.dart';
 import 'settings_screen.dart';
 
-/// The screen you land on: a hub of recent chats with a prominent way to start
-/// a new one. A single conversation opens on top as a detail screen, so the
-/// back button always returns here — the standard Android hub-and-detail flow.
+/// The section you land on: a Home dashboard. It leads with where replies come
+/// from (the provider setup reminder) and offers a quick peek at recent chats,
+/// keeping the full list one tap away. Conversations open on top as detail
+/// screens, so Back always returns here — the standard Android flow.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
-
-  void _openChat(BuildContext context, AppState state, String id) {
-    state.selectConversation(id);
-    _pushChat(context);
-  }
 
   void _newChat(BuildContext context, AppState state) {
     state.newConversation();
     _pushChat(context);
   }
 
+  void _openChat(BuildContext context, AppState state, String id) {
+    state.selectConversation(id);
+    _pushChat(context);
+  }
+
   void _pushChat(BuildContext context) => Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const ChatScreen()),
+      );
+
+  void _openChats(BuildContext context) => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const ChatsScreen()),
       );
 
   void _openSettings(BuildContext context) => Navigator.of(context).push(
@@ -37,13 +43,13 @@ class HomeScreen extends StatelessWidget {
     if (!state.ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    // Brand-new, never-sent threads have nothing to show, so they stay out of
-    // the list until they hold a message.
+    // Brand-new, never-sent threads stay hidden until they hold a message.
     final chats = state.conversations.where((c) => !c.isEmpty).toList();
+    final recent = chats.take(3).toList();
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
-      drawer: const AppDrawer(),
+      drawer: const AppDrawer(selected: DrawerSection.home),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _newChat(context, state),
         icon: const Icon(Icons.add),
@@ -51,16 +57,7 @@ class HomeScreen extends StatelessWidget {
       ),
       body: CustomScrollView(
         slivers: [
-          SliverAppBar.large(
-            title: const Text('MaiChat'),
-            actions: [
-              IconButton(
-                tooltip: 'Settings',
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: () => _openSettings(context),
-              ),
-            ],
-          ),
+          const SliverAppBar.large(title: Text('Home')),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
             sliver: SliverToBoxAdapter(
@@ -70,32 +67,43 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ),
-          if (chats.isNotEmpty)
-            const SliverPadding(
-              padding: EdgeInsets.fromLTRB(20, 12, 20, 4),
-              sliver: SliverToBoxAdapter(child: _SectionHeader('Recent chats')),
-            ),
-          if (chats.isEmpty)
+          if (recent.isEmpty)
             SliverFillRemaining(
               hasScrollBody: false,
-              child: _EmptyHome(configured: state.isConfigured),
+              child: _WelcomeHome(configured: state.isConfigured),
             )
-          else
+          else ...[
             SliverPadding(
-              padding: EdgeInsets.fromLTRB(12, 0, 12, 96 + bottom),
-              sliver: SliverList.builder(
-                itemCount: chats.length,
-                itemBuilder: (context, index) => _ChatCard(
-                  conversation: chats[index],
-                  onTap: () => _openChat(context, state, chats[index].id),
-                  onDelete: () => _confirmDelete(context, state, chats[index]),
+              padding: const EdgeInsets.fromLTRB(20, 12, 8, 0),
+              sliver: SliverToBoxAdapter(
+                child: Row(
+                  children: [
+                    const Expanded(child: _SectionHeader('Recent chats')),
+                    TextButton(
+                      onPressed: () => _openChats(context),
+                      child: const Text('See all'),
+                    ),
+                  ],
                 ),
               ),
             ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(12, 0, 12, 96 + bottom),
+              sliver: SliverList.builder(
+                itemCount: recent.length,
+                itemBuilder: (context, index) => ChatCard(
+                  conversation: recent[index],
+                  onTap: () => _openChat(context, state, recent[index].id),
+                  onDelete: () => _confirmDelete(context, state, recent[index]),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+
   Future<void> _confirmDelete(
     BuildContext context,
     AppState state,
@@ -121,6 +129,7 @@ class HomeScreen extends StatelessWidget {
     if (confirmed ?? false) await state.deleteConversation(c.id);
   }
 }
+// APPEND-MARKER
 
 /// A left-aligned label that titles a run of cards below it.
 class _SectionHeader extends StatelessWidget {
@@ -227,91 +236,10 @@ class _ProviderCard extends StatelessWidget {
   }
 }
 
-/// One conversation in the recent list: title, a preview of the last turn, how
-/// long ago it was touched, and an overflow menu to delete it.
-class _ChatCard extends StatelessWidget {
-  const _ChatCard({
-    required this.conversation,
-    required this.onTap,
-    required this.onDelete,
-  });
-
-  final Conversation conversation;
-  final VoidCallback onTap;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final preview = conversation.messages.isEmpty
-        ? 'Empty'
-        : conversation.messages.last.content
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerLow,
-      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        onTap: onTap,
-        leading: CircleAvatar(
-          backgroundColor: scheme.secondaryContainer,
-          child: Icon(
-            Icons.chat_bubble_outline,
-            color: scheme.onSecondaryContainer,
-            size: 20,
-          ),
-        ),
-        title: Text(
-          conversation.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              preview.isEmpty ? 'Empty' : preview,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              relativeTime(conversation.updatedAt),
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-            ),
-          ],
-        ),
-        isThreeLine: true,
-        trailing: PopupMenuButton<String>(
-          tooltip: 'More',
-          icon: const Icon(Icons.more_vert),
-          onSelected: (value) {
-            if (value == 'delete') onDelete();
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem<String>(
-              value: 'delete',
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.delete_outline),
-                title: Text('Delete'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Fills the body when there are no chats yet — a friendly nudge towards the
-/// New chat button (or settings, when the provider is not configured).
-class _EmptyHome extends StatelessWidget {
-  const _EmptyHome({required this.configured});
+/// Fills the body on a fresh Home with no chats yet — a friendly nudge towards
+/// the New chat button (or settings, when the provider is not configured).
+class _WelcomeHome extends StatelessWidget {
+  const _WelcomeHome({required this.configured});
 
   final bool configured;
 
@@ -324,12 +252,10 @@ class _EmptyHome extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.forum_outlined, size: 56, color: scheme.outline),
+            Icon(Icons.waving_hand_outlined, size: 56, color: scheme.outline),
             const SizedBox(height: 16),
-            Text(
-              'No chats yet',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Welcome to MaiChat',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
               configured
@@ -345,15 +271,4 @@ class _EmptyHome extends StatelessWidget {
       ),
     );
   }
-}
-
-/// A compact "time since" label: minutes, hours, days, weeks, then years.
-String relativeTime(DateTime time) {
-  final diff = DateTime.now().difference(time);
-  if (diff.inMinutes < 1) return 'Just now';
-  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-  if (diff.inHours < 24) return '${diff.inHours}h ago';
-  if (diff.inDays < 7) return '${diff.inDays}d ago';
-  if (diff.inDays < 365) return '${diff.inDays ~/ 7}w ago';
-  return '${diff.inDays ~/ 365}y ago';
 }

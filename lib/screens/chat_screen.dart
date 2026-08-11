@@ -1,4 +1,7 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../models/conversation.dart';
@@ -7,10 +10,16 @@ import '../services/chat_client.dart';
 import '../state/app_state.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/model_picker.dart';
+import 'chats_screen.dart';
+import 'section_screen.dart';
+import 'settings/appearance_settings_page.dart';
 import 'settings_screen.dart';
 
-/// A single conversation: the thread, a composer, and a tap-through to the
-/// quick provider/model picker. Opened on top of the home hub.
+/// A single conversation: the thread and a composer. The chat is deliberately
+/// chrome-light — instead of a full app bar it carries a single translucent,
+/// non-intrusive hamburger at the top-left that opens the chat sidebar, where
+/// every option lives (provider/model, edit, export, restart, delete, and the
+/// jumps to the other sections).
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -46,6 +55,26 @@ class _ChatScreenState extends State<ChatScreen> {
         MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
       );
 
+  void _openAppearance() => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const AppearanceSettingsPage()),
+      );
+
+  void _openSection(String title, IconData icon) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+            builder: (_) => SectionScreen(title: title, icon: icon)),
+      );
+
+  /// Back to the landing Home screen (the first route).
+  void _goHome() => Navigator.of(context).popUntil((route) => route.isFirst);
+
+  /// Home first, then open the full Chats list, so Back is predictable.
+  void _goChats() {
+    _goHome();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const ChatsScreen()),
+    );
+  }
+
   void _openQuickSettings() => showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
@@ -56,6 +85,105 @@ class _ChatScreenState extends State<ChatScreen> {
         }),
       );
 
+  Future<void> _editChat(AppState state) async {
+    final conversation = state.active;
+    final controller = TextEditingController(
+      text: conversation.isEmpty ? '' : conversation.title,
+    );
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename chat'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Title'),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name != null && name.trim().isNotEmpty) {
+      await state.renameConversation(conversation.id, name);
+    }
+  }
+
+  Future<void> _exportChat(AppState state) async {
+    final conversation = state.active;
+    if (conversation.isEmpty) {
+      _toast('Nothing to export yet.');
+      return;
+    }
+    final buffer = StringBuffer('# ${conversation.title}\n\n');
+    for (final m in conversation.messages) {
+      final who = m.role == 'user' ? 'You' : 'Assistant';
+      buffer.writeln('$who:\n${m.content}\n');
+    }
+    await Clipboard.setData(ClipboardData(text: buffer.toString().trim()));
+    _toast('Chat copied to clipboard.');
+  }
+
+  Future<void> _restartChat(AppState state) async {
+    final ok = await _confirm(
+      title: 'Restart chat?',
+      body: 'This clears every message in this chat but keeps it around.',
+      action: 'Restart',
+    );
+    if (ok) {
+      await state.restartConversation();
+      _scrollToEnd();
+    }
+  }
+
+  Future<void> _deleteChat(AppState state) async {
+    final ok = await _confirm(
+      title: 'Delete chat?',
+      body: '"${state.active.title}" will be removed permanently.',
+      action: 'Delete',
+    );
+    if (!ok) return;
+    await state.deleteConversation(state.active.id);
+    if (mounted) _goHome();
+  }
+
+  Future<bool> _confirm({
+    required String title,
+    required String body,
+    required String action,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  void _toast(String message) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(message)));
+
   /// Sticks to the newest message after the frame that added it.
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -63,6 +191,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _scroll.jumpTo(_scroll.position.maxScrollExtent);
     });
   }
+// APPEND-MARKER-1
 
   @override
   Widget build(BuildContext context) {
@@ -72,84 +201,70 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
-    final active = state.activeProvider;
-    final subtitle = active == null
-        ? null
-        : '${active.displayName}${active.model.trim().isEmpty ? '' : ' · ${active.model.trim()}'}';
+    final topInset = MediaQuery.paddingOf(context).top;
 
     return Scaffold(
-      appBar: AppBar(
-        title: InkWell(
-          onTap: _openQuickSettings,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+      drawer: _ChatDrawer(
+        onProfile: _goHome,
+        onCharacters: () =>
+            _openSection('Characters', Icons.people_alt_outlined),
+        onChats: _goChats,
+        onParticipants: () => _openSection('Participants', Icons.group_outlined),
+        onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),
+        onEditChat: () => _editChat(state),
+        onPreset: () => _openSection('Presets', Icons.tune_outlined),
+        onMemory: () => _openSection('Memory', Icons.book_outlined),
+        onUi: _openAppearance,
+        onChatGraph: () =>
+            _openSection('Chat Graph', Icons.account_tree_outlined),
+        onProviderModel: _openQuickSettings,
+        onSettings: _openSettings,
+        onImageGen: () =>
+            _openSection('Image Generation', Icons.add_photo_alternate_outlined),
+        onExport: () => _exportChat(state),
+        onRestart: () => _restartChat(state),
+        onDelete: () => _deleteChat(state),
+        onNotifications: () =>
+            _openSection('Notifications', Icons.notifications_outlined),
+      ),
+      body: Stack(
+        children: [
+          SafeArea(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  conversation.isEmpty ? 'MaiChat' : conversation.title,
-                  overflow: TextOverflow.ellipsis,
+                Expanded(
+                  child: conversation.isEmpty
+                      ? _EmptyState(
+                          configured: state.isConfigured,
+                          onSettings: _openSettings,
+                        )
+                      : _messageList(conversation, state, topInset),
                 ),
-                if (subtitle != null)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          subtitle,
-                          style: Theme.of(context).textTheme.labelSmall,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const Icon(Icons.arrow_drop_down, size: 16),
-                    ],
-                  ),
+                _composer(state),
               ],
             ),
           ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Quick settings',
-            onPressed: _openQuickSettings,
-            icon: const Icon(Icons.tune),
-          ),
-          IconButton(
-            tooltip: 'New chat',
-            onPressed: state.streaming ? null : state.newConversation,
-            icon: const Icon(Icons.add_comment_outlined),
-          ),
-          IconButton(
-            tooltip: 'Settings',
-            onPressed: _openSettings,
-            icon: const Icon(Icons.settings_outlined),
+          // The one piece of chrome: a translucent hamburger that floats over
+          // the thread without boxing it in.
+          Positioned(
+            top: topInset + 6,
+            left: 8,
+            child: Builder(
+              builder: (ctx) => _TranslucentMenuButton(
+                onTap: () => Scaffold.of(ctx).openDrawer(),
+              ),
+            ),
           ),
         ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: conversation.isEmpty
-                  ? _EmptyState(
-                      configured: state.isConfigured,
-                      onSettings: _openSettings,
-                    )
-                  : _messageList(conversation, state),
-            ),
-            _composer(state),
-          ],
-        ),
       ),
     );
   }
 
-  Widget _messageList(Conversation conversation, AppState state) {
+  Widget _messageList(Conversation conversation, AppState state, double top) {
     return ListView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      // Leave room so the first bubble clears the floating hamburger.
+      padding: EdgeInsets.fromLTRB(0, top + 56, 0, 8),
       itemCount: conversation.messages.length,
       itemBuilder: (context, index) {
         final isLast = index == conversation.messages.length - 1;
@@ -212,9 +327,345 @@ class _ChatScreenState extends State<ChatScreen> {
       valueListenable: _input,
       builder: (context, value, _) => IconButton.filled(
         tooltip: 'Send',
-        onPressed:
-            value.text.trim().isEmpty ? null : () => _send(state),
+        onPressed: value.text.trim().isEmpty ? null : () => _send(state),
         icon: const Icon(Icons.arrow_upward),
+      ),
+    );
+  }
+}
+// APPEND-MARKER-2
+
+/// The lone bit of chat chrome: a small, frosted, semi-transparent circle that
+/// carries the menu icon. Translucent enough to let the thread show through,
+/// so it never boxes the conversation in.
+class _TranslucentMenuButton extends StatelessWidget {
+  const _TranslucentMenuButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Material(
+          color: scheme.surface.withValues(alpha: 0.4),
+          shape: const CircleBorder(),
+          child: IconButton(
+            tooltip: 'Menu',
+            icon: Icon(Icons.menu, color: scheme.onSurface.withValues(alpha: 0.9)),
+            onPressed: onTap,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The chat sidebar. Mirrors agnai's chat menu: an editable chat title on top,
+/// jumps to the other sections, provider/model, and a utility row of chat
+/// actions (settings, image gen, export, restart, delete, notifications).
+class _ChatDrawer extends StatelessWidget {
+  const _ChatDrawer({
+    required this.onProfile,
+    required this.onCharacters,
+    required this.onChats,
+    required this.onParticipants,
+    required this.onGallery,
+    required this.onEditChat,
+    required this.onPreset,
+    required this.onMemory,
+    required this.onUi,
+    required this.onChatGraph,
+    required this.onProviderModel,
+    required this.onSettings,
+    required this.onImageGen,
+    required this.onExport,
+    required this.onRestart,
+    required this.onDelete,
+    required this.onNotifications,
+  });
+
+  final VoidCallback onProfile;
+  final VoidCallback onCharacters;
+  final VoidCallback onChats;
+  final VoidCallback onParticipants;
+  final VoidCallback onGallery;
+  final VoidCallback onEditChat;
+  final VoidCallback onPreset;
+  final VoidCallback onMemory;
+  final VoidCallback onUi;
+  final VoidCallback onChatGraph;
+  final VoidCallback onProviderModel;
+  final VoidCallback onSettings;
+  final VoidCallback onImageGen;
+  final VoidCallback onExport;
+  final VoidCallback onRestart;
+  final VoidCallback onDelete;
+  final VoidCallback onNotifications;
+
+  /// Runs [action] after the drawer has closed, so the drawer does not sit
+  /// open behind whatever the action pushes or shows.
+  void _close(BuildContext context, VoidCallback action) {
+    Navigator.of(context).pop();
+    action();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final conversation = state.active;
+    final active = state.activeProvider;
+    final model = active?.model.trim() ?? '';
+    final providerSubtitle = active == null
+        ? 'No provider yet'
+        : '${active.displayName}${model.isEmpty ? '' : ' · $model'}';
+
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Editable chat title, like agnai's "edit character" header.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              child: InkWell(
+                onTap: () => _close(context, onEditChat),
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit_outlined, size: 18, color: scheme.primary),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          conversation.isEmpty ? 'New chat' : conversation.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                children: [
+                  _ChatNavItem(
+                    icon: Icons.person_outline,
+                    label: 'Profile',
+                    onTap: () => _close(context, onProfile),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _BackNavButton(
+                            label: 'Characters',
+                            onTap: () => _close(context, onCharacters),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _BackNavButton(
+                            label: 'Chats',
+                            onTap: () => _close(context, onChats),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.group_outlined,
+                    label: 'Participants',
+                    onTap: () => _close(context, onParticipants),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.photo_library_outlined,
+                    label: 'Gallery',
+                    onTap: () => _close(context, onGallery),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.edit_note_outlined,
+                    label: 'Edit Chat',
+                    onTap: () => _close(context, onEditChat),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.tune_outlined,
+                    label: 'Preset',
+                    onTap: () => _close(context, onPreset),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.book_outlined,
+                    label: 'Memory',
+                    onTap: () => _close(context, onMemory),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.palette_outlined,
+                    label: 'UI',
+                    onTap: () => _close(context, onUi),
+                  ),
+                  _ChatNavItem(
+                    icon: Icons.account_tree_outlined,
+                    label: 'Chat Graph',
+                    onTap: () => _close(context, onChatGraph),
+                  ),
+                  const SizedBox(height: 4),
+                  _ChatNavItem(
+                    icon: Icons.dns_outlined,
+                    label: 'Provider & model',
+                    subtitle: providerSubtitle,
+                    onTap: () => _close(context, onProviderModel),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            _ChatDrawerFooter(
+              onSettings: () => _close(context, onSettings),
+              onImageGen: () => _close(context, onImageGen),
+              onExport: () => _close(context, onExport),
+              onRestart: () => _close(context, onRestart),
+              onDelete: () => _close(context, onDelete),
+              onNotifications: () => _close(context, onNotifications),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+// APPEND-MARKER-3
+
+/// A single rounded destination in the chat sidebar, optionally with a quiet
+/// second line (used to show the active provider and model).
+class _ChatNavItem extends StatelessWidget {
+  const _ChatNavItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String label;
+  final String? subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: ListTile(
+        leading: Icon(icon, color: scheme.onSurfaceVariant),
+        title: Text(
+          label,
+          style: Theme.of(context)
+              .textTheme
+              .labelLarge
+              ?.copyWith(color: scheme.onSurface, fontWeight: FontWeight.w500),
+        ),
+        subtitle: subtitle == null
+            ? null
+            : Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+/// One half of the "← Characters / ← Chats" back-navigation pair.
+class _BackNavButton extends StatelessWidget {
+  const _BackNavButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: const Icon(Icons.chevron_left, size: 18),
+      label: Text(label, overflow: TextOverflow.ellipsis),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+}
+
+/// The utility strip pinned to the bottom of the chat sidebar: icon-only chat
+/// actions, echoing agnai's footer row.
+class _ChatDrawerFooter extends StatelessWidget {
+  const _ChatDrawerFooter({
+    required this.onSettings,
+    required this.onImageGen,
+    required this.onExport,
+    required this.onRestart,
+    required this.onDelete,
+    required this.onNotifications,
+  });
+
+  final VoidCallback onSettings;
+  final VoidCallback onImageGen;
+  final VoidCallback onExport;
+  final VoidCallback onRestart;
+  final VoidCallback onDelete;
+  final VoidCallback onNotifications;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Wrap(
+        alignment: WrapAlignment.spaceEvenly,
+        children: [
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: onSettings,
+          ),
+          IconButton(
+            tooltip: 'Image generation',
+            icon: const Icon(Icons.add_photo_alternate_outlined),
+            onPressed: onImageGen,
+          ),
+          IconButton(
+            tooltip: 'Export chat',
+            icon: const Icon(Icons.download_outlined),
+            onPressed: onExport,
+          ),
+          IconButton(
+            tooltip: 'Restart chat',
+            icon: const Icon(Icons.restart_alt),
+            onPressed: onRestart,
+          ),
+          IconButton(
+            tooltip: 'Delete chat',
+            icon: Icon(Icons.delete_outline, color: scheme.error),
+            onPressed: onDelete,
+          ),
+          IconButton(
+            tooltip: 'Notifications',
+            icon: const Icon(Icons.notifications_outlined),
+            onPressed: onNotifications,
+          ),
+        ],
       ),
     );
   }
@@ -264,6 +715,7 @@ class _EmptyState extends StatelessWidget {
     );
   }
 }
+// APPEND-MARKER-4
 
 /// The chat-screen quick picker: switch the active provider and choose its
 /// model without leaving the conversation. "Manage providers" drops into the
@@ -395,3 +847,5 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
     );
   }
 }
+
+

@@ -13,10 +13,10 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    // The home hub greets by name and prompts setup while unconfigured.
+    // The Home dashboard is titled and prompts setup while unconfigured.
     // A large app bar renders its title in both the collapsed and expanded
     // slots, so more than one match is expected.
-    expect(find.text('MaiChat'), findsWidgets);
+    expect(find.text('Home'), findsWidgets);
     expect(find.text('Open settings'), findsOneWidget);
 
     // Opening a fresh chat lands on the composer with a disabled send button.
@@ -64,7 +64,9 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.settings_outlined));
+    // The configured provider shows as a status card on Home; tapping it opens
+    // settings, where the Providers page holds the editor.
+    await tester.tap(find.text('host.tld'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Providers'));
@@ -179,10 +181,22 @@ void main() {
     // Home reflects the active provider.
     expect(find.text('First'), findsWidgets);
 
-    // Open a chat, then the quick-settings sheet.
+    // Open a chat, then the quick-settings sheet via the chat sidebar. The
+    // provider entry sits toward the bottom of the scrollable sidebar.
     await tester.tap(find.text('New chat'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.tune));
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.dragUntilVisible(
+      find.text('Provider & model'),
+      find.descendant(
+        of: find.byType(Drawer),
+        matching: find.byType(Scrollable),
+      ),
+      const Offset(0, -80),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Provider & model'));
     await tester.pumpAndSettle();
 
     // Both providers are listed; the active one's model shows in the Model row.
@@ -193,5 +207,32 @@ void main() {
     await tester.tap(find.text('Second'));
     await tester.pumpAndSettle();
     expect(find.text('m2'), findsWidgets);
+  });
+
+  testWidgets('the chat sidebar restarts a conversation', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'flutter.conversations':
+          '[{"id":"1","title":"Tides","updatedAt":"2026-01-01T00:00:00.000",'
+              '"messages":[{"role":"user","content":"hi"}]}]',
+    });
+    await tester.pumpWidget(const MaiChatApp());
+    await tester.pumpAndSettle();
+
+    // Open the saved chat from Home, then its sidebar.
+    await tester.tap(find.text('Tides'));
+    await tester.pumpAndSettle();
+    expect(find.text('hi'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    // Restart lives in the footer and asks before clearing.
+    await tester.tap(find.byIcon(Icons.restart_alt));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Restart'));
+    await tester.pumpAndSettle();
+
+    // The message is gone and the composer is back to its empty state.
+    expect(find.text('hi'), findsNothing);
   });
 }
