@@ -5,6 +5,7 @@ import '../models/character.dart';
 import '../services/character_codec.dart';
 import '../services/character_sources.dart';
 import '../state/app_state.dart';
+import '../widgets/app_drawer.dart';
 import '../widgets/character_avatar.dart';
 import 'character_actions.dart';
 import 'character_edit_screen.dart';
@@ -390,6 +391,9 @@ class _CharactersScreenState extends State<CharactersScreen> {
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
+      drawer: _selecting
+          ? null
+          : const AppDrawer(selected: DrawerSection.characters),
       appBar: _selecting ? _selectionAppBar(state) : _mainAppBar(),
       floatingActionButton: _selecting
           ? null
@@ -698,7 +702,11 @@ class _CharacterCard extends StatelessWidget {
                 ],
               ),
             ),
-            Padding(
+            // The name/description slot sits on a distinct, slightly stronger
+            // surface so it reads as a label attached under the avatar.
+            Container(
+              width: double.infinity,
+              color: scheme.surfaceContainerHighest,
               padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,

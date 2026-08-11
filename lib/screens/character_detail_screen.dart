@@ -61,12 +61,13 @@ class CharacterDetailScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 96),
         children: [
           _Header(character: character),
-          _Section('Description', character.description),
-          _Section('Personality', character.personality),
-          _Section('Scenario', character.scenario),
-          _Section('Greeting', character.firstMes),
+          _ChatInfoCard(state: state),
+          _ExpandableSection('Description', character.description),
+          _ExpandableSection('Personality', character.personality),
+          _ExpandableSection('Scenario', character.scenario),
+          _ExpandableSection('Greeting', character.firstMes),
           if (character.alternateGreetings.isNotEmpty)
-            _Section(
+            _ExpandableSection(
               'Alternate greetings',
               character.alternateGreetings
                   .asMap()
@@ -74,11 +75,11 @@ class CharacterDetailScreen extends StatelessWidget {
                   .map((e) => '${e.key + 1}. ${e.value}')
                   .join('\n\n'),
             ),
-          _Section('Example dialogue', character.mesExample),
-          _Section('System prompt', character.systemPrompt),
-          _Section(
+          _ExpandableSection('Example dialogue', character.mesExample),
+          _ExpandableSection('System prompt', character.systemPrompt),
+          _ExpandableSection(
               'Post-history instructions', character.postHistoryInstructions),
-          _Section('Creator notes', character.creatorNotes),
+          _ExpandableSection('Creator notes', character.creatorNotes),
         ],
       ),
     );
@@ -143,25 +144,114 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// A titled block of body text, hidden entirely when [body] is empty so the
-/// page only shows what a card actually filled in.
-class _Section extends StatelessWidget {
-  const _Section(this.title, this.body);
+/// A compact "For this chat" summary: which provider (and preset) a chat
+/// started from this character will run under.
+class _ChatInfoCard extends StatelessWidget {
+  const _ChatInfoCard({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final active = state.activeProvider;
+    final model = active?.model.trim() ?? '';
+    final providerText = active == null
+        ? 'No provider set up'
+        : '${active.displayName}${model.isEmpty ? '' : ' · $model'}';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Card(
+        elevation: 0,
+        color: scheme.surfaceContainerHighest,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'FOR THIS CHAT',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                    ),
+              ),
+              const SizedBox(height: 10),
+              _row(context, Icons.dns_outlined, 'Provider', providerText),
+              const SizedBox(height: 8),
+              _row(context, Icons.tune_outlined, 'Preset', 'Default'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _row(
+      BuildContext context, IconData icon, String label, String value) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 10),
+        Text('$label: ',
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: scheme.onSurfaceVariant)),
+        Expanded(
+          child: Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A titled block of body text, hidden entirely when [body] is empty. Long text
+/// collapses to a few lines behind a "Read more" toggle so one field can't take
+/// over the whole page.
+class _ExpandableSection extends StatefulWidget {
+  const _ExpandableSection(this.title, this.body);
 
   final String title;
   final String body;
 
   @override
+  State<_ExpandableSection> createState() => _ExpandableSectionState();
+}
+
+class _ExpandableSectionState extends State<_ExpandableSection> {
+  bool _expanded = false;
+
+  static const int _collapsedLines = 5;
+  static const int _threshold = 200;
+
+  @override
   Widget build(BuildContext context) {
-    if (body.trim().isEmpty) return const SizedBox.shrink();
+    final body = widget.body.trim();
+    if (body.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
+    final isLong = body.length > _threshold ||
+        '\n'.allMatches(body).length >= _collapsedLines;
+    final collapsed = isLong && !_expanded;
+
     return Padding(
       padding: const EdgeInsets.only(top: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            title.toUpperCase(),
+            widget.title.toUpperCase(),
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: scheme.primary,
                   fontWeight: FontWeight.w700,
@@ -169,10 +259,30 @@ class _Section extends StatelessWidget {
                 ),
           ),
           const SizedBox(height: 6),
-          SelectableText(
-            body.trim(),
-            style: Theme.of(context).textTheme.bodyMedium,
+          AnimatedSize(
+            duration: const Duration(milliseconds: 150),
+            alignment: Alignment.topCenter,
+            child: Text(
+              body,
+              maxLines: collapsed ? _collapsedLines : null,
+              overflow:
+                  collapsed ? TextOverflow.ellipsis : TextOverflow.clip,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
           ),
+          if (isLong)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () => setState(() => _expanded = !_expanded),
+                child: Text(_expanded ? 'Read less' : 'Read more'),
+              ),
+            ),
         ],
       ),
     );

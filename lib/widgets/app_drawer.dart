@@ -13,7 +13,7 @@ import '../screens/settings_screen.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
-enum DrawerSection { home, chats }
+enum DrawerSection { home, chats, characters }
 
 /// The navigation drawer shared by the top-level sections (Home and Chats).
 ///
@@ -51,6 +51,15 @@ class AppDrawer extends StatelessWidget {
     }
   }
 
+  /// Opens the Characters roster, unless it is already the host screen.
+  void _goCharacters(BuildContext context) {
+    Navigator.of(context).pop();
+    if (selected != DrawerSection.characters) {
+      Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const CharactersScreen()));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -84,7 +93,8 @@ class AppDrawer extends StatelessWidget {
                   _NavItem(
                     icon: Icons.people_alt_outlined,
                     label: 'Characters',
-                    onTap: () => _go(context, const CharactersScreen()),
+                    selected: selected == DrawerSection.characters,
+                    onTap: () => _goCharacters(context),
                   ),
                   _NavItem(
                     icon: Icons.chat_bubble_outline,
