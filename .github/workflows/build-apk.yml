@@ -68,23 +68,29 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Build split-per-ABI APKs
-        run: flutter build apk --release --split-per-abi
-
       - name: Build universal APK
+        # One APK that installs on any device — no ABI-picking for the user.
         run: flutter build apk --release
 
-      - name: Upload APKs as workflow artifacts
+      - name: Rename to MaiChat-<version>.apk
+        # Give the single output a friendly, versioned name so the download is
+        # obviously "the app", not app-release.apk.
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             "build/app/outputs/flutter-apk/MaiChat-${VERSION}.apk"
+
+      - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: maichat-apks
-          path: build/app/outputs/flutter-apk/*.apk
+          name: MaiChat-apk
+          path: build/app/outputs/flutter-apk/MaiChat-*.apk
           if-no-files-found: error
 
-      - name: Attach APKs to release (tags only)
+      - name: Attach APK to release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/app/outputs/flutter-apk/*.apk
+          files: build/app/outputs/flutter-apk/MaiChat-*.apk
           fail_on_unmatched_files: true
           generate_release_notes: true

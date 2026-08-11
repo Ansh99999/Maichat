@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/conversation.dart';
 import '../state/app_state.dart';
+import '../widgets/app_drawer.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 
@@ -42,6 +43,7 @@ class HomeScreen extends StatelessWidget {
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
+      drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _newChat(context, state),
         icon: const Icon(Icons.add),
