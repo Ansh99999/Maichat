@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
+
 import '../models/character.dart';
 
 /// Raised when bytes/text cannot be understood as a character card. The message
@@ -26,7 +28,8 @@ class CharacterCodec {
   /// size so a huge card doesn't bloat the (SharedPreferences-backed) store.
   static const int _maxEmbeddedAvatarBytes = 4 * 1024 * 1024;
 
-  /// Parses raw bytes, auto-detecting a PNG card versus a JSON card. [filename]
+  /// Parses raw bytes, auto-detecting a PNG card, a CharX archive (a `.charx`
+  /// zip, standalone or appended after a JPEG/PNG) or a JSON card. [filename]
   /// only sharpens error messages.
   static Character parseBytes(Uint8List bytes, {String? filename}) {
     if (bytes.isEmpty) {
@@ -34,22 +37,44 @@ class CharacterCodec {
     }
     if (_looksLikePng(bytes)) {
       final embedded = _extractPngCard(bytes);
-      if (embedded == null) {
-        throw CharacterParseException(
-          'That PNG has no embedded character card. Export it from '
-          'SillyTavern/JannyAI as a character card, or import the JSON instead.',
-        );
+      if (embedded != null) {
+        final character = parseJson(embedded);
+        // The card image *is* the portrait — keep it as the avatar unless the
+        // card already named a URL of its own.
+        if (character.avatar.trim().isEmpty &&
+            bytes.lengthInBytes <= _maxEmbeddedAvatarBytes) {
+          character.avatar = base64Encode(bytes);
+        }
+        return character;
       }
-      final character = parseJson(embedded);
-      // The card image *is* the portrait — keep it as the avatar unless the
-      // card already named a URL of its own.
+      // A PNG can also carry a CharX zip appended after IEND — fall through.
+    }
+
+    // CharX: a zip (possibly riding after a JPEG/PNG image) with a card.json.
+    final charX = _extractCharX(bytes);
+    if (charX != null) {
+      final character = parseJson(charX.cardJson);
       if (character.avatar.trim().isEmpty &&
-          bytes.lengthInBytes <= _maxEmbeddedAvatarBytes) {
-        character.avatar = base64Encode(bytes);
+          charX.avatar != null &&
+          charX.avatar!.lengthInBytes <= _maxEmbeddedAvatarBytes) {
+        character.avatar = base64Encode(charX.avatar!);
       }
       return character;
     }
-    // Not a PNG — assume text (JSON).
+
+    if (_looksLikePng(bytes)) {
+      throw CharacterParseException(
+        'That PNG has no embedded character card. Export it from '
+        'SillyTavern/JannyAI as a character card, or import the JSON instead.',
+      );
+    }
+    if (_looksLikeImage(bytes)) {
+      throw CharacterParseException(
+        'That image has no embedded character card. Export it as a CharX / '
+        'character card, or import the JSON instead.',
+      );
+    }
+    // Not an image — assume text (JSON).
     final String text;
     try {
       text = utf8.decode(bytes, allowMalformed: true);
@@ -66,6 +91,11 @@ class CharacterCodec {
       throw CharacterParseException('That file is empty.');
     }
     if (_looksLikePng(bytes)) {
+      return [parseBytes(bytes, filename: filename)];
+    }
+    // A CharX archive (standalone .charx, or a zip appended after a JPEG/PNG)
+    // holds a single card — hand it to the byte parser.
+    if (_looksLikeImage(bytes) || _hasZipArchive(bytes)) {
       return [parseBytes(bytes, filename: filename)];
     }
     final String text;
@@ -357,6 +387,132 @@ class CharacterCodec {
     return (keyword, utf8.decode(chunk.sublist(p), allowMalformed: true));
   }
 
+  // --- CharX (.charx zip, incl. image-embedded) ----------------------------
+
+  /// Extracts the CCv3 `card.json` (and its main icon, as the avatar) from a
+  /// CharX archive. Handles a bare `.charx` zip and a zip appended after a
+  /// JPEG/PNG image. Returns null when [bytes] holds no such archive.
+  static _CharXCard? _extractCharX(Uint8List bytes) {
+    final zip = _carveZip(bytes);
+    if (zip == null) return null;
+    Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(zip);
+    } catch (_) {
+      return null;
+    }
+    final card = archive.findFile('card.json');
+    final cardBytes = card?.readBytes();
+    if (cardBytes == null) return null;
+    return _CharXCard(
+      utf8.decode(cardBytes, allowMalformed: true),
+      _charXAvatar(archive, cardBytes),
+    );
+  }
+
+  static bool _hasZipArchive(Uint8List bytes) => _carveZip(bytes) != null;
+
+  /// Returns a view of [bytes] that begins exactly at a ZIP archive, or null if
+  /// there is none. A CharX-in-JPEG stores the zip after the image, so the
+  /// archive's internal offsets are relative to the zip start, not the file —
+  /// this realigns them by walking back from the End Of Central Directory to
+  /// the archive base. Only the tail is scanned (the EOCD lives near the end,
+  /// after an optional ≤64 KB comment).
+  static Uint8List? _carveZip(Uint8List bytes) {
+    if (bytes.length < 22) return null;
+    const eocdSig = 0x06054b50; // 'PK\x05\x06', little-endian
+    final view = ByteData.sublistView(bytes);
+    final floor = bytes.length - 22 >= 65557 ? bytes.length - 65557 : 0;
+    for (var i = bytes.length - 22; i >= floor; i--) {
+      if (view.getUint32(i, Endian.little) != eocdSig) continue;
+      final cdSize = view.getUint32(i + 12, Endian.little);
+      final cdOffset = view.getUint32(i + 16, Endian.little);
+      // ZIP64 sentinels: fall back to assuming the file already starts at PK.
+      if (cdSize == 0xFFFFFFFF || cdOffset == 0xFFFFFFFF) {
+        return (bytes[0] == 0x50 && bytes[1] == 0x4b) ? bytes : null;
+      }
+      final base = i - cdSize - cdOffset;
+      if (base < 0 || base > i) continue; // not the real EOCD, keep looking
+      return base == 0 ? bytes : Uint8List.sublistView(bytes, base);
+    }
+    return null;
+  }
+
+  /// The card's portrait, resolved from within [archive]: the CCv3 icon asset
+  /// named "main", else any icon asset, else the conventional `main.png`, else
+  /// the first embedded image. Null when the archive carries no usable image.
+  static Uint8List? _charXAvatar(Archive archive, Uint8List cardBytes) {
+    Object? mainUri;
+    Object? firstIconUri;
+    try {
+      final decoded = jsonDecode(utf8.decode(cardBytes, allowMalformed: true));
+      final data = decoded is Map ? decoded['data'] : null;
+      final assets = data is Map ? data['assets'] : null;
+      if (assets is List) {
+        for (final a in assets) {
+          if (a is Map && a['type'] == 'icon') {
+            firstIconUri ??= a['uri'];
+            if (a['name'] == 'main') {
+              mainUri = a['uri'];
+              break;
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Invalid/absent assets — fall back to filename conventions.
+    }
+
+    final path = _embeddedAssetPath(mainUri ?? firstIconUri);
+    if (path != null) {
+      final bytes = archive.findFile(path)?.readBytes();
+      if (bytes != null) return bytes;
+    }
+    final main = archive.findFile('assets/icon/image/main.png')?.readBytes();
+    if (main != null) return main;
+    for (final f in archive.files) {
+      if (f.isFile && f.name.startsWith('assets/') && _isImageName(f.name)) {
+        final bytes = f.readBytes();
+        if (bytes != null) return bytes;
+      }
+    }
+    return null;
+  }
+
+  /// Turns a CCv3 `embeded://path` asset URI (the spec's spelling) into a zip
+  /// entry path. Null for external (`http`, `ccdefault:`) or empty URIs.
+  static String? _embeddedAssetPath(Object? uri) {
+    if (uri is! String) return null;
+    for (final scheme in const ['embeded://', 'embedded://']) {
+      if (uri.startsWith(scheme)) return uri.substring(scheme.length);
+    }
+    return null;
+  }
+
+  static bool _isImageName(String name) {
+    final n = name.toLowerCase();
+    return n.endsWith('.png') ||
+        n.endsWith('.jpg') ||
+        n.endsWith('.jpeg') ||
+        n.endsWith('.webp') ||
+        n.endsWith('.gif');
+  }
+
+  /// Recognises the raster formats a card can be embedded in (PNG is handled
+  /// separately). Used to route bytes to the CharX path rather than trying to
+  /// read them as JSON text, and to give a clear message.
+  static bool _looksLikeImage(Uint8List b) {
+    if (b.length < 4) return false;
+    if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return true; // JPEG
+    if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) return true; // GIF
+    if (b.length >= 12 && // WEBP: RIFF????WEBP
+        b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
+        b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) {
+      return true;
+    }
+    return false;
+  }
+
   // --- helpers -------------------------------------------------------------
 
   static String _str(Map<String, dynamic> m, String key) {
@@ -397,4 +553,12 @@ class CharacterCodec {
     if (remainder == 0) return cleaned;
     return cleaned + ('=' * (4 - remainder));
   }
+}
+
+/// The pieces pulled from a CharX archive: the raw `card.json` text and the
+/// bytes of the main icon to use as the avatar (null when none is embedded).
+class _CharXCard {
+  const _CharXCard(this.cardJson, this.avatar);
+  final String cardJson;
+  final Uint8List? avatar;
 }

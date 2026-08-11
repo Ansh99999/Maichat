@@ -43,6 +43,9 @@ dependencies:
   file_picker: 11.0.3
   # Opening the release / APK download in the browser for in-app update.
   url_launcher: 6.3.2
+  # Reading CharX (.charx) character cards — a ZIP archive, standalone or
+  # appended after a JPEG/PNG. Pure Dart, so no native-plugin build concerns.
+  archive: 4.0.7
 
 dev_dependencies:
   flutter_test:

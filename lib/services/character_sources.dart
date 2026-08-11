@@ -79,7 +79,7 @@ class FileSource extends CharacterSource {
   @override
   String get label => 'From file';
   @override
-  String get description => 'Pick one or more .json / .png cards';
+  String get description => 'Pick .json / .png / .charx cards';
   @override
   IconData get icon => Icons.folder_open_outlined;
   @override
@@ -89,7 +89,17 @@ class FileSource extends CharacterSource {
   Future<List<SourcePayload>> fetch(String input) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['json', 'png', 'charx', 'card'],
+      // Cards travel as JSON, PNG, a CharX zip, or a CharX embedded in an
+      // image (JPEG/WEBP) — accept them all.
+      allowedExtensions: const [
+        'json',
+        'png',
+        'charx',
+        'card',
+        'jpg',
+        'jpeg',
+        'webp',
+      ],
       withData: true,
       allowMultiple: true,
     );
