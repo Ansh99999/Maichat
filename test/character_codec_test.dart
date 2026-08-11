@@ -138,6 +138,21 @@ void main() {
     expect(c.format, CharacterFormat.tavernV2);
   });
 
+  test("a PNG card's own image becomes the avatar", () {
+    final card = {
+      'spec': 'chara_card_v2',
+      'spec_version': '2.0',
+      'data': {'name': 'Pixel'},
+    };
+    final base64Card = base64.encode(utf8.encode(jsonEncode(card)));
+    final png = _pngWithChara(base64Card);
+    final c = CharacterCodec.parseBytes(png);
+    // No URL in the card, so the PNG bytes are kept as the portrait.
+    expect(c.avatarIsUrl, isFalse);
+    expect(c.avatarBytes, isNotNull);
+    expect(base64.decode(c.avatar), png);
+  });
+
   test('a PNG with no card chunk fails clearly', () {
     final png = Uint8List.fromList(const [137, 80, 78, 71, 13, 10, 26, 10]);
     expect(

@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -36,6 +39,12 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   /// we never dump the blob into the URL field.
   late final String _originalAvatar;
 
+  /// A freshly chosen device image, base64-encoded (no `data:` prefix).
+  String? _pickedBase64;
+
+  /// Set when the user explicitly clears the avatar.
+  bool _removed = false;
+
   bool get _isNew => widget.character == null;
 
   @override
@@ -59,6 +68,36 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     _creator = TextEditingController(text: c?.creator ?? '');
     _notes = TextEditingController(text: c?.creatorNotes ?? '');
     _tags = TextEditingController(text: (c?.tags ?? const <String>[]).join(', '));
+    // A typed URL should update the preview live.
+    _avatar.addListener(_onAvatarUrlChanged);
+  }
+
+  void _onAvatarUrlChanged() => setState(() {});
+
+  Future<void> _pickImage() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final bytes = result.files.first.bytes;
+    if (bytes == null || bytes.isEmpty) return;
+    setState(() {
+      _pickedBase64 = base64Encode(bytes);
+      _removed = false;
+      _avatar.clear(); // a picked image takes over from any typed URL
+    });
+  }
+
+  /// The avatar to persist / preview: a typed URL wins, then a freshly picked
+  /// image, then the preserved original (unless it was explicitly removed).
+  String _effectiveAvatar() {
+    final url = _avatar.text.trim();
+    if (url.isNotEmpty) return url;
+    if (_pickedBase64 != null) return _pickedBase64!;
+    if (_removed) return '';
+    // A cleared URL original resolves to empty; a base64 image is kept.
+    return _originalAvatar.startsWith('http') ? '' : _originalAvatar;
   }
 
   @override
@@ -74,11 +113,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    final typedAvatar = _avatar.text.trim();
-    final avatar = typedAvatar.isNotEmpty
-        ? typedAvatar
-        // Field left empty: keep a preserved card image, drop a cleared URL.
-        : (_originalAvatar.startsWith('http') ? '' : _originalAvatar);
+    final avatar = _effectiveAvatar();
 
     final character = widget.character ?? Character.empty();
     character
@@ -117,6 +152,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
+            _avatarSection(),
             const _SectionLabel('Identity'),
             _field(_name, 'Name', required: true),
             _field(_avatar, 'Avatar image URL',
@@ -136,6 +172,60 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
             _field(_notes, 'Creator notes', lines: 2),
           ],
         ),
+      ),
+    );
+  }
+
+  /// The avatar preview + pick/remove controls shown atop the form.
+  Widget _avatarSection() {
+    final scheme = Theme.of(context).colorScheme;
+    final eff = _effectiveAvatar();
+    ImageProvider? image;
+    if (eff.startsWith('http')) {
+      image = NetworkImage(eff);
+    } else if (eff.isNotEmpty) {
+      try {
+        image = MemoryImage(base64Decode(eff));
+      } catch (_) {
+        image = null;
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        children: [
+          CircleAvatar(
+            radius: 44,
+            backgroundColor: scheme.secondaryContainer,
+            backgroundImage: image,
+            onBackgroundImageError: image == null ? null : (_, _) {},
+            child: image == null
+                ? Icon(Icons.person_outline,
+                    size: 40, color: scheme.onSecondaryContainer)
+                : null,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _pickImage,
+                icon: const Icon(Icons.image_outlined),
+                label: const Text('Choose image'),
+              ),
+              if (eff.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => setState(() {
+                    _removed = true;
+                    _pickedBase64 = null;
+                    _avatar.clear();
+                  }),
+                  icon: const Icon(Icons.close),
+                  label: const Text('Remove'),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }

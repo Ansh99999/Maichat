@@ -22,6 +22,10 @@ class CharacterCodec {
 
   static const List<int> _pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
 
+  /// A PNG card's own image doubles as the avatar. Skip embedding it past this
+  /// size so a huge card doesn't bloat the (SharedPreferences-backed) store.
+  static const int _maxEmbeddedAvatarBytes = 4 * 1024 * 1024;
+
   /// Parses raw bytes, auto-detecting a PNG card versus a JSON card. [filename]
   /// only sharpens error messages.
   static Character parseBytes(Uint8List bytes, {String? filename}) {
@@ -36,7 +40,14 @@ class CharacterCodec {
           'SillyTavern/JannyAI as a character card, or import the JSON instead.',
         );
       }
-      return parseJson(embedded);
+      final character = parseJson(embedded);
+      // The card image *is* the portrait — keep it as the avatar unless the
+      // card already named a URL of its own.
+      if (character.avatar.trim().isEmpty &&
+          bytes.lengthInBytes <= _maxEmbeddedAvatarBytes) {
+        character.avatar = base64Encode(bytes);
+      }
+      return character;
     }
     // Not a PNG — assume text (JSON).
     final String text;
