@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/conversation.dart';
+import '../models/preset.dart';
 import '../models/provider.dart';
 import '../models/settings.dart';
 
@@ -13,6 +14,13 @@ class ProviderState {
   const ProviderState(this.providers, this.activeId);
   final List<Provider> providers;
   final String? activeId;
+}
+
+/// The persisted preset list plus which one new chats default to.
+class PresetState {
+  const PresetState(this.presets, this.defaultId);
+  final List<Preset> presets;
+  final String? defaultId;
 }
 
 /// Persists settings and conversations in app-private storage.
@@ -27,6 +35,8 @@ class Storage {
   static const _conversationsKey = 'conversations';
   static const _charactersKey = 'characters';
   static const _activeKey = 'activeConversation';
+  static const _presetsKey = 'presets';
+  static const _globalVarsKey = 'macroGlobals';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -170,4 +180,52 @@ class Storage {
         _charactersKey,
         jsonEncode(characters.map((c) => c.toJson()).toList()),
       );
+
+  /// Loads stored presets and the default-preset id, or an empty state on a
+  /// fresh install (the caller seeds a built-in default).
+  Future<PresetState> loadPresets() async {
+    final raw = (await _prefs).getString(_presetsKey);
+    if (raw != null) {
+      try {
+        final json = jsonDecode(raw);
+        if (json is Map<String, dynamic>) {
+          final list = (json['presets'] as List<dynamic>? ?? <dynamic>[])
+              .whereType<Map<String, dynamic>>()
+              .map(Preset.fromJson)
+              .toList();
+          return PresetState(list, json['defaultId'] as String?);
+        }
+      } catch (_) {
+        // Corrupt entry: start clean rather than blocking startup.
+      }
+    }
+    return const PresetState(<Preset>[], null);
+  }
+
+  Future<void> savePresets(PresetState state) async =>
+      (await _prefs).setString(
+        _presetsKey,
+        jsonEncode({
+          'presets': state.presets.map((p) => p.toJson()).toList(),
+          'defaultId': state.defaultId,
+        }),
+      );
+
+  /// App-wide macro variables ({{setglobalvar}} scope).
+  Future<Map<String, String>> loadGlobalVars() async {
+    final raw = (await _prefs).getString(_globalVarsKey);
+    if (raw == null) return <String, String>{};
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map) {
+        return json.map((k, v) => MapEntry(k.toString(), v?.toString() ?? ''));
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <String, String>{};
+  }
+
+  Future<void> saveGlobalVars(Map<String, String> vars) async =>
+      (await _prefs).setString(_globalVarsKey, jsonEncode(vars));
 }

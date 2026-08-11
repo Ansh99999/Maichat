@@ -7,8 +7,12 @@ import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
+import '../models/preset.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
+import '../services/macro_context.dart';
+import '../services/macro_engine.dart';
+import '../services/prompt_builder.dart';
 import '../services/storage.dart';
 import '../services/update_service.dart';
 
@@ -26,6 +30,10 @@ class AppState extends ChangeNotifier {
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
   final List<Character> _characters = <Character>[];
+  final List<Preset> _presets = <Preset>[];
+  final Map<String, String> _globalVars = <String, String>{};
+  String? _defaultPresetId;
+  final PromptBuilder _prompts = PromptBuilder(macros: DefaultMacroEngine());
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
   String? _activeId;
@@ -37,6 +45,7 @@ class AppState extends ChangeNotifier {
   List<Conversation> get conversations => List.unmodifiable(_conversations);
   List<Provider> get providers => List.unmodifiable(_providers);
   List<Character> get characters => List.unmodifiable(_characters);
+  List<Preset> get presets => List.unmodifiable(_presets);
   Appearance get appearance => _appearance;
   bool get ready => _ready;
   bool get streaming => _streaming;
@@ -77,6 +86,18 @@ class AppState extends ChangeNotifier {
     return _conversations.first;
   }
 
+  /// The visible thread without creating one — for read-only peeks (e.g. before
+  /// committing to a send).
+  Conversation? _activeOrNull() {
+    final id = _activeId;
+    if (id != null) {
+      for (final conversation in _conversations) {
+        if (conversation.id == id) return conversation;
+      }
+    }
+    return _conversations.isEmpty ? null : _conversations.first;
+  }
+
   Future<void> init() async {
     final providerState = await _storage.loadProviders();
     _providers
@@ -87,6 +108,10 @@ class AppState extends ChangeNotifier {
     _characters
       ..clear()
       ..addAll(await _storage.loadCharacters());
+    await _loadPresets();
+    _globalVars
+      ..clear()
+      ..addAll(await _storage.loadGlobalVars());
     final stored = await _storage.loadConversations()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _conversations
@@ -158,6 +183,99 @@ class AppState extends ChangeNotifier {
     _appearance = next;
     notifyListeners();
     await _storage.saveAppearance(next);
+  }
+
+  // --- Presets -------------------------------------------------------------
+
+  /// Loads presets, seeding a built-in default (SillyTavern's default blocks) on
+  /// first run so a fresh install always has something to chat with.
+  Future<void> _loadPresets() async {
+    final state = await _storage.loadPresets();
+    _presets
+      ..clear()
+      ..addAll(state.presets);
+    _defaultPresetId = state.defaultId;
+    if (_presets.isEmpty) {
+      final seed = Preset.create(name: 'Default');
+      _presets.add(seed);
+      _defaultPresetId = seed.id;
+      await _persistPresets();
+    } else if (presetById(_defaultPresetId) == null) {
+      _defaultPresetId = _presets.first.id;
+    }
+  }
+
+  Future<void> _persistPresets() =>
+      _storage.savePresets(PresetState(_presets, _defaultPresetId));
+
+  Preset? presetById(String? id) {
+    if (id == null) return null;
+    for (final p in _presets) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  /// The preset a conversation runs under: its own, else the app default.
+  Preset? presetFor(Conversation conversation) =>
+      presetById(conversation.presetId) ?? presetById(_defaultPresetId);
+
+  Preset? get defaultPreset => presetById(_defaultPresetId);
+  String? get defaultPresetId => _defaultPresetId;
+
+  Future<void> addPreset(Preset preset) async {
+    _presets.add(preset);
+    _defaultPresetId ??= preset.id;
+    notifyListeners();
+    await _persistPresets();
+  }
+
+  Future<void> savePreset(Preset preset) async {
+    final index = _presets.indexWhere((p) => p.id == preset.id);
+    if (index == -1) {
+      _presets.add(preset);
+    } else {
+      _presets[index] = preset;
+    }
+    notifyListeners();
+    await _persistPresets();
+  }
+
+  Future<Preset> duplicatePreset(Preset preset) async {
+    final copy = preset.duplicate();
+    _presets.add(copy);
+    notifyListeners();
+    await _persistPresets();
+    return copy;
+  }
+
+  Future<void> deletePreset(String id) async {
+    _presets.removeWhere((p) => p.id == id);
+    if (_defaultPresetId == id) {
+      _defaultPresetId = _presets.isEmpty ? null : _presets.first.id;
+    }
+    notifyListeners();
+    await _persistPresets();
+  }
+
+  Future<void> setDefaultPreset(String id) async {
+    if (_defaultPresetId == id) return;
+    _defaultPresetId = id;
+    notifyListeners();
+    await _persistPresets();
+  }
+
+  /// Binds [conversation] to a preset (or clears it) — the per-chat selection.
+  Future<void> setConversationPreset(String conversationId, String? presetId) async {
+    for (final c in _conversations) {
+      if (c.id == conversationId) {
+        c.presetId = presetId;
+        c.updatedAt = DateTime.now();
+        break;
+      }
+    }
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
   }
 
   // --- Characters ----------------------------------------------------------
@@ -324,19 +442,49 @@ class AppState extends ChangeNotifier {
   Future<void> send(String text) async {
     final prompt = text.trim();
     if (prompt.isEmpty || _streaming) return;
-    final provider = activeProvider;
+
+    // Resolve the provider before materializing a thread, so a misconfigured
+    // app never spawns an empty conversation just to bail out.
+    final current = _activeOrNull();
+    final preset = presetById(current?.presetId) ?? presetById(_defaultPresetId);
+    final provider = _resolveProvider(preset);
     if (provider == null) return;
 
     final conversation = active;
+
     if (conversation.isEmpty) conversation.retitleFrom(prompt);
     conversation.messages.add(ChatMessage(role: 'user', content: prompt));
-    // A character thread runs under its composed persona, sent as a leading
-    // system turn. Failure notices are display-only, so they never go back.
-    final history = <ChatMessage>[
-      if (conversation.systemPrompt.trim().isNotEmpty)
-        ChatMessage(role: 'system', content: conversation.systemPrompt.trim()),
-      ...conversation.messages.where((m) => !m.error),
-    ];
+
+    // Failure notices are display-only, so they never go back to the model.
+    final priorTurns =
+        conversation.messages.where((m) => !m.error).toList(growable: false);
+    late final List<ChatMessage> history;
+    var params = const GenParams();
+    if (preset != null) {
+      // A preset assembles the request from its ordered prompt blocks, running
+      // macros against this chat's local + the app's global variables.
+      final built = _prompts.build(
+        preset: preset,
+        character: characterById(conversation.characterId),
+        history: priorTurns,
+        model: provider.model,
+        variables: MacroVariables(
+          local: conversation.variables,
+          global: _globalVars,
+        ),
+        input: prompt,
+      );
+      history = built.messages;
+      params = _paramsFor(preset);
+    } else {
+      // No preset: the original flat behavior — the composed persona as a
+      // leading system turn, then the history.
+      history = <ChatMessage>[
+        if (conversation.systemPrompt.trim().isNotEmpty)
+          ChatMessage(role: 'system', content: conversation.systemPrompt.trim()),
+        ...priorTurns,
+      ];
+    }
     conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
@@ -347,7 +495,7 @@ class AppState extends ChangeNotifier {
     final reply = StringBuffer();
     try {
       final deltas =
-          _client.streamChat(provider: provider, history: history);
+          _client.streamChat(provider: provider, history: history, params: params);
       await for (final delta in deltas) {
         reply.write(delta);
         _replaceLast(conversation, content: reply.toString());
@@ -372,8 +520,43 @@ class AppState extends ChangeNotifier {
       conversation.updatedAt = DateTime.now();
       notifyListeners();
       await _storage.saveConversations(_conversations);
+      // Macros may have mutated variables; persist both scopes.
+      await _storage.saveGlobalVars(_globalVars);
     }
   }
+
+  /// The provider a preset runs on: its bound provider (else the active one),
+  /// with the preset's model applied on top when it names one.
+  Provider? _resolveProvider(Preset? preset) {
+    Provider? base;
+    final id = preset?.providerId;
+    if (id != null) {
+      for (final p in _providers) {
+        if (p.id == id) {
+          base = p;
+          break;
+        }
+      }
+    }
+    base ??= activeProvider;
+    if (base == null) return null;
+    final model = (preset?.model.trim().isNotEmpty ?? false)
+        ? preset!.model.trim()
+        : base.model;
+    return model == base.model ? base : base.copyWith(model: model);
+  }
+
+  GenParams _paramsFor(Preset p) => GenParams(
+        temperature: p.temperature,
+        maxTokens: p.maxResponseTokens,
+        topP: p.topP,
+        topK: p.topK,
+        frequencyPenalty: p.frequencyPenalty,
+        presencePenalty: p.presencePenalty,
+        seed: p.seed,
+        n: p.n,
+        stop: p.stopSequences,
+      );
 
   /// Aborts streaming and keeps whatever text already arrived.
   void stop() {

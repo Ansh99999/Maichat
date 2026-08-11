@@ -14,6 +14,33 @@ class ChatApiException implements Exception {
   String toString() => message;
 }
 
+/// Generation knobs a preset contributes to a request. Only values that differ
+/// from a neutral default are actually sent, so hosts that reject unknown or
+/// unsupported fields keep working.
+class GenParams {
+  const GenParams({
+    this.temperature,
+    this.maxTokens,
+    this.topP,
+    this.topK,
+    this.frequencyPenalty,
+    this.presencePenalty,
+    this.seed,
+    this.n,
+    this.stop = const <String>[],
+  });
+
+  final double? temperature;
+  final int? maxTokens;
+  final double? topP;
+  final int? topK;
+  final double? frequencyPenalty;
+  final double? presencePenalty;
+  final int? seed;
+  final int? n;
+  final List<String> stop;
+}
+
 /// Minimal client for chat and model listing. Speaks two wire formats depending
 /// on the provider's [ProviderKind]: the OpenAI-compatible `/chat/completions`
 /// and `/models` endpoints, and Anthropic's `/messages` and `/models`. Streaming
@@ -52,9 +79,11 @@ class ChatClient {
     };
   }
 
-  /// The request body for a chat turn, shaped for the provider's format.
-  Object _body(Provider provider, List<ChatMessage> history) {
+  /// The request body for a chat turn, shaped for the provider's format and
+  /// carrying the preset's [GenParams].
+  Object _body(Provider provider, List<ChatMessage> history, GenParams params) {
     final model = provider.model.trim();
+    final stop = params.stop.where((s) => s.trim().isNotEmpty).toList();
     if (provider.kind == ProviderKind.anthropic) {
       // Anthropic carries the system prompt separately and requires a token
       // ceiling; only user/assistant turns go in `messages`.
@@ -69,16 +98,32 @@ class ChatClient {
           .toList(growable: false);
       return {
         'model': model,
-        'max_tokens': 4096,
+        'max_tokens': (params.maxTokens ?? 0) > 0 ? params.maxTokens : 4096,
         'stream': true,
         if (system.isNotEmpty) 'system': system,
         'messages': turns,
+        // Anthropic's temperature tops out at 1.0.
+        if (params.temperature != null)
+          'temperature': params.temperature!.clamp(0.0, 1.0),
+        if (params.topP != null && params.topP != 1.0) 'top_p': params.topP,
+        if ((params.topK ?? 0) > 0) 'top_k': params.topK,
+        if (stop.isNotEmpty) 'stop_sequences': stop,
       };
     }
     return {
       'model': model,
       'stream': true,
       'messages': history.map((m) => m.toApi()).toList(growable: false),
+      if (params.temperature != null) 'temperature': params.temperature,
+      if ((params.maxTokens ?? 0) > 0) 'max_tokens': params.maxTokens,
+      if (params.topP != null && params.topP != 1.0) 'top_p': params.topP,
+      if (params.frequencyPenalty != null && params.frequencyPenalty != 0)
+        'frequency_penalty': params.frequencyPenalty,
+      if (params.presencePenalty != null && params.presencePenalty != 0)
+        'presence_penalty': params.presencePenalty,
+      if ((params.seed ?? -1) >= 0) 'seed': params.seed,
+      if ((params.n ?? 1) > 1) 'n': params.n,
+      if (stop.isNotEmpty) 'stop': stop,
     };
   }
 
@@ -86,6 +131,7 @@ class ChatClient {
   Stream<String> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
+    GenParams params = const GenParams(),
   }) async* {
     if (provider.model.trim().isEmpty) {
       throw ChatApiException('Pick a model in Settings first.');
@@ -100,7 +146,7 @@ class ChatClient {
     try {
       final request = http.Request('POST', uri)
         ..headers.addAll(_headers(provider, stream: true))
-        ..body = jsonEncode(_body(provider, history));
+        ..body = jsonEncode(_body(provider, history, params));
 
       final response = await client.send(request);
       if (response.statusCode != 200) {

@@ -14,6 +14,7 @@ class FakeClient extends ChatClient {
   Stream<String> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
+    GenParams params = const GenParams(),
   }) async* {
     lastHistory = List<ChatMessage>.from(history);
     yield 'ok';
@@ -120,9 +121,15 @@ void main() {
 
     await state.send('hi');
 
+    // The default preset assembles the persona from the character's fields:
+    // a leading system turn, a system block carrying the description, and the
+    // user's message last.
     final history = client.lastHistory!;
     expect(history.first.role, 'system');
-    expect(history.first.content, contains('A calm librarian.'));
+    expect(
+      history.any((m) => m.role == 'system' && m.content.contains('A calm librarian.')),
+      isTrue,
+    );
     expect(history.last.role, 'user');
     expect(history.last.content, 'hi');
   });

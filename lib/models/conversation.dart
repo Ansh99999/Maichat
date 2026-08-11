@@ -10,7 +10,9 @@ class Conversation {
     this.characterId,
     this.characterName,
     this.systemPrompt = '',
-  });
+    this.presetId,
+    Map<String, String>? variables,
+  }) : variables = variables ?? <String, String>{};
 
   final String id;
   String title;
@@ -24,6 +26,13 @@ class Conversation {
   String? characterId;
   String? characterName;
   String systemPrompt;
+
+  /// The generation preset this thread runs under (by [Preset.id]); null falls
+  /// back to the app's default preset.
+  String? presetId;
+
+  /// Per-chat macro variables ({{setvar}}/{{getvar}}), SillyTavern's local scope.
+  final Map<String, String> variables;
 
   factory Conversation.empty() => Conversation(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -51,6 +60,8 @@ class Conversation {
         if (characterId != null) 'characterId': characterId,
         if (characterName != null) 'characterName': characterName,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
+        if (presetId != null) 'presetId': presetId,
+        if (variables.isNotEmpty) 'variables': variables,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -64,6 +75,10 @@ class Conversation {
         characterId: json['characterId'] as String?,
         characterName: json['characterName'] as String?,
         systemPrompt: json['systemPrompt'] as String? ?? '',
+        presetId: json['presetId'] as String?,
+        variables: (json['variables'] as Map?)?.map(
+          (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+        ),
         messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(ChatMessage.fromJson)

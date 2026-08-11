@@ -18,6 +18,7 @@ class FakeClient extends ChatClient {
   Stream<String> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
+    GenParams params = const GenParams(),
   }) async* {
     lastProvider = provider;
     lastHistory = List<ChatMessage>.from(history);
@@ -68,9 +69,12 @@ void main() {
 
     await state.send('  first  ');
 
-    expect(client.lastHistory, hasLength(1));
-    expect(client.lastHistory!.single.role, 'user');
-    expect(client.lastHistory!.single.content, 'first');
+    // The default preset assembles the request; the user's turn is last and the
+    // empty assistant placeholder is never sent.
+    final history = client.lastHistory!;
+    expect(history.last.role, 'user');
+    expect(history.last.content, 'first');
+    expect(history.every((m) => m.content.isNotEmpty), isTrue);
     expect(client.lastProvider!.model, 'm');
     expect(state.active.title, 'first');
   });

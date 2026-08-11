@@ -7,6 +7,7 @@ import '../services/update_service.dart';
 import '../state/app_state.dart';
 import '../screens/characters_screen.dart';
 import '../screens/chats_screen.dart';
+import '../screens/presets/presets_screen.dart';
 import '../screens/section_screen.dart';
 import '../screens/settings/about_settings_page.dart';
 import '../screens/settings_screen.dart';
@@ -121,8 +122,7 @@ class AppDrawer extends StatelessWidget {
                   _NavItem(
                     icon: Icons.tune_outlined,
                     label: 'Presets',
-                    onTap: () => _go(context,
-                        const SectionScreen(title: 'Presets', icon: Icons.tune_outlined)),
+                    onTap: () => _go(context, const PresetsScreen()),
                   ),
                 ],
               ),
