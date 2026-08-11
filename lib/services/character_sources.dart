@@ -127,8 +127,10 @@ class PasteSource extends CharacterSource {
   }
 }
 
-/// Import from any direct URL that serves a card (a raw `.json`, a `.png` card,
-/// a gist, etc.).
+/// Import from a URL. A direct card link (a raw `.json` or `.png` card) works
+/// as-is, and a few known hosts are special-cased to their real download APIs —
+/// the same way SillyTavern imports (it resolves an API/CDN link rather than
+/// scraping the HTML page).
 class UrlSource extends CharacterSource {
   const UrlSource();
   @override
@@ -136,7 +138,7 @@ class UrlSource extends CharacterSource {
   @override
   String get label => 'From URL';
   @override
-  String get description => 'Fetch a card from a direct link';
+  String get description => 'A direct link, or a JannyAI/JanitorAI/RisuAI page';
   @override
   IconData get icon => Icons.link_outlined;
   @override
@@ -147,7 +149,7 @@ class UrlSource extends CharacterSource {
   @override
   Future<SourcePayload?> fetch(String input) => fetchUrl(input);
 
-  /// Shared GET used by URL-based sources.
+  /// Resolves [input] to card bytes, routing known hosts to their download API.
   static Future<SourcePayload> fetchUrl(String input) async {
     final raw = input.trim();
     if (raw.isEmpty) {
@@ -157,20 +159,44 @@ class UrlSource extends CharacterSource {
     if (uri == null || !uri.hasAuthority) {
       throw CharacterParseException('That is not a valid link.');
     }
+    final host = uri.host.toLowerCase();
+    if (host.contains('jannyai.com') || host.contains('janitorai')) {
+      return _fetchJanny(uri);
+    }
+    if (host.contains('realm.risuai.net')) {
+      return _fetchRisu(uri);
+    }
+    return _getDirect(uri);
+  }
+
+  /// A plain GET for direct asset links; rejects HTML pages.
+  static Future<SourcePayload> _getDirect(Uri uri) async {
+    final response = await _get(uri);
+    final contentType = (response.headers['content-type'] ?? '').toLowerCase();
+    if (contentType.contains('text/html')) {
+      throw CharacterParseException(
+        'That link returned a web page, not a card. Use the direct '
+        'download link to the .png or .json card.',
+      );
+    }
+    final name = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : null;
+    return SourcePayload(response.bodyBytes, filename: name);
+  }
+
+  /// GET with browser-ish headers + a same-origin referer and clear failures.
+  static Future<http.Response> _get(Uri uri) async {
     http.Response response;
     try {
-      response = await http
-          .get(uri, headers: {
-            ..._browserHeaders,
-            // A same-origin referer helps some picky CDNs serve the asset.
-            'Referer': '${uri.scheme}://${uri.host}/',
-          })
-          .timeout(const Duration(seconds: 30));
+      response = await http.get(uri, headers: {
+        ..._browserHeaders,
+        'Referer': '${uri.scheme}://${uri.host}/',
+      }).timeout(const Duration(seconds: 30));
     } catch (_) {
       throw CharacterParseException('Could not reach that link.');
     }
     if (response.statusCode != 200) {
-      if (response.statusCode == 403 || response.statusCode == 401 ||
+      if (response.statusCode == 401 ||
+          response.statusCode == 403 ||
           response.statusCode == 503) {
         throw CharacterParseException(
           'The link returned HTTP ${response.statusCode} — it is blocking '
@@ -182,24 +208,104 @@ class UrlSource extends CharacterSource {
         'The link returned HTTP ${response.statusCode}.',
       );
     }
-    final contentType =
-        (response.headers['content-type'] ?? '').toLowerCase();
-    if (contentType.contains('text/html')) {
+    return response;
+  }
+
+  /// The character-id candidates in a JannyAI/JanitorAI URL: the full
+  /// `<uuid>_<slug>` segment after `/characters/`, and the bare UUID. JannyAI's
+  /// API has been seen to accept either, so both are tried in turn.
+  static List<String> jannyCharacterIds(Uri uri) {
+    final segs = uri.pathSegments;
+    final ci = segs.indexOf('characters');
+    final full = (ci >= 0 && ci + 1 < segs.length)
+        ? segs[ci + 1]
+        : (segs.isNotEmpty ? segs.last : '');
+    final uuid = RegExp(
+      r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',
+    ).firstMatch(uri.toString())?.group(0);
+    return <String>{
+      if (full.isNotEmpty) full,
+      ?uuid,
+    }.toList();
+  }
+
+  /// SillyTavern-style JannyAI/JanitorAI import: ask `api.jannyai.com` for a
+  /// download URL for the character, then fetch that card. Falls back to clear
+  /// guidance when the API declines or the CDN link is Cloudflare-blocked.
+  static Future<SourcePayload> _fetchJanny(Uri uri) async {
+    final candidates = jannyCharacterIds(uri);
+    if (candidates.isEmpty) throw CharacterParseException(JannyAiSource.guidance);
+
+    for (final id in candidates) {
+      http.Response api;
+      try {
+        api = await http
+            .post(
+              Uri.parse('https://api.jannyai.com/api/v1/download'),
+              headers: {'Content-Type': 'application/json', ..._browserHeaders},
+              body: jsonEncode({'characterId': id}),
+            )
+            .timeout(const Duration(seconds: 30));
+      } catch (_) {
+        continue; // try the next candidate / fall through to guidance
+      }
+      if (api.statusCode != 200) continue;
+      Object? data;
+      try {
+        data = jsonDecode(api.body);
+      } catch (_) {
+        continue;
+      }
+      if (data is Map &&
+          data['status'] == 'ok' &&
+          data['downloadUrl'] is String) {
+        final dl = Uri.tryParse(data['downloadUrl'] as String);
+        if (dl == null) continue;
+        http.Response img;
+        try {
+          img = await http
+              .get(dl, headers: _browserHeaders)
+              .timeout(const Duration(seconds: 30));
+        } catch (_) {
+          throw CharacterParseException(
+            'JannyAI returned a download link but it could not be reached.',
+          );
+        }
+        if (img.statusCode == 200) {
+          return SourcePayload(img.bodyBytes, filename: '$id.png');
+        }
+        throw CharacterParseException(
+          'JannyAI returned a download link but it was blocked (HTTP '
+          '${img.statusCode}) by Cloudflare. Download the card in your browser '
+          'and import it with "From file".',
+        );
+      }
+    }
+    throw CharacterParseException(JannyAiSource.guidance);
+  }
+
+  /// RisuAI realm: `/character/<uuid>` → the `png-v3` card download.
+  static Future<SourcePayload> _fetchRisu(Uri uri) async {
+    final last = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
+    final uuid = RegExp(r'[a-f0-9-]{16,}').firstMatch(last)?.group(0);
+    if (uuid == null) {
       throw CharacterParseException(
-        'That link returned a web page, not a card. Use the direct '
-        'download link to the .png or .json card.',
+        'Could not find a RisuAI character id in that link.',
       );
     }
-    final name = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : null;
-    return SourcePayload(response.bodyBytes, filename: name);
+    final response = await _get(
+      Uri.parse(
+        'https://realm.risuai.net/api/v1/download/png-v3/$uuid?non_commercial=true',
+      ),
+    );
+    return SourcePayload(response.bodyBytes, filename: '$uuid.png');
   }
 }
 
-/// Import from JannyAI / JanitorAI. Their character *pages* sit behind a
-/// Cloudflare-style bot wall (they answer non-browser requests with 403) and
-/// JanitorAI hides bot definitions, so a page link cannot be scraped from the
-/// app. This source fetches a *direct card asset* (`.png`/`.json`) when given
-/// one, and otherwise explains how to get the card file into the app.
+/// Import from JannyAI / JanitorAI. Like SillyTavern, this resolves the
+/// character through `api.jannyai.com` (not by scraping the Cloudflare-guarded
+/// page), so a normal character-page link works. If the API declines or the
+/// card CDN is bot-blocked, it explains how to import the downloaded file.
 class JannyAiSource extends CharacterSource {
   const JannyAiSource();
   @override
@@ -207,48 +313,22 @@ class JannyAiSource extends CharacterSource {
   @override
   String get label => 'JannyAI / JanitorAI';
   @override
-  String get description => 'Paste a direct card link (.png/.json)';
+  String get description => 'Paste a JannyAI/JanitorAI character link';
   @override
   IconData get icon => Icons.extension_outlined;
   @override
   SourceInputKind get inputKind => SourceInputKind.url;
   @override
-  String get inputHint => 'https://…/card.png';
+  String get inputHint => 'https://jannyai.com/characters/…';
 
-  static const String _guidance =
-      'JannyAI/JanitorAI block direct fetches (that page returns 403) and hide '
-      'bot definitions, so a page link cannot be imported here. Download the '
+  static const String guidance =
+      'Could not fetch that character from JannyAI/JanitorAI — their API '
+      'declined or the card is behind Cloudflare bot protection. Download the '
       'card as a PNG or JSON in your browser — e.g. with a "JanitorAI → '
       'SillyTavern card exporter" userscript — then import it with "From file" '
       'or "Paste JSON".';
 
   @override
-  Future<SourcePayload?> fetch(String input) async {
-    final raw = input.trim();
-    final lower = raw.toLowerCase();
-    final isCard = lower.endsWith('.png') ||
-        lower.endsWith('.json') ||
-        lower.contains('.png?') ||
-        lower.contains('.json?');
-    final isKnownSite =
-        lower.contains('janitorai.com') || lower.contains('jannyai.com');
-
-    // A site page URL (not a direct asset) can never work — say so up front
-    // instead of round-tripping to a 403.
-    if (isKnownSite && !isCard) {
-      throw CharacterParseException(_guidance);
-    }
-
-    try {
-      return await UrlSource.fetchUrl(raw);
-    } on CharacterParseException catch (e) {
-      if (e.message.contains('403') ||
-          e.message.contains('web page') ||
-          e.message.contains('blocking')) {
-        throw CharacterParseException(_guidance);
-      }
-      rethrow;
-    }
-  }
+  Future<SourcePayload?> fetch(String input) => UrlSource.fetchUrl(input);
 }
 
