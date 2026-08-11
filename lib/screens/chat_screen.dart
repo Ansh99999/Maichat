@@ -10,6 +10,7 @@ import '../services/chat_client.dart';
 import '../state/app_state.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/model_picker.dart';
+import 'characters_screen.dart';
 import 'chats_screen.dart';
 import 'section_screen.dart';
 import 'settings/appearance_settings_page.dart';
@@ -62,6 +63,10 @@ class _ChatScreenState extends State<ChatScreen> {
   void _openSection(String title, IconData icon) => Navigator.of(context).push(
         MaterialPageRoute<void>(
             builder: (_) => SectionScreen(title: title, icon: icon)),
+      );
+
+  void _openCharacters() => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const CharactersScreen()),
       );
 
   /// Back to the landing Home screen (the first route).
@@ -206,8 +211,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       drawer: _ChatDrawer(
         onProfile: _goHome,
-        onCharacters: () =>
-            _openSection('Characters', Icons.people_alt_outlined),
+        onCharacters: _openCharacters,
         onChats: _goChats,
         onParticipants: () => _openSection('Participants', Icons.group_outlined),
         onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),

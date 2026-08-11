@@ -7,12 +7,23 @@ class Conversation {
     required this.title,
     required this.messages,
     required this.updatedAt,
+    this.characterId,
+    this.characterName,
+    this.systemPrompt = '',
   });
 
   final String id;
   String title;
   final List<ChatMessage> messages;
   DateTime updatedAt;
+
+  /// Set when this thread was started from a saved character. [characterName]
+  /// is denormalised so the chat still reads right if the character is later
+  /// edited or deleted, and [systemPrompt] is the composed persona injected
+  /// (invisibly) ahead of the history on every turn.
+  String? characterId;
+  String? characterName;
+  String systemPrompt;
 
   factory Conversation.empty() => Conversation(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -22,6 +33,9 @@ class Conversation {
       );
 
   bool get isEmpty => messages.isEmpty;
+
+  /// Whether this thread is bound to a saved character.
+  bool get hasCharacter => characterId != null;
 
   /// Names an untitled thread after its opening user message.
   void retitleFrom(String text) {
@@ -34,6 +48,9 @@ class Conversation {
         'id': id,
         'title': title,
         'updatedAt': updatedAt.toIso8601String(),
+        if (characterId != null) 'characterId': characterId,
+        if (characterName != null) 'characterName': characterName,
+        if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -44,6 +61,9 @@ class Conversation {
         updatedAt:
             DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
                 DateTime.now(),
+        characterId: json['characterId'] as String?,
+        characterName: json['characterName'] as String?,
+        systemPrompt: json['systemPrompt'] as String? ?? '',
         messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(ChatMessage.fromJson)

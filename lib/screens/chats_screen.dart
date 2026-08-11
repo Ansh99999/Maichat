@@ -9,8 +9,16 @@ import 'chat_screen.dart';
 /// The full list of recent conversations. Reached from the drawer's "Chats"
 /// destination; a single conversation opens on top as a detail screen, so the
 /// back button returns here — the standard Android hub-and-detail flow.
+///
+/// When [characterId] is set the list is scoped to that character's chats (the
+/// "Chat List" action on a character), and the drawer is dropped for a back
+/// arrow so it reads as a detail view.
 class ChatsScreen extends StatelessWidget {
-  const ChatsScreen({super.key});
+  const ChatsScreen({super.key, this.characterId, this.characterName});
+
+  /// When non-null, only conversations bound to this character are shown.
+  final String? characterId;
+  final String? characterName;
 
   void _openChat(BuildContext context, AppState state, String id) {
     state.selectConversation(id);
@@ -29,13 +37,18 @@ class ChatsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final filtered = characterId == null;
     // Brand-new, never-sent threads have nothing to show, so they stay out of
     // the list until they hold a message.
-    final chats = state.conversations.where((c) => !c.isEmpty).toList();
+    final chats = state.conversations
+        .where((c) => !c.isEmpty)
+        .where((c) => filtered ? true : c.characterId == characterId)
+        .toList();
     final bottom = MediaQuery.paddingOf(context).bottom;
+    final title = filtered ? 'Chats' : '${characterName ?? 'Character'} chats';
 
     return Scaffold(
-      drawer: const AppDrawer(selected: DrawerSection.chats),
+      drawer: filtered ? const AppDrawer(selected: DrawerSection.chats) : null,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _newChat(context, state),
         icon: const Icon(Icons.add),
@@ -43,7 +56,7 @@ class ChatsScreen extends StatelessWidget {
       ),
       body: CustomScrollView(
         slivers: [
-          const SliverAppBar.large(title: Text('Chats')),
+          SliverAppBar.large(title: Text(title)),
           if (chats.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,

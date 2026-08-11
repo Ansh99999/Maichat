@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/appearance.dart';
+import '../models/character.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/provider.dart';
@@ -18,6 +19,7 @@ class AppState extends ChangeNotifier {
 
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
+  final List<Character> _characters = <Character>[];
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
   String? _activeId;
@@ -27,6 +29,7 @@ class AppState extends ChangeNotifier {
 
   List<Conversation> get conversations => List.unmodifiable(_conversations);
   List<Provider> get providers => List.unmodifiable(_providers);
+  List<Character> get characters => List.unmodifiable(_characters);
   Appearance get appearance => _appearance;
   bool get ready => _ready;
   bool get streaming => _streaming;
@@ -71,6 +74,9 @@ class AppState extends ChangeNotifier {
       ..addAll(providerState.providers);
     _activeProviderId = providerState.activeId;
     _appearance = await _storage.loadAppearance();
+    _characters
+      ..clear()
+      ..addAll(await _storage.loadCharacters());
     final stored = await _storage.loadConversations()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _conversations
@@ -132,6 +138,88 @@ class AppState extends ChangeNotifier {
     await _storage.saveAppearance(next);
   }
 
+  // --- Characters ----------------------------------------------------------
+
+  Future<void> _persistCharacters() => _storage.saveCharacters(_characters);
+
+  Character? characterById(String? id) {
+    if (id == null) return null;
+    for (final c in _characters) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  /// Adds [character] to the top of the roster.
+  Future<void> addCharacter(Character character) async {
+    _characters.insert(0, character);
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// Replaces the stored character sharing [character]'s id, or adds it when
+  /// there is no match yet.
+  Future<void> saveCharacter(Character character) async {
+    character.updatedAt = DateTime.now();
+    final index = _characters.indexWhere((c) => c.id == character.id);
+    if (index == -1) {
+      _characters.insert(0, character);
+    } else {
+      _characters[index] = character;
+    }
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  Future<void> deleteCharacter(String id) async {
+    _characters.removeWhere((c) => c.id == id);
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// Flips a character's starred flag — the pin-to-top action.
+  Future<void> toggleCharacterStar(String id) async {
+    final character = characterById(id);
+    if (character == null) return;
+    character.starred = !character.starred;
+    character.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// Copies a character under a new id and "(copy)" name — the duplicate action.
+  Future<Character> duplicateCharacter(Character character) async {
+    final copy = character.copyWith(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: '${character.displayName} (copy)',
+    );
+    await addCharacter(copy);
+    return copy;
+  }
+
+  /// Opens a fresh thread bound to [character]: titles it after the character,
+  /// stores the composed persona as the thread's (invisible) system prompt, and
+  /// seeds the resolved greeting as the opening assistant turn when there is one.
+  /// Returns the new conversation's id so the caller can navigate to it.
+  String startChatWithCharacter(Character character) {
+    final conversation = Conversation.empty()
+      ..title = character.displayName
+      ..characterId = character.id
+      ..characterName = character.displayName
+      ..systemPrompt = character.composedSystemPrompt();
+    final greeting = character.resolvedGreeting();
+    if (greeting.isNotEmpty) {
+      conversation.messages.add(ChatMessage(role: 'assistant', content: greeting));
+    }
+    _conversations.insert(0, conversation);
+    _activeId = conversation.id;
+    notifyListeners();
+    _storage
+      ..saveActiveId(conversation.id)
+      ..saveConversations(_conversations);
+    return conversation.id;
+  }
+
   /// Opens a fresh thread, reusing an existing empty one so repeated taps do
   /// not pile up blank entries.
   void newConversation() {
@@ -174,7 +262,20 @@ class AppState extends ChangeNotifier {
     if (_streaming) stop();
     final conversation = active;
     conversation.messages.clear();
-    conversation.title = 'New chat';
+    // A character thread keeps its identity and re-seeds the greeting; a plain
+    // thread resets to an untitled one.
+    if (conversation.hasCharacter) {
+      final character = characterById(conversation.characterId);
+      if (character != null) {
+        final greeting = character.resolvedGreeting();
+        if (greeting.isNotEmpty) {
+          conversation.messages
+              .add(ChatMessage(role: 'assistant', content: greeting));
+        }
+      }
+    } else {
+      conversation.title = 'New chat';
+    }
     conversation.updatedAt = DateTime.now();
     notifyListeners();
     await _storage.saveConversations(_conversations);
@@ -198,10 +299,13 @@ class AppState extends ChangeNotifier {
     final conversation = active;
     if (conversation.isEmpty) conversation.retitleFrom(prompt);
     conversation.messages.add(ChatMessage(role: 'user', content: prompt));
-    // Failure notices are display-only, so they never go back to the model.
-    final history = List<ChatMessage>.unmodifiable(
-      conversation.messages.where((m) => !m.error),
-    );
+    // A character thread runs under its composed persona, sent as a leading
+    // system turn. Failure notices are display-only, so they never go back.
+    final history = <ChatMessage>[
+      if (conversation.systemPrompt.trim().isNotEmpty)
+        ChatMessage(role: 'system', content: conversation.systemPrompt.trim()),
+      ...conversation.messages.where((m) => !m.error),
+    ];
     conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);

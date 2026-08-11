@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/appearance.dart';
 import '../state/app_state.dart';
+import '../screens/characters_screen.dart';
 import '../screens/chats_screen.dart';
 import '../screens/section_screen.dart';
 import '../screens/settings/about_settings_page.dart';
@@ -81,10 +82,7 @@ class AppDrawer extends StatelessWidget {
                   _NavItem(
                     icon: Icons.people_alt_outlined,
                     label: 'Characters',
-                    onTap: () => _go(
-                        context,
-                        const SectionScreen(
-                            title: 'Characters', icon: Icons.people_alt_outlined)),
+                    onTap: () => _go(context, const CharactersScreen()),
                   ),
                   _NavItem(
                     icon: Icons.chat_bubble_outline,

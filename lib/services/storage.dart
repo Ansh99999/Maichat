@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/appearance.dart';
+import '../models/character.dart';
 import '../models/conversation.dart';
 import '../models/provider.dart';
 import '../models/settings.dart';
@@ -24,6 +25,7 @@ class Storage {
   static const _providersKey = 'providers';
   static const _appearanceKey = 'appearance';
   static const _conversationsKey = 'conversations';
+  static const _charactersKey = 'characters';
   static const _activeKey = 'activeConversation';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
@@ -145,4 +147,27 @@ class Storage {
 
   Future<void> saveActiveId(String id) async =>
       (await _prefs).setString(_activeKey, id);
+
+  Future<List<Character>> loadCharacters() async {
+    final raw = (await _prefs).getString(_charactersKey);
+    if (raw == null) return <Character>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(Character.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <Character>[];
+  }
+
+  Future<void> saveCharacters(List<Character> characters) async =>
+      (await _prefs).setString(
+        _charactersKey,
+        jsonEncode(characters.map((c) => c.toJson()).toList()),
+      );
 }
