@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 /// Bounds the avatar-size slider (and the drag-to-resize handle) honour, in
@@ -151,6 +152,102 @@ enum TextPlacement {
 }
 // APPEND-AVATARSTYLE
 
+/// A per-message action, offered either inline (as an icon beside the message)
+/// or tucked into the three-dot overflow — configured per action in Chat
+/// Interface settings, mirroring Agnai's `msgOptsInline` model.
+enum MessageAction {
+  regenerate('Regenerate', Icons.refresh),
+  edit('Edit', Icons.edit_outlined),
+  delete('Delete', Icons.delete_outline),
+  copy('Copy', Icons.copy_outlined),
+  fork('Fork', Icons.call_split),
+  prompt('View prompt', Icons.terminal),
+  info('Info', Icons.info_outline);
+
+  const MessageAction(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+
+  /// Regenerate and prompt inspection only make sense on a model turn.
+  bool get assistantOnly =>
+      this == MessageAction.regenerate || this == MessageAction.prompt;
+
+  /// Whether this action is offered on a turn sent by [isUser].
+  bool appliesTo(bool isUser) => !(isUser && assistantOnly);
+
+  /// Mutating actions are disabled while a reply is still streaming.
+  bool get blockedWhileStreaming =>
+      this == MessageAction.regenerate ||
+      this == MessageAction.edit ||
+      this == MessageAction.delete ||
+      this == MessageAction.fork;
+
+  static MessageAction? byName(String? name) {
+    for (final a in values) {
+      if (a.name == name) return a;
+    }
+    return null;
+  }
+}
+
+/// One action's placement: [inline] true → an icon beside the message; false →
+/// inside the three-dot overflow. The list order is the display order.
+class MessageActionPref {
+  const MessageActionPref(this.action, {this.inline = false});
+
+  final MessageAction action;
+  final bool inline;
+
+  MessageActionPref copyWith({bool? inline}) =>
+      MessageActionPref(action, inline: inline ?? this.inline);
+
+  Map<String, dynamic> toJson() => {'action': action.name, 'inline': inline};
+
+  static MessageActionPref? fromJson(Map<String, dynamic> json) {
+    final action = MessageAction.byName(json['action'] as String?);
+    if (action == null) return null;
+    return MessageActionPref(action, inline: json['inline'] as bool? ?? false);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is MessageActionPref &&
+      other.action == action &&
+      other.inline == inline;
+
+  @override
+  int get hashCode => Object.hash(action, inline);
+}
+
+/// The out-of-the-box placement: regenerate / edit / delete inline, the rest
+/// behind the overflow — uncluttered, and freely reorderable by the user.
+const List<MessageActionPref> kDefaultMessageActions = [
+  MessageActionPref(MessageAction.regenerate, inline: true),
+  MessageActionPref(MessageAction.edit, inline: true),
+  MessageActionPref(MessageAction.delete, inline: true),
+  MessageActionPref(MessageAction.copy),
+  MessageActionPref(MessageAction.fork),
+  MessageActionPref(MessageAction.prompt),
+  MessageActionPref(MessageAction.info),
+];
+
+/// Normalises a loaded list: drops unknown/duplicate actions and appends any
+/// action missing from it (e.g. one introduced in a later version) as a menu
+/// item, so the set is always complete and stable across upgrades.
+List<MessageActionPref> normalizeMessageActions(
+    List<MessageActionPref> loaded) {
+  final seen = <MessageAction>{};
+  final out = <MessageActionPref>[];
+  for (final pref in loaded) {
+    if (seen.add(pref.action)) out.add(pref);
+  }
+  for (final a in MessageAction.values) {
+    if (!seen.contains(a)) out.add(MessageActionPref(a));
+  }
+  return out;
+}
+
 /// One role's avatar settings. The user's and the character's are held
 /// separately on [ChatInterface] so each can be tuned independently (or kept in
 /// step via [ChatInterface.syncAvatars]).
@@ -272,6 +369,8 @@ class ChatInterface {
     this.backgroundColor,
     this.emphasisColor,
     this.quoteColor,
+    this.messageActionsEnabled = true,
+    this.messageActions = kDefaultMessageActions,
   });
 
   final AvatarStyle botAvatar;
@@ -325,6 +424,26 @@ class ChatInterface {
   /// Colour for text inside "quotes"; null follows the text.
   final int? quoteColor;
 
+  /// Whether the inline per-message action bar is shown at all. When off, only
+  /// the long-press action sheet remains.
+  final bool messageActionsEnabled;
+
+  /// Per-action placement (inline icon vs three-dot overflow), in display order.
+  /// Always the full set of [MessageAction]s once normalised.
+  final List<MessageActionPref> messageActions;
+
+  /// The inline actions, in order.
+  List<MessageAction> get inlineActions => [
+        for (final p in messageActions)
+          if (p.inline) p.action,
+      ];
+
+  /// The overflow ("three-dot") actions, in order.
+  List<MessageAction> get overflowActions => [
+        for (final p in messageActions)
+          if (!p.inline) p.action,
+      ];
+
   AvatarStyle avatarFor(bool isUser) => isUser ? userAvatar : botAvatar;
 // APPEND-CI-2
 
@@ -352,6 +471,8 @@ class ChatInterface {
     Object? backgroundColor = _unset,
     Object? emphasisColor = _unset,
     Object? quoteColor = _unset,
+    bool? messageActionsEnabled,
+    List<MessageActionPref>? messageActions,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -377,6 +498,9 @@ class ChatInterface {
         backgroundColor: _pick(backgroundColor, this.backgroundColor),
         emphasisColor: _pick(emphasisColor, this.emphasisColor),
         quoteColor: _pick(quoteColor, this.quoteColor),
+        messageActionsEnabled:
+            messageActionsEnabled ?? this.messageActionsEnabled,
+        messageActions: messageActions ?? this.messageActions,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -421,6 +545,8 @@ class ChatInterface {
         if (backgroundColor != null) 'backgroundColor': backgroundColor,
         if (emphasisColor != null) 'emphasisColor': emphasisColor,
         if (quoteColor != null) 'quoteColor': quoteColor,
+        'messageActionsEnabled': messageActionsEnabled,
+        'messageActions': messageActions.map((p) => p.toJson()).toList(),
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -473,7 +599,25 @@ class ChatInterface {
       backgroundColor: (json['backgroundColor'] as num?)?.toInt(),
       emphasisColor: (json['emphasisColor'] as num?)?.toInt(),
       quoteColor: (json['quoteColor'] as num?)?.toInt(),
+      messageActionsEnabled: json['messageActionsEnabled'] as bool? ?? true,
+      messageActions: _messageActionsFromJson(json['messageActions']),
     );
+  }
+
+  /// Reads a stored action-placement list, tolerating absence (→ defaults),
+  /// unknown action names and an incomplete set (missing actions are appended
+  /// as overflow items by [normalizeMessageActions]).
+  static List<MessageActionPref> _messageActionsFromJson(Object? value) {
+    if (value is! List) return kDefaultMessageActions;
+    final loaded = <MessageActionPref>[];
+    for (final e in value) {
+      if (e is Map<String, dynamic>) {
+        final pref = MessageActionPref.fromJson(e);
+        if (pref != null) loaded.add(pref);
+      }
+    }
+    if (loaded.isEmpty) return kDefaultMessageActions;
+    return normalizeMessageActions(loaded);
   }
 
   @override
@@ -501,7 +645,9 @@ class ChatInterface {
       other.botBubbleColor == botBubbleColor &&
       other.backgroundColor == backgroundColor &&
       other.emphasisColor == emphasisColor &&
-      other.quoteColor == quoteColor;
+      other.quoteColor == quoteColor &&
+      other.messageActionsEnabled == messageActionsEnabled &&
+      listEquals(other.messageActions, messageActions);
 
   @override
   int get hashCode => Object.hash(
@@ -524,6 +670,8 @@ class ChatInterface {
         backgroundColor,
         emphasisColor,
         quoteColor,
+        messageActionsEnabled,
+        Object.hashAll(messageActions),
       );
 }
 

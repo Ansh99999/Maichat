@@ -165,6 +165,13 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
               ),
             ),
           const Divider(height: 24),
+          _header(context, 'Message actions'),
+          SettingHighlight(
+            active: highlight == SettingAnchor.messageActions,
+            child: _MessageActionsSection(
+                ui: ui, update: update, notify: notify),
+          ),
+          const Divider(height: 24),
           _header(context, 'Avatars'),
           SwitchListTile(
             dense: true,
@@ -745,5 +752,101 @@ class _ColorRow extends StatelessWidget {
   }
 }
 
+/// The "Message actions" controls: a master toggle plus a reorderable list where
+/// each action is placed either inline (an icon beside the message) or behind the
+/// three-dot overflow — mirroring Agnai's `msgOptsInline`. Drag to reorder.
+class _MessageActionsSection extends StatelessWidget {
+  const _MessageActionsSection({
+    required this.ui,
+    required this.update,
+    required this.notify,
+  });
 
+  final ChatInterface ui;
+  final void Function(ChatInterface) update;
+  final void Function(String) notify;
 
+  void _setInline(MessageAction action, bool inline) {
+    final next = [
+      for (final p in ui.messageActions)
+        p.action == action ? p.copyWith(inline: inline) : p,
+    ];
+    update(ui.copyWith(messageActions: next));
+    notify('${action.label} → ${inline ? 'inline' : 'menu'}');
+  }
+
+  void _reorder(int oldIndex, int newIndex) {
+    final list = [...ui.messageActions];
+    final moved = list.removeAt(oldIndex);
+    list.insert(newIndex, moved);
+    update(ui.copyWith(messageActions: list));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        SwitchListTile(
+          dense: true,
+          value: ui.messageActionsEnabled,
+          onChanged: (v) {
+            update(ui.copyWith(messageActionsEnabled: v));
+            notify(v ? 'Action buttons shown' : 'Action buttons hidden');
+          },
+          secondary: const Icon(Icons.more_horiz),
+          title: const Text('Show action buttons'),
+          subtitle: const Text(
+              'Inline actions beside each message; the rest under a ⋮ menu'),
+        ),
+        if (ui.messageActionsEnabled)
+          ReorderableListView(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            onReorderItem: _reorder,
+            children: [
+              for (var i = 0; i < ui.messageActions.length; i++)
+                _actionRow(context, scheme, ui.messageActions[i], i),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _actionRow(BuildContext context, ColorScheme scheme,
+      MessageActionPref pref, int index) {
+    final action = pref.action;
+    return Padding(
+      key: ValueKey(action),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Row(
+        children: [
+          Icon(action.icon, size: 20, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 14),
+          Expanded(child: Text(action.label)),
+          SegmentedButton<bool>(
+            style: const ButtonStyle(
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: true, label: Text('Inline')),
+              ButtonSegment(value: false, label: Text('Menu')),
+            ],
+            selected: {pref.inline},
+            onSelectionChanged: (s) => _setInline(action, s.first),
+          ),
+          ReorderableDragStartListener(
+            index: index,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Icon(Icons.drag_handle, color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

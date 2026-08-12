@@ -157,4 +157,77 @@ void main() {
     expect(next.botAvatar.side, ChatSide.left);
     expect(next.userAvatar.side, ChatSide.right);
   });
+
+  group('message actions', () {
+    test('defaults: regenerate/edit/delete inline, the rest in the menu', () {
+      const ui = ChatInterface();
+      expect(ui.messageActionsEnabled, isTrue);
+      expect(ui.inlineActions,
+          [MessageAction.regenerate, MessageAction.edit, MessageAction.delete]);
+      expect(ui.overflowActions, [
+        MessageAction.copy,
+        MessageAction.fork,
+        MessageAction.prompt,
+        MessageAction.info,
+      ]);
+    });
+
+    test('a customised placement round trips', () {
+      final custom = const ChatInterface().copyWith(
+        messageActionsEnabled: false,
+        messageActions: const [
+          MessageActionPref(MessageAction.prompt, inline: true),
+          MessageActionPref(MessageAction.info, inline: true),
+          MessageActionPref(MessageAction.regenerate),
+          MessageActionPref(MessageAction.edit),
+          MessageActionPref(MessageAction.delete),
+          MessageActionPref(MessageAction.copy),
+          MessageActionPref(MessageAction.fork),
+        ],
+      );
+      final restored = ChatInterface.fromJson(custom.toJson());
+      expect(restored, custom);
+      expect(restored.messageActionsEnabled, isFalse);
+      expect(restored.inlineActions,
+          [MessageAction.prompt, MessageAction.info]);
+    });
+
+    test('absent config migrates to defaults', () {
+      final restored = ChatInterface.fromJson(const {});
+      expect(restored.messageActions, kDefaultMessageActions);
+      expect(restored.messageActionsEnabled, isTrue);
+    });
+
+    test('an unknown action is dropped and a missing one appended as menu', () {
+      final restored = ChatInterface.fromJson({
+        'messageActions': [
+          {'action': 'edit', 'inline': true},
+          {'action': 'telepathy', 'inline': true}, // unknown → dropped
+          {'action': 'delete', 'inline': false},
+        ],
+      });
+      // Known ones kept in order…
+      expect(restored.messageActions.first.action, MessageAction.edit);
+      expect(restored.messageActions.first.inline, isTrue);
+      // …unknown dropped…
+      expect(restored.messageActions.length, MessageAction.values.length);
+      // …and every action is present exactly once (missing ones appended).
+      expect(
+        restored.messageActions.map((p) => p.action).toSet(),
+        MessageAction.values.toSet(),
+      );
+      // An appended (previously missing) action defaults to the overflow menu.
+      final regen = restored.messageActions
+          .firstWhere((p) => p.action == MessageAction.regenerate);
+      expect(regen.inline, isFalse);
+    });
+
+    test('role gating: regenerate/prompt are assistant-only', () {
+      expect(MessageAction.regenerate.appliesTo(true), isFalse); // user turn
+      expect(MessageAction.regenerate.appliesTo(false), isTrue); // bot turn
+      expect(MessageAction.prompt.appliesTo(true), isFalse);
+      expect(MessageAction.edit.appliesTo(true), isTrue);
+      expect(MessageAction.delete.appliesTo(true), isTrue);
+    });
+  });
 }

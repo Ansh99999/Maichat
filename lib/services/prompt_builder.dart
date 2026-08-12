@@ -6,12 +6,29 @@ import 'macro_context.dart';
 import 'token_estimator.dart';
 
 /// The result of assembling a preset into a request: the role-tagged messages
-/// ready for [ChatClient] (which splits out `system` for Anthropic itself), and
-/// a rough token estimate for diagnostics.
+/// ready for [ChatClient] (which splits out `system` for Anthropic itself), a
+/// rough token estimate, and a per-section breakdown (Main / Description /
+/// History / …) for the message "Info" view.
 class BuiltPrompt {
-  BuiltPrompt(this.messages, this.estimatedTokens);
+  BuiltPrompt(this.messages, this.estimatedTokens, this.sections);
   final List<ChatMessage> messages;
   final int estimatedTokens;
+  final List<PromptSection> sections;
+}
+
+/// One labeled slice of the assembled prompt, for the context-window breakdown.
+class PromptSection {
+  const PromptSection({
+    required this.label,
+    required this.role,
+    required this.tokens,
+    required this.messageCount,
+  });
+
+  final String label;
+  final String role;
+  final int tokens;
+  final int messageCount;
 }
 
 /// Turns a [Preset] (prompt blocks + order) plus a character and chat history
@@ -44,11 +61,31 @@ class PromptBuilder {
         .clamp(0, 1 << 30)
         .toInt();
 
+    // Chat history carries {{char}}/{{user}} (a greeting, a pasted line, …) that
+    // must reflect the *current* identity — the impersonated name when the user
+    // is speaking as a character. SillyTavern (substituteParams per message) and
+    // Agnai (prompt.ts placeholderReplace) both resolve these on every message at
+    // build time. We resolve only the identity macros here — never the full,
+    // stateful engine — so {{setvar}}/{{roll}} in old turns are not re-run each
+    // generation. Marker/block content still goes through the full engine below.
+    final resolvedHistory = [
+      for (final m in history)
+        m.content.contains('{') || m.content.contains('<')
+            ? m.copyWith(
+                content: Character.resolveMacros(
+                  m.content,
+                  charName: charName,
+                  userName: userName,
+                ),
+              )
+            : m,
+    ];
+
     final ctx = MacroContext(
       userName: userName,
       charName: charName,
       character: character,
-      messages: history,
+      messages: resolvedHistory,
       model: model.isEmpty ? preset.model : model,
       maxContext: preset.maxContext,
       maxResponse: preset.maxResponseTokens,
@@ -80,16 +117,17 @@ class PromptBuilder {
 
     // Blocks that inject into the history at a depth rather than inline.
     final absolute = <PromptBlock>[];
-    // Fixed (non-history) messages, in order; chatHistory marks where history goes.
-    final leading = <ChatMessage>[];
-    final trailing = <ChatMessage>[];
+    // Fixed (non-history) messages, in order, each tagged with the section it
+    // belongs to for the breakdown; chatHistory marks where history goes.
+    final leading = <_Part>[];
+    final trailing = <_Part>[];
     var sawHistory = false;
 
-    void emit(String role, String content) {
+    void emit(String label, String role, String content) {
       final text = macros.evaluate(content, ctx).trim();
       if (text.isEmpty) return;
       final msg = ChatMessage(role: role, content: text);
-      (sawHistory ? trailing : leading).add(msg);
+      (sawHistory ? trailing : leading).add(_Part(label, msg));
     }
 
     for (final entry in preset.promptOrder) {
@@ -109,7 +147,7 @@ class PromptBuilder {
       }
 
       if (block.marker) {
-        emit('system', markerSource(block.identifier));
+        emit(_labelFor(block), 'system', markerSource(block.identifier));
         continue;
       }
 
@@ -124,57 +162,118 @@ class PromptBuilder {
           content = character!.postHistoryInstructions;
         }
       }
-      emit(block.role, content);
+      emit(_labelFor(block), block.role, content);
     }
 
     // PLACEHOLDER_HISTORY
     int cost(ChatMessage m) => tokens.estimate(m.content) + _perMessageOverhead;
 
-    final fixed = [...leading, ...trailing];
-    var fixedTokens = fixed.fold<int>(0, (sum, m) => sum + cost(m));
+    var fixedTokens =
+        [...leading, ...trailing].fold<int>(0, (sum, p) => sum + cost(p.msg));
 
     // Absolute-injection blocks are reserved before history fills the rest.
-    final injections = <ChatMessage>[];
+    final injections = <_Part>[];
     for (final block in absolute
       ..sort((a, b) => b.injectionOrder.compareTo(a.injectionOrder))) {
       final text = macros.evaluate(block.content, ctx).trim();
       if (text.isEmpty) continue;
       final msg = ChatMessage(role: block.role, content: text);
-      injections.add(msg);
+      injections.add(_Part('Injected (depth ${block.injectionDepth})', msg));
       fixedTokens += cost(msg);
     }
 
     // Chat history greedily fills the remaining budget, newest first.
     var remaining = (budget - fixedTokens).clamp(0, 1 << 30).toInt();
     final chosen = <ChatMessage>[];
-    for (final msg in history.reversed) {
+    for (final msg in resolvedHistory.reversed) {
       final c = cost(msg);
       if (c > remaining) break;
       remaining -= c;
       chosen.add(msg);
     }
-    final chatHistory = chosen.reversed.toList();
+    final history0 =
+        chosen.reversed.map((m) => _Part('Chat history', m)).toList();
 
     // Merge absolute injections in at their depth-from-end (highest order first).
     if (injections.isNotEmpty) {
-      final byDepth = <int, List<ChatMessage>>{};
+      final byDepth = <int, List<_Part>>{};
       for (var i = 0; i < absolute.length; i++) {
         if (i < injections.length) {
-          byDepth.putIfAbsent(absolute[i].injectionDepth, () => []).add(injections[i]);
+          byDepth
+              .putIfAbsent(absolute[i].injectionDepth, () => [])
+              .add(injections[i]);
         }
       }
       final depths = byDepth.keys.toList()..sort();
       for (final depth in depths) {
-        final at = (chatHistory.length - depth).clamp(0, chatHistory.length);
-        chatHistory.insertAll(at, byDepth[depth]!);
+        final at = (history0.length - depth).clamp(0, history0.length);
+        history0.insertAll(at, byDepth[depth]!);
       }
     }
 
-    var messages = <ChatMessage>[...leading, ...chatHistory, ...trailing];
+    final parts = <_Part>[...leading, ...history0, ...trailing];
+    var messages = parts.map((p) => p.msg).toList();
     if (preset.squashSystemMessages) messages = _squashSystem(messages);
 
+    final sections = _sectionsFrom(parts, cost);
     final total = messages.fold<int>(0, (sum, m) => sum + cost(m));
-    return BuiltPrompt(messages, total);
+    return BuiltPrompt(messages, total, sections);
+  }
+
+  /// A human-readable section label for a prompt [block].
+  static String _labelFor(PromptBlock block) {
+    switch (block.identifier) {
+      case PromptId.main:
+        return 'Main prompt';
+      case PromptId.nsfw:
+        return 'Auxiliary prompt';
+      case PromptId.charDescription:
+        return 'Character description';
+      case PromptId.charPersonality:
+        return 'Personality';
+      case PromptId.scenario:
+        return 'Scenario';
+      case PromptId.dialogueExamples:
+        return 'Example dialogue';
+      case PromptId.personaDescription:
+        return 'User persona';
+      case PromptId.worldInfoBefore:
+      case PromptId.worldInfoAfter:
+        return 'World info';
+      case PromptId.jailbreak:
+        return 'Post-history instructions';
+      case PromptId.enhanceDefinitions:
+        return 'Enhance definitions';
+      default:
+        return block.name.trim().isEmpty ? 'Custom' : block.name.trim();
+    }
+  }
+
+  /// Groups consecutive same-label parts into sections, summing token cost, so
+  /// the breakdown reads in prompt order and its totals match the real budget.
+  static List<PromptSection> _sectionsFrom(
+      List<_Part> parts, int Function(ChatMessage) cost) {
+    final out = <PromptSection>[];
+    for (final part in parts) {
+      final t = cost(part.msg);
+      if (out.isNotEmpty && out.last.label == part.label) {
+        final prev = out.last;
+        out[out.length - 1] = PromptSection(
+          label: prev.label,
+          role: prev.role,
+          tokens: prev.tokens + t,
+          messageCount: prev.messageCount + 1,
+        );
+      } else {
+        out.add(PromptSection(
+          label: part.label,
+          role: part.msg.role,
+          tokens: t,
+          messageCount: 1,
+        ));
+      }
+    }
+    return out;
   }
 
   /// Collapses runs of consecutive `system` messages into one, joined by blank
@@ -193,4 +292,12 @@ class PromptBuilder {
     }
     return out;
   }
+}
+
+/// A prompt message tagged with the breakdown section it belongs to, tracked
+/// through assembly so the "Info" view can report per-section token cost.
+class _Part {
+  const _Part(this.label, this.msg);
+  final String label;
+  final ChatMessage msg;
 }

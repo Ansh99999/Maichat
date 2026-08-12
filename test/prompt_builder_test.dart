@@ -107,4 +107,31 @@ void main() {
       isNot(contains('A market at dawn.')),
     );
   });
+
+  test('emits a labeled section breakdown whose tokens are consistent', () {
+    final built = builder.build(
+      preset: Preset.create(),
+      character: _alice(),
+      history: _history(2),
+    );
+    final labels = built.sections.map((s) => s.label).toList();
+    expect(labels, contains('Main prompt'));
+    expect(labels, contains('Character description'));
+    expect(labels, contains('Personality'));
+    expect(labels, contains('Scenario'));
+    expect(labels, contains('Chat history'));
+
+    // Every section carries a positive token count and at least one message.
+    for (final s in built.sections) {
+      expect(s.tokens, greaterThan(0));
+      expect(s.messageCount, greaterThanOrEqualTo(1));
+    }
+    // The history section counts both turns.
+    final history =
+        built.sections.firstWhere((s) => s.label == 'Chat history');
+    expect(history.messageCount, 2);
+    // Section totals equal the built total (no squashing in the default preset).
+    final sum = built.sections.fold<int>(0, (a, s) => a + s.tokens);
+    expect(sum, built.estimatedTokens);
+  });
 }

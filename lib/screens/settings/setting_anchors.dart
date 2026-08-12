@@ -13,6 +13,7 @@ enum SettingAnchor {
   chatAvatars,
   textPlacement,
   names,
+  messageActions,
   chatColours,
   storage,
   version,

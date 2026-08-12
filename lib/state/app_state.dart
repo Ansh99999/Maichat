@@ -17,6 +17,7 @@ import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
 import '../services/prompt_builder.dart';
 import '../services/storage.dart';
+import '../services/token_estimator.dart';
 import '../services/update_service.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
@@ -431,7 +432,10 @@ class AppState extends ChangeNotifier {
       ..characterId = character.id
       ..characterName = character.displayName
       ..systemPrompt = character.composedSystemPrompt();
-    final greeting = character.resolvedGreeting();
+    // The greeting is stored with {{char}}/{{user}} intact so it tracks the
+    // current identity (e.g. after the user starts impersonating) — resolution
+    // happens at prompt-build and display time, not once at write time.
+    final greeting = character.firstMes.trim();
     if (greeting.isNotEmpty) {
       conversation.messages.add(ChatMessage(role: 'assistant', content: greeting));
     }
@@ -491,7 +495,7 @@ class AppState extends ChangeNotifier {
     if (conversation.hasCharacter) {
       final character = characterById(conversation.characterId);
       if (character != null) {
-        final greeting = character.resolvedGreeting();
+        final greeting = character.firstMes.trim();
         if (greeting.isNotEmpty) {
           conversation.messages
               .add(ChatMessage(role: 'assistant', content: greeting));
@@ -542,69 +546,10 @@ class AppState extends ChangeNotifier {
     final base = _resolveProvider(preset);
     if (base == null) return;
 
-    // A preset's {{input}} is the latest user turn already in the thread; empty
-    // when the remaining history has no user message.
-    var input = '';
-    for (final m in conversation.messages.reversed) {
-      if (m.isUser) {
-        input = m.content;
-        break;
-      }
-    }
+    final assembled = _assemble(conversation);
+    final history = assembled.messages;
+    final params = assembled.params;
 
-    // Failure notices are display-only, so they never go back to the model.
-    final priorTurns =
-        conversation.messages.where((m) => !m.error).toList(growable: false);
-
-    // When the user impersonates a character, their identity is injected so the
-    // model treats their turns as that persona (mirrors Agnai's user-persona).
-    final impersonation = impersonationFor(conversation);
-    final character = characterById(conversation.characterId);
-    final userName = impersonation?.displayName ?? 'User';
-    final persona = impersonation == null
-        ? ''
-        : impersonation.userPersona(charName: character?.displayName ?? 'the character');
-
-    late List<ChatMessage> history;
-    var params = const GenParams();
-    if (preset != null) {
-      // A preset assembles the request from its ordered prompt blocks, running
-      // macros against this chat's local + the app's global variables.
-      final built = _prompts.build(
-        preset: preset,
-        character: character,
-        history: priorTurns,
-        model: base.model,
-        userName: userName,
-        persona: persona,
-        variables: MacroVariables(
-          local: conversation.variables,
-          global: _globalVars,
-        ),
-        input: input,
-      );
-      history = built.messages;
-      // The persona reaches the payload through the preset's personaDescription
-      // block when it has one; otherwise inject it as a leading system turn so
-      // impersonation always takes effect regardless of preset shape.
-      if (persona.isNotEmpty && !_presetEmitsPersona(preset)) {
-        history = <ChatMessage>[
-          ChatMessage(role: 'system', content: persona),
-          ...history,
-        ];
-      }
-      params = _paramsFor(preset);
-    } else {
-      // No preset: the original flat behavior — the composed persona as a
-      // leading system turn, then the history — plus the impersonated user
-      // persona (when set) so the identity still reaches the model.
-      history = <ChatMessage>[
-        if (conversation.systemPrompt.trim().isNotEmpty)
-          ChatMessage(role: 'system', content: conversation.systemPrompt.trim()),
-        if (persona.isNotEmpty) ChatMessage(role: 'system', content: persona),
-        ...priorTurns,
-      ];
-    }
     conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
@@ -786,6 +731,127 @@ class AppState extends ChangeNotifier {
     _keyCursor[base.id] = ((_keyCursor[base.id] ?? 0) + 1) % count;
   }
 
+  static const HeuristicTokenEstimator _tokens = HeuristicTokenEstimator();
+  static const int _perMessageOverhead = 4; // mirrors PromptBuilder
+  int _cost(ChatMessage m) => _tokens.estimate(m.content) + _perMessageOverhead;
+
+  /// Assembles the exact request for [conversation] — the single code path used
+  /// by real sends ([_generate]) *and* the "View prompt" / "Info" inspectors, so
+  /// what the user inspects is what the model receives. [historyEnd], when set,
+  /// caps the messages considered (exclusive), letting a caller rebuild the
+  /// prompt as it stood at an earlier turn.
+  AssembledPrompt _assemble(Conversation conversation, {int? historyEnd}) {
+    final preset = presetFor(conversation);
+    final model = _resolveProvider(preset)?.model ?? '';
+
+    final considered = historyEnd == null
+        ? conversation.messages
+        : conversation.messages.take(historyEnd.clamp(0, conversation.messages.length)).toList();
+    // Failure notices are display-only, so they never go back to the model.
+    final priorTurns =
+        considered.where((m) => !m.error).toList(growable: false);
+
+    // A preset's {{input}} is the latest user turn in the considered window.
+    var input = '';
+    for (final m in priorTurns.reversed) {
+      if (m.isUser) {
+        input = m.content;
+        break;
+      }
+    }
+
+    // When the user impersonates a character, their identity is injected so the
+    // model treats their turns as that persona (mirrors Agnai's user-persona).
+    final impersonation = impersonationFor(conversation);
+    final character = characterById(conversation.characterId);
+    final userName = impersonation?.displayName ?? 'User';
+    final persona = impersonation == null
+        ? ''
+        : impersonation.userPersona(charName: character?.displayName ?? 'the character');
+    final maxContext = preset?.maxContext ?? 4095;
+
+    // Leading system turns injected by AppState (ahead of the built prompt),
+    // each surfaced as its own breakdown section.
+    final prefix = <ChatMessage>[];
+    final sections = <PromptSection>[];
+    void addPrefix(String label, String content) {
+      final trimmed = content.trim();
+      if (trimmed.isEmpty) return;
+      final m = ChatMessage(role: 'system', content: trimmed);
+      prefix.add(m);
+      sections.add(PromptSection(
+        label: label, role: 'system', tokens: _cost(m), messageCount: 1));
+    }
+
+    List<ChatMessage> messages;
+    var params = const GenParams();
+
+    if (preset != null) {
+      final built = _prompts.build(
+        preset: preset,
+        character: character,
+        history: priorTurns,
+        model: model,
+        userName: userName,
+        persona: persona,
+        variables: MacroVariables(
+          local: conversation.variables,
+          global: _globalVars,
+        ),
+        input: input,
+      );
+      // Robustness: the preset fills the character definition from the *live*
+      // character via its marker blocks. If that character is gone (deleted, or
+      // an older thread that never linked one) the definition would silently
+      // vanish and the model would "only have instructions" — so fall back to
+      // the persona snapshot stored on the thread at creation.
+      if (character == null) addPrefix('Character (stored)', conversation.systemPrompt);
+      // The persona reaches the payload through the preset's personaDescription
+      // block when it has one; otherwise inject it as a leading system turn so
+      // impersonation always takes effect regardless of preset shape.
+      if (persona.isNotEmpty && !_presetEmitsPersona(preset)) {
+        addPrefix('User persona', persona);
+      }
+      messages = <ChatMessage>[...prefix, ...built.messages];
+      sections.addAll(built.sections);
+      params = _paramsFor(preset);
+    } else {
+      // No preset: the original flat behaviour — stored persona then history,
+      // plus the impersonated user persona (when set).
+      addPrefix('Character (stored)', conversation.systemPrompt);
+      if (persona.isNotEmpty) addPrefix('User persona', persona);
+      messages = <ChatMessage>[...prefix, ...priorTurns];
+      if (priorTurns.isNotEmpty) {
+        sections.add(PromptSection(
+          label: 'Chat history',
+          role: 'mixed',
+          tokens: priorTurns.fold<int>(0, (s, m) => s + _cost(m)),
+          messageCount: priorTurns.length,
+        ));
+      }
+    }
+
+    final total = sections.fold<int>(0, (s, x) => s + x.tokens);
+    return AssembledPrompt(
+      messages: messages,
+      params: params,
+      sections: sections,
+      totalTokens: total,
+      maxContext: maxContext,
+    );
+  }
+
+  /// The exact prompt behind the message at [index] — for "View prompt"/"Info".
+  /// An assistant turn shows the prompt that *produced* it (history before it);
+  /// a user turn shows what *would* be sent next (history through it).
+  AssembledPrompt assemblePromptForMessage(Conversation conversation, int index) {
+    final safe = index.clamp(0, conversation.messages.length);
+    final isUser = safe < conversation.messages.length &&
+        conversation.messages[safe].isUser;
+    final end = isUser ? safe + 1 : safe;
+    return _assemble(conversation, historyEnd: end);
+  }
+
   /// Whether [preset] already surfaces the user persona through an enabled
   /// personaDescription marker block, so the impersonation persona is not
   /// injected twice.
@@ -871,4 +937,24 @@ class AppState extends ChangeNotifier {
     _client.cancel();
     super.dispose();
   }
+}
+
+/// The fully assembled request for a turn: the role-tagged [messages] the model
+/// receives, the [params] applied, the per-section token [sections] breakdown,
+/// the [totalTokens] estimate, and the preset's [maxContext] budget. Produced by
+/// [AppState._assemble]; consumed by real sends and the View-prompt/Info views.
+class AssembledPrompt {
+  const AssembledPrompt({
+    required this.messages,
+    required this.params,
+    required this.sections,
+    required this.totalTokens,
+    required this.maxContext,
+  });
+
+  final List<ChatMessage> messages;
+  final GenParams params;
+  final List<PromptSection> sections;
+  final int totalTokens;
+  final int maxContext;
 }

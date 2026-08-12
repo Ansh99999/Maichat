@@ -6,13 +6,16 @@ import 'package:provider/provider.dart' hide Provider;
 
 import '../models/conversation.dart';
 import '../models/character.dart';
+import '../models/chat_interface.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../state/app_state.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/message_info_sheet.dart';
 import 'characters_screen.dart';
 import 'chats_screen.dart';
+import 'prompt_view_screen.dart';
 import 'presets/chat_preset_panel.dart';
 import 'presets/preset_pickers.dart';
 import 'section_screen.dart';
@@ -287,11 +290,77 @@ class _ChatScreenState extends State<ChatScreen> {
           character: character,
           userPersona: persona,
           pending: isLast && state.streaming,
+          streaming: state.streaming,
+          onAction: (action) =>
+              _runMessageAction(state, conversation, index, action),
           onLongPress: message.content.isEmpty
               ? null
               : () => _showMessageActions(state, conversation, index),
         );
       },
+    );
+  }
+
+  /// Dispatches an inline/overflow message action to the matching handler.
+  void _runMessageAction(
+    AppState state,
+    Conversation conversation,
+    int index,
+    MessageAction action,
+  ) {
+    switch (action) {
+      case MessageAction.regenerate:
+        state.regenerateMessage(conversation.id, index);
+        _scrollToEnd();
+      case MessageAction.edit:
+        _editMessage(state, conversation, index);
+      case MessageAction.delete:
+        state.deleteMessage(conversation.id, index);
+      case MessageAction.copy:
+        Clipboard.setData(
+            ClipboardData(text: conversation.messages[index].content));
+        _toast('Copied');
+      case MessageAction.fork:
+        _forkFrom(state, conversation, index);
+      case MessageAction.prompt:
+        _openPromptView(state, conversation, index);
+      case MessageAction.info:
+        _openMessageInfo(state, conversation, index);
+    }
+  }
+
+  Future<void> _forkFrom(
+      AppState state, Conversation conversation, int index) async {
+    await state.forkConversation(conversation.id, index);
+    if (!mounted) return;
+    _toast('Forked into a new chat');
+    _scrollToEnd();
+  }
+
+  /// Opens the full assembled prompt behind [index] — exactly what the model
+  /// receives — in a scrollable inspector.
+  void _openPromptView(AppState state, Conversation conversation, int index) {
+    final assembled = state.assemblePromptForMessage(conversation, index);
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PromptViewScreen(assembled: assembled),
+      ),
+    );
+  }
+
+  /// Opens the message info sheet: position, tokens, and a context breakdown.
+  void _openMessageInfo(AppState state, Conversation conversation, int index) {
+    final assembled = state.assemblePromptForMessage(conversation, index);
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => MessageInfoSheet(
+        assembled: assembled,
+        messageNumber: index + 1,
+        messageCount: conversation.messages.length,
+        message: conversation.messages[index],
+      ),
     );
   }
 
@@ -348,6 +417,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 await state.forkConversation(conversation.id, index);
                 _toast('Forked into a new chat');
                 _scrollToEnd();
+              },
+            ),
+            if (isAssistant)
+              ListTile(
+                leading: const Icon(Icons.terminal),
+                title: const Text('View prompt'),
+                subtitle: const Text('Inspect the exact request sent'),
+                onTap: () {
+                  Navigator.of(sheet).pop();
+                  _openPromptView(state, conversation, index);
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Info'),
+              subtitle: const Text('Tokens and context breakdown'),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _openMessageInfo(state, conversation, index);
               },
             ),
             ListTile(

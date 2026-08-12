@@ -231,6 +231,14 @@ const List<_SearchEntry> _searchIndex = [
     builder: _namesPage,
   ),
   _SearchEntry(
+    title: 'Message actions',
+    section: 'Chat Interface',
+    icon: Icons.more_horiz,
+    keywords: 'message actions buttons regenerate edit delete copy fork prompt '
+        'info inline overflow three dot menu',
+    builder: _messageActionsPage,
+  ),
+  _SearchEntry(
     title: 'Message colours',
     section: 'Chat Interface',
     icon: Icons.format_color_fill_outlined,
@@ -267,6 +275,8 @@ Widget _textPlacementPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.textPlacement);
 Widget _namesPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.names);
+Widget _messageActionsPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.messageActions);
 Widget _chatColoursPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
 Widget _storagePage() =>

@@ -28,6 +28,8 @@ class MessageBubble extends StatelessWidget {
     this.onAvatarDrag,
     this.onAvatarResize,
     this.onLongPress,
+    this.onAction,
+    this.streaming = false,
   });
 
   final ChatMessage message;
@@ -50,6 +52,24 @@ class MessageBubble extends StatelessWidget {
   /// Opens the per-message actions (edit/delete/fork/regenerate). Falls back to
   /// copy-on-long-press when not supplied (e.g. the preview).
   final VoidCallback? onLongPress;
+
+  /// Dispatches an inline/overflow message action. Null in the settings preview
+  /// (which passes [interactive]), where the action bar is suppressed.
+  final void Function(MessageAction)? onAction;
+
+  /// Whether a reply is currently streaming — disables mutating actions.
+  final bool streaming;
+
+  /// The message text with the identity macros resolved for display, so a
+  /// greeting stored as "Hello {{user}}, I am {{char}}" shows the live names —
+  /// and updates the instant the user starts impersonating. Mirrors the
+  /// prompt-build resolution ([Character.resolveMacros] with the same names) so
+  /// the screen and the model always agree on who "{{user}}" is.
+  String get _displayContent => Character.resolveMacros(
+        message.content,
+        charName: character?.displayName ?? '',
+        userName: userPersona?.displayName ?? 'User',
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -143,6 +163,18 @@ class MessageBubble extends StatelessWidget {
         );
     }
 
+    // The action bar sits directly under the message, aligned to its side. It's
+    // suppressed for a still-streaming caret-only turn (nothing to act on yet)
+    // and whenever no dispatcher is wired (the settings preview).
+    final actionsBar = showCaret ? null : _actionsBar(context, isUser);
+    final body = actionsBar == null
+        ? inner
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: crossAxis,
+            children: [inner, actionsBar],
+          );
+
     return Align(
       alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
@@ -154,9 +186,73 @@ class MessageBubble extends StatelessWidget {
           onLongPress: onLongPress ??
               (message.content.isEmpty
                   ? null
-                  : () => _copy(context, message.content)),
-          child: inner,
+                  : () => _copy(context, _displayContent)),
+          child: body,
         ),
+      ),
+    );
+  }
+
+  /// The inline/overflow action bar for this turn, or null when actions are
+  /// disabled, undispatched (preview), or none apply to this role. Inline
+  /// actions render as small icon buttons; the rest live behind a three-dot
+  /// overflow menu — the split is configured in Chat Interface settings.
+  Widget? _actionsBar(BuildContext context, bool isUser) {
+    if (onAction == null || !ui.messageActionsEnabled) return null;
+    final inline =
+        ui.inlineActions.where((a) => a.appliesTo(isUser)).toList();
+    final overflow =
+        ui.overflowActions.where((a) => a.appliesTo(isUser)).toList();
+    if (inline.isEmpty && overflow.isEmpty) return null;
+
+    final scheme = Theme.of(context).colorScheme;
+    final color = scheme.onSurfaceVariant;
+    bool disabled(MessageAction a) => a.blockedWhileStreaming && streaming;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 1, left: 2, right: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final a in inline)
+            IconButton(
+              tooltip: a.label,
+              iconSize: 17,
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints:
+                  const BoxConstraints(minWidth: 32, minHeight: 32),
+              color: a == MessageAction.delete ? scheme.error : color,
+              onPressed: disabled(a) ? null : () => onAction!(a),
+              icon: Icon(a.icon),
+            ),
+          if (overflow.isNotEmpty)
+            PopupMenuButton<MessageAction>(
+              tooltip: 'More',
+              icon: Icon(Icons.more_vert, size: 17, color: color),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              position: PopupMenuPosition.under,
+              onSelected: (a) => onAction!(a),
+              itemBuilder: (context) => [
+                for (final a in overflow)
+                  PopupMenuItem<MessageAction>(
+                    value: a,
+                    enabled: !disabled(a),
+                    child: Row(
+                      children: [
+                        Icon(a.icon,
+                            size: 18,
+                            color:
+                                a == MessageAction.delete ? scheme.error : null),
+                        const SizedBox(width: 12),
+                        Text(a.label),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -299,7 +395,7 @@ class MessageBubble extends StatelessWidget {
       );
     }
     final style = TextStyle(color: color, fontSize: ui.fontSize, height: 1.35);
-    final content = message.content;
+    final content = _displayContent;
 
     // Full HTML + CSS engine for any message that actually contains HTML.
     if (ui.markdown && content.isNotEmpty && looksLikeHtml(content)) {
