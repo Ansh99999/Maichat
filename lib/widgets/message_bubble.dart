@@ -236,13 +236,25 @@ class MessageBubble extends StatelessWidget {
   Widget _text(ColorScheme scheme, Color color, bool showCaret,
       {Widget? leading}) {
     if (showCaret) {
+      final spinner = SizedBox(
+        height: 16,
+        width: 16,
+        child: CircularProgressIndicator(strokeWidth: 2, color: color),
+      );
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
-        child: SizedBox(
-          height: 16,
-          width: 16,
-          child: CircularProgressIndicator(strokeWidth: 2, color: color),
-        ),
+        // Keep the avatar visible while streaming in the "around" placement.
+        child: leading == null
+            ? spinner
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  leading,
+                  const SizedBox(width: 10),
+                  spinner,
+                ],
+              ),
       );
     }
     final style = TextStyle(color: color, fontSize: ui.fontSize, height: 1.35);
@@ -255,8 +267,11 @@ class MessageBubble extends StatelessWidget {
           base: style,
           emphasis: ui.emphasisColor != null ? Color(ui.emphasisColor!) : color,
           quote: ui.quoteColor != null ? Color(ui.quoteColor!) : color,
-          codeBackground: scheme.surfaceContainerHighest,
-          codeForeground: color,
+          // A neutral inset so code stands out from any bubble/background
+          // (the default bot bubble is itself surfaceContainerHighest).
+          codeBackground: scheme.surfaceContainerLowest,
+          codeForeground: scheme.onSurface,
+          link: scheme.primary,
         ),
       );
     } else {

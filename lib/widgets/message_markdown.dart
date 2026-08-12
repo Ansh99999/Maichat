@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
-/// Colours and base text style used when turning a message's markdown into
+/// Colours and base text style used when turning a message's markdown/HTML into
 /// [InlineSpan]s. [emphasis] tints *italic*/**bold** runs; [quote] tints text
-/// inside "quotes"; code runs use [codeBackground]/[codeForeground].
+/// inside "quotes"; code runs use [codeBackground]/[codeForeground]; [link]
+/// tints `<a>`/link text.
 class MarkdownStyles {
   const MarkdownStyles({
     required this.base,
@@ -10,6 +11,7 @@ class MarkdownStyles {
     required this.quote,
     required this.codeBackground,
     required this.codeForeground,
+    required this.link,
   });
 
   final TextStyle base;
@@ -17,14 +19,18 @@ class MarkdownStyles {
   final Color quote;
   final Color codeBackground;
   final Color codeForeground;
+  final Color link;
 }
 
-/// Renders [text] as a light subset of markdown into inline spans: headings,
-/// bullet/numbered lists and blockquotes at the line level, and **bold**,
-/// *italic*, ***both***, `code`, ~~strike~~ and "quoted" runs inline. Anything
-/// that doesn't parse is left as literal text, so raw prose is never mangled.
+/// Renders [text] as a light subset of markdown **and** HTML into inline spans:
+/// headings, bullet/numbered lists and blockquotes at the line level, and
+/// **bold**, *italic*, ***both***, `code`, ~~strike~~ and "quoted" runs inline,
+/// plus common inline HTML tags (`<b> <i> <u> <s> <code> <mark> <q> <a>`) and
+/// block tags (`<p> <div> <br> <h1-6> <blockquote> <ul>/<ol>/<li>`), and HTML
+/// entities. Anything that doesn't parse is left as literal text, so raw prose
+/// is never mangled.
 List<InlineSpan> buildMessageSpans(String text, MarkdownStyles styles) {
-  final lines = text.split('\n');
+  final lines = _preprocessHtmlBlocks(text).split('\n');
   final out = <InlineSpan>[];
   for (var i = 0; i < lines.length; i++) {
     if (i > 0) out.add(const TextSpan(text: '\n'));
@@ -74,12 +80,20 @@ void _appendLine(List<InlineSpan> out, String line, MarkdownStyles s) {
 }
 // APPEND-INLINE
 
-List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg) {
+/// Depth cap so pathological deeply-nested markup can't blow the stack or spend
+/// quadratic time; past it, the remainder is rendered literally.
+const int _maxDepth = 32;
+
+List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg,
+    [int depth = 0]) {
+  if (depth > _maxDepth) {
+    return [TextSpan(text: _decodeEntities(s), style: style)];
+  }
   final spans = <InlineSpan>[];
   final buf = StringBuffer();
   void flush() {
     if (buf.isNotEmpty) {
-      spans.add(TextSpan(text: buf.toString(), style: style));
+      spans.add(TextSpan(text: _decodeEntities(buf.toString()), style: style));
       buf.clear();
     }
   }
@@ -88,7 +102,16 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg) {
   while (i < s.length) {
     final c = s[i];
 
-    // Inline code — verbatim, no nested formatting.
+    // Inline HTML tag (<b>, <i>, <code>, <a>, <q>, <mark>, …).
+    if (c == '<') {
+      final consumed = _htmlInline(s, i, style, cfg, spans, flush, depth);
+      if (consumed != -1) {
+        i = consumed;
+        continue;
+      }
+    }
+
+    // Inline code — verbatim (entities and markup shown as typed).
     if (c == '`') {
       final end = s.indexOf('`', i + 1);
       if (end > i) {
@@ -115,6 +138,7 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg) {
           s.substring(i + 2, end),
           style.copyWith(decoration: TextDecoration.lineThrough),
           cfg,
+          depth + 1,
         ));
         i = end + 2;
         continue;
@@ -143,7 +167,7 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg) {
           } else {
             ns = ns.copyWith(fontStyle: FontStyle.italic);
           }
-          spans.addAll(_inline(s.substring(i + run, close), ns, cfg));
+          spans.addAll(_inline(s.substring(i + run, close), ns, cfg, depth + 1));
           i = close + run;
           continue;
         }
@@ -158,7 +182,7 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg) {
         flush();
         final qStyle = style.copyWith(color: cfg.quote);
         spans.add(TextSpan(text: c, style: qStyle));
-        spans.addAll(_inline(s.substring(i + 1, end), qStyle, cfg));
+        spans.addAll(_inline(s.substring(i + 1, end), qStyle, cfg, depth + 1));
         spans.add(TextSpan(text: closeChar, style: qStyle));
         i = end + 1;
         continue;
@@ -172,8 +196,11 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg) {
   return spans;
 }
 
-/// Finds the start of a closing run of [marker] at least [run] long, not
-/// immediately preceded by a space (so `*a *` doesn't close).
+/// Finds the start of a closing run of [marker] for an opener [run] long, not
+/// immediately preceded by a space (so `*a *` doesn't close). A single-marker
+/// opener (italic) skips over longer runs, which are bold/both delimiters for a
+/// nested span — so `*a **b** c*` parses as italic wrapping a bold, rather than
+/// closing on the inner `**`.
 int _findClose(String s, int start, String marker, int run) {
   var j = start;
   while (j < s.length) {
@@ -182,7 +209,8 @@ int _findClose(String s, int start, String marker, int run) {
       while (j + len < s.length && s[j + len] == marker) {
         len++;
       }
-      if (len >= run && j > 0 && !_isSpace(s[j - 1])) return j;
+      final closes = run == 1 ? len == 1 : len >= run;
+      if (closes && j > 0 && !_isSpace(s[j - 1])) return j;
       j += len;
     } else {
       j++;
@@ -195,4 +223,226 @@ bool _isSpace(String ch) => ch == ' ' || ch == '\t';
 
 bool _isWord(String ch) =>
     ch.isNotEmpty && RegExp(r'[A-Za-z0-9]').hasMatch(ch);
+
+// ---------------------------------------------------------------------------
+// HTML
+// ---------------------------------------------------------------------------
+
+class _Tag {
+  const _Tag(this.name, this.closing, this.selfClose, this.end);
+  final String name;
+  final bool closing;
+  final bool selfClose;
+  final int end;
+}
+
+final _tagPrefix = RegExp(r'</?([a-zA-Z][a-zA-Z0-9]*)([^<>]*)>');
+
+/// Matches an HTML tag anchored exactly at [i], or null if there isn't one.
+/// Bounds the work to the next `>` (and a sane tag length) so a stray `<`
+/// followed by a long run of text can't trigger quadratic regex backtracking.
+_Tag? _htmlTagAt(String s, int i) {
+  final gt = s.indexOf('>', i);
+  if (gt == -1 || gt - i > 256) return null;
+  final m = _tagPrefix.matchAsPrefix(s, i);
+  if (m == null) return null;
+  final closing = m.group(0)!.startsWith('</');
+  final attrs = m.group(2) ?? '';
+  return _Tag(m.group(1)!.toLowerCase(), closing, attrs.trimRight().endsWith('/'),
+      m.end);
+}
+
+/// The style an inline HTML tag applies, or null when the tag is unknown (so it
+/// falls through to being rendered literally).
+TextStyle? _htmlStyle(String name, TextStyle s, MarkdownStyles cfg) {
+  switch (name) {
+    case 'b':
+    case 'strong':
+      return s.copyWith(fontWeight: FontWeight.bold, color: cfg.emphasis);
+    case 'i':
+    case 'em':
+      return s.copyWith(fontStyle: FontStyle.italic, color: cfg.emphasis);
+    case 'u':
+    case 'ins':
+      return s.copyWith(decoration: TextDecoration.underline);
+    case 's':
+    case 'strike':
+    case 'del':
+      return s.copyWith(decoration: TextDecoration.lineThrough);
+    case 'code':
+    case 'kbd':
+    case 'tt':
+    case 'samp':
+      return s.copyWith(
+        fontFamily: 'monospace',
+        color: cfg.codeForeground,
+        backgroundColor: cfg.codeBackground,
+      );
+    case 'mark':
+      return s.copyWith(backgroundColor: cfg.codeBackground);
+    case 'q':
+      return s.copyWith(color: cfg.quote);
+    case 'a':
+      return s.copyWith(color: cfg.link, decoration: TextDecoration.underline);
+    case 'span':
+    case 'small':
+    case 'big':
+    case 'sub':
+    case 'sup':
+    case 'font':
+    case 'abbr':
+    case 'cite':
+      return s; // Passthrough: render children, ignore attributes.
+    default:
+      return null;
+  }
+}
+// APPEND-HTML-2
+
+/// Handles an inline HTML tag starting at [i]. Returns the index just past the
+/// consumed tag (and its content), or -1 to leave the `<` as literal text.
+int _htmlInline(
+  String s,
+  int i,
+  TextStyle style,
+  MarkdownStyles cfg,
+  List<InlineSpan> spans,
+  void Function() flush,
+  int depth,
+) {
+  final tag = _htmlTagAt(s, i);
+  if (tag == null || tag.closing) return -1;
+  if (tag.name == 'br') {
+    flush();
+    spans.add(const TextSpan(text: '\n'));
+    return tag.end;
+  }
+  final innerStyle = _htmlStyle(tag.name, style, cfg);
+  if (innerStyle == null || tag.selfClose) return -1;
+  final close = _findHtmlClose(s, tag.end, tag.name);
+  if (close == null) return -1;
+  flush();
+  final inner = s.substring(tag.end, close.$1);
+  if (tag.name == 'q') {
+    spans.add(TextSpan(text: '“', style: innerStyle));
+    spans.addAll(_inline(inner, innerStyle, cfg, depth + 1));
+    spans.add(TextSpan(text: '”', style: innerStyle));
+  } else {
+    spans.addAll(_inline(inner, innerStyle, cfg, depth + 1));
+  }
+  return close.$2;
+}
+
+/// Finds the matching close tag for [name] opened at [start], honouring nesting.
+/// Returns (startOfCloseTag, endOfCloseTag) or null.
+(int, int)? _findHtmlClose(String s, int start, String name) {
+  var depth = 1;
+  var j = start;
+  while (j < s.length) {
+    if (s[j] == '<') {
+      final t = _htmlTagAt(s, j);
+      if (t != null && t.name == name && !t.selfClose) {
+        if (t.closing) {
+          depth--;
+          if (depth == 0) return (j, t.end);
+        } else {
+          depth++;
+        }
+        j = t.end;
+        continue;
+      }
+    }
+    j++;
+  }
+  return null;
+}
+
+/// Normalises block-level HTML into the line-based markdown the renderer
+/// already understands (paragraphs/divs → blank lines, headings → `#`, ordered
+/// lists → `1.`/`2.`, other list items → `-`, blockquotes → `>`), leaving
+/// inline tags for [_inline]. Inline code spans are masked first so HTML shown
+/// as code (e.g. `<div>`) survives verbatim.
+String _preprocessHtmlBlocks(String t) {
+  if (!t.contains('<')) return t;
+
+  final codes = <String>[];
+  var s = t.replaceAllMapped(RegExp(r'`[^`\n]*`'), (m) {
+    codes.add(m.group(0)!);
+    return '${codes.length - 1}';
+  });
+
+  // Ordered lists: number their items before the generic <li> rule.
+  s = s.replaceAllMapped(
+    RegExp(r'<ol(\s[^>]*)?>(.*?)</ol\s*>', caseSensitive: false, dotAll: true),
+    (m) {
+      var n = 0;
+      final body = m.group(2)!.replaceAllMapped(
+            RegExp(r'<li(\s[^>]*)?>', caseSensitive: false),
+            (_) => '\n${++n}. ',
+          );
+      return '\n$body\n';
+    },
+  );
+
+  s = s
+      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'</p\s*>', caseSensitive: false), '\n\n')
+      .replaceAll(RegExp(r'<p(\s[^>]*)?>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'</div\s*>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<div(\s[^>]*)?>', caseSensitive: false), '\n')
+      .replaceAllMapped(
+        RegExp(r'<h([1-6])(\s[^>]*)?>', caseSensitive: false),
+        (m) => '\n${'#' * int.parse(m.group(1)!)} ',
+      )
+      .replaceAll(RegExp(r'</h[1-6]\s*>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<blockquote(\s[^>]*)?>', caseSensitive: false), '\n> ')
+      .replaceAll(RegExp(r'</blockquote\s*>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<li(\s[^>]*)?>', caseSensitive: false), '\n- ')
+      .replaceAll(RegExp(r'</li\s*>', caseSensitive: false), '')
+      .replaceAll(RegExp(r'</?[uo]l(\s[^>]*)?>', caseSensitive: false), '\n');
+
+  // Restore the masked inline code spans.
+  if (codes.isNotEmpty) {
+    s = s.replaceAllMapped(
+      RegExp('(\\d+)'),
+      (m) => codes[int.parse(m.group(1)!)],
+    );
+  }
+  return s;
+}
+
+final _entity = RegExp(r'&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);');
+const _named = {
+  'amp': '&', 'lt': '<', 'gt': '>', 'quot': '"', 'apos': "'", 'nbsp': ' ',
+  'mdash': '—', 'ndash': '–', 'hellip': '…', 'copy': '©', 'reg': '®',
+  'trade': '™', 'deg': '°', 'laquo': '«', 'raquo': '»', 'rsquo': '’',
+  'lsquo': '‘', 'ldquo': '“', 'rdquo': '”', 'middot': '·', 'bull': '•',
+};
+
+/// Decodes the HTML entities that show up in model output. Out-of-range numeric
+/// references are left as their literal source rather than crashing the render.
+String _decodeEntities(String s) {
+  if (!s.contains('&')) return s;
+  return s.replaceAllMapped(_entity, (m) {
+    final body = m.group(1)!;
+    if (body.startsWith('#x') || body.startsWith('#X')) {
+      final code = int.tryParse(body.substring(2), radix: 16);
+      return _fromCode(code) ?? m.group(0)!;
+    }
+    if (body.startsWith('#')) {
+      final code = int.tryParse(body.substring(1));
+      return _fromCode(code) ?? m.group(0)!;
+    }
+    return _named[body] ?? m.group(0)!;
+  });
+}
+
+/// A single character for a valid Unicode scalar, or null when out of range
+/// (String.fromCharCode throws above 0x10FFFF).
+String? _fromCode(int? code) {
+  if (code == null || code < 0 || code > 0x10FFFF) return null;
+  return String.fromCharCode(code);
+}
+
+
 
