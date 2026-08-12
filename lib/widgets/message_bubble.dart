@@ -5,6 +5,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/message.dart';
 import 'character_avatar.dart';
+import 'message_html.dart';
 import 'message_markdown.dart';
 
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
@@ -259,6 +260,35 @@ class MessageBubble extends StatelessWidget {
     }
     final style = TextStyle(color: color, fontSize: ui.fontSize, height: 1.35);
     final content = message.content;
+
+    // Full HTML + CSS engine for any message that actually contains HTML.
+    if (ui.markdown && content.isNotEmpty && looksLikeHtml(content)) {
+      final html = SelectionArea(
+        child: buildMessageHtml(
+          content,
+          HtmlMessageStyle(
+            base: color,
+            emphasis:
+                ui.emphasisColor != null ? Color(ui.emphasisColor!) : color,
+            quote: ui.quoteColor != null ? Color(ui.quoteColor!) : color,
+            codeBackground: scheme.surfaceContainerLowest,
+            codeForeground: scheme.onSurface,
+            link: scheme.primary,
+            fontSize: ui.fontSize,
+          ),
+        ),
+      );
+      // The "around" float isn't possible with block HTML; sit the avatar
+      // beside it instead.
+      if (leading == null) return html;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [leading, const SizedBox(width: 10), Flexible(child: html)],
+      );
+    }
+
+    // Lightweight, selectable inline renderer (markdown/quotes/emphasis).
     final List<InlineSpan> spans;
     if (ui.markdown && content.isNotEmpty) {
       spans = buildMessageSpans(
