@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/appearance.dart';
 import '../models/character.dart';
+import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
@@ -32,6 +33,7 @@ class Storage {
   static const _settingsKey = 'settings';
   static const _providersKey = 'providers';
   static const _appearanceKey = 'appearance';
+  static const _chatInterfaceKey = 'chatInterface';
   static const _conversationsKey = 'conversations';
   static const _charactersKey = 'characters';
   static const _activeKey = 'activeConversation';
@@ -130,6 +132,21 @@ class Storage {
 
   Future<void> saveAppearance(Appearance appearance) async =>
       (await _prefs).setString(_appearanceKey, jsonEncode(appearance.toJson()));
+
+  Future<ChatInterface> loadChatInterface() async {
+    final raw = (await _prefs).getString(_chatInterfaceKey);
+    if (raw == null) return const ChatInterface();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return ChatInterface.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const ChatInterface();
+  }
+
+  Future<void> saveChatInterface(ChatInterface ui) async =>
+      (await _prefs).setString(_chatInterfaceKey, jsonEncode(ui.toJson()));
 
   Future<List<Conversation>> loadConversations() async {
     final raw = (await _prefs).getString(_conversationsKey);

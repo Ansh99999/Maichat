@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
+import 'settings/chat_interface_settings_page.dart';
 import 'settings/providers_settings_page.dart';
 import 'settings/setting_anchors.dart';
 
@@ -38,6 +39,12 @@ class SettingsScreen extends StatelessWidget {
             onTap: () => _open(context, const AppearanceSettingsPage()),
           ),
           _SectionTile(
+            icon: Icons.chat_bubble_outline,
+            title: 'Chat Interface',
+            subtitle: _chatInterfaceSummary(state),
+            onTap: () => _open(context, const ChatInterfaceSettingsPage()),
+          ),
+          _SectionTile(
             icon: Icons.info_outline,
             title: 'About',
             subtitle: 'Version ${AboutSettingsPage.version} · Storage',
@@ -65,6 +72,14 @@ class SettingsScreen extends StatelessWidget {
     return a.dynamicColor
         ? '${a.mode.label} · System colours'
         : a.mode.label;
+  }
+
+  static String _chatInterfaceSummary(AppState state) {
+    final ui = state.chatInterface;
+    final avatars = ui.showAvatars
+        ? '${ui.avatarShape.label} avatars'
+        : 'No avatars';
+    return '$avatars · ${ui.textPlacement.label}';
   }
 
   static void _open(BuildContext context, Widget page) {
@@ -187,6 +202,27 @@ const List<_SearchEntry> _searchIndex = [
     builder: _systemColoursPage,
   ),
   _SearchEntry(
+    title: 'Avatars',
+    section: 'Chat Interface',
+    icon: Icons.account_circle_outlined,
+    keywords: 'avatar size shape corners circle square fit picture image free',
+    builder: _chatAvatarsPage,
+  ),
+  _SearchEntry(
+    title: 'Text placement',
+    section: 'Chat Interface',
+    icon: Icons.view_agenda_outlined,
+    keywords: 'beside below under around wrap avatar layout position bubbles flat',
+    builder: _textPlacementPage,
+  ),
+  _SearchEntry(
+    title: 'Message colours',
+    section: 'Chat Interface',
+    icon: Icons.format_color_fill_outlined,
+    keywords: 'text bubble background colour color chat theme override font size',
+    builder: _chatColoursPage,
+  ),
+  _SearchEntry(
     title: 'Storage',
     section: 'About',
     icon: Icons.sd_storage_outlined,
@@ -208,6 +244,12 @@ Widget _themePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.theme);
 Widget _systemColoursPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.systemColours);
+Widget _chatAvatarsPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatAvatars);
+Widget _textPlacementPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.textPlacement);
+Widget _chatColoursPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
 Widget _storagePage() =>
     const AboutSettingsPage(highlight: SettingAnchor.storage);
 Widget _versionPage() =>

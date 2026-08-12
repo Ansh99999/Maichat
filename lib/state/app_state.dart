@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../app_info.dart';
 import '../models/appearance.dart';
 import '../models/character.dart';
+import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/preset.dart';
@@ -42,6 +43,7 @@ class AppState extends ChangeNotifier {
   final PromptBuilder _prompts = PromptBuilder(macros: DefaultMacroEngine());
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
+  ChatInterface _chatInterface = const ChatInterface();
   String? _activeId;
   bool _ready = false;
   bool _streaming = false;
@@ -53,6 +55,7 @@ class AppState extends ChangeNotifier {
   List<Character> get characters => List.unmodifiable(_characters);
   List<Preset> get presets => List.unmodifiable(_presets);
   Appearance get appearance => _appearance;
+  ChatInterface get chatInterface => _chatInterface;
   bool get ready => _ready;
   bool get streaming => _streaming;
 
@@ -111,6 +114,7 @@ class AppState extends ChangeNotifier {
       ..addAll(providerState.providers);
     _activeProviderId = providerState.activeId;
     _appearance = await _storage.loadAppearance();
+    _chatInterface = await _storage.loadChatInterface();
     _characters
       ..clear()
       ..addAll(await _storage.loadCharacters());
@@ -192,6 +196,13 @@ class AppState extends ChangeNotifier {
     _appearance = next;
     notifyListeners();
     await _storage.saveAppearance(next);
+  }
+
+  Future<void> updateChatInterface(ChatInterface next) async {
+    if (next == _chatInterface) return;
+    _chatInterface = next;
+    notifyListeners();
+    await _storage.saveChatInterface(next);
   }
 
   // --- Presets -------------------------------------------------------------

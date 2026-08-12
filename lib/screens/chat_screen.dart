@@ -208,8 +208,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
     final topInset = MediaQuery.paddingOf(context).top;
+    final ui = state.chatInterface;
+    final bg = ui.backgroundColor != null ? Color(ui.backgroundColor!) : null;
 
     return Scaffold(
+      backgroundColor: bg,
       drawer: _ChatDrawer(
         onProfile: _goHome,
         onCharacters: _openCharacters,
@@ -265,6 +268,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _messageList(Conversation conversation, AppState state, double top) {
+    final ui = state.chatInterface;
+    final character = state.characterById(conversation.characterId);
     return ListView.builder(
       controller: _scroll,
       // Leave room so the first bubble clears the floating hamburger.
@@ -274,6 +279,8 @@ class _ChatScreenState extends State<ChatScreen> {
         final isLast = index == conversation.messages.length - 1;
         return MessageBubble(
           message: conversation.messages[index],
+          ui: ui,
+          character: character,
           pending: isLast && state.streaming,
         );
       },
