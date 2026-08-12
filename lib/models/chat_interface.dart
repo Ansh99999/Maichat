@@ -43,6 +43,24 @@ enum NameAlign {
   }
 }
 
+/// Whether a sender's name label sits above or below its message (the avatar +
+/// bubble group).
+enum NamePosition {
+  above('Above'),
+  below('Below');
+
+  const NamePosition(this.label);
+
+  final String label;
+
+  static NamePosition byName(String? name) {
+    for (final p in values) {
+      if (p.name == name) return p;
+    }
+    return NamePosition.above;
+  }
+}
+
 /// The shape an avatar is clipped to.
 enum AvatarShape {
   circle('Circle'),
@@ -244,6 +262,8 @@ class ChatInterface {
     this.userNameSize = 12,
     this.botNameAlign = NameAlign.start,
     this.userNameAlign = NameAlign.start,
+    this.botNamePosition = NamePosition.above,
+    this.userNamePosition = NamePosition.above,
     this.markdown = true,
     this.userTextColor,
     this.botTextColor,
@@ -285,6 +305,10 @@ class ChatInterface {
   final NameAlign botNameAlign;
   final NameAlign userNameAlign;
 
+  /// Whether each role's name sits above or below its message.
+  final NamePosition botNamePosition;
+  final NamePosition userNamePosition;
+
   /// Whether message text is rendered as markdown (bold/italic/quotes/code…).
   final bool markdown;
 
@@ -318,6 +342,8 @@ class ChatInterface {
     double? userNameSize,
     NameAlign? botNameAlign,
     NameAlign? userNameAlign,
+    NamePosition? botNamePosition,
+    NamePosition? userNamePosition,
     bool? markdown,
     Object? userTextColor = _unset,
     Object? botTextColor = _unset,
@@ -341,6 +367,8 @@ class ChatInterface {
         userNameSize: userNameSize ?? this.userNameSize,
         botNameAlign: botNameAlign ?? this.botNameAlign,
         userNameAlign: userNameAlign ?? this.userNameAlign,
+        botNamePosition: botNamePosition ?? this.botNamePosition,
+        userNamePosition: userNamePosition ?? this.userNamePosition,
         markdown: markdown ?? this.markdown,
         userTextColor: _pick(userTextColor, this.userTextColor),
         botTextColor: _pick(botTextColor, this.botTextColor),
@@ -383,6 +411,8 @@ class ChatInterface {
         'userNameSize': userNameSize,
         'botNameAlign': botNameAlign.name,
         'userNameAlign': userNameAlign.name,
+        'botNamePosition': botNamePosition.name,
+        'userNamePosition': userNamePosition.name,
         'markdown': markdown,
         if (userTextColor != null) 'userTextColor': userTextColor,
         if (botTextColor != null) 'botTextColor': botTextColor,
@@ -433,6 +463,8 @@ class ChatInterface {
       userNameSize: (json['userNameSize'] as num?)?.toDouble() ?? 12,
       botNameAlign: NameAlign.byName(json['botNameAlign'] as String?),
       userNameAlign: NameAlign.byName(json['userNameAlign'] as String?),
+      botNamePosition: NamePosition.byName(json['botNamePosition'] as String?),
+      userNamePosition: NamePosition.byName(json['userNamePosition'] as String?),
       markdown: json['markdown'] as bool? ?? true,
       userTextColor: (json['userTextColor'] as num?)?.toInt(),
       botTextColor: (json['botTextColor'] as num?)?.toInt(),
@@ -460,6 +492,8 @@ class ChatInterface {
       other.userNameSize == userNameSize &&
       other.botNameAlign == botNameAlign &&
       other.userNameAlign == userNameAlign &&
+      other.botNamePosition == botNamePosition &&
+      other.userNamePosition == userNamePosition &&
       other.markdown == markdown &&
       other.userTextColor == userTextColor &&
       other.botTextColor == botTextColor &&
@@ -480,7 +514,8 @@ class ChatInterface {
         bubbleOpacity,
         showNames,
         userName,
-        Object.hash(botNameSize, userNameSize, botNameAlign, userNameAlign),
+        Object.hash(botNameSize, userNameSize, botNameAlign, userNameAlign,
+            botNamePosition, userNamePosition),
         markdown,
         userTextColor,
         botTextColor,

@@ -131,10 +131,15 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
                     icon: Icons.smart_toy_outlined,
                     size: ui.botNameSize,
                     align: ui.botNameAlign,
+                    position: ui.botNamePosition,
                     onSize: (v) => update(ui.copyWith(botNameSize: v)),
                     onAlign: (a) {
                       update(ui.copyWith(botNameAlign: a));
                       notify('Character name aligned ${a.label.toLowerCase()}');
+                    },
+                    onPosition: (p) {
+                      update(ui.copyWith(botNamePosition: p));
+                      notify('Character name ${p.label.toLowerCase()} the avatar');
                     },
                     onSizeEnd: (v) =>
                         notify('Character name size ${v.round()} px'),
@@ -144,10 +149,15 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
                     icon: Icons.person_outline,
                     size: ui.userNameSize,
                     align: ui.userNameAlign,
+                    position: ui.userNamePosition,
                     onSize: (v) => update(ui.copyWith(userNameSize: v)),
                     onAlign: (a) {
                       update(ui.copyWith(userNameAlign: a));
                       notify('Your name aligned ${a.label.toLowerCase()}');
+                    },
+                    onPosition: (p) {
+                      update(ui.copyWith(userNamePosition: p));
+                      notify('Your name ${p.label.toLowerCase()} the avatar');
                     },
                     onSizeEnd: (v) => notify('Your name size ${v.round()} px'),
                   ),
@@ -378,8 +388,10 @@ class _NameControls extends StatelessWidget {
     required this.icon,
     required this.size,
     required this.align,
+    required this.position,
     required this.onSize,
     required this.onAlign,
+    required this.onPosition,
     required this.onSizeEnd,
   });
 
@@ -387,8 +399,10 @@ class _NameControls extends StatelessWidget {
   final IconData icon;
   final double size;
   final NameAlign align;
+  final NamePosition position;
   final ValueChanged<double> onSize;
   final ValueChanged<NameAlign> onAlign;
+  final ValueChanged<NamePosition> onPosition;
   final ValueChanged<double> onSizeEnd;
 
   @override
@@ -420,11 +434,19 @@ class _NameControls extends StatelessWidget {
         ),
         _EnumRow<NameAlign>(
           icon: Icons.format_align_center_outlined,
-          label: 'Placement',
+          label: 'Alignment',
           value: align,
           values: NameAlign.values,
           labelOf: (a) => a.label,
           onChanged: onAlign,
+        ),
+        _EnumRow<NamePosition>(
+          icon: Icons.vertical_align_top_outlined,
+          label: 'Position',
+          value: position,
+          values: NamePosition.values,
+          labelOf: (p) => p.label,
+          onChanged: onPosition,
         ),
       ],
     );

@@ -203,6 +203,13 @@ const List<_SearchEntry> _searchIndex = [
     builder: _systemColoursPage,
   ),
   _SearchEntry(
+    title: 'App font',
+    section: 'Appearance',
+    icon: Icons.font_download_outlined,
+    keywords: 'font typeface google fonts family typography text',
+    builder: _fontPage,
+  ),
+  _SearchEntry(
     title: 'Avatars',
     section: 'Chat Interface',
     icon: Icons.account_circle_outlined,
@@ -252,6 +259,8 @@ Widget _themePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.theme);
 Widget _systemColoursPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.systemColours);
+Widget _fontPage() =>
+    const AppearanceSettingsPage(highlight: SettingAnchor.font);
 Widget _chatAvatarsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatAvatars);
 Widget _textPlacementPage() =>

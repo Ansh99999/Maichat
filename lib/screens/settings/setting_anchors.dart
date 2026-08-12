@@ -9,6 +9,7 @@ enum SettingAnchor {
   model,
   theme,
   systemColours,
+  font,
   chatAvatars,
   textPlacement,
   names,

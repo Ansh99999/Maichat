@@ -1,6 +1,7 @@
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'models/appearance.dart';
@@ -35,13 +36,14 @@ class MaiChatApp extends StatelessWidget {
                 title: 'MaiChat',
                 debugShowCheckedModeBanner: false,
                 themeMode: _themeMode(appearance.mode),
-                theme:
-                    _theme(wanted ? lightDynamic : null, Brightness.light, seed),
+                theme: _theme(wanted ? lightDynamic : null, Brightness.light,
+                    seed, fontFamily: appearance.fontFamily),
                 darkTheme: _theme(
                   wanted ? darkDynamic : null,
                   Brightness.dark,
                   seed,
                   amoled: amoled,
+                  fontFamily: appearance.fontFamily,
                 ),
                 home: const HomeScreen(),
               );
@@ -69,6 +71,7 @@ class MaiChatApp extends StatelessWidget {
     Brightness brightness,
     Color seed, {
     bool amoled = false,
+    String? fontFamily,
   }) {
     var scheme = dynamicScheme?.harmonized() ??
         ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
@@ -82,7 +85,7 @@ class MaiChatApp extends StatelessWidget {
         surfaceContainerHighest: const Color(0xFF1C1C1C),
       );
     }
-    return ThemeData(
+    final base = ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
       scaffoldBackgroundColor: amoled && brightness == Brightness.dark
@@ -98,6 +101,24 @@ class MaiChatApp extends StatelessWidget {
         border: OutlineInputBorder(),
       ),
     );
+    return _withFont(base, fontFamily);
+  }
+
+  /// Applies a Google Fonts [fontFamily] across the whole text theme, leaving
+  /// the theme untouched when no font is chosen or the family is unknown (a bad
+  /// name must never crash the app at startup).
+  static ThemeData _withFont(ThemeData base, String? fontFamily) {
+    if (fontFamily == null || fontFamily.trim().isEmpty) return base;
+    try {
+      final textTheme = GoogleFonts.getTextTheme(fontFamily, base.textTheme);
+      return base.copyWith(
+        textTheme: textTheme,
+        primaryTextTheme:
+            GoogleFonts.getTextTheme(fontFamily, base.primaryTextTheme),
+      );
+    } catch (_) {
+      return base;
+    }
   }
 
   /// Transparent bars with icons contrasting against the app's own surface.

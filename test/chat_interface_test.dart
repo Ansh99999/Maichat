@@ -63,6 +63,8 @@ void main() {
       userNameSize: 9,
       botNameAlign: NameAlign.center,
       userNameAlign: NameAlign.end,
+      botNamePosition: NamePosition.below,
+      userNamePosition: NamePosition.above,
     );
     final restored = ChatInterface.fromJson(original.toJson());
     expect(restored, original);
@@ -70,17 +72,23 @@ void main() {
     expect(restored.userNameSize, 9);
     expect(restored.botNameAlign, NameAlign.center);
     expect(restored.userNameAlign, NameAlign.end);
+    expect(restored.botNamePosition, NamePosition.below);
+    expect(restored.userNamePosition, NamePosition.above);
   });
 
-  test('name defaults and NameAlign.byName fall back sensibly', () {
+  test('name defaults and enum byName fall back sensibly', () {
     const ui = ChatInterface();
     expect(ui.botNameSize, 12);
     expect(ui.userNameSize, 12);
     expect(ui.botNameAlign, NameAlign.start);
     expect(ui.userNameAlign, NameAlign.start);
+    expect(ui.botNamePosition, NamePosition.above);
+    expect(ui.userNamePosition, NamePosition.above);
     expect(NameAlign.byName('nonsense'), NameAlign.start);
     expect(NameAlign.byName('center'), NameAlign.center);
     expect(NameAlign.center.textAlign, TextAlign.center);
+    expect(NamePosition.byName('nonsense'), NamePosition.above);
+    expect(NamePosition.byName('below'), NamePosition.below);
   });
 
   test('copyWith clears a colour to null (follow theme) via the sentinel', () {

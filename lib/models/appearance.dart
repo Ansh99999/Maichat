@@ -14,6 +14,7 @@ class Appearance {
     this.dynamicColor = true,
     this.mode = AppThemeMode.system,
     this.seedColor = kDefaultSeedColor,
+    this.fontFamily,
   });
 
   /// Prefer the platform's Material You palette over the custom [seedColor].
@@ -25,23 +26,42 @@ class Appearance {
   /// [dynamicColor] is off or no system palette is available.
   final int seedColor;
 
-  Appearance copyWith({bool? dynamicColor, AppThemeMode? mode, int? seedColor}) =>
+  /// A Google Fonts family applied app-wide to the text theme, or null to keep
+  /// the platform default font.
+  final String? fontFamily;
+
+  Appearance copyWith({
+    bool? dynamicColor,
+    AppThemeMode? mode,
+    int? seedColor,
+    Object? fontFamily = _unset,
+  }) =>
       Appearance(
         dynamicColor: dynamicColor ?? this.dynamicColor,
         mode: mode ?? this.mode,
         seedColor: seedColor ?? this.seedColor,
+        fontFamily: identical(fontFamily, _unset)
+            ? this.fontFamily
+            : fontFamily as String?,
       );
+
+  // Sentinel so copyWith can tell "leave the font" from "clear it to null".
+  static const Object _unset = Object();
 
   Map<String, dynamic> toJson() => {
         'dynamicColor': dynamicColor,
         'mode': mode.name,
         'seedColor': seedColor,
+        if (fontFamily != null) 'fontFamily': fontFamily,
       };
 
   factory Appearance.fromJson(Map<String, dynamic> json) => Appearance(
         dynamicColor: json['dynamicColor'] as bool? ?? true,
         mode: AppThemeMode.byName(json['mode'] as String?),
         seedColor: (json['seedColor'] as num?)?.toInt() ?? kDefaultSeedColor,
+        fontFamily: (json['fontFamily'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['fontFamily'] as String).trim(),
       );
 
   @override
@@ -49,10 +69,11 @@ class Appearance {
       other is Appearance &&
       other.dynamicColor == dynamicColor &&
       other.mode == mode &&
-      other.seedColor == seedColor;
+      other.seedColor == seedColor &&
+      other.fontFamily == fontFamily;
 
   @override
-  int get hashCode => Object.hash(dynamicColor, mode, seedColor);
+  int get hashCode => Object.hash(dynamicColor, mode, seedColor, fontFamily);
 }
 
 /// Mirrors Flutter's ThemeMode without dragging the framework into the model

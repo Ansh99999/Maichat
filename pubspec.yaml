@@ -48,6 +48,7 @@ dependencies:
   archive: 4.0.7
   flutter_html: ^3.0.0
   markdown: ^7.3.1
+  google_fonts: 8.2.1
 
 dev_dependencies:
   flutter_test:

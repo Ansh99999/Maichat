@@ -83,23 +83,23 @@ class MessageBubble extends StatelessWidget {
     final crossAxis =
         side.isLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
 
-    // Wraps the avatar+bubble group with an optional sender-name label above
-    // it. When shown, the group is laid over the full message cell so the name
-    // can be aligned (start/centre/end) across the whole row while the bubble
-    // still hugs its own side.
+    // Wraps the avatar+bubble group with an optional sender-name label. When
+    // shown, the group is laid over the full message cell so the name can be
+    // aligned (start/centre/end) across the whole row, and sits either above or
+    // below the group per the role's name position.
     Widget withName(Widget group) {
       if (!ui.showNames) return group;
+      final position = isUser ? ui.userNamePosition : ui.botNamePosition;
+      final aligned = Align(
+        alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
+        child: group,
+      );
       return Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _nameLabel(context, isUser),
-          Align(
-            alignment:
-                side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
-            child: group,
-          ),
-        ],
+        children: position == NamePosition.above
+            ? [_nameLabel(context, isUser), aligned]
+            : [aligned, _nameLabel(context, isUser)],
       );
     }
 // APPEND-BUILD

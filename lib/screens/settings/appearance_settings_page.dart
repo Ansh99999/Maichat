@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/appearance.dart';
 import '../../state/app_state.dart';
 import '../../widgets/color_picker.dart';
+import '../presets/preset_pickers.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
 
@@ -71,8 +73,87 @@ class AppearanceSettingsPage extends StatelessWidget {
               appearance.copyWith(seedColor: color.toARGB32()),
             ),
           ),
+          // App font — a Google Fonts family applied across the whole app.
+          SettingHighlight(
+            active: highlight == SettingAnchor.font,
+            child: _FontRow(
+              fontFamily: appearance.fontFamily,
+              onChanged: (family) => state.updateAppearance(
+                appearance.copyWith(fontFamily: family),
+              ),
+            ),
+          ),
         ],
       ),
+    );
+  }
+}
+
+/// A single row showing the current app font; tapping it opens a searchable
+/// picker of every Google Fonts family. Choosing "System default" clears it.
+class _FontRow extends StatelessWidget {
+  const _FontRow({required this.fontFamily, required this.onChanged});
+
+  final String? fontFamily;
+
+  /// Called with the chosen family, or null for the system default.
+  final ValueChanged<String?> onChanged;
+
+  static const String _systemId = '__system__';
+
+  Future<void> _pick(BuildContext context) async {
+    final families = GoogleFonts.asMap().keys.toList()..sort();
+    final chosen = await showSearchPicker(
+      context: context,
+      title: 'App font',
+      entries: [
+        const PickerEntry(
+          id: _systemId,
+          title: 'System default',
+          subtitle: 'Platform font',
+        ),
+        for (final f in families) PickerEntry(id: f, title: f),
+      ],
+      selectedId: fontFamily ?? _systemId,
+      allowCustom: true,
+    );
+    if (chosen == null) return;
+    onChanged(chosen == _systemId || chosen.trim().isEmpty ? null : chosen.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final family = fontFamily;
+    // Preview the chosen font on its own name where possible.
+    TextStyle? preview;
+    if (family != null) {
+      try {
+        preview = GoogleFonts.getFont(family);
+      } catch (_) {
+        preview = null;
+      }
+    }
+    return ListTile(
+      leading: const Icon(Icons.font_download_outlined),
+      title: const Text('App font'),
+      subtitle: Text(
+        family ?? 'System default',
+        style: preview,
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (family != null)
+            IconButton(
+              tooltip: 'Use system font',
+              icon: const Icon(Icons.close),
+              onPressed: () => onChanged(null),
+            ),
+          Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+        ],
+      ),
+      onTap: () => _pick(context),
     );
   }
 }

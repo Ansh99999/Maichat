@@ -183,4 +183,22 @@ void main() {
     });
     expect(restored.seedColor, kDefaultSeedColor);
   });
+
+  test('the app font round-trips and is omitted from JSON when unset', () {
+    // Default: no font key written, so the stored shape stays minimal.
+    expect(const Appearance().fontFamily, isNull);
+    expect(const Appearance().toJson().containsKey('fontFamily'), isFalse);
+
+    const original = Appearance(fontFamily: 'Roboto Slab');
+    final restored = Appearance.fromJson(original.toJson());
+    expect(restored, original);
+    expect(restored.fontFamily, 'Roboto Slab');
+
+    // copyWith clears the font back to the system default via the sentinel.
+    expect(original.copyWith().fontFamily, 'Roboto Slab');
+    expect(original.copyWith(fontFamily: null).fontFamily, isNull);
+    // A blank stored value reads as "no font".
+    expect(Appearance.fromJson(<String, dynamic>{'fontFamily': '  '}).fontFamily,
+        isNull);
+  });
 }

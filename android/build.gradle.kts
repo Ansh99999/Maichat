@@ -21,9 +21,13 @@ subprojects {
 
 // file_picker 11.x skips applying the Kotlin plugin on AGP 9+, expecting AGP's
 // built-in Kotlin — but its library module never gets it, so its Kotlin
-// sources (FilePickerPlugin) don't compile. Supply the plugin ourselves.
+// sources (FilePickerPlugin) don't compile. Supply the plugin ourselves. The
+// same applies to other Kotlin-based plugins pulled in transitively
+// (url_launcher_android, path_provider_android via google_fonts).
 subprojects {
-    if (name == "file_picker" || name == "url_launcher_android") {
+    if (name == "file_picker" ||
+        name == "url_launcher_android" ||
+        name == "path_provider_android") {
         plugins.apply("org.jetbrains.kotlin.android")
     }
 }
