@@ -5,6 +5,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/message.dart';
 import 'character_avatar.dart';
+import 'message_markdown.dart';
 
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
 /// (size/shape/fit/offset and which side it sits on), where the text sits
@@ -91,7 +92,8 @@ class MessageBubble extends StatelessWidget {
     switch (ui.textPlacement) {
       case TextPlacement.around:
         inner = contentColumn(
-          _bubble(_text(textColor, showCaret, leading: avatar), bubbleColor),
+          _bubble(
+              _text(scheme, textColor, showCaret, leading: avatar), bubbleColor),
         );
       case TextPlacement.below:
         inner = Column(
@@ -99,7 +101,8 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: crossAxis,
           children: [
             if (avatar != null) ...[avatar, const SizedBox(height: 6)],
-            contentColumn(_bubble(_text(textColor, showCaret), bubbleColor)),
+            contentColumn(
+                _bubble(_text(scheme, textColor, showCaret), bubbleColor)),
           ],
         );
       case TextPlacement.beside:
@@ -113,7 +116,7 @@ class MessageBubble extends StatelessWidget {
             if (avatar != null) ...[avatar, const SizedBox(width: 8)],
             Flexible(
               child: contentColumn(
-                _bubble(_text(textColor, showCaret), bubbleColor),
+                _bubble(_text(scheme, textColor, showCaret), bubbleColor),
               ),
             ),
           ],
@@ -227,9 +230,11 @@ class MessageBubble extends StatelessWidget {
   }
 
   /// The message body: a spinner while a caret-only turn is still streaming,
-  /// otherwise selectable text. When [leading] is set (the "around" placement)
-  /// the avatar is dropped inline so the text wraps around it.
-  Widget _text(Color color, bool showCaret, {Widget? leading}) {
+  /// otherwise selectable text rendered as markdown (when enabled). When
+  /// [leading] is set (the "around" placement) the avatar is dropped inline so
+  /// the text wraps around it.
+  Widget _text(ColorScheme scheme, Color color, bool showCaret,
+      {Widget? leading}) {
     if (showCaret) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
@@ -241,11 +246,27 @@ class MessageBubble extends StatelessWidget {
       );
     }
     final style = TextStyle(color: color, fontSize: ui.fontSize, height: 1.35);
-    if (leading != null) {
-      return SelectableText.rich(
-        TextSpan(
-          style: style,
-          children: [
+    final content = message.content;
+    final List<InlineSpan> spans;
+    if (ui.markdown && content.isNotEmpty) {
+      spans = buildMessageSpans(
+        content,
+        MarkdownStyles(
+          base: style,
+          emphasis: ui.emphasisColor != null ? Color(ui.emphasisColor!) : color,
+          quote: ui.quoteColor != null ? Color(ui.quoteColor!) : color,
+          codeBackground: scheme.surfaceContainerHighest,
+          codeForeground: color,
+        ),
+      );
+    } else {
+      spans = [TextSpan(text: content, style: style)];
+    }
+    return SelectableText.rich(
+      TextSpan(
+        style: style,
+        children: [
+          if (leading != null)
             WidgetSpan(
               alignment: PlaceholderAlignment.top,
               child: Padding(
@@ -253,12 +274,10 @@ class MessageBubble extends StatelessWidget {
                 child: leading,
               ),
             ),
-            TextSpan(text: message.content),
-          ],
-        ),
-      );
-    }
-    return SelectableText(message.content, style: style);
+          ...spans,
+        ],
+      ),
+    );
   }
 
   /// Wraps [child] in a tinted bubble, or leaves it flat ("document") when

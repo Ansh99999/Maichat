@@ -35,9 +35,12 @@ void main() {
       bubbleOpacity: 0.5,
       showNames: true,
       userName: 'Ansh',
+      markdown: false,
       userTextColor: 0xFF112233,
       botBubbleColor: 0xFFAABBCC,
       backgroundColor: 0xFF010203,
+      emphasisColor: 0xFF00FF00,
+      quoteColor: 0xFF123456,
     );
 
     final restored = ChatInterface.fromJson(original.toJson());
@@ -46,6 +49,9 @@ void main() {
     expect(restored.botAvatar.fit, AvatarFit.free);
     expect(restored.userAvatar.side, ChatSide.left);
     expect(restored.userName, 'Ansh');
+    expect(restored.markdown, isFalse);
+    expect(restored.emphasisColor, 0xFF00FF00);
+    expect(restored.quoteColor, 0xFF123456);
     expect(restored.botAvatar.offset.dx, 10);
   });
 

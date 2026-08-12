@@ -206,11 +206,14 @@ class ChatInterface {
     this.bubbleOpacity = 1,
     this.showNames = false,
     this.userName = 'You',
+    this.markdown = true,
     this.userTextColor,
     this.botTextColor,
     this.userBubbleColor,
     this.botBubbleColor,
     this.backgroundColor,
+    this.emphasisColor,
+    this.quoteColor,
   });
 
   final AvatarStyle botAvatar;
@@ -236,12 +239,21 @@ class ChatInterface {
   /// The user's display name (the character's own name labels its turns).
   final String userName;
 
+  /// Whether message text is rendered as markdown (bold/italic/quotes/code…).
+  final bool markdown;
+
   /// ARGB overrides; null defers to the theme.
   final int? userTextColor;
   final int? botTextColor;
   final int? userBubbleColor;
   final int? botBubbleColor;
   final int? backgroundColor;
+
+  /// Colour for emphasised (*italic* / **bold**) text; null follows the text.
+  final int? emphasisColor;
+
+  /// Colour for text inside "quotes"; null follows the text.
+  final int? quoteColor;
 
   AvatarStyle avatarFor(bool isUser) => isUser ? userAvatar : botAvatar;
 // APPEND-CI-2
@@ -256,11 +268,14 @@ class ChatInterface {
     double? bubbleOpacity,
     bool? showNames,
     String? userName,
+    bool? markdown,
     Object? userTextColor = _unset,
     Object? botTextColor = _unset,
     Object? userBubbleColor = _unset,
     Object? botBubbleColor = _unset,
     Object? backgroundColor = _unset,
+    Object? emphasisColor = _unset,
+    Object? quoteColor = _unset,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -272,11 +287,14 @@ class ChatInterface {
         bubbleOpacity: bubbleOpacity ?? this.bubbleOpacity,
         showNames: showNames ?? this.showNames,
         userName: userName ?? this.userName,
+        markdown: markdown ?? this.markdown,
         userTextColor: _pick(userTextColor, this.userTextColor),
         botTextColor: _pick(botTextColor, this.botTextColor),
         userBubbleColor: _pick(userBubbleColor, this.userBubbleColor),
         botBubbleColor: _pick(botBubbleColor, this.botBubbleColor),
         backgroundColor: _pick(backgroundColor, this.backgroundColor),
+        emphasisColor: _pick(emphasisColor, this.emphasisColor),
+        quoteColor: _pick(quoteColor, this.quoteColor),
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -307,11 +325,14 @@ class ChatInterface {
         'bubbleOpacity': bubbleOpacity,
         'showNames': showNames,
         'userName': userName,
+        'markdown': markdown,
         if (userTextColor != null) 'userTextColor': userTextColor,
         if (botTextColor != null) 'botTextColor': botTextColor,
         if (userBubbleColor != null) 'userBubbleColor': userBubbleColor,
         if (botBubbleColor != null) 'botBubbleColor': botBubbleColor,
         if (backgroundColor != null) 'backgroundColor': backgroundColor,
+        if (emphasisColor != null) 'emphasisColor': emphasisColor,
+        if (quoteColor != null) 'quoteColor': quoteColor,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -350,11 +371,14 @@ class ChatInterface {
       bubbleOpacity: (json['bubbleOpacity'] as num?)?.toDouble() ?? 1,
       showNames: json['showNames'] as bool? ?? false,
       userName: json['userName'] as String? ?? 'You',
+      markdown: json['markdown'] as bool? ?? true,
       userTextColor: (json['userTextColor'] as num?)?.toInt(),
       botTextColor: (json['botTextColor'] as num?)?.toInt(),
       userBubbleColor: (json['userBubbleColor'] as num?)?.toInt(),
       botBubbleColor: (json['botBubbleColor'] as num?)?.toInt(),
       backgroundColor: (json['backgroundColor'] as num?)?.toInt(),
+      emphasisColor: (json['emphasisColor'] as num?)?.toInt(),
+      quoteColor: (json['quoteColor'] as num?)?.toInt(),
     );
   }
 
@@ -370,11 +394,14 @@ class ChatInterface {
       other.bubbleOpacity == bubbleOpacity &&
       other.showNames == showNames &&
       other.userName == userName &&
+      other.markdown == markdown &&
       other.userTextColor == userTextColor &&
       other.botTextColor == botTextColor &&
       other.userBubbleColor == userBubbleColor &&
       other.botBubbleColor == botBubbleColor &&
-      other.backgroundColor == backgroundColor;
+      other.backgroundColor == backgroundColor &&
+      other.emphasisColor == emphasisColor &&
+      other.quoteColor == quoteColor;
 
   @override
   int get hashCode => Object.hash(
@@ -387,11 +414,14 @@ class ChatInterface {
         bubbleOpacity,
         showNames,
         userName,
+        markdown,
         userTextColor,
         botTextColor,
         userBubbleColor,
         botBubbleColor,
         backgroundColor,
+        emphasisColor,
+        quoteColor,
       );
 }
 

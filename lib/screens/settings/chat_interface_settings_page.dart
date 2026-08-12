@@ -99,6 +99,15 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             value: ui.userName,
             onChanged: (v) => update(ui.copyWith(userName: v)),
           ),
+          SwitchListTile(
+            dense: true,
+            value: ui.markdown,
+            onChanged: (v) => update(ui.copyWith(markdown: v)),
+            secondary: const Icon(Icons.text_format_outlined),
+            title: const Text('Markdown'),
+            subtitle: const Text('Render **bold**, *italic*, `code`, lists and '
+                'quotes'),
+          ),
 // APPEND-CHILDREN
           const Divider(height: 24),
           _header(context, 'Avatars'),
@@ -160,6 +169,18 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             value: ui.backgroundColor,
             fallback: Theme.of(context).colorScheme.surface,
             onChanged: (c) => update(ui.copyWith(backgroundColor: c)),
+          ),
+          _ColorRow(
+            label: 'Emphasis (*italic* / **bold**)',
+            value: ui.emphasisColor,
+            fallback: Theme.of(context).colorScheme.onSurface,
+            onChanged: (c) => update(ui.copyWith(emphasisColor: c)),
+          ),
+          _ColorRow(
+            label: 'Quoted "text"',
+            value: ui.quoteColor,
+            fallback: Theme.of(context).colorScheme.onSurface,
+            onChanged: (c) => update(ui.copyWith(quoteColor: c)),
           ),
         ],
       ),
