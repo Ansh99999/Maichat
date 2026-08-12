@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../models/message.dart';
-import '../services/token_estimator.dart';
 import '../state/app_state.dart';
 
 /// Per-message info: its position in the thread, its own token cost, the total
@@ -14,6 +13,8 @@ class MessageInfoSheet extends StatelessWidget {
     required this.messageNumber,
     required this.messageCount,
     required this.message,
+    required this.messageTokens,
+    this.exactCount,
   });
 
   final AssembledPrompt assembled;
@@ -21,9 +22,12 @@ class MessageInfoSheet extends StatelessWidget {
   final int messageCount;
   final ChatMessage message;
 
-  static const _estimator = HeuristicTokenEstimator();
+  /// Tokens for this message's own content, under the active tokenizer.
+  final int messageTokens;
 
-  int get _messageTokens => _estimator.estimate(message.content) + 4;
+  /// An exact provider-side count of the whole assembled context (Anthropic),
+  /// or null when unavailable. Shown as a separate line when it resolves.
+  final Future<int?>? exactCount;
 
   @override
   Widget build(BuildContext context) {
@@ -49,11 +53,25 @@ class MessageInfoSheet extends StatelessWidget {
             _StatRow(
                 label: 'Position', value: 'Message $messageNumber of $messageCount'),
             _StatRow(label: 'Role', value: message.role),
-            _StatRow(label: 'This message', value: '~$_messageTokens tokens'),
+            _StatRow(label: 'This message', value: '~$messageTokens tokens'),
             _StatRow(
               label: 'Context total',
               value: '~$total / ${assembled.maxContext} tokens ($pct%)',
             ),
+            if (exactCount != null)
+              FutureBuilder<int?>(
+                future: exactCount,
+                builder: (context, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const _StatRow(
+                        label: 'Exact (Claude API)', value: 'counting…');
+                  }
+                  final n = snap.data;
+                  if (n == null) return const SizedBox.shrink();
+                  return _StatRow(
+                      label: 'Exact (Claude API)', value: '$n tokens');
+                },
+              ),
             const SizedBox(height: 16),
             Text('Context breakdown', style: text.titleSmall),
             const SizedBox(height: 4),

@@ -573,6 +573,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.11"
+  tiktoken_tokenizer_gpt4o_o1:
+    dependency: "direct main"
+    description:
+      name: tiktoken_tokenizer_gpt4o_o1
+      sha256: "87c65a9000d24f4273ad25c4a454dcdf1819f5da7e66eff14fbaef9f773ee6bc"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.1"
   typed_data:
     dependency: transitive
     description:

@@ -7,6 +7,7 @@ enum SettingAnchor {
   baseUrl,
   apiKey,
   model,
+  tokenizer,
   theme,
   systemColours,
   font,

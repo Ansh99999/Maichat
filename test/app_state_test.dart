@@ -3,6 +3,7 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/services/chat_client.dart';
+import 'package:maichat/services/tokenizer.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -423,5 +424,21 @@ void main() {
     final chat =
         reloaded.conversations.firstWhere((c) => c.id == chatId);
     expect(chat.impersonateId, isNull);
+  });
+
+  test('tokenizer config persists, reloads, and drives counting', () async {
+    final state = await _state(FakeClient(deltas: ['x']));
+    // Default is OpenAI; a real BPE count is well below the chars/4 heuristic
+    // for short English text (proves it isn't the ÷4 fallback).
+    expect(state.tokenizerConfig.kind, TokenizerKind.openai);
+    expect(state.estimateTokens('hello world'), greaterThan(0));
+
+    await state.updateTokenizerConfig(const TokenizerConfig(
+        kind: TokenizerKind.custom, customEncoding: BpeEncoding.cl100k));
+
+    final reloaded = AppState(client: FakeClient());
+    await reloaded.init();
+    expect(reloaded.tokenizerConfig.kind, TokenizerKind.custom);
+    expect(reloaded.tokenizerConfig.customEncoding, BpeEncoding.cl100k);
   });
 }

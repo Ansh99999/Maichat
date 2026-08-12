@@ -9,6 +9,7 @@ import '../models/conversation.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
 import '../models/settings.dart';
+import 'tokenizer.dart';
 
 /// The persisted provider list plus which one is active.
 class ProviderState {
@@ -40,6 +41,7 @@ class Storage {
   static const _presetsKey = 'presets';
   static const _globalVarsKey = 'macroGlobals';
   static const _modelCacheKey = 'modelCache';
+  static const _tokenizerKey = 'tokenizer';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -268,4 +270,20 @@ class Storage {
 
   Future<void> saveModelCache(Map<String, List<String>> cache) async =>
       (await _prefs).setString(_modelCacheKey, jsonEncode(cache));
+
+  /// The app-wide tokenizer choice (OpenAI / Anthropic / Custom + encoding).
+  Future<TokenizerConfig> loadTokenizerConfig() async {
+    final raw = (await _prefs).getString(_tokenizerKey);
+    if (raw == null) return const TokenizerConfig();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return TokenizerConfig.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const TokenizerConfig();
+  }
+
+  Future<void> saveTokenizerConfig(TokenizerConfig config) async =>
+      (await _prefs).setString(_tokenizerKey, jsonEncode(config.toJson()));
 }

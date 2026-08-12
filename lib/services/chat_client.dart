@@ -245,6 +245,49 @@ class ChatClient {
     _active = null;
   }
 
+  /// The exact input-token count for [history] from Anthropic's
+  /// `/messages/count_tokens` endpoint. Returns null for a non-Anthropic
+  /// provider, a missing model/key, or any transport/HTTP failure — it is a
+  /// best-effort display aid, never on the send path.
+  Future<int?> countTokens(Provider provider, List<ChatMessage> history) async {
+    if (provider.kind != ProviderKind.anthropic) return null;
+    final model = provider.model.trim();
+    if (model.isEmpty || provider.apiKey.isEmpty) return null;
+    try {
+      final system = history
+          .where((m) => m.role == 'system')
+          .map((m) => m.content)
+          .join('\n')
+          .trim();
+      final turns = history
+          .where((m) => m.role != 'system')
+          .map((m) => m.toApi())
+          .toList(growable: false);
+      // count_tokens rejects an empty messages array; nothing to count then.
+      if (turns.isEmpty) return null;
+      final response = await http
+          .post(
+            endpoint(provider.baseUrl, '/messages/count_tokens'),
+            headers: _headers(provider),
+            body: jsonEncode({
+              'model': model,
+              if (system.isNotEmpty) 'system': system,
+              'messages': turns,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return null;
+      final json = jsonDecode(response.body);
+      if (json is Map<String, dynamic>) {
+        final n = json['input_tokens'];
+        if (n is num) return n.toInt();
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Fetches selectable model ids from the provider's `/models` endpoint.
   Future<List<String>> listModels(Provider provider) async {
     final uri = endpoint(provider.baseUrl, '/models');

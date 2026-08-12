@@ -189,6 +189,14 @@ const List<_SearchEntry> _searchIndex = [
     builder: _providersPage,
   ),
   _SearchEntry(
+    title: 'Tokenizer',
+    section: 'Providers',
+    icon: Icons.calculate_outlined,
+    keywords: 'token count tokenizer tiktoken openai anthropic claude bpe '
+        'cl100k o200k context window encoding custom',
+    builder: _tokenizerPage,
+  ),
+  _SearchEntry(
     title: 'Theme',
     section: 'Appearance',
     icon: Icons.brightness_6_outlined,
@@ -263,6 +271,8 @@ const List<_SearchEntry> _searchIndex = [
 
 // Const tear-offs so the index above stays a compile-time constant.
 Widget _providersPage() => const ProvidersSettingsPage();
+Widget _tokenizerPage() =>
+    const ProvidersSettingsPage(highlight: SettingAnchor.tokenizer);
 Widget _themePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.theme);
 Widget _systemColoursPage() =>

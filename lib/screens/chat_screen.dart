@@ -351,6 +351,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Opens the message info sheet: position, tokens, and a context breakdown.
   void _openMessageInfo(AppState state, Conversation conversation, int index) {
     final assembled = state.assemblePromptForMessage(conversation, index);
+    final message = conversation.messages[index];
+    // An exact provider-side count only exists for Anthropic; fetched lazily so
+    // it never blocks opening the sheet.
+    final exact = state.activeProvider?.kind == ProviderKind.anthropic
+        ? state.exactTokenCount(assembled)
+        : null;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -359,7 +365,9 @@ class _ChatScreenState extends State<ChatScreen> {
         assembled: assembled,
         messageNumber: index + 1,
         messageCount: conversation.messages.length,
-        message: conversation.messages[index],
+        message: message,
+        messageTokens: state.estimateTokens(message.content),
+        exactCount: exact,
       ),
     );
   }

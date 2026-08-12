@@ -17,7 +17,7 @@ import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
 import '../services/prompt_builder.dart';
 import '../services/storage.dart';
-import '../services/token_estimator.dart';
+import '../services/tokenizer.dart';
 import '../services/update_service.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
@@ -42,7 +42,15 @@ class AppState extends ChangeNotifier {
   final Map<String, int> _keyCursor = <String, int>{};
   final Random _random = Random();
   String? _defaultPresetId;
-  final PromptBuilder _prompts = PromptBuilder(macros: DefaultMacroEngine());
+  TokenizerConfig _tokenizerConfig = const TokenizerConfig();
+  // The app-wide tokenizer, reading config + active model live so a settings
+  // change takes effect without rebuilding the prompt builder.
+  late final AppTokenizer _tokenizer = AppTokenizer(
+    config: () => _tokenizerConfig,
+    model: () => activeProvider?.model ?? '',
+  );
+  late final PromptBuilder _prompts =
+      PromptBuilder(macros: DefaultMacroEngine(), tokens: _tokenizer);
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
   ChatInterface _chatInterface = const ChatInterface();
@@ -127,6 +135,7 @@ class AppState extends ChangeNotifier {
     _modelCache
       ..clear()
       ..addAll(await _storage.loadModelCache());
+    _tokenizerConfig = await _storage.loadTokenizerConfig();
     final stored = await _storage.loadConversations()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _conversations
@@ -731,9 +740,37 @@ class AppState extends ChangeNotifier {
     _keyCursor[base.id] = ((_keyCursor[base.id] ?? 0) + 1) % count;
   }
 
-  static const HeuristicTokenEstimator _tokens = HeuristicTokenEstimator();
   static const int _perMessageOverhead = 4; // mirrors PromptBuilder
-  int _cost(ChatMessage m) => _tokens.estimate(m.content) + _perMessageOverhead;
+  int _cost(ChatMessage m) => _tokenizer.estimate(m.content) + _perMessageOverhead;
+
+  /// The app-wide tokenizer choice (OpenAI / Anthropic / Custom).
+  TokenizerConfig get tokenizerConfig => _tokenizerConfig;
+
+  /// Whether the current tokenizer yields approximate counts (Anthropic).
+  bool get tokenizerIsApproximate => _tokenizer.isApproximate;
+
+  /// The BPE encoding the tokenizer is currently resolving to (for the settings
+  /// readout).
+  BpeEncoding get activeTokenizerEncoding => _tokenizer.activeEncoding();
+
+  Future<void> updateTokenizerConfig(TokenizerConfig next) async {
+    if (next == _tokenizerConfig) return;
+    _tokenizerConfig = next;
+    notifyListeners();
+    await _storage.saveTokenizerConfig(next);
+  }
+
+  /// A synchronous token estimate for [text] under the active tokenizer — used
+  /// by the message Info view and anywhere a one-off count is needed.
+  int estimateTokens(String text) => _tokenizer.estimate(text);
+
+  /// An exact input-token count for [assembled] from the provider's count API
+  /// (Anthropic only), or null when unavailable. Display-only, best-effort.
+  Future<int?> exactTokenCount(AssembledPrompt assembled) {
+    final provider = activeProvider;
+    if (provider == null) return Future<int?>.value(null);
+    return _client.countTokens(provider, assembled.messages);
+  }
 
   /// Assembles the exact request for [conversation] — the single code path used
   /// by real sends ([_generate]) *and* the "View prompt" / "Info" inspectors, so

@@ -2,13 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/provider.dart';
+import '../../services/tokenizer.dart';
 import '../../state/app_state.dart';
 import 'provider_settings_page.dart';
+import 'setting_anchors.dart';
+import 'setting_highlight.dart';
 
-/// Lists the configured providers: pick which one is active with the radio,
-/// tap a row to edit it, or add another with the button.
+/// Lists the configured providers (pick the active one, edit, or add) and, at
+/// the top, the app-wide tokenizer used for all token counting.
 class ProvidersSettingsPage extends StatelessWidget {
-  const ProvidersSettingsPage({super.key});
+  const ProvidersSettingsPage({super.key, this.highlight});
+
+  final SettingAnchor? highlight;
 
   void _edit(BuildContext context, [Provider? provider]) {
     Navigator.of(context).push(
@@ -31,55 +36,142 @@ class ProvidersSettingsPage extends StatelessWidget {
         icon: const Icon(Icons.add),
         label: const Text('Add provider'),
       ),
-      body: providers.isEmpty
-          ? _empty(context)
-          : RadioGroup<String>(
-              groupValue: activeId,
-              onChanged: (id) {
-                if (id != null) state.selectProvider(id);
-              },
-              child: ListView(
-                padding: EdgeInsets.only(
-                  top: 8,
-                  bottom: 96 + MediaQuery.paddingOf(context).bottom,
-                ),
-                children: [
-                  for (final provider in providers)
-                    _ProviderTile(
-                      provider: provider,
-                      onEdit: () => _edit(context, provider),
-                    ),
-                ],
-              ),
-            ),
-    );
-  }
-
-  Widget _empty(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(32, 0, 32, 96),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+      body: RadioGroup<String>(
+        groupValue: activeId,
+        onChanged: (id) {
+          if (id != null) state.selectProvider(id);
+        },
+        child: ListView(
+          padding: EdgeInsets.only(
+            top: 8,
+            bottom: 96 + MediaQuery.paddingOf(context).bottom,
+          ),
           children: [
-            Icon(Icons.dns_outlined, size: 56, color: scheme.outline),
-            const SizedBox(height: 16),
-            Text('No providers yet',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(
-              'Add an OpenAI-compatible, Anthropic or Gemini endpoint to start '
-              'chatting.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+            SettingHighlight(
+              active: highlight == SettingAnchor.tokenizer,
+              child: const _TokenizerSection(),
             ),
+            const Divider(height: 24),
+            _header(context, 'Providers'),
+            if (providers.isEmpty)
+              _emptyHint(context)
+            else
+              for (final provider in providers)
+                _ProviderTile(
+                  provider: provider,
+                  onEdit: () => _edit(context, provider),
+                ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _emptyHint(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Text(
+        'No providers yet. Add an OpenAI-compatible, Anthropic or Gemini '
+        'endpoint to start chatting.',
+        style: Theme.of(context)
+            .textTheme
+            .bodyMedium
+            ?.copyWith(color: scheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+Widget _header(BuildContext context, String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+
+/// The app-wide tokenizer picker: which real tokenizer counts context tokens
+/// everywhere (budget, breakdowns, info). A live sample proves it is working.
+class _TokenizerSection extends StatelessWidget {
+  const _TokenizerSection();
+
+  static const _sample = 'The quick brown fox jumps over the lazy dog.';
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final config = state.tokenizerConfig;
+    final scheme = Theme.of(context).colorScheme;
+    final sampleCount = state.estimateTokens(_sample);
+    final encoding = state.activeTokenizerEncoding;
+
+    String subtitle() => switch (config.kind) {
+          TokenizerKind.openai =>
+            'Exact tiktoken counts; encoding follows the active model.',
+          TokenizerKind.anthropic =>
+            'Approximate offline (o200k); exact counts show in a message’s '
+                'Info when a Claude key is set.',
+          TokenizerKind.custom => 'Uses the chosen BPE encoding everywhere.',
+        };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _header(context, 'Tokenizer'),
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.calculate_outlined),
+          title: const Text('Token counter'),
+          subtitle: Text(subtitle()),
+          trailing: DropdownButton<TokenizerKind>(
+            value: config.kind,
+            underline: const SizedBox.shrink(),
+            onChanged: (kind) {
+              if (kind != null) {
+                state.updateTokenizerConfig(config.copyWith(kind: kind));
+              }
+            },
+            items: [
+              for (final k in TokenizerKind.values)
+                DropdownMenuItem(value: k, child: Text(k.label)),
+            ],
+          ),
+        ),
+        if (config.kind == TokenizerKind.custom)
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.abc_outlined),
+            title: const Text('Encoding'),
+            trailing: DropdownButton<BpeEncoding>(
+              value: config.customEncoding,
+              underline: const SizedBox.shrink(),
+              onChanged: (e) {
+                if (e != null) {
+                  state.updateTokenizerConfig(
+                      config.copyWith(customEncoding: e));
+                }
+              },
+              items: [
+                for (final e in BpeEncoding.values)
+                  DropdownMenuItem(value: e, child: Text(e.label)),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text(
+            'Sample: “$_sample” → $sampleCount tokens · ${encoding.id}',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.8.0+16
+version: 1.9.0+17
 
 environment:
   sdk: ^3.12.2
@@ -49,6 +49,9 @@ dependencies:
   flutter_html: ^3.0.0
   markdown: ^7.3.1
   google_fonts: 8.2.1
+  # Real BPE token counting (OpenAI cl100k/o200k). Pure Dart, offline, synchronous
+  # — no platform channels, so no AGP-9 native-plugin concern.
+  tiktoken_tokenizer_gpt4o_o1: 1.2.1
 
 dev_dependencies:
   flutter_test:
