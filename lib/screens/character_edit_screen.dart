@@ -35,6 +35,11 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   late final TextEditingController _notes;
   late final TextEditingController _tags;
 
+  /// One controller per alternate greeting (SillyTavern `alternate_greetings` /
+  /// Agnai's extra opening messages). The first message lives in [_greeting];
+  /// these are "Greeting 2", "Greeting 3", … shown as foldable tiles.
+  late List<TextEditingController> _altGreetings;
+
   /// Preserved so an imported PNG's base64 avatar survives an edit even though
   /// we never dump the blob into the URL field.
   late final String _originalAvatar;
@@ -68,6 +73,9 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     _creator = TextEditingController(text: c?.creator ?? '');
     _notes = TextEditingController(text: c?.creatorNotes ?? '');
     _tags = TextEditingController(text: (c?.tags ?? const <String>[]).join(', '));
+    _altGreetings = (c?.alternateGreetings ?? const <String>[])
+        .map((g) => TextEditingController(text: g))
+        .toList();
     // A typed URL should update the preview live.
     _avatar.addListener(_onAvatarUrlChanged);
   }
@@ -105,11 +113,19 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     for (final controller in [
       _name, _avatar, _description, _personality, _scenario, _greeting,
       _example, _system, _postHistory, _creator, _notes, _tags,
+      ..._altGreetings,
     ]) {
       controller.dispose();
     }
     super.dispose();
   }
+
+  void _addGreeting() =>
+      setState(() => _altGreetings.add(TextEditingController()));
+
+  void _removeGreeting(int index) => setState(() {
+        _altGreetings.removeAt(index).dispose();
+      });
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
@@ -123,6 +139,10 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
       ..personality = _personality.text.trim()
       ..scenario = _scenario.text.trim()
       ..firstMes = _greeting.text.trim()
+      ..alternateGreetings = _altGreetings
+          .map((c) => c.text.trim())
+          .where((t) => t.isNotEmpty)
+          .toList()
       ..mesExample = _example.text.trim()
       ..systemPrompt = _system.text.trim()
       ..postHistoryInstructions = _postHistory.text.trim()
@@ -164,6 +184,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
             _field(_scenario, 'Scenario', lines: 2),
             const _SectionLabel('Conversation'),
             _field(_greeting, 'Greeting (first message)', lines: 3),
+            _alternateGreetings(),
             _field(_example, 'Example dialogue', lines: 3),
             const _SectionLabel('Advanced'),
             _field(_system, 'System prompt', lines: 3),
@@ -225,6 +246,80 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                 ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  /// Foldable editors for the extra opening messages ("Greeting 2", "Greeting
+  /// 3", …). A + on the right adds another; each tile can be removed.
+  Widget _alternateGreetings() {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Alternate greetings',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              IconButton.filledTonal(
+                tooltip: 'Add greeting',
+                icon: const Icon(Icons.add),
+                onPressed: _addGreeting,
+              ),
+            ],
+          ),
+          if (_altGreetings.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 4),
+              child: Text(
+                'None yet — tap + to add a swipeable opening message.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+              ),
+            ),
+          for (var i = 0; i < _altGreetings.length; i++)
+            Card(
+              key: ValueKey(_altGreetings[i]),
+              elevation: 0,
+              color: scheme.surfaceContainerLow,
+              margin: const EdgeInsets.only(bottom: 8),
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: Text('Greeting ${i + 2}'),
+                childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                children: [
+                  TextField(
+                    controller: _altGreetings[i],
+                    minLines: 3,
+                    maxLines: 8,
+                    keyboardType: TextInputType.multiline,
+                    decoration: const InputDecoration(
+                      hintText: 'Alternate opening message',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => _removeGreeting(i),
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('Remove'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
