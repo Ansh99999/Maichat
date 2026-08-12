@@ -321,4 +321,64 @@ void main() {
     expect(state.activeProvider?.id, migrated.id);
     expect(state.isConfigured, isTrue);
   });
+
+  test('editMessage replaces a turn in place', () async {
+    final state = await _state(FakeClient(deltas: ['hi']));
+    await state.send('hello');
+    await state.editMessage(state.active.id, 0, '  edited  ');
+    expect(state.active.messages[0].content, 'edited');
+    // An empty edit is ignored.
+    await state.editMessage(state.active.id, 0, '   ');
+    expect(state.active.messages[0].content, 'edited');
+  });
+
+  test('deleteMessage drops a single turn', () async {
+    final state = await _state(FakeClient(deltas: ['reply']));
+    await state.send('hello');
+    expect(state.active.messages, hasLength(2));
+    await state.deleteMessage(state.active.id, 1);
+    expect(state.active.messages, hasLength(1));
+    expect(state.active.messages[0].content, 'hello');
+  });
+
+  test('forkConversation copies up to the index into a new active thread',
+      () async {
+    final state = await _state(FakeClient(deltas: ['a']));
+    await state.send('one');
+    await state.send('two');
+    final source = state.active;
+    final total = source.messages.length; // 4: one, a, two, a
+    expect(total, 4);
+
+    final forkId = await state.forkConversation(source.id, 1);
+    expect(forkId, isNotEmpty);
+    expect(state.active.id, forkId);
+    // Copied messages [0..1] only, and diverged from the source.
+    expect(state.active.messages, hasLength(2));
+    expect(state.active.title, endsWith('(fork)'));
+    state.active.messages[0] =
+        state.active.messages[0].copyWith(content: 'changed');
+    expect(source.messages[0].content, 'one');
+  });
+
+  test('regenerateMessage retries an assistant turn from prior history',
+      () async {
+    final client = FakeClient(deltas: ['reply']);
+    final state = await _state(client);
+    await state.send('hi');
+    expect(state.active.messages[1].content, 'reply');
+
+    // A user turn cannot be regenerated.
+    await state.regenerateMessage(state.active.id, 0);
+    expect(state.active.messages, hasLength(2));
+
+    // Regenerating the assistant turn replaces it using the prior history.
+    await state.regenerateMessage(state.active.id, 1);
+    expect(state.active.messages, hasLength(2));
+    expect(state.active.messages[1].role, 'assistant');
+    expect(state.active.messages[1].content, 'reply');
+    // The retry sent the user turn but not the old assistant reply.
+    expect(client.lastHistory!.last.content, 'hi');
+    expect(client.lastHistory!.every((m) => m.role != 'assistant'), isTrue);
+  });
 }

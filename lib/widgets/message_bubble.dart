@@ -6,12 +6,14 @@ import '../models/chat_interface.dart';
 import '../models/message.dart';
 import 'character_avatar.dart';
 
-/// One chat turn, drawn according to the current [ChatInterface] settings:
-/// avatar size/shape/fit and offset, where the text sits relative to the avatar
-/// (beside / below / around), bubble-vs-flat, font size and colour overrides.
+/// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
+/// (size/shape/fit/offset and which side it sits on), where the text sits
+/// relative to the avatar, bubble-vs-document, an optional sender name, font
+/// size and colour overrides.
 ///
 /// The preview passes [interactive] with [onAvatarDrag]/[onAvatarResize] so the
-/// mock chat can be tuned by dragging the avatar and its resize handle.
+/// mock chat can be tuned by dragging each avatar and its resize handle; the
+/// callbacks are role-agnostic (the caller knows which role this turn is).
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
     super.key,
@@ -22,6 +24,7 @@ class MessageBubble extends StatelessWidget {
     this.interactive = false,
     this.onAvatarDrag,
     this.onAvatarResize,
+    this.onLongPress,
   });
 
   final ChatMessage message;
@@ -31,18 +34,22 @@ class MessageBubble extends StatelessWidget {
   /// user's own turns.
   final Character? character;
 
-  /// True while this turn is still being streamed into.
   final bool pending;
 
-  /// When set, the avatar shows a frame + resize handle and reports drags.
   final bool interactive;
   final ValueChanged<Offset>? onAvatarDrag;
   final ValueChanged<double>? onAvatarResize;
+
+  /// Opens the per-message actions (edit/delete/fork/regenerate). Falls back to
+  /// copy-on-long-press when not supplied (e.g. the preview).
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isUser = message.isUser;
+    final style = ui.avatarFor(isUser);
+    final side = style.side;
 
     final Color bubbleColor;
     final Color textColor;
@@ -65,89 +72,120 @@ class MessageBubble extends StatelessWidget {
     }
 
     final showCaret = pending && message.content.isEmpty;
-    final avatar = ui.showAvatars ? _avatar(context, isUser) : null;
+    final avatar = style.show ? _avatar(context, isUser, style) : null;
+    final crossAxis =
+        side.isLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
+
+    // Name + bubble stack for the text side.
+    Widget contentColumn(Widget body) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: crossAxis,
+          children: [
+            if (ui.showNames) _nameLabel(context, isUser),
+            body,
+          ],
+        );
+// APPEND-BUILD
 
     final Widget inner;
     switch (ui.textPlacement) {
       case TextPlacement.around:
-        inner = _bubble(
-          _text(textColor, showCaret, leading: avatar),
-          bubbleColor,
+        inner = contentColumn(
+          _bubble(_text(textColor, showCaret, leading: avatar), bubbleColor),
         );
       case TextPlacement.below:
         inner = Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment:
-              isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: crossAxis,
           children: [
             if (avatar != null) ...[avatar, const SizedBox(height: 6)],
-            _bubble(_text(textColor, showCaret), bubbleColor),
+            contentColumn(_bubble(_text(textColor, showCaret), bubbleColor)),
           ],
         );
       case TextPlacement.beside:
         inner = Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
-          // Flip the row for the user so their avatar sits on the right; the
-          // text itself keeps the ambient (LTR) direction.
-          textDirection: isUser ? TextDirection.rtl : TextDirection.ltr,
+          // Lay the avatar on this role's side; the text keeps the ambient
+          // (LTR) direction.
+          textDirection: side.isLeft ? TextDirection.ltr : TextDirection.rtl,
           children: [
             if (avatar != null) ...[avatar, const SizedBox(width: 8)],
-            Flexible(child: _bubble(_text(textColor, showCaret), bubbleColor)),
+            Flexible(
+              child: contentColumn(
+                _bubble(_text(textColor, showCaret), bubbleColor),
+              ),
+            ),
           ],
         );
     }
 
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         constraints: BoxConstraints(
           maxWidth: MediaQuery.sizeOf(context).width * 0.85,
         ),
         child: GestureDetector(
-          onLongPress: message.content.isEmpty
-              ? null
-              : () => _copy(context, message.content),
+          onLongPress: onLongPress ??
+              (message.content.isEmpty
+                  ? null
+                  : () => _copy(context, message.content)),
           child: inner,
         ),
       ),
     );
   }
 
-  /// The avatar for this turn: the character's picture for a bot turn that has
-  /// one, otherwise a generic person/bot glyph. In [interactive] mode it wears
-  /// a frame and a corner handle so the preview can be dragged and resized.
-  Widget _avatar(BuildContext context, bool isUser) {
-    final size = ui.avatarSize;
+  Widget _nameLabel(BuildContext context, bool isUser) {
+    final name = isUser
+        ? (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim())
+        : (character?.displayName ?? 'Assistant');
+    return Padding(
+      padding: const EdgeInsets.only(left: 2, right: 2, bottom: 2),
+      child: Text(
+        name,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+  }
+// APPEND-HELPERS
+
+  /// This role's avatar: the character's picture for a bot turn that has one,
+  /// otherwise a generic person/bot glyph. In [interactive] mode it wears a
+  /// frame and a corner handle so the preview can drag and resize it.
+  Widget _avatar(BuildContext context, bool isUser, AvatarStyle style) {
+    final size = style.size;
     final Widget base;
     if (!isUser && character != null) {
       base = CharacterAvatar(
         character: character!,
         size: size,
-        shape: ui.avatarShape,
-        fit: ui.avatarFit,
+        shape: style.shape,
+        fit: style.fit,
       );
     } else {
       base = _GenericAvatar(
         size: size,
-        shape: ui.avatarShape,
+        shape: style.shape,
         icon: isUser ? Icons.person : Icons.smart_toy_outlined,
       );
     }
 
     if (!interactive) {
-      return Transform.translate(offset: ui.avatarOffset, child: base);
+      return Transform.translate(offset: style.offset, child: base);
     }
 
     final scheme = Theme.of(context).colorScheme;
     return Transform.translate(
-      offset: ui.avatarOffset,
+      offset: style.offset,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // Reserve room for the handle so it stays inside the Stack's bounds
-          // (and hit-testable) without overlapping the drag-to-move area.
           Padding(
             padding: const EdgeInsets.only(right: 22, bottom: 22),
             child: GestureDetector(
@@ -157,7 +195,7 @@ class MessageBubble extends StatelessWidget {
                 decoration: BoxDecoration(
                   border: Border.all(color: scheme.primary, width: 2),
                   borderRadius:
-                      BorderRadius.circular(ui.avatarShape.radiusFor(size)),
+                      BorderRadius.circular(style.shape.radiusFor(size)),
                 ),
                 child: base,
               ),
@@ -223,7 +261,8 @@ class MessageBubble extends StatelessWidget {
     return SelectableText(message.content, style: style);
   }
 
-  /// Wraps [child] in a tinted bubble, or leaves it flat when bubbles are off.
+  /// Wraps [child] in a tinted bubble, or leaves it flat ("document") when
+  /// bubbles are off.
   Widget _bubble(Widget child, Color color) {
     if (!ui.bubbles) {
       return Padding(

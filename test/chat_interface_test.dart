@@ -5,56 +5,114 @@ void main() {
   test('defaults survive a JSON round trip', () {
     final restored = ChatInterface.fromJson(const ChatInterface().toJson());
     expect(restored, const ChatInterface());
+    // Defaults put the bot on the left and the user on the right.
+    expect(restored.botAvatar.side, ChatSide.left);
+    expect(restored.userAvatar.side, ChatSide.right);
   });
 
-  test('a fully customised config round trips, colours included', () {
+  test('a fully customised config round trips, per-role and colours', () {
     const original = ChatInterface(
-      showAvatars: false,
-      avatarSize: 72,
-      avatarShape: AvatarShape.rounded,
-      avatarFit: AvatarFit.contain,
+      botAvatar: AvatarStyle(
+        show: true,
+        size: 96,
+        shape: AvatarShape.rounded,
+        fit: AvatarFit.free,
+        side: ChatSide.left,
+        offsetX: 10,
+        offsetY: -4,
+      ),
+      userAvatar: AvatarStyle(
+        show: false,
+        size: 40,
+        shape: AvatarShape.square,
+        fit: AvatarFit.contain,
+        side: ChatSide.left,
+      ),
+      syncAvatars: false,
       textPlacement: TextPlacement.around,
       bubbles: false,
       fontSize: 20,
       bubbleOpacity: 0.5,
+      showNames: true,
+      userName: 'Ansh',
       userTextColor: 0xFF112233,
-      botTextColor: 0xFF445566,
-      userBubbleColor: 0xFF778899,
       botBubbleColor: 0xFFAABBCC,
       backgroundColor: 0xFF010203,
-      avatarOffsetX: 12,
-      avatarOffsetY: -8,
     );
 
     final restored = ChatInterface.fromJson(original.toJson());
 
     expect(restored, original);
-    expect(restored.avatarShape, AvatarShape.rounded);
-    expect(restored.textPlacement, TextPlacement.around);
-    expect(restored.userTextColor, 0xFF112233);
-    expect(restored.avatarOffset, const Offset(12, -8));
+    expect(restored.botAvatar.fit, AvatarFit.free);
+    expect(restored.userAvatar.side, ChatSide.left);
+    expect(restored.userName, 'Ansh');
+    expect(restored.botAvatar.offset.dx, 10);
   });
 
   test('copyWith clears a colour to null (follow theme) via the sentinel', () {
     const withColour = ChatInterface(userTextColor: 0xFF112233);
-
-    // Not passing the argument leaves it untouched...
     expect(withColour.copyWith().userTextColor, 0xFF112233);
-    // ...passing null explicitly clears it.
     expect(withColour.copyWith(userTextColor: null).userTextColor, isNull);
-    // ...and other fields are preserved when one is cleared.
-    expect(withColour.copyWith(userTextColor: null).avatarSize, 44);
-  });
-
-  test('enum byName falls back to a sensible default for junk', () {
-    expect(AvatarShape.byName('nonsense'), AvatarShape.circle);
-    expect(AvatarFit.byName(null), AvatarFit.cover);
-    expect(TextPlacement.byName(''), TextPlacement.beside);
+    expect(withColour.copyWith(userTextColor: null).userName, 'You');
   });
 
   test('unset colours are omitted from JSON, not written as null', () {
     final json = const ChatInterface().toJson();
     expect(json.containsKey('userTextColor'), isFalse);
     expect(json.containsKey('backgroundColor'), isFalse);
+  });
+
+  test('enum byName falls back sensibly for junk', () {
+    expect(AvatarShape.byName('nonsense'), AvatarShape.circle);
+    expect(AvatarFit.byName(null), AvatarFit.cover);
+    expect(TextPlacement.byName(''), TextPlacement.beside);
+    expect(ChatSide.byName('x', fallback: ChatSide.right), ChatSide.right);
+  });
+
+  test('migrates the old single-avatar shape onto both roles', () {
+    // The pre-split JSON had flat avatar fields and one offset.
+    final legacy = {
+      'showAvatars': true,
+      'avatarSize': 72.0,
+      'avatarShape': 'rounded',
+      'avatarFit': 'contain',
+      'textPlacement': 'below',
+      'bubbles': false,
+      'fontSize': 18.0,
+      'avatarOffsetX': 5.0,
+      'avatarOffsetY': 6.0,
+      'userTextColor': 0xFF445566,
+    };
+
+    final migrated = ChatInterface.fromJson(legacy);
+
+    // Both avatars pick up the old look; only the default side differs.
+    expect(migrated.botAvatar.size, 72);
+    expect(migrated.userAvatar.size, 72);
+    expect(migrated.botAvatar.shape, AvatarShape.rounded);
+    expect(migrated.userAvatar.fit, AvatarFit.contain);
+    expect(migrated.botAvatar.side, ChatSide.left);
+    expect(migrated.userAvatar.side, ChatSide.right);
+    expect(migrated.bubbles, isFalse);
+    expect(migrated.textPlacement, TextPlacement.below);
+    expect(migrated.userTextColor, 0xFF445566);
+  });
+
+  test('withAvatar respects the sync flag', () {
+    const base = ChatInterface(syncAvatars: false);
+
+    // Unsynced: editing the bot leaves the user untouched.
+    final unsynced = base.withAvatar(false, base.botAvatar.copyWith(size: 100));
+    expect(unsynced.botAvatar.size, 100);
+    expect(unsynced.userAvatar.size, 44);
+
+    // Synced: the look mirrors to both, but each keeps its own side.
+    const synced = ChatInterface(syncAvatars: true);
+    final next =
+        synced.withAvatar(false, synced.botAvatar.copyWith(size: 100));
+    expect(next.botAvatar.size, 100);
+    expect(next.userAvatar.size, 100);
+    expect(next.botAvatar.side, ChatSide.left);
+    expect(next.userAvatar.side, ChatSide.right);
   });
 }

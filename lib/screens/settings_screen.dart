@@ -76,10 +76,11 @@ class SettingsScreen extends StatelessWidget {
 
   static String _chatInterfaceSummary(AppState state) {
     final ui = state.chatInterface;
-    final avatars = ui.showAvatars
-        ? '${ui.avatarShape.label} avatars'
-        : 'No avatars';
-    return '$avatars · ${ui.textPlacement.label}';
+    final style = ui.bubbles ? 'Bubbles' : 'Document';
+    final avatars = (ui.botAvatar.show || ui.userAvatar.show)
+        ? 'avatars on'
+        : 'no avatars';
+    return '$style · $avatars · ${ui.textPlacement.label}';
   }
 
   static void _open(BuildContext context, Widget page) {

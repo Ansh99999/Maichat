@@ -1,28 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/character.dart';
 import '../../models/chat_interface.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../widgets/message_bubble.dart';
 
 /// A live mock chat that reflects the current Chat Interface settings and lets
-/// them be tuned by hand: drag the framed avatar to move it anywhere, pull its
-/// corner handle to resize it, and use the quick controls at the bottom for
-/// size and placement. Every change writes straight back to the saved settings.
+/// them be tuned by hand. Both avatars are independent: drag either framed
+/// avatar to move it, pull its corner handle to resize it. Every change writes
+/// straight back to the saved settings (respecting the sync toggle).
 class ChatInterfacePreviewPage extends StatelessWidget {
   const ChatInterfacePreviewPage({super.key});
+
+  // A stand-in character so the reply avatar shows a real monogram.
+  static final Character _character = Character.empty()..name = 'Aria';
 
   static final List<ChatMessage> _mock = [
     ChatMessage(
       role: 'assistant',
-      content: 'Hey! This is a preview of how your chats will look. '
-          'Drag my avatar to move it, or pull the corner handle to resize it.',
+      content: 'Hey! Drag my avatar to move it, or pull the corner handle to '
+          'resize it. I keep my own settings.',
     ),
-    ChatMessage(role: 'user', content: 'Nice — let me tweak the colours and size.'),
+    ChatMessage(
+      role: 'user',
+      content: 'And this is your avatar — independent from mine. Tune each side '
+          'however you like.',
+    ),
     ChatMessage(
       role: 'assistant',
-      content: 'Go ahead. Everything you change updates here live.',
+      content: 'Turn on Sync in settings if you want us to match.',
     ),
   ];
 
@@ -34,17 +42,40 @@ class ChatInterfacePreviewPage extends StatelessWidget {
         ? Color(ui.backgroundColor!)
         : Theme.of(context).colorScheme.surface;
 
-    void update(ChatInterface next) => context.read<AppState>().updateChatInterface(next);
+    void update(ChatInterface next) =>
+        context.read<AppState>().updateChatInterface(next);
+
+    // Nudge/resize the given role's own avatar (sync is honoured by withAvatar).
+    void drag(bool isUser, Offset d) {
+      final s = ui.avatarFor(isUser);
+      update(ui.withAvatar(
+        isUser,
+        s.copyWith(
+          offsetX: (s.offsetX + d.dx).clamp(-200.0, 200.0),
+          offsetY: (s.offsetY + d.dy).clamp(-200.0, 200.0),
+        ),
+      ));
+    }
+
+    void resize(bool isUser, double d) {
+      final s = ui.avatarFor(isUser);
+      update(ui.withAvatar(
+        isUser,
+        s.copyWith(size: (s.size + d).clamp(kMinAvatarSize, kMaxAvatarSize)),
+      ));
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Preview'),
         actions: [
-          if (ui.avatarOffsetX != 0 || ui.avatarOffsetY != 0)
+          if (_nudged(ui))
             TextButton(
-              onPressed: () =>
-                  update(ui.copyWith(avatarOffsetX: 0, avatarOffsetY: 0)),
-              child: const Text('Reset position'),
+              onPressed: () => update(ui.copyWith(
+                botAvatar: ui.botAvatar.copyWith(offsetX: 0, offsetY: 0),
+                userAvatar: ui.userAvatar.copyWith(offsetX: 0, offsetY: 0),
+              )),
+              child: const Text('Reset positions'),
             ),
         ],
       ),
@@ -59,26 +90,14 @@ class ChatInterfacePreviewPage extends StatelessWidget {
                 itemCount: _mock.length,
                 itemBuilder: (context, i) {
                   final message = _mock[i];
-                  // The first assistant turn is the interactive one.
-                  final interactive = i == 0;
+                  final isUser = message.isUser;
                   return MessageBubble(
                     message: message,
                     ui: ui,
-                    interactive: interactive,
-                    onAvatarDrag: interactive
-                        ? (d) => update(ui.copyWith(
-                              avatarOffsetX:
-                                  (ui.avatarOffsetX + d.dx).clamp(-160.0, 160.0),
-                              avatarOffsetY:
-                                  (ui.avatarOffsetY + d.dy).clamp(-160.0, 160.0),
-                            ))
-                        : null,
-                    onAvatarResize: interactive
-                        ? (d) => update(ui.copyWith(
-                              avatarSize: (ui.avatarSize + d)
-                                  .clamp(kMinAvatarSize, kMaxAvatarSize),
-                            ))
-                        : null,
+                    character: isUser ? null : _character,
+                    interactive: true,
+                    onAvatarDrag: (d) => drag(isUser, d),
+                    onAvatarResize: (d) => resize(isUser, d),
                   );
                 },
               ),
@@ -89,7 +108,14 @@ class ChatInterfacePreviewPage extends StatelessWidget {
       ),
     );
   }
+
+  static bool _nudged(ChatInterface ui) =>
+      ui.botAvatar.offsetX != 0 ||
+      ui.botAvatar.offsetY != 0 ||
+      ui.userAvatar.offsetX != 0 ||
+      ui.userAvatar.offsetY != 0;
 }
+// APPEND-PREVIEW
 
 /// The instruction strip above the mock chat.
 class _Hint extends StatelessWidget {
@@ -107,8 +133,8 @@ class _Hint extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Drag the framed avatar to reposition it; pull the corner handle '
-              'to resize.',
+              'Each avatar is independent — drag either one to reposition it, '
+              'pull its corner handle to resize.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSecondaryContainer,
                   ),
@@ -120,8 +146,8 @@ class _Hint extends StatelessWidget {
   }
 }
 
-/// A compact tuning bar pinned under the mock chat: avatar size and text
-/// placement, the two things most worth seeing change live.
+/// A compact tuning bar pinned under the mock chat: the layout-level options
+/// most worth seeing change live.
 class _QuickControls extends StatelessWidget {
   const _QuickControls({required this.ui, required this.onChanged});
 
@@ -137,36 +163,11 @@ class _QuickControls extends StatelessWidget {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.photo_size_select_large_outlined, size: 20),
-                  const SizedBox(width: 12),
-                  const Text('Size'),
-                  Expanded(
-                    child: Slider(
-                      value: ui.avatarSize
-                          .clamp(kMinAvatarSize, kMaxAvatarSize),
-                      min: kMinAvatarSize,
-                      max: kMaxAvatarSize,
-                      onChanged: (v) => onChanged(ui.copyWith(avatarSize: v)),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 44,
-                    child: Text(
-                      '${ui.avatarSize.round()}',
-                      textAlign: TextAlign.end,
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
               SizedBox(
                 width: double.infinity,
                 child: SegmentedButton<TextPlacement>(
@@ -182,6 +183,29 @@ class _QuickControls extends StatelessWidget {
                   onSelectionChanged: (s) =>
                       onChanged(ui.copyWith(textPlacement: s.first)),
                 ),
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: ui.bubbles,
+                      onChanged: (v) => onChanged(ui.copyWith(bubbles: v)),
+                      title: const Text('Bubbles'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: ui.syncAvatars,
+                      onChanged: (v) => onChanged(ui.copyWith(syncAvatars: v)),
+                      title: const Text('Sync'),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

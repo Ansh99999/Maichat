@@ -44,7 +44,9 @@ void main() {
     await tester.pumpWidget(host(
       MessageBubble(
         message: ChatMessage(role: 'assistant', content: 'Drag me'),
-        ui: const ChatInterface(avatarSize: 60),
+        ui: const ChatInterface(
+          botAvatar: AvatarStyle(size: 60, side: ChatSide.left),
+        ),
         interactive: true,
         onAvatarDrag: (d) => drag = d,
         onAvatarResize: (d) => resize = d,

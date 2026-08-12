@@ -277,14 +277,126 @@ class _ChatScreenState extends State<ChatScreen> {
       itemCount: conversation.messages.length,
       itemBuilder: (context, index) {
         final isLast = index == conversation.messages.length - 1;
+        final message = conversation.messages[index];
         return MessageBubble(
-          message: conversation.messages[index],
+          message: message,
           ui: ui,
           character: character,
           pending: isLast && state.streaming,
+          onLongPress: message.content.isEmpty
+              ? null
+              : () => _showMessageActions(state, conversation, index),
         );
       },
     );
+  }
+
+  /// The per-message action sheet: copy, edit, regenerate (assistant turns),
+  /// fork from here, or delete.
+  void _showMessageActions(
+    AppState state,
+    Conversation conversation,
+    int index,
+  ) {
+    final message = conversation.messages[index];
+    final isAssistant = !message.isUser;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy_outlined),
+              title: const Text('Copy'),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                Clipboard.setData(ClipboardData(text: message.content));
+                _toast('Copied');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit'),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _editMessage(state, conversation, index);
+              },
+            ),
+            if (isAssistant)
+              ListTile(
+                leading: const Icon(Icons.refresh),
+                title: const Text('Regenerate'),
+                enabled: !state.streaming,
+                onTap: () {
+                  Navigator.of(sheet).pop();
+                  state.regenerateMessage(conversation.id, index);
+                  _scrollToEnd();
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.call_split),
+              title: const Text('Fork from here'),
+              subtitle: const Text('Copy the chat up to this turn'),
+              onTap: () async {
+                Navigator.of(sheet).pop();
+                await state.forkConversation(conversation.id, index);
+                _toast('Forked into a new chat');
+                _scrollToEnd();
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete_outline,
+                  color: Theme.of(sheet).colorScheme.error),
+              title: const Text('Delete'),
+              enabled: !state.streaming,
+              onTap: () {
+                Navigator.of(sheet).pop();
+                state.deleteMessage(conversation.id, index);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Edits a single turn's text in place.
+  Future<void> _editMessage(
+    AppState state,
+    Conversation conversation,
+    int index,
+  ) async {
+    final controller =
+        TextEditingController(text: conversation.messages[index].content);
+    final edited = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Edit message'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 10,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialog).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (edited != null && edited.trim().isNotEmpty) {
+      await state.editMessage(conversation.id, index, edited);
+    }
   }
 
   Widget _composer(AppState state) {

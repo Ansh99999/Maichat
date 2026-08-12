@@ -505,13 +505,33 @@ class AppState extends ChangeNotifier {
     final preset = current == null
         ? presetById(_defaultPresetId)
         : presetFor(current);
-    final base = _resolveProvider(preset);
-    if (base == null) return;
+    if (_resolveProvider(preset) == null) return;
 
     final conversation = active;
 
     if (conversation.isEmpty) conversation.retitleFrom(prompt);
     conversation.messages.add(ChatMessage(role: 'user', content: prompt));
+
+    await _generate(conversation);
+  }
+
+  /// Streams an assistant reply into [conversation], whose messages already end
+  /// with the user's latest turn (this does NOT append the user message). Shared
+  /// by [send] and [regenerateMessage].
+  Future<void> _generate(Conversation conversation) async {
+    final preset = presetFor(conversation);
+    final base = _resolveProvider(preset);
+    if (base == null) return;
+
+    // A preset's {{input}} is the latest user turn already in the thread; empty
+    // when the remaining history has no user message.
+    var input = '';
+    for (final m in conversation.messages.reversed) {
+      if (m.isUser) {
+        input = m.content;
+        break;
+      }
+    }
 
     // Failure notices are display-only, so they never go back to the model.
     final priorTurns =
@@ -530,7 +550,7 @@ class AppState extends ChangeNotifier {
           local: conversation.variables,
           global: _globalVars,
         ),
-        input: prompt,
+        input: input,
       );
       history = built.messages;
       params = _paramsFor(preset);
@@ -585,6 +605,91 @@ class AppState extends ChangeNotifier {
       // Macros may have mutated variables; persist both scopes.
       await _storage.saveGlobalVars(_globalVars);
     }
+  }
+
+  /// Finds a thread by [id] without materializing one — for the message-level
+  /// actions below, which must be no-ops on an unknown id.
+  Conversation? _conversationById(String id) {
+    for (final c in _conversations) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  /// Replaces the content of the message at [index] — the "edit turn" action.
+  /// An empty (trimmed) edit is ignored.
+  Future<void> editMessage(
+      String conversationId, int index, String content) async {
+    final trimmed = content.trim();
+    if (trimmed.isEmpty) return;
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (index < 0 || index >= conversation.messages.length) return;
+    conversation.messages[index] =
+        conversation.messages[index].copyWith(content: trimmed);
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
+  /// Removes the message at [index] — the "delete turn" action. Ignored while
+  /// the active conversation is streaming, to avoid racing the in-flight reply.
+  Future<void> deleteMessage(String conversationId, int index) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (_streaming && _activeOrNull()?.id == conversation.id) return;
+    if (index < 0 || index >= conversation.messages.length) return;
+    conversation.messages.removeAt(index);
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
+  /// Copies messages [0..index] (inclusive) into a NEW thread, makes it active,
+  /// and returns its id — the "fork from here" action. Messages are deep-copied
+  /// so the fork and its source diverge independently.
+  Future<String> forkConversation(String conversationId, int index) async {
+    final source = _conversationById(conversationId);
+    if (source == null) return '';
+    final end =
+        source.messages.isEmpty ? -1 : index.clamp(0, source.messages.length - 1);
+    final copied = <ChatMessage>[
+      for (var i = 0; i <= end; i++)
+        ChatMessage.fromJson(source.messages[i].toJson()),
+    ];
+    final fork = Conversation(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      title: '${source.title} (fork)',
+      messages: copied,
+      updatedAt: DateTime.now(),
+      characterId: source.characterId,
+      characterName: source.characterName,
+      systemPrompt: source.systemPrompt,
+      presetId: source.presetId,
+      presetOverride: source.presetOverride == null
+          ? null
+          : Preset.fromJson(source.presetOverride!.toJson()),
+      variables: Map<String, String>.from(source.variables),
+    );
+    _conversations.insert(0, fork);
+    _activeId = fork.id;
+    notifyListeners();
+    await _storage.saveActiveId(fork.id);
+    await _storage.saveConversations(_conversations);
+    return fork.id;
+  }
+
+  /// Regenerates the assistant turn at [index]: drops it and everything after,
+  /// then streams a fresh reply from the remaining history — the "retry" action.
+  /// A no-op for a user turn, an unknown thread, or while streaming.
+  Future<void> regenerateMessage(String conversationId, int index) async {
+    if (_streaming) return;
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (index < 0 || index >= conversation.messages.length) return;
+    if (conversation.messages[index].isUser) return;
+    conversation.messages.removeRange(index, conversation.messages.length);
+    await _generate(conversation);
   }
 
   /// The provider a preset runs on: its bound provider (else the active one),
