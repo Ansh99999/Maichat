@@ -180,7 +180,7 @@ class MessageBubble extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.85,
+          maxWidth: ui.contentWidth.maxWidthFor(MediaQuery.sizeOf(context).width),
         ),
         child: GestureDetector(
           onLongPress: onLongPress ??

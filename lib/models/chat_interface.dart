@@ -150,6 +150,41 @@ enum TextPlacement {
     return TextPlacement.beside;
   }
 }
+
+/// How wide a message may grow. Matters most in "document" mode (bubbles off),
+/// where without this the text keeps the bubble width and reads no differently.
+/// [full] fills the row; the others cap at a readable measure.
+enum ContentWidth {
+  narrow('Narrow'),
+  medium('Medium'),
+  wide('Wide'),
+  full('Full');
+
+  const ContentWidth(this.label);
+
+  final String label;
+
+  /// The max message width for a row [screenWidth] wide. Fixed readable caps for
+  /// the bounded modes; [full] uses the whole row (minus the bubble's own
+  /// horizontal margin).
+  double maxWidthFor(double screenWidth) {
+    final cap = switch (this) {
+      ContentWidth.narrow => 560.0,
+      ContentWidth.medium => 720.0,
+      ContentWidth.wide => 920.0,
+      ContentWidth.full => double.infinity,
+    };
+    final avail = (screenWidth - 24).clamp(0.0, double.infinity);
+    return cap > avail ? avail : cap;
+  }
+
+  static ContentWidth byName(String? name) {
+    for (final w in values) {
+      if (w.name == name) return w;
+    }
+    return ContentWidth.medium;
+  }
+}
 // APPEND-AVATARSTYLE
 
 /// A per-message action, offered either inline (as an icon beside the message)
@@ -351,6 +386,7 @@ class ChatInterface {
     this.syncAvatars = false,
     this.textPlacement = TextPlacement.beside,
     this.bubbles = true,
+    this.contentWidth = ContentWidth.medium,
     this.fontSize = 16,
     this.bubbleOpacity = 1,
     this.showNames = false,
@@ -384,6 +420,9 @@ class ChatInterface {
 
   /// Bubbles vs flat "document" turns.
   final bool bubbles;
+
+  /// How wide a message may grow (esp. in document mode).
+  final ContentWidth contentWidth;
 
   final double fontSize;
 
@@ -453,6 +492,7 @@ class ChatInterface {
     bool? syncAvatars,
     TextPlacement? textPlacement,
     bool? bubbles,
+    ContentWidth? contentWidth,
     double? fontSize,
     double? bubbleOpacity,
     bool? showNames,
@@ -480,6 +520,7 @@ class ChatInterface {
         syncAvatars: syncAvatars ?? this.syncAvatars,
         textPlacement: textPlacement ?? this.textPlacement,
         bubbles: bubbles ?? this.bubbles,
+        contentWidth: contentWidth ?? this.contentWidth,
         fontSize: fontSize ?? this.fontSize,
         bubbleOpacity: bubbleOpacity ?? this.bubbleOpacity,
         showNames: showNames ?? this.showNames,
@@ -527,6 +568,7 @@ class ChatInterface {
         'syncAvatars': syncAvatars,
         'textPlacement': textPlacement.name,
         'bubbles': bubbles,
+        'contentWidth': contentWidth.name,
         'fontSize': fontSize,
         'bubbleOpacity': bubbleOpacity,
         'showNames': showNames,
@@ -581,6 +623,7 @@ class ChatInterface {
       syncAvatars: json['syncAvatars'] as bool? ?? false,
       textPlacement: TextPlacement.byName(json['textPlacement'] as String?),
       bubbles: json['bubbles'] as bool? ?? true,
+      contentWidth: ContentWidth.byName(json['contentWidth'] as String?),
       fontSize: (json['fontSize'] as num?)?.toDouble() ?? 16,
       bubbleOpacity: (json['bubbleOpacity'] as num?)?.toDouble() ?? 1,
       showNames: json['showNames'] as bool? ?? false,
@@ -628,6 +671,7 @@ class ChatInterface {
       other.syncAvatars == syncAvatars &&
       other.textPlacement == textPlacement &&
       other.bubbles == bubbles &&
+      other.contentWidth == contentWidth &&
       other.fontSize == fontSize &&
       other.bubbleOpacity == bubbleOpacity &&
       other.showNames == showNames &&
@@ -655,7 +699,7 @@ class ChatInterface {
         userAvatar,
         syncAvatars,
         textPlacement,
-        bubbles,
+        Object.hash(bubbles, contentWidth),
         fontSize,
         bubbleOpacity,
         showNames,

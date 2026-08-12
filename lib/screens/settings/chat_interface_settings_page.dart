@@ -82,6 +82,17 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             labelOf: (p) => p.label,
             onChanged: (p) => update(ui.copyWith(textPlacement: p)),
           ),
+          _EnumRow<ContentWidth>(
+            icon: Icons.width_normal_outlined,
+            label: 'Content width',
+            value: ui.contentWidth,
+            values: ContentWidth.values,
+            labelOf: (w) => w.label,
+            onChanged: (w) {
+              update(ui.copyWith(contentWidth: w));
+              notify('Content width: ${w.label.toLowerCase()}');
+            },
+          ),
           if (ui.bubbles)
             _SliderRow(
               icon: Icons.opacity_outlined,

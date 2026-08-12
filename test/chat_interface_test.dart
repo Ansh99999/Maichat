@@ -230,4 +230,24 @@ void main() {
       expect(MessageAction.delete.appliesTo(true), isTrue);
     });
   });
+
+  group('content width', () {
+    test('defaults to medium and round trips', () {
+      expect(const ChatInterface().contentWidth, ContentWidth.medium);
+      final custom =
+          const ChatInterface().copyWith(contentWidth: ContentWidth.full);
+      final restored = ChatInterface.fromJson(custom.toJson());
+      expect(restored.contentWidth, ContentWidth.full);
+      expect(restored, custom);
+    });
+
+    test('maxWidthFor caps bounded modes and fills for full', () {
+      // On a wide screen the bounded modes keep their readable caps…
+      expect(ContentWidth.narrow.maxWidthFor(1200), 560);
+      expect(ContentWidth.medium.maxWidthFor(1200), 720);
+      expect(ContentWidth.full.maxWidthFor(1200), 1200 - 24);
+      // …and on a narrow screen every mode is clamped to what's available.
+      expect(ContentWidth.wide.maxWidthFor(360), 360 - 24);
+    });
+  });
 }

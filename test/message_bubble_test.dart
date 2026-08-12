@@ -174,4 +174,25 @@ void main() {
       expect(find.byIcon(Icons.more_vert), findsNothing);
     });
   });
+
+  // Every content width should lay out (esp. document mode / full) without
+  // throwing.
+  for (final width in ContentWidth.values) {
+    for (final bubbles in [true, false]) {
+      testWidgets('content width ${width.name}, bubbles=$bubbles',
+          (tester) async {
+        await tester.pumpWidget(host(
+          ListView(children: [
+            MessageBubble(
+              message:
+                  ChatMessage(role: 'assistant', content: 'A longer line of text.'),
+              ui: ChatInterface(contentWidth: width, bubbles: bubbles),
+            ),
+          ]),
+        ));
+        expect(tester.takeException(), isNull);
+        expect(find.byType(MessageBubble), findsOneWidget);
+      });
+    }
+  }
 }
