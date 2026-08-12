@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/chat_interface.dart';
 
@@ -53,6 +54,33 @@ void main() {
     expect(restored.emphasisColor, 0xFF00FF00);
     expect(restored.quoteColor, 0xFF123456);
     expect(restored.botAvatar.offset.dx, 10);
+  });
+
+  test('name typography + alignment round trip', () {
+    const original = ChatInterface(
+      showNames: true,
+      botNameSize: 18,
+      userNameSize: 9,
+      botNameAlign: NameAlign.center,
+      userNameAlign: NameAlign.end,
+    );
+    final restored = ChatInterface.fromJson(original.toJson());
+    expect(restored, original);
+    expect(restored.botNameSize, 18);
+    expect(restored.userNameSize, 9);
+    expect(restored.botNameAlign, NameAlign.center);
+    expect(restored.userNameAlign, NameAlign.end);
+  });
+
+  test('name defaults and NameAlign.byName fall back sensibly', () {
+    const ui = ChatInterface();
+    expect(ui.botNameSize, 12);
+    expect(ui.userNameSize, 12);
+    expect(ui.botNameAlign, NameAlign.start);
+    expect(ui.userNameAlign, NameAlign.start);
+    expect(NameAlign.byName('nonsense'), NameAlign.start);
+    expect(NameAlign.byName('center'), NameAlign.center);
+    expect(NameAlign.center.textAlign, TextAlign.center);
   });
 
   test('copyWith clears a colour to null (follow theme) via the sentinel', () {

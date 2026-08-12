@@ -174,6 +174,36 @@ class Character {
         userName: userName,
       ).trim();
 
+  /// A persona block describing the human's side of the conversation when the
+  /// user impersonates this character. Injected into the request so the model
+  /// knows who "{{user}}" is — the mirror of [composedSystemPrompt], from the
+  /// user's seat. Macros resolve against this character as both {{char}} and
+  /// {{user}} (it is the user here). [charName] names the character being
+  /// chatted with, so a line like "talking with {{char}}" reads right.
+  String userPersona({String charName = 'the character'}) {
+    final buffer = StringBuffer()
+      ..writeln('The user is roleplaying as $displayName. '
+          'Treat their messages as $displayName speaking, and address them as '
+          '$displayName.');
+    void section(String heading, String value) {
+      final v = value.trim();
+      if (v.isEmpty) return;
+      buffer
+        ..writeln()
+        ..writeln('# $heading')
+        ..writeln(v);
+    }
+
+    section('Description', description);
+    section('Personality', personality);
+
+    return resolveMacros(
+      buffer.toString().trim(),
+      charName: charName,
+      userName: displayName,
+    ).trim();
+  }
+
   Character copyWith({String? id, String? name}) => Character(
         id: id ?? this.id,
         name: name ?? this.name,

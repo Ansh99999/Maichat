@@ -2,12 +2,46 @@ import 'package:flutter/material.dart';
 
 /// Bounds the avatar-size slider (and the drag-to-resize handle) honour, in
 /// logical pixels. For [AvatarFit.free] this is the longest side of the frame.
+///
+/// [kMaxAvatarSize] is only the slider *track* maximum — a comfortable ceiling
+/// for dragging — not a hard limit. The numeric field beside the slider lets a
+/// value be typed past it (up to [kAvatarHardMax], a sanity bound that just
+/// keeps a fat-fingered entry from blowing up the layout).
 const double kMinAvatarSize = 24;
-const double kMaxAvatarSize = 160;
+const double kMaxAvatarSize = 320;
+const double kAvatarHardMax = 2000;
 
 /// Bounds for the message font-size slider, in logical pixels.
 const double kMinFontSize = 11;
 const double kMaxFontSize = 26;
+
+/// Bounds for the sender-name font-size sliders, in logical pixels.
+const double kMinNameSize = 8;
+const double kMaxNameSize = 28;
+
+/// Where a sender's name label sits across the message row.
+enum NameAlign {
+  start('Start'),
+  center('Center'),
+  end('End');
+
+  const NameAlign(this.label);
+
+  final String label;
+
+  TextAlign get textAlign => switch (this) {
+        NameAlign.start => TextAlign.left,
+        NameAlign.center => TextAlign.center,
+        NameAlign.end => TextAlign.right,
+      };
+
+  static NameAlign byName(String? name) {
+    for (final a in values) {
+      if (a.name == name) return a;
+    }
+    return NameAlign.start;
+  }
+}
 
 /// The shape an avatar is clipped to.
 enum AvatarShape {
@@ -206,6 +240,10 @@ class ChatInterface {
     this.bubbleOpacity = 1,
     this.showNames = false,
     this.userName = 'You',
+    this.botNameSize = 12,
+    this.userNameSize = 12,
+    this.botNameAlign = NameAlign.start,
+    this.userNameAlign = NameAlign.start,
     this.markdown = true,
     this.userTextColor,
     this.botTextColor,
@@ -236,8 +274,16 @@ class ChatInterface {
   /// Whether to label each turn with its sender's name.
   final bool showNames;
 
-  /// The user's display name (the character's own name labels its turns).
+  /// The user's display name (the character's own name labels its turns). Used
+  /// as the fallback label when the user is not impersonating a character.
   final String userName;
+
+  /// Font size (logical px) for each role's sender-name label, and where that
+  /// label sits across the message row.
+  final double botNameSize;
+  final double userNameSize;
+  final NameAlign botNameAlign;
+  final NameAlign userNameAlign;
 
   /// Whether message text is rendered as markdown (bold/italic/quotes/code…).
   final bool markdown;
@@ -268,6 +314,10 @@ class ChatInterface {
     double? bubbleOpacity,
     bool? showNames,
     String? userName,
+    double? botNameSize,
+    double? userNameSize,
+    NameAlign? botNameAlign,
+    NameAlign? userNameAlign,
     bool? markdown,
     Object? userTextColor = _unset,
     Object? botTextColor = _unset,
@@ -287,6 +337,10 @@ class ChatInterface {
         bubbleOpacity: bubbleOpacity ?? this.bubbleOpacity,
         showNames: showNames ?? this.showNames,
         userName: userName ?? this.userName,
+        botNameSize: botNameSize ?? this.botNameSize,
+        userNameSize: userNameSize ?? this.userNameSize,
+        botNameAlign: botNameAlign ?? this.botNameAlign,
+        userNameAlign: userNameAlign ?? this.userNameAlign,
         markdown: markdown ?? this.markdown,
         userTextColor: _pick(userTextColor, this.userTextColor),
         botTextColor: _pick(botTextColor, this.botTextColor),
@@ -325,6 +379,10 @@ class ChatInterface {
         'bubbleOpacity': bubbleOpacity,
         'showNames': showNames,
         'userName': userName,
+        'botNameSize': botNameSize,
+        'userNameSize': userNameSize,
+        'botNameAlign': botNameAlign.name,
+        'userNameAlign': userNameAlign.name,
         'markdown': markdown,
         if (userTextColor != null) 'userTextColor': userTextColor,
         if (botTextColor != null) 'botTextColor': botTextColor,
@@ -371,6 +429,10 @@ class ChatInterface {
       bubbleOpacity: (json['bubbleOpacity'] as num?)?.toDouble() ?? 1,
       showNames: json['showNames'] as bool? ?? false,
       userName: json['userName'] as String? ?? 'You',
+      botNameSize: (json['botNameSize'] as num?)?.toDouble() ?? 12,
+      userNameSize: (json['userNameSize'] as num?)?.toDouble() ?? 12,
+      botNameAlign: NameAlign.byName(json['botNameAlign'] as String?),
+      userNameAlign: NameAlign.byName(json['userNameAlign'] as String?),
       markdown: json['markdown'] as bool? ?? true,
       userTextColor: (json['userTextColor'] as num?)?.toInt(),
       botTextColor: (json['botTextColor'] as num?)?.toInt(),
@@ -394,6 +456,10 @@ class ChatInterface {
       other.bubbleOpacity == bubbleOpacity &&
       other.showNames == showNames &&
       other.userName == userName &&
+      other.botNameSize == botNameSize &&
+      other.userNameSize == userNameSize &&
+      other.botNameAlign == botNameAlign &&
+      other.userNameAlign == userNameAlign &&
       other.markdown == markdown &&
       other.userTextColor == userTextColor &&
       other.botTextColor == botTextColor &&
@@ -414,6 +480,7 @@ class ChatInterface {
         bubbleOpacity,
         showNames,
         userName,
+        Object.hash(botNameSize, userNameSize, botNameAlign, userNameAlign),
         markdown,
         userTextColor,
         botTextColor,

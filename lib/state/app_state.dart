@@ -10,6 +10,7 @@ import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/preset.dart';
+import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../services/macro_context.dart';
@@ -334,6 +335,24 @@ class AppState extends ChangeNotifier {
     await _storage.saveConversations(_conversations);
   }
 
+  /// The character the user is impersonating in [conversation], or null when
+  /// they are speaking as themselves.
+  Character? impersonationFor(Conversation conversation) =>
+      characterById(conversation.impersonateId);
+
+  /// Sets (or clears, when [character] is null) the impersonated identity on the
+  /// active thread — the send-bar "impersonate" action. The chosen persona is
+  /// injected into every subsequent request (see [_generate]).
+  Future<void> setImpersonation(Character? character) async {
+    final conversation = active;
+    if (conversation.impersonateId == character?.id) return;
+    conversation.impersonateId = character?.id;
+    conversation.impersonateName = character?.displayName;
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
   // --- Characters ----------------------------------------------------------
 
   Future<void> _persistCharacters() => _storage.saveCharacters(_characters);
@@ -536,16 +555,28 @@ class AppState extends ChangeNotifier {
     // Failure notices are display-only, so they never go back to the model.
     final priorTurns =
         conversation.messages.where((m) => !m.error).toList(growable: false);
-    late final List<ChatMessage> history;
+
+    // When the user impersonates a character, their identity is injected so the
+    // model treats their turns as that persona (mirrors Agnai's user-persona).
+    final impersonation = impersonationFor(conversation);
+    final character = characterById(conversation.characterId);
+    final userName = impersonation?.displayName ?? 'User';
+    final persona = impersonation == null
+        ? ''
+        : impersonation.userPersona(charName: character?.displayName ?? 'the character');
+
+    late List<ChatMessage> history;
     var params = const GenParams();
     if (preset != null) {
       // A preset assembles the request from its ordered prompt blocks, running
       // macros against this chat's local + the app's global variables.
       final built = _prompts.build(
         preset: preset,
-        character: characterById(conversation.characterId),
+        character: character,
         history: priorTurns,
         model: base.model,
+        userName: userName,
+        persona: persona,
         variables: MacroVariables(
           local: conversation.variables,
           global: _globalVars,
@@ -553,13 +584,24 @@ class AppState extends ChangeNotifier {
         input: input,
       );
       history = built.messages;
+      // The persona reaches the payload through the preset's personaDescription
+      // block when it has one; otherwise inject it as a leading system turn so
+      // impersonation always takes effect regardless of preset shape.
+      if (persona.isNotEmpty && !_presetEmitsPersona(preset)) {
+        history = <ChatMessage>[
+          ChatMessage(role: 'system', content: persona),
+          ...history,
+        ];
+      }
       params = _paramsFor(preset);
     } else {
       // No preset: the original flat behavior — the composed persona as a
-      // leading system turn, then the history.
+      // leading system turn, then the history — plus the impersonated user
+      // persona (when set) so the identity still reaches the model.
       history = <ChatMessage>[
         if (conversation.systemPrompt.trim().isNotEmpty)
           ChatMessage(role: 'system', content: conversation.systemPrompt.trim()),
+        if (persona.isNotEmpty) ChatMessage(role: 'system', content: persona),
         ...priorTurns,
       ];
     }
@@ -665,6 +707,8 @@ class AppState extends ChangeNotifier {
       characterId: source.characterId,
       characterName: source.characterName,
       systemPrompt: source.systemPrompt,
+      impersonateId: source.impersonateId,
+      impersonateName: source.impersonateName,
       presetId: source.presetId,
       presetOverride: source.presetOverride == null
           ? null
@@ -740,6 +784,19 @@ class AppState extends ChangeNotifier {
     final count = base.usableKeys.length;
     if (count <= 1) return;
     _keyCursor[base.id] = ((_keyCursor[base.id] ?? 0) + 1) % count;
+  }
+
+  /// Whether [preset] already surfaces the user persona through an enabled
+  /// personaDescription marker block, so the impersonation persona is not
+  /// injected twice.
+  bool _presetEmitsPersona(Preset preset) {
+    for (final entry in preset.promptOrder) {
+      if (entry.identifier == PromptId.personaDescription && entry.enabled) {
+        final block = preset.blockById(entry.identifier);
+        if (block != null && block.marker) return true;
+      }
+    }
+    return false;
   }
 
   GenParams _paramsFor(Preset p) => GenParams(

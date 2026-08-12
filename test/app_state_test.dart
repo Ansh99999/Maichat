@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maichat/models/character.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/services/chat_client.dart';
@@ -380,5 +381,47 @@ void main() {
     // The retry sent the user turn but not the old assistant reply.
     expect(client.lastHistory!.last.content, 'hi');
     expect(client.lastHistory!.every((m) => m.role != 'assistant'), isTrue);
+  });
+
+  test('impersonation injects the chosen persona into the request', () async {
+    final client = FakeClient(deltas: ['ok']);
+    final state = await _state(client);
+    final persona = Character.empty()
+      ..name = 'Kaelen'
+      ..description = 'A weathered ranger from the northern reaches.';
+    await state.addCharacter(persona);
+
+    await state.setImpersonation(persona);
+    expect(state.active.impersonateId, persona.id);
+    expect(state.impersonationFor(state.active)?.displayName, 'Kaelen');
+
+    await state.send('hello');
+
+    // A system turn carries the persona so the model treats the user as Kaelen.
+    final systems =
+        client.lastHistory!.where((m) => m.role == 'system').toList();
+    expect(systems, isNotEmpty);
+    final joined = systems.map((m) => m.content).join('\n');
+    expect(joined, contains('Kaelen'));
+    expect(joined, contains('northern reaches'));
+  });
+
+  test('clearing impersonation drops the persona and persists', () async {
+    final client = FakeClient(deltas: ['ok']);
+    final state = await _state(client);
+    final persona = Character.empty()..name = 'Kaelen';
+    await state.addCharacter(persona);
+    await state.setImpersonation(persona);
+    final chatId = state.active.id;
+
+    await state.setImpersonation(null);
+    expect(state.active.impersonateId, isNull);
+
+    // The cleared identity survives a reload from storage.
+    final reloaded = AppState(client: client);
+    await reloaded.init();
+    final chat =
+        reloaded.conversations.firstWhere((c) => c.id == chatId);
+    expect(chat.impersonateId, isNull);
   });
 }

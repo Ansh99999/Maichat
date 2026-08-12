@@ -5,9 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../models/conversation.dart';
+import '../models/character.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../state/app_state.dart';
+import '../widgets/character_avatar.dart';
 import '../widgets/message_bubble.dart';
 import 'characters_screen.dart';
 import 'chats_screen.dart';
@@ -270,6 +272,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _messageList(Conversation conversation, AppState state, double top) {
     final ui = state.chatInterface;
     final character = state.characterById(conversation.characterId);
+    final persona = state.impersonationFor(conversation);
     return ListView.builder(
       controller: _scroll,
       // Leave room so the first bubble clears the floating hamburger.
@@ -282,6 +285,7 @@ class _ChatScreenState extends State<ChatScreen> {
           message: message,
           ui: ui,
           character: character,
+          userPersona: persona,
           pending: isLast && state.streaming,
           onLongPress: message.content.isEmpty
               ? null
@@ -401,8 +405,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _composer(AppState state) {
     final scheme = Theme.of(context).colorScheme;
+    final persona = state.impersonationFor(state.active);
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      padding: const EdgeInsets.fromLTRB(8, 8, 12, 12),
       decoration: BoxDecoration(
         color: scheme.surface,
         border: Border(top: BorderSide(color: scheme.outlineVariant)),
@@ -410,6 +415,11 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          _ImpersonateButton(
+            persona: persona,
+            onTap: () => _openImpersonatePicker(state),
+          ),
+          const SizedBox(width: 8),
           Expanded(
             child: TextField(
               controller: _input,
@@ -417,11 +427,12 @@ class _ChatScreenState extends State<ChatScreen> {
               maxLines: 5,
               textInputAction: TextInputAction.newline,
               keyboardType: TextInputType.multiline,
-              decoration: const InputDecoration(
-                hintText: 'Message',
+              decoration: InputDecoration(
+                hintText:
+                    persona == null ? 'Message' : 'Message as ${persona.displayName}',
                 isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
               ),
             ),
           ),
@@ -430,6 +441,42 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  /// Opens the impersonation picker (search + character list) and, on a pick,
+  /// confirms before switching the active identity.
+  Future<void> _openImpersonatePicker(AppState state) async {
+    final current = state.impersonationFor(state.active);
+    final choice = await showModalBottomSheet<_ImpersonationChoice>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => _ImpersonatePicker(
+        characters: state.characters,
+        currentId: current?.id,
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    if (choice.character == null) {
+      // "Yourself" — clear any impersonation.
+      if (current != null) {
+        await state.setImpersonation(null);
+        if (mounted) _toast('Impersonation cleared — back to yourself.');
+      }
+      return;
+    }
+
+    final character = choice.character!;
+    final ok = await _confirm(
+      title: 'Impersonate?',
+      body: 'Do you want to impersonate ${character.displayName}? Your messages '
+          'will be sent as this character.',
+      action: 'Impersonate',
+    );
+    if (!ok || !mounted) return;
+    await state.setImpersonation(character);
+    if (mounted) _toast('Now impersonating ${character.displayName}.');
   }
 
   /// Doubles as the stop control while a reply is streaming.
@@ -965,6 +1012,183 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
               leading: const Icon(Icons.settings_outlined),
               title: const Text('Manage providers'),
               onTap: widget.onManage,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The small circular avatar on the far left of the composer. Shows the
+/// impersonated character's picture when the user has assumed an identity,
+/// otherwise a plain person glyph. Tapping it opens the impersonation picker.
+class _ImpersonateButton extends StatelessWidget {
+  const _ImpersonateButton({required this.persona, required this.onTap});
+
+  final Character? persona;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const double diameter = 40;
+    final impersonating = persona != null;
+    return Tooltip(
+      message: impersonating
+          ? 'Impersonating ${persona!.displayName}'
+          : 'Impersonate a character',
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: diameter,
+          height: diameter,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: impersonating ? scheme.primary : scheme.outlineVariant,
+              width: impersonating ? 2 : 1,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: impersonating
+              ? CharacterAvatar(character: persona!, size: diameter)
+              : Icon(Icons.person_outline,
+                  color: scheme.onSurfaceVariant, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
+/// The result of the impersonation picker: a chosen character, or a null
+/// character meaning "be yourself" (clear impersonation).
+class _ImpersonationChoice {
+  const _ImpersonationChoice(this.character);
+  final Character? character;
+}
+
+/// A bottom sheet to pick who to impersonate: a search field over a scrollable
+/// list of saved characters, plus a "Yourself" entry at the top to step back
+/// out of any active impersonation.
+class _ImpersonatePicker extends StatefulWidget {
+  const _ImpersonatePicker({required this.characters, this.currentId});
+
+  final List<Character> characters;
+  final String? currentId;
+
+  @override
+  State<_ImpersonatePicker> createState() => _ImpersonatePickerState();
+}
+
+class _ImpersonatePickerState extends State<_ImpersonatePicker> {
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<Character> get _visible {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.characters;
+    return widget.characters
+        .where((c) =>
+            c.name.toLowerCase().contains(q) ||
+            c.blurb.toLowerCase().contains(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final bottom = MediaQuery.viewInsetsOf(context).bottom +
+        MediaQuery.paddingOf(context).bottom;
+    final results = _visible;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottom),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.7,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Row(
+                children: [
+                  Text('Impersonate',
+                      style: Theme.of(context).textTheme.titleMedium),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: TextField(
+                controller: _search,
+                autofocus: false,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Search characters',
+                  prefixIcon: const Icon(Icons.search),
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(28),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                children: [
+                  ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: scheme.secondaryContainer,
+                      child: Icon(Icons.person_outline,
+                          color: scheme.onSecondaryContainer),
+                    ),
+                    title: const Text('Yourself'),
+                    subtitle: const Text('Stop impersonating'),
+                    trailing: widget.currentId == null
+                        ? Icon(Icons.check, color: scheme.primary)
+                        : null,
+                    onTap: () => Navigator.of(context)
+                        .pop(const _ImpersonationChoice(null)),
+                  ),
+                  if (widget.characters.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(
+                        child: Text('No characters yet — import or create one '
+                            'to impersonate.'),
+                      ),
+                    )
+                  else if (results.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(child: Text('No characters match that')),
+                    )
+                  else
+                    for (final c in results)
+                      ListTile(
+                        leading: CharacterAvatar(character: c, radius: 20),
+                        title: Text(c.displayName,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: c.blurb.isEmpty
+                            ? null
+                            : Text(c.blurb,
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                        trailing: widget.currentId == c.id
+                            ? Icon(Icons.check, color: scheme.primary)
+                            : null,
+                        onTap: () => Navigator.of(context)
+                            .pop(_ImpersonationChoice(c)),
+                      ),
+                ],
+              ),
             ),
           ],
         ),

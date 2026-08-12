@@ -217,6 +217,13 @@ const List<_SearchEntry> _searchIndex = [
     builder: _textPlacementPage,
   ),
   _SearchEntry(
+    title: 'Sender names',
+    section: 'Chat Interface',
+    icon: Icons.badge_outlined,
+    keywords: 'name label title font size placement align alignment character user',
+    builder: _namesPage,
+  ),
+  _SearchEntry(
     title: 'Message colours',
     section: 'Chat Interface',
     icon: Icons.format_color_fill_outlined,
@@ -249,6 +256,8 @@ Widget _chatAvatarsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatAvatars);
 Widget _textPlacementPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.textPlacement);
+Widget _namesPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.names);
 Widget _chatColoursPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
 Widget _storagePage() =>

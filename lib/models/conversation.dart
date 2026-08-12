@@ -11,6 +11,8 @@ class Conversation {
     this.characterId,
     this.characterName,
     this.systemPrompt = '',
+    this.impersonateId,
+    this.impersonateName,
     this.presetId,
     this.presetOverride,
     Map<String, String>? variables,
@@ -28,6 +30,16 @@ class Conversation {
   String? characterId;
   String? characterName;
   String systemPrompt;
+
+  /// Set when the user is impersonating a saved character in this thread — the
+  /// "active identity" chosen from the send bar. [impersonateName] is
+  /// denormalised so a turn still labels right if the character is later edited
+  /// or deleted. The persona is injected into every outgoing request.
+  String? impersonateId;
+  String? impersonateName;
+
+  /// Whether the user is currently speaking as an impersonated character.
+  bool get isImpersonating => impersonateId != null;
 
   /// The generation preset this thread runs under (by [Preset.id]); null falls
   /// back to the app's default preset.
@@ -66,6 +78,8 @@ class Conversation {
         if (characterId != null) 'characterId': characterId,
         if (characterName != null) 'characterName': characterName,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
+        if (impersonateId != null) 'impersonateId': impersonateId,
+        if (impersonateName != null) 'impersonateName': impersonateName,
         if (presetId != null) 'presetId': presetId,
         if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
         if (variables.isNotEmpty) 'variables': variables,
@@ -82,6 +96,8 @@ class Conversation {
         characterId: json['characterId'] as String?,
         characterName: json['characterName'] as String?,
         systemPrompt: json['systemPrompt'] as String? ?? '',
+        impersonateId: json['impersonateId'] as String?,
+        impersonateName: json['impersonateName'] as String?,
         presetId: json['presetId'] as String?,
         presetOverride: json['presetOverride'] is Map<String, dynamic>
             ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)

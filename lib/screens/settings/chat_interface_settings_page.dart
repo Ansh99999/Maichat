@@ -23,6 +23,20 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
     final ui = state.chatInterface;
     void update(ChatInterface next) => state.updateChatInterface(next);
 
+    // Subtle, non-blocking confirmation that a change was applied. Replaces any
+    // still-showing note so rapid tweaks don't stack up.
+    void notify(String message) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(milliseconds: 1400),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chat Interface'),
@@ -89,18 +103,6 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
           ),
           SwitchListTile(
             dense: true,
-            value: ui.showNames,
-            onChanged: (v) => update(ui.copyWith(showNames: v)),
-            secondary: const Icon(Icons.badge_outlined),
-            title: const Text('Show names'),
-            subtitle: const Text('Label each turn with its sender'),
-          ),
-          _NameField(
-            value: ui.userName,
-            onChanged: (v) => update(ui.copyWith(userName: v)),
-          ),
-          SwitchListTile(
-            dense: true,
             value: ui.markdown,
             onChanged: (v) => update(ui.copyWith(markdown: v)),
             secondary: const Icon(Icons.text_format_outlined),
@@ -110,11 +112,57 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
           ),
 // APPEND-CHILDREN
           const Divider(height: 24),
+          _header(context, 'Names'),
+          SwitchListTile(
+            dense: true,
+            value: ui.showNames,
+            onChanged: (v) => update(ui.copyWith(showNames: v)),
+            secondary: const Icon(Icons.badge_outlined),
+            title: const Text('Show names'),
+            subtitle: const Text('Label each turn with its sender'),
+          ),
+          if (ui.showNames)
+            SettingHighlight(
+              active: highlight == SettingAnchor.names,
+              child: Column(
+                children: [
+                  _NameControls(
+                    title: 'Character name',
+                    icon: Icons.smart_toy_outlined,
+                    size: ui.botNameSize,
+                    align: ui.botNameAlign,
+                    onSize: (v) => update(ui.copyWith(botNameSize: v)),
+                    onAlign: (a) {
+                      update(ui.copyWith(botNameAlign: a));
+                      notify('Character name aligned ${a.label.toLowerCase()}');
+                    },
+                    onSizeEnd: (v) =>
+                        notify('Character name size ${v.round()} px'),
+                  ),
+                  _NameControls(
+                    title: 'Your name',
+                    icon: Icons.person_outline,
+                    size: ui.userNameSize,
+                    align: ui.userNameAlign,
+                    onSize: (v) => update(ui.copyWith(userNameSize: v)),
+                    onAlign: (a) {
+                      update(ui.copyWith(userNameAlign: a));
+                      notify('Your name aligned ${a.label.toLowerCase()}');
+                    },
+                    onSizeEnd: (v) => notify('Your name size ${v.round()} px'),
+                  ),
+                ],
+              ),
+            ),
+          const Divider(height: 24),
           _header(context, 'Avatars'),
           SwitchListTile(
             dense: true,
             value: ui.syncAvatars,
-            onChanged: (v) => update(ui.copyWith(syncAvatars: v)),
+            onChanged: (v) {
+              update(ui.copyWith(syncAvatars: v));
+              notify(v ? 'Avatars synced' : 'Avatars independent');
+            },
             secondary: const Icon(Icons.link_outlined),
             title: const Text('Sync avatars'),
             subtitle: const Text('Keep both avatars\' look in step (side stays '
@@ -123,17 +171,21 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
           SettingHighlight(
             active: highlight == SettingAnchor.chatAvatars,
             child: _AvatarSection(
-              title: 'Character avatar',
+              title: 'Character avatar settings',
               icon: Icons.smart_toy_outlined,
               style: ui.botAvatar,
               onChanged: (s) => update(ui.withAvatar(false, s)),
+              notify: notify,
+              role: 'Character',
             ),
           ),
           _AvatarSection(
-            title: 'Your avatar',
+            title: 'User avatar settings',
             icon: Icons.person_outline,
             style: ui.userAvatar,
             onChanged: (s) => update(ui.withAvatar(true, s)),
+            notify: notify,
+            role: 'User',
           ),
           const Divider(height: 24),
           _header(context, 'Colours'),
@@ -199,130 +251,312 @@ Widget _header(BuildContext context, String text) => Padding(
       ),
     );
 
-/// One role's avatar controls: show, size, corners, image fit and which side it
-/// sits on. Writes back a whole [AvatarStyle] via [onChanged].
+/// One role's avatar controls, presented as a collapsible dropdown (an
+/// [ExpansionTile] in a card) to keep the settings list uncluttered. Expands to
+/// reveal show/size/corners/fit/side; writes back a whole [AvatarStyle] via
+/// [onChanged] and reports each change through [notify].
 class _AvatarSection extends StatelessWidget {
   const _AvatarSection({
     required this.title,
     required this.icon,
     required this.style,
     required this.onChanged,
+    required this.notify,
+    required this.role,
   });
 
   final String title;
   final IconData icon;
   final AvatarStyle style;
   final ValueChanged<AvatarStyle> onChanged;
+  final ValueChanged<String> notify;
+
+  /// "Character" / "User" — used in the change notifications.
+  final String role;
+
+  String get _summary {
+    if (!style.show) return 'Hidden';
+    return 'Shown · ${style.size.round()} px · ${style.shape.label}';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final shape =
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12));
     return Card(
       margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Column(
-          children: [
-            SwitchListTile(
-              dense: true,
-              value: style.show,
-              onChanged: (v) => onChanged(style.copyWith(show: v)),
-              secondary: Icon(icon),
-              title: Text(title),
-              subtitle: Text(style.show ? 'Shown' : 'Hidden'),
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(_summary),
+        shape: shape,
+        collapsedShape: shape,
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        children: [
+          SwitchListTile(
+            dense: true,
+            value: style.show,
+            onChanged: (v) {
+              onChanged(style.copyWith(show: v));
+              notify('$role avatar ${v ? 'shown' : 'hidden'}');
+            },
+            secondary: const Icon(Icons.visibility_outlined),
+            title: const Text('Show avatar'),
+          ),
+          if (style.show) ...[
+            _SizeSliderField(
+              icon: Icons.photo_size_select_large_outlined,
+              label: 'Size',
+              value: style.size,
+              min: kMinAvatarSize,
+              sliderMax: kMaxAvatarSize,
+              hardMax: kAvatarHardMax,
+              unit: 'px',
+              onChanged: (v) => onChanged(style.copyWith(size: v)),
+              onChangeEnd: (v) => notify('$role avatar size ${v.round()} px'),
             ),
-            if (style.show) ...[
-              _SliderRow(
-                icon: Icons.photo_size_select_large_outlined,
-                label: 'Size',
-                value: style.size,
-                min: kMinAvatarSize,
-                max: kMaxAvatarSize,
-                suffix: '${style.size.round()} px',
-                onChanged: (v) => onChanged(style.copyWith(size: v)),
-              ),
-              _EnumRow<AvatarShape>(
-                icon: Icons.crop_square_outlined,
-                label: 'Corners',
-                value: style.shape,
-                values: AvatarShape.values,
-                labelOf: (s) => s.label,
-                onChanged: (s) => onChanged(style.copyWith(shape: s)),
-              ),
-              _EnumRow<AvatarFit>(
-                icon: Icons.aspect_ratio_outlined,
-                label: 'Image fit',
-                value: style.fit,
-                values: AvatarFit.values,
-                labelOf: (f) => f.label,
-                onChanged: (f) => onChanged(style.copyWith(fit: f)),
-              ),
-              _EnumRow<ChatSide>(
-                icon: Icons.swap_horiz_outlined,
-                label: 'Side',
-                value: style.side,
-                values: ChatSide.values,
-                labelOf: (s) => s.label,
-                onChanged: (s) => onChanged(style.copyWith(side: s)),
-              ),
-              if (style.offsetX != 0 || style.offsetY != 0)
-                ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.open_with_outlined),
-                  title: const Text('Position'),
-                  subtitle: Text(
-                    'Nudged ${style.offsetX.round()}, ${style.offsetY.round()} '
-                    '— drag in the preview',
-                  ),
-                  trailing: TextButton(
-                    onPressed: () =>
-                        onChanged(style.copyWith(offsetX: 0, offsetY: 0)),
-                    child: const Text('Reset'),
-                  ),
+            _EnumRow<AvatarShape>(
+              icon: Icons.crop_square_outlined,
+              label: 'Corners',
+              value: style.shape,
+              values: AvatarShape.values,
+              labelOf: (s) => s.label,
+              onChanged: (s) {
+                onChanged(style.copyWith(shape: s));
+                notify('$role avatar corners: ${s.label}');
+              },
+            ),
+            _EnumRow<AvatarFit>(
+              icon: Icons.aspect_ratio_outlined,
+              label: 'Image fit',
+              value: style.fit,
+              values: AvatarFit.values,
+              labelOf: (f) => f.label,
+              onChanged: (f) {
+                onChanged(style.copyWith(fit: f));
+                notify('$role avatar fit: ${f.label}');
+              },
+            ),
+            _EnumRow<ChatSide>(
+              icon: Icons.swap_horiz_outlined,
+              label: 'Side',
+              value: style.side,
+              values: ChatSide.values,
+              labelOf: (s) => s.label,
+              onChanged: (s) {
+                onChanged(style.copyWith(side: s));
+                notify('$role avatar on the ${s.label.toLowerCase()}');
+              },
+            ),
+            if (style.offsetX != 0 || style.offsetY != 0)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.open_with_outlined),
+                title: const Text('Position'),
+                subtitle: Text(
+                  'Nudged ${style.offsetX.round()}, ${style.offsetY.round()} '
+                  '— drag in the preview',
                 ),
-            ],
+                trailing: TextButton(
+                  onPressed: () =>
+                      onChanged(style.copyWith(offsetX: 0, offsetY: 0)),
+                  child: const Text('Reset'),
+                ),
+              ),
           ],
-        ),
+        ],
       ),
+    );
+  }
+}
+
+/// Font-size + alignment controls for one role's sender name.
+class _NameControls extends StatelessWidget {
+  const _NameControls({
+    required this.title,
+    required this.icon,
+    required this.size,
+    required this.align,
+    required this.onSize,
+    required this.onAlign,
+    required this.onSizeEnd,
+  });
+
+  final String title;
+  final IconData icon;
+  final double size;
+  final NameAlign align;
+  final ValueChanged<double> onSize;
+  final ValueChanged<NameAlign> onAlign;
+  final ValueChanged<double> onSizeEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              Icon(icon, size: 20),
+              const SizedBox(width: 16),
+              Text(title,
+                  style: Theme.of(context).textTheme.labelLarge),
+            ],
+          ),
+        ),
+        _SizeSliderField(
+          icon: Icons.format_size_outlined,
+          label: 'Name size',
+          value: size,
+          min: kMinNameSize,
+          sliderMax: kMaxNameSize,
+          hardMax: kMaxNameSize,
+          unit: 'px',
+          onChanged: onSize,
+          onChangeEnd: onSizeEnd,
+        ),
+        _EnumRow<NameAlign>(
+          icon: Icons.format_align_center_outlined,
+          label: 'Placement',
+          value: align,
+          values: NameAlign.values,
+          labelOf: (a) => a.label,
+          onChanged: onAlign,
+        ),
+      ],
     );
   }
 }
 // APPEND-WIDGETS
 
-/// The user's display-name field. Keeps its own controller so live updates
-/// don't clobber the cursor.
-class _NameField extends StatefulWidget {
-  const _NameField({required this.value, required this.onChanged});
+/// A numeric value editable two ways at once: a slider for quick adjustment and
+/// a text field for precise entry, kept in sync. The slider spans [min]..
+/// [sliderMax]; the field accepts anything in [min]..[hardMax] so a value past
+/// the slider's comfortable ceiling can still be typed (the slider just pins to
+/// its max). [onChanged] fires live; [onChangeEnd] fires once a change is
+/// committed (slider release or field submit) — the hook the caller uses to
+/// surface a confirmation.
+class _SizeSliderField extends StatefulWidget {
+  const _SizeSliderField({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.sliderMax,
+    required this.hardMax,
+    required this.unit,
+    required this.onChanged,
+    this.onChangeEnd,
+  });
 
-  final String value;
-  final ValueChanged<String> onChanged;
+  final IconData icon;
+  final String label;
+  final double value;
+  final double min;
+  final double sliderMax;
+  final double hardMax;
+  final String unit;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double>? onChangeEnd;
 
   @override
-  State<_NameField> createState() => _NameFieldState();
+  State<_SizeSliderField> createState() => _SizeSliderFieldState();
 }
 
-class _NameFieldState extends State<_NameField> {
+class _SizeSliderFieldState extends State<_SizeSliderField> {
   late final TextEditingController _controller =
-      TextEditingController(text: widget.value);
+      TextEditingController(text: widget.value.round().toString());
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void didUpdateWidget(_SizeSliderField old) {
+    super.didUpdateWidget(old);
+    // Reflect external changes (e.g. dragging the slider) into the field, but
+    // never fight the user while they are typing in it.
+    if (!_focus.hasFocus && widget.value != old.value) {
+      final text = widget.value.round().toString();
+      if (_controller.text != text) _controller.text = text;
+    }
+  }
 
   @override
   void dispose() {
     _controller.dispose();
+    _focus.dispose();
     super.dispose();
+  }
+
+  double _clamp(double v) => v.clamp(widget.min, widget.hardMax).toDouble();
+
+  void _commitField(String raw) {
+    final parsed = double.tryParse(raw.trim());
+    if (parsed == null) {
+      _controller.text = widget.value.round().toString();
+      return;
+    }
+    final v = _clamp(parsed);
+    _controller.text = v.round().toString();
+    widget.onChanged(v);
+    widget.onChangeEnd?.call(v);
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final sliderValue = widget.value.clamp(widget.min, widget.sliderMax);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: TextField(
-        controller: _controller,
-        textInputAction: TextInputAction.done,
-        decoration: const InputDecoration(
-          labelText: 'Your name',
-          prefixIcon: Icon(Icons.person_outline),
-          isDense: true,
-        ),
-        onChanged: widget.onChanged,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(widget.icon, size: 20),
+              const SizedBox(width: 16),
+              Expanded(child: Text(widget.label)),
+              SizedBox(
+                width: 84,
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focus,
+                  textAlign: TextAlign.end,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: false),
+                  textInputAction: TextInputAction.done,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    suffixText: widget.unit,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 8),
+                    border: const OutlineInputBorder(),
+                  ),
+                  onSubmitted: _commitField,
+                  onTapOutside: (_) {
+                    if (_focus.hasFocus) {
+                      _focus.unfocus();
+                      _commitField(_controller.text);
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            value: sliderValue.toDouble(),
+            min: widget.min,
+            max: widget.sliderMax,
+            activeColor: scheme.primary,
+            onChanged: (v) {
+              final r = v.roundToDouble();
+              _controller.text = r.round().toString();
+              widget.onChanged(r);
+            },
+            onChangeEnd: (v) => widget.onChangeEnd?.call(v.roundToDouble()),
+          ),
+        ],
       ),
     );
   }

@@ -22,6 +22,7 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     required this.ui,
     this.character,
+    this.userPersona,
     this.pending = false,
     this.interactive = false,
     this.onAvatarDrag,
@@ -35,6 +36,10 @@ class MessageBubble extends StatelessWidget {
   /// The bot's character, when the chat has one; null for a plain chat or the
   /// user's own turns.
   final Character? character;
+
+  /// The character the user is impersonating, when any — drives the user turn's
+  /// avatar picture and name label. Null when the user is speaking as themself.
+  final Character? userPersona;
 
   final bool pending;
 
@@ -78,32 +83,39 @@ class MessageBubble extends StatelessWidget {
     final crossAxis =
         side.isLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
 
-    // Name + bubble stack for the text side.
-    Widget contentColumn(Widget body) => Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: crossAxis,
-          children: [
-            if (ui.showNames) _nameLabel(context, isUser),
-            body,
-          ],
-        );
+    // Wraps the avatar+bubble group with an optional sender-name label above
+    // it. When shown, the group is laid over the full message cell so the name
+    // can be aligned (start/centre/end) across the whole row while the bubble
+    // still hugs its own side.
+    Widget withName(Widget group) {
+      if (!ui.showNames) return group;
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _nameLabel(context, isUser),
+          Align(
+            alignment:
+                side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
+            child: group,
+          ),
+        ],
+      );
+    }
 // APPEND-BUILD
 
     final Widget inner;
     switch (ui.textPlacement) {
       case TextPlacement.around:
-        inner = contentColumn(
-          _bubble(
-              _text(scheme, textColor, showCaret, leading: avatar), bubbleColor),
-        );
+        inner = _bubble(
+            _text(scheme, textColor, showCaret, leading: avatar), bubbleColor);
       case TextPlacement.below:
         inner = Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: crossAxis,
           children: [
             if (avatar != null) ...[avatar, const SizedBox(height: 6)],
-            contentColumn(
-                _bubble(_text(scheme, textColor, showCaret), bubbleColor)),
+            _bubble(_text(scheme, textColor, showCaret), bubbleColor),
           ],
         );
       case TextPlacement.beside:
@@ -116,9 +128,7 @@ class MessageBubble extends StatelessWidget {
           children: [
             if (avatar != null) ...[avatar, const SizedBox(width: 8)],
             Flexible(
-              child: contentColumn(
-                _bubble(_text(scheme, textColor, showCaret), bubbleColor),
-              ),
+              child: _bubble(_text(scheme, textColor, showCaret), bubbleColor),
             ),
           ],
         );
@@ -136,7 +146,7 @@ class MessageBubble extends StatelessWidget {
               (message.content.isEmpty
                   ? null
                   : () => _copy(context, message.content)),
-          child: inner,
+          child: withName(inner),
         ),
       ),
     );
@@ -144,13 +154,18 @@ class MessageBubble extends StatelessWidget {
 
   Widget _nameLabel(BuildContext context, bool isUser) {
     final name = isUser
-        ? (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim())
+        ? (userPersona?.displayName ??
+            (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim()))
         : (character?.displayName ?? 'Assistant');
+    final size = isUser ? ui.userNameSize : ui.botNameSize;
+    final align = isUser ? ui.userNameAlign : ui.botNameAlign;
     return Padding(
       padding: const EdgeInsets.only(left: 2, right: 2, bottom: 2),
       child: Text(
         name,
+        textAlign: align.textAlign,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              fontSize: size,
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
@@ -168,6 +183,14 @@ class MessageBubble extends StatelessWidget {
     if (!isUser && character != null) {
       base = CharacterAvatar(
         character: character!,
+        size: size,
+        shape: style.shape,
+        fit: style.fit,
+      );
+    } else if (isUser && userPersona != null) {
+      // The user is impersonating a character: wear that persona's picture.
+      base = CharacterAvatar(
+        character: userPersona!,
         size: size,
         shape: style.shape,
         fit: style.fit,

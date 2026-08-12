@@ -34,6 +34,7 @@ class PromptBuilder {
     Character? character,
     required List<ChatMessage> history,
     String userName = 'User',
+    String persona = '',
     String model = '',
     MacroVariables? variables,
     String input = '',
@@ -68,9 +69,10 @@ class PromptBuilder {
         case PromptId.dialogueExamples:
           return character?.mesExample ?? '';
         case PromptId.personaDescription:
+          return persona; // the impersonated user persona, when set
         case PromptId.worldInfoBefore:
         case PromptId.worldInfoAfter:
-          return ''; // no persona/lorebook system yet
+          return ''; // no lorebook system yet
         default:
           return '';
       }

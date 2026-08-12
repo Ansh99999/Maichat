@@ -11,6 +11,7 @@ enum SettingAnchor {
   systemColours,
   chatAvatars,
   textPlacement,
+  names,
   chatColours,
   storage,
   version,
