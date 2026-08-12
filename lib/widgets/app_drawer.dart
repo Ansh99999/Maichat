@@ -200,7 +200,7 @@ class _DrawerFooter extends StatelessWidget {
     // Resolve what "dark" means right now so the toggle can flip to the
     // opposite explicit mode, even when currently following the system.
     final mode = state.appearance.mode;
-    final isDark = mode == AppThemeMode.dark ||
+    final isDark = mode.isDark ||
         (mode == AppThemeMode.system &&
             MediaQuery.platformBrightnessOf(context) == Brightness.dark);
 

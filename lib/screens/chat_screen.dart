@@ -9,10 +9,10 @@ import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../state/app_state.dart';
 import '../widgets/message_bubble.dart';
-import '../widgets/model_picker.dart';
 import 'characters_screen.dart';
 import 'chats_screen.dart';
 import 'presets/chat_preset_panel.dart';
+import 'presets/preset_pickers.dart';
 import 'section_screen.dart';
 import 'settings/appearance_settings_page.dart';
 import 'settings_screen.dart';
@@ -753,37 +753,27 @@ class _QuickSettingsSheet extends StatefulWidget {
 }
 
 class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
-  bool _loadingModels = false;
-
   Future<void> _browseModels(AppState state, Provider active) async {
-    setState(() => _loadingModels = true);
-    List<String>? models;
-    String? error;
-    try {
-      models = await state.fetchModels(active);
-    } on ChatApiException catch (e) {
-      error = e.message;
-    } finally {
-      if (mounted) setState(() => _loadingModels = false);
-    }
-    if (!mounted) return;
-    if (error != null || models == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error ?? 'Could not list models.')),
-      );
-      return;
-    }
-    final picked = await showModalBottomSheet<String>(
+    final chosen = await showSearchPicker(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) => ModelPicker(
-        models: models!,
-        selected: active.model.trim(),
-      ),
+      title: 'Choose model',
+      entries: [
+        for (final m in state.cachedModels(active.id)) PickerEntry(id: m, title: m),
+      ],
+      selectedId: active.model.trim(),
+      allowCustom: true,
+      onRefresh: () async {
+        try {
+          final models = await state.refreshModels(active);
+          return [for (final m in models) PickerEntry(id: m, title: m)];
+        } on ChatApiException catch (e) {
+          throw PickerRefreshException(e.message);
+        }
+      },
+      refreshOnEmpty: state.cachedModels(active.id).isEmpty,
     );
-    if (picked == null || !mounted) return;
-    await state.setActiveModel(picked);
+    if (chosen == null || !mounted) return;
+    await state.setActiveModel(chosen);
   }
 
   @override
@@ -849,15 +839,8 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
                 subtitle: Text(
                   active.model.trim().isEmpty ? 'None selected' : active.model,
                 ),
-                trailing: _loadingModels
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.expand_more),
-                onTap:
-                    _loadingModels ? null : () => _browseModels(state, active),
+                trailing: const Icon(Icons.expand_more),
+                onTap: () => _browseModels(state, active),
               ),
             ListTile(
               leading: const Icon(Icons.settings_outlined),

@@ -69,7 +69,8 @@ class ProvidersSettingsPage extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              'Add an OpenAI-compatible or Anthropic endpoint to start chatting.',
+              'Add an OpenAI-compatible, Anthropic or Gemini endpoint to start '
+              'chatting.',
               textAlign: TextAlign.center,
               style: Theme.of(context)
                   .textTheme
@@ -95,7 +96,13 @@ class _ProviderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final host = Uri.tryParse(provider.baseUrl)?.host ?? provider.baseUrl;
     final model = provider.model.trim();
-    final detail = model.isEmpty ? '$host · no model' : '$host · $model';
+    final keyCount = provider.usableKeys.length;
+    final parts = <String>[
+      provider.kind.label,
+      host,
+      model.isEmpty ? 'no model' : model,
+      if (keyCount > 1) '$keyCount keys',
+    ];
     return ListTile(
       onTap: onEdit,
       leading: Radio<String>(value: provider.id),
@@ -105,7 +112,7 @@ class _ProviderTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
-        '${provider.kind.label} · $detail',
+        parts.join(' · '),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

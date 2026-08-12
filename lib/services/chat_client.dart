@@ -66,16 +66,21 @@ class ChatClient {
   }
 
   /// Auth and content headers for [provider], keyed by its wire format:
-  /// Anthropic wants `x-api-key` + a version header; OpenAI wants a bearer.
+  /// Anthropic wants `x-api-key` + a version header; Gemini wants
+  /// `x-goog-api-key`; OpenAI wants a bearer.
   Map<String, String> _headers(Provider provider, {bool stream = false}) {
     final key = provider.apiKey.trim();
-    final anthropic = provider.kind == ProviderKind.anthropic;
     return {
       'Content-Type': 'application/json',
       if (stream) 'Accept': 'text/event-stream',
-      if (anthropic) 'anthropic-version': '2023-06-01',
+      if (provider.kind == ProviderKind.anthropic)
+        'anthropic-version': '2023-06-01',
       if (key.isNotEmpty)
-        if (anthropic) 'x-api-key': key else 'Authorization': 'Bearer $key',
+        ...switch (provider.kind) {
+          ProviderKind.anthropic => {'x-api-key': key},
+          ProviderKind.gemini => {'x-goog-api-key': key},
+          ProviderKind.openai => {'Authorization': 'Bearer $key'},
+        },
     };
   }
 
@@ -84,6 +89,42 @@ class ChatClient {
   Object _body(Provider provider, List<ChatMessage> history, GenParams params) {
     final model = provider.model.trim();
     final stop = params.stop.where((s) => s.trim().isNotEmpty).toList();
+    if (provider.kind == ProviderKind.gemini) {
+      // Gemini carries the system prompt as `systemInstruction`, names the
+      // assistant role "model", and wraps text in `parts`. The model id travels
+      // in the URL, not the body.
+      final system = history
+          .where((m) => m.role == 'system')
+          .map((m) => m.content)
+          .join('\n')
+          .trim();
+      final contents = history
+          .where((m) => m.role != 'system')
+          .map((m) => {
+                'role': m.role == 'assistant' ? 'model' : 'user',
+                'parts': [
+                  {'text': m.content}
+                ],
+              })
+          .toList(growable: false);
+      final gen = <String, dynamic>{
+        if (params.temperature != null) 'temperature': params.temperature,
+        if ((params.maxTokens ?? 0) > 0) 'maxOutputTokens': params.maxTokens,
+        if (params.topP != null && params.topP != 1.0) 'topP': params.topP,
+        if ((params.topK ?? 0) > 0) 'topK': params.topK,
+        if (stop.isNotEmpty) 'stopSequences': stop,
+      };
+      return {
+        'contents': contents,
+        if (system.isNotEmpty)
+          'systemInstruction': {
+            'parts': [
+              {'text': system}
+            ],
+          },
+        if (gen.isNotEmpty) 'generationConfig': gen,
+      };
+    }
     if (provider.kind == ProviderKind.anthropic) {
       // Anthropic carries the system prompt separately and requires a token
       // ceiling; only user/assistant turns go in `messages`.
@@ -137,10 +178,21 @@ class ChatClient {
       throw ChatApiException('Pick a model in Settings first.');
     }
     final anthropic = provider.kind == ProviderKind.anthropic;
-    final uri = endpoint(
-      provider.baseUrl,
-      anthropic ? '/messages' : '/chat/completions',
-    );
+    final gemini = provider.kind == ProviderKind.gemini;
+    final Uri uri;
+    if (gemini) {
+      // Gemini names the method on the model path and streams via `alt=sse`.
+      uri = endpoint(
+        provider.baseUrl,
+        '/models/${Uri.encodeComponent(provider.model.trim())}'
+            ':streamGenerateContent',
+      ).replace(queryParameters: {'alt': 'sse'});
+    } else {
+      uri = endpoint(
+        provider.baseUrl,
+        anthropic ? '/messages' : '/chat/completions',
+      );
+    }
     final client = http.Client();
     _active = client;
     try {
@@ -162,7 +214,11 @@ class ChatClient {
         if (!line.startsWith('data:')) continue;
         final payload = line.substring(5).trim();
         if (payload.isEmpty) continue;
-        if (anthropic) {
+        if (gemini) {
+          if (payload == '[DONE]') break;
+          final text = _extractGeminiDelta(payload);
+          if (text != null && text.isNotEmpty) yield text;
+        } else if (anthropic) {
           final event = _extractAnthropicDelta(payload);
           if (event.stop) break;
           final text = event.text;
@@ -192,6 +248,7 @@ class ChatClient {
   /// Fetches selectable model ids from the provider's `/models` endpoint.
   Future<List<String>> listModels(Provider provider) async {
     final uri = endpoint(provider.baseUrl, '/models');
+    final gemini = provider.kind == ProviderKind.gemini;
     try {
       final response =
           await http.get(uri, headers: _headers(provider)).timeout(
@@ -203,17 +260,26 @@ class ChatClient {
         );
       }
       final decoded = jsonDecode(response.body);
+      // Gemini returns `{models:[{name:"models/gemini-..."}]}`; OpenAI-style
+      // hosts return `{data:[{id:...}]}` (or a bare list).
       final data = decoded is Map<String, dynamic>
-          ? decoded['data']
+          ? (gemini ? decoded['models'] : decoded['data'])
           : (decoded is List ? decoded : null);
       if (data is! List) {
         throw ChatApiException('Unexpected /models response from this host.');
       }
       final ids = <String>{};
       for (final entry in data) {
-        final id = entry is Map<String, dynamic>
-            ? entry['id'] as String?
-            : (entry is String ? entry : null);
+        String? id;
+        if (entry is Map<String, dynamic>) {
+          id = gemini ? entry['name'] as String? : entry['id'] as String?;
+          // Gemini prefixes ids with "models/"; drop it for a clean label.
+          if (gemini && id != null && id.startsWith('models/')) {
+            id = id.substring('models/'.length);
+          }
+        } else if (entry is String) {
+          id = entry;
+        }
         if (id != null && id.trim().isNotEmpty) ids.add(id.trim());
       }
       if (ids.isEmpty) {
@@ -247,6 +313,38 @@ class ChatClient {
       final message = choice['message'];
       if (message is Map<String, dynamic>) return message['content'] as String?;
       return null;
+    } on ChatApiException {
+      rethrow;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Pulls concatenated text out of one Gemini SSE chunk. Gemini nests text in
+  /// `candidates[].content.parts[].text` and signals errors with a top-level
+  /// `error` object; the stream simply closes when generation is done.
+  static String? _extractGeminiDelta(String payload) {
+    try {
+      final json = jsonDecode(payload);
+      if (json is! Map<String, dynamic>) return null;
+      if (json['error'] != null) {
+        throw ChatApiException(_describeErrorBody(json));
+      }
+      final candidates = json['candidates'];
+      if (candidates is! List || candidates.isEmpty) return null;
+      final first = candidates.first;
+      if (first is! Map<String, dynamic>) return null;
+      final content = first['content'];
+      if (content is! Map<String, dynamic>) return null;
+      final parts = content['parts'];
+      if (parts is! List) return null;
+      final buffer = StringBuffer();
+      for (final part in parts) {
+        if (part is Map<String, dynamic> && part['text'] is String) {
+          buffer.write(part['text'] as String);
+        }
+      }
+      return buffer.isEmpty ? null : buffer.toString();
     } on ChatApiException {
       rethrow;
     } catch (_) {

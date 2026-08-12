@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -33,6 +34,10 @@ class AppState extends ChangeNotifier {
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
   final Map<String, List<String>> _modelCache = <String, List<String>>{};
+  // Per-provider cursor into its key pool, used by round-robin (advances every
+  // request) and error-based (advances only when a request fails).
+  final Map<String, int> _keyCursor = <String, int>{};
+  final Random _random = Random();
   String? _defaultPresetId;
   final PromptBuilder _prompts = PromptBuilder(macros: DefaultMacroEngine());
   String? _activeProviderId;
@@ -489,8 +494,8 @@ class AppState extends ChangeNotifier {
     final preset = current == null
         ? presetById(_defaultPresetId)
         : presetFor(current);
-    final provider = _resolveProvider(preset);
-    if (provider == null) return;
+    final base = _resolveProvider(preset);
+    if (base == null) return;
 
     final conversation = active;
 
@@ -509,7 +514,7 @@ class AppState extends ChangeNotifier {
         preset: preset,
         character: characterById(conversation.characterId),
         history: priorTurns,
-        model: provider.model,
+        model: base.model,
         variables: MacroVariables(
           local: conversation.variables,
           global: _globalVars,
@@ -535,6 +540,8 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     final reply = StringBuffer();
+    // Narrow the key pool to the one this request should use.
+    final provider = _applyKey(base);
     try {
       final deltas =
           _client.streamChat(provider: provider, history: history, params: params);
@@ -554,6 +561,8 @@ class AppState extends ChangeNotifier {
       if (_stopRequested) {
         _finishStopped(conversation, reply.toString());
       } else {
+        // A failed request rotates an error-based pool to the next key.
+        _advanceKeyOnError(base);
         _replaceLast(conversation, content: e.message, error: true);
       }
     } finally {
@@ -586,6 +595,35 @@ class AppState extends ChangeNotifier {
         ? preset!.model.trim()
         : base.model;
     return model == base.model ? base : base.copyWith(model: model);
+  }
+
+  /// Narrows [base]'s key pool to the single key this request should use, per
+  /// its [KeyRotationStrategy]. A single-key (or keyless) provider is returned
+  /// unchanged. Round-robin advances the cursor here; error-based holds until a
+  /// failure moves it (see [_advanceKeyOnError]); random is stateless.
+  Provider _applyKey(Provider base) {
+    final keys = base.usableKeys;
+    if (keys.length <= 1) return base;
+    switch (base.keyStrategy) {
+      case KeyRotationStrategy.random:
+        return base.withActiveKey(keys[_random.nextInt(keys.length)]);
+      case KeyRotationStrategy.roundRobin:
+        final i = (_keyCursor[base.id] ?? 0) % keys.length;
+        _keyCursor[base.id] = (i + 1) % keys.length;
+        return base.withActiveKey(keys[i]);
+      case KeyRotationStrategy.errorBased:
+        final i = (_keyCursor[base.id] ?? 0) % keys.length;
+        return base.withActiveKey(keys[i]);
+    }
+  }
+
+  /// Moves an error-based pool onto its next key so the following request tries
+  /// a different credential. No-op for other strategies or a single key.
+  void _advanceKeyOnError(Provider base) {
+    if (base.keyStrategy != KeyRotationStrategy.errorBased) return;
+    final count = base.usableKeys.length;
+    if (count <= 1) return;
+    _keyCursor[base.id] = ((_keyCursor[base.id] ?? 0) + 1) % count;
   }
 
   GenParams _paramsFor(Preset p) => GenParams(

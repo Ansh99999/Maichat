@@ -56,15 +56,20 @@ class Appearance {
 }
 
 /// Mirrors Flutter's ThemeMode without dragging the framework into the model
-/// layer; [MaiChatApp] maps it across.
+/// layer; [MaiChatApp] maps it across. [amoled] is a dark variant that paints
+/// surfaces true black to save power on OLED panels.
 enum AppThemeMode {
   system('System'),
   light('Light'),
-  dark('Dark');
+  dark('Dark'),
+  amoled('AMOLED');
 
   const AppThemeMode(this.label);
 
   final String label;
+
+  /// Whether this mode resolves to a dark theme without consulting the system.
+  bool get isDark => this == AppThemeMode.dark || this == AppThemeMode.amoled;
 
   /// Unknown or missing names fall back to following the system.
   static AppThemeMode byName(String? name) {

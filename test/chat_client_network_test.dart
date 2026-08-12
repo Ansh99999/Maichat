@@ -260,6 +260,95 @@ void main() {
     expect(await ChatClient().listModels(provider), ['alpha', 'zeta']);
   });
 
+  test('parses Gemini streamGenerateContent SSE deltas', () async {
+    await serve(
+      kind: ProviderKind.gemini,
+      (request) async {
+        request.response.headers.contentType =
+            ContentType('text', 'event-stream');
+        void chunk(String text) => request.response.write(
+              'data: ${jsonEncode({
+                    'candidates': [
+                      {
+                        'content': {
+                          'parts': [
+                            {'text': text},
+                          ],
+                        },
+                      },
+                    ],
+                  })}\n\n',
+            );
+        chunk('Hel');
+        chunk('lo');
+        await request.response.close();
+      },
+    );
+
+    final text = await ChatClient()
+        .streamChat(
+          provider: provider,
+          history: [ChatMessage(role: 'user', content: 'hi')],
+        )
+        .join();
+
+    expect(text, 'Hello');
+    // Gemini names the assistant role "model" and wraps text in parts.
+    expect(requests.single['contents'], [
+      {
+        'role': 'user',
+        'parts': [
+          {'text': 'hi'},
+        ],
+      },
+    ]);
+  });
+
+  test('Gemini authenticates with x-goog-api-key, not a bearer', () async {
+    String? key;
+    String? auth;
+    await serve(
+      kind: ProviderKind.gemini,
+      (request) async {
+        key = request.headers.value('x-goog-api-key');
+        auth = request.headers.value(HttpHeaders.authorizationHeader);
+        await request.response.close();
+      },
+    );
+
+    await ChatClient()
+        .streamChat(
+          provider: provider,
+          history: [ChatMessage(role: 'user', content: 'hi')],
+        )
+        .drain<void>();
+
+    expect(key, 'sk-test');
+    expect(auth, isNull);
+  });
+
+  test('lists Gemini model ids without the models/ prefix', () async {
+    await serve(
+      kind: ProviderKind.gemini,
+      (request) async {
+        request.response.write(
+          jsonEncode({
+            'models': [
+              {'name': 'models/gemini-2.5-flash'},
+              {'name': 'models/gemini-1.5-pro'},
+            ],
+          }),
+        );
+        await request.response.close();
+      },
+    );
+
+    expect(
+      await ChatClient().listModels(provider),
+      ['gemini-1.5-pro', 'gemini-2.5-flash'],
+    );
+  });
+
   test('reports an unreachable host rather than throwing raw socket errors',
       () async {
     await serve((request) async => request.response.close());

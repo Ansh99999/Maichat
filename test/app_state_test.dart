@@ -212,6 +212,98 @@ void main() {
     expect(state.activeProvider?.id, 'b');
   });
 
+  test('round-robin rotates the key on each send', () async {
+    final client = FakeClient(deltas: ['x']);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final state = AppState(client: client);
+    await state.init();
+    await state.addProvider(
+      Provider(
+        id: 'p',
+        name: 'Pool',
+        kind: ProviderKind.openai,
+        baseUrl: 'https://host.tld/v1',
+        apiKeys: const ['k1', 'k2'],
+        keyStrategy: KeyRotationStrategy.roundRobin,
+        model: 'm',
+      ),
+    );
+
+    await state.send('a');
+    expect(client.lastProvider!.apiKey, 'k1');
+    await state.send('b');
+    expect(client.lastProvider!.apiKey, 'k2');
+    await state.send('c');
+    expect(client.lastProvider!.apiKey, 'k1');
+  });
+
+  test('error-based keeps a key until a request fails', () async {
+    final client = FakeClient(failure: 'check your API key');
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final state = AppState(client: client);
+    await state.init();
+    await state.addProvider(
+      Provider(
+        id: 'p',
+        name: 'Pool',
+        kind: ProviderKind.openai,
+        baseUrl: 'https://host.tld/v1',
+        apiKeys: const ['k1', 'k2'],
+        keyStrategy: KeyRotationStrategy.errorBased,
+        model: 'm',
+      ),
+    );
+
+    // Each send fails, so the pool advances by one key each time.
+    await state.send('a');
+    expect(client.lastProvider!.apiKey, 'k1');
+    await state.send('b');
+    expect(client.lastProvider!.apiKey, 'k2');
+    await state.send('c');
+    expect(client.lastProvider!.apiKey, 'k1');
+  });
+
+  test('random rotation picks a key from the pool', () async {
+    final client = FakeClient(deltas: ['x']);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final state = AppState(client: client);
+    await state.init();
+    await state.addProvider(
+      Provider(
+        id: 'p',
+        name: 'Pool',
+        kind: ProviderKind.openai,
+        baseUrl: 'https://host.tld/v1',
+        apiKeys: const ['k1', 'k2'],
+        keyStrategy: KeyRotationStrategy.random,
+        model: 'm',
+      ),
+    );
+
+    await state.send('a');
+    expect(['k1', 'k2'], contains(client.lastProvider!.apiKey));
+  });
+
+  test('a single-key provider is sent unchanged', () async {
+    final client = FakeClient(deltas: ['x']);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final state = AppState(client: client);
+    await state.init();
+    await state.addProvider(
+      Provider(
+        id: 'p',
+        name: 'Solo',
+        kind: ProviderKind.openai,
+        baseUrl: 'https://host.tld/v1',
+        apiKey: 'only',
+        model: 'm',
+      ),
+    );
+
+    await state.send('a');
+    expect(client.lastProvider!.apiKey, 'only');
+  });
+
   test('a legacy settings blob migrates to one active provider', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
       'flutter.settings':

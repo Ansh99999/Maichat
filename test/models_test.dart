@@ -87,6 +87,54 @@ void main() {
     expect(ProviderKind.byName('mystery'), ProviderKind.openai);
     expect(ProviderKind.byName(null), ProviderKind.openai);
     expect(ProviderKind.byName('anthropic'), ProviderKind.anthropic);
+    expect(ProviderKind.byName('gemini'), ProviderKind.gemini);
+  });
+
+  test('a provider carries a pool of keys with a rotation strategy', () {
+    final original = Provider(
+      id: 'p2',
+      name: 'Pool',
+      kind: ProviderKind.openai,
+      baseUrl: 'https://host.tld/v1',
+      apiKeys: const ['  k1 ', 'k2', '   '],
+      keyStrategy: KeyRotationStrategy.random,
+      model: 'm',
+    );
+    // Blank entries are ignored at use time; the first usable key is the
+    // single-key view.
+    expect(original.usableKeys, ['k1', 'k2']);
+    expect(original.apiKey, 'k1');
+
+    final restored = Provider.fromJson(original.toJson());
+    expect(restored.usableKeys, ['k1', 'k2']);
+    expect(restored.keyStrategy, KeyRotationStrategy.random);
+
+    // Pinning a key for one request leaves the strategy intact.
+    final pinned = original.withActiveKey('k2');
+    expect(pinned.apiKey, 'k2');
+    expect(pinned.usableKeys, ['k2']);
+  });
+
+  test('a legacy single-key provider reads back as a one-key pool', () {
+    final restored = Provider.fromJson(<String, dynamic>{
+      'id': 'p3',
+      'name': 'Legacy',
+      'kind': 'openai',
+      'baseUrl': 'https://host.tld/v1',
+      'apiKey': 'sk-legacy',
+      'model': 'm',
+    });
+    expect(restored.usableKeys, ['sk-legacy']);
+    expect(restored.keyStrategy, KeyRotationStrategy.roundRobin);
+  });
+
+  test('an unknown key strategy falls back to round robin', () {
+    expect(KeyRotationStrategy.byName('mystery'), KeyRotationStrategy.roundRobin);
+    expect(KeyRotationStrategy.byName(null), KeyRotationStrategy.roundRobin);
+    expect(
+      KeyRotationStrategy.byName('error-based'),
+      KeyRotationStrategy.errorBased,
+    );
   });
 
   test('an unnamed provider shows its format label instead', () {
@@ -116,6 +164,16 @@ void main() {
     final restored = Appearance.fromJson(<String, dynamic>{'mode': 'sepia'});
     expect(restored.mode, AppThemeMode.system);
     expect(restored.dynamicColor, isTrue);
+  });
+
+  test('the AMOLED mode round-trips and counts as dark', () {
+    const original = Appearance(mode: AppThemeMode.amoled);
+    final restored = Appearance.fromJson(original.toJson());
+    expect(restored.mode, AppThemeMode.amoled);
+    expect(restored.mode.isDark, isTrue);
+    expect(AppThemeMode.dark.isDark, isTrue);
+    expect(AppThemeMode.light.isDark, isFalse);
+    expect(AppThemeMode.system.isDark, isFalse);
   });
 
   test('a stored appearance without a seed keeps the default colour', () {

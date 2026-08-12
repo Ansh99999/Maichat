@@ -119,6 +119,22 @@ void main() {
     );
   });
 
+  testWidgets('an AMOLED preference paints surfaces true black',
+      (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'flutter.appearance': '{"dynamicColor":false,"mode":"amoled"}',
+    });
+    await tester.pumpWidget(const MaiChatApp());
+    await tester.pumpAndSettle();
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.themeMode, ThemeMode.dark);
+    final scheme =
+        Theme.of(tester.element(find.byType(Scaffold))).colorScheme;
+    expect(scheme.brightness, Brightness.dark);
+    expect(scheme.surface, const Color(0xFF000000));
+  });
+
   testWidgets('the appearance controls persist what the user picks',
       (tester) async {
     await tester.pumpWidget(const MaiChatApp());
@@ -136,7 +152,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
 
-    await tester.tap(find.text('Light'));
+    // Theme mode is a compact dropdown; open it and choose Light.
+    await tester.tap(find.text('System'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Light').last);
     await tester.pumpAndSettle();
     expect(
       tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
