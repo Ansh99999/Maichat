@@ -220,9 +220,12 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  /// The preset a conversation runs under: its own, else the app default.
+  /// The preset a conversation runs under: its own chat-specific override, then
+  /// its referenced preset, then the app default.
   Preset? presetFor(Conversation conversation) =>
-      presetById(conversation.presetId) ?? presetById(_defaultPresetId);
+      conversation.presetOverride ??
+      presetById(conversation.presetId) ??
+      presetById(_defaultPresetId);
 
   Preset? get defaultPreset => presetById(_defaultPresetId);
   String? get defaultPresetId => _defaultPresetId;
@@ -270,10 +273,43 @@ class AppState extends ChangeNotifier {
   }
 
   /// Binds [conversation] to a preset (or clears it) — the per-chat selection.
+  /// Choosing a preset drops any chat-specific override so the chat cleanly
+  /// follows the chosen one.
   Future<void> setConversationPreset(String conversationId, String? presetId) async {
     for (final c in _conversations) {
       if (c.id == conversationId) {
         c.presetId = presetId;
+        c.presetOverride = null;
+        c.updatedAt = DateTime.now();
+        break;
+      }
+    }
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
+  /// Stores an edited preset as a chat-specific override (the "save for this
+  /// chat only" path); does not touch the shared library.
+  Future<void> saveChatPresetOverride(String conversationId, Preset preset) async {
+    for (final c in _conversations) {
+      if (c.id == conversationId) {
+        c.presetOverride = Preset.fromJson(preset.toJson());
+        c.updatedAt = DateTime.now();
+        break;
+      }
+    }
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
+  /// Saves an edited preset back to the shared library (the "save for the whole
+  /// preset" path) and binds the chat to it, clearing any override.
+  Future<void> savePresetToLibrary(String conversationId, Preset preset) async {
+    await savePreset(preset);
+    for (final c in _conversations) {
+      if (c.id == conversationId) {
+        c.presetId = preset.id;
+        c.presetOverride = null;
         c.updatedAt = DateTime.now();
         break;
       }
@@ -450,7 +486,9 @@ class AppState extends ChangeNotifier {
     // Resolve the provider before materializing a thread, so a misconfigured
     // app never spawns an empty conversation just to bail out.
     final current = _activeOrNull();
-    final preset = presetById(current?.presetId) ?? presetById(_defaultPresetId);
+    final preset = current == null
+        ? presetById(_defaultPresetId)
+        : presetFor(current);
     final provider = _resolveProvider(preset);
     if (provider == null) return;
 

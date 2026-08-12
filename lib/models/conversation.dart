@@ -1,4 +1,5 @@
 import 'message.dart';
+import 'preset.dart';
 
 /// A named thread of messages, persisted as a whole.
 class Conversation {
@@ -11,6 +12,7 @@ class Conversation {
     this.characterName,
     this.systemPrompt = '',
     this.presetId,
+    this.presetOverride,
     Map<String, String>? variables,
   }) : variables = variables ?? <String, String>{};
 
@@ -30,6 +32,10 @@ class Conversation {
   /// The generation preset this thread runs under (by [Preset.id]); null falls
   /// back to the app's default preset.
   String? presetId;
+
+  /// A chat-specific preset copy that overrides [presetId] when present — the
+  /// "save for this chat only" case from the in-chat preset editor.
+  Preset? presetOverride;
 
   /// Per-chat macro variables ({{setvar}}/{{getvar}}), SillyTavern's local scope.
   final Map<String, String> variables;
@@ -61,6 +67,7 @@ class Conversation {
         if (characterName != null) 'characterName': characterName,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
         if (presetId != null) 'presetId': presetId,
+        if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
         if (variables.isNotEmpty) 'variables': variables,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
@@ -76,6 +83,9 @@ class Conversation {
         characterName: json['characterName'] as String?,
         systemPrompt: json['systemPrompt'] as String? ?? '',
         presetId: json['presetId'] as String?,
+        presetOverride: json['presetOverride'] is Map<String, dynamic>
+            ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)
+            : null,
         variables: (json['variables'] as Map?)?.map(
           (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
         ),

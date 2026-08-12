@@ -12,6 +12,7 @@ import '../widgets/message_bubble.dart';
 import '../widgets/model_picker.dart';
 import 'characters_screen.dart';
 import 'chats_screen.dart';
+import 'presets/chat_preset_panel.dart';
 import 'section_screen.dart';
 import 'settings/appearance_settings_page.dart';
 import 'settings_screen.dart';
@@ -216,7 +217,6 @@ class _ChatScreenState extends State<ChatScreen> {
         onParticipants: () => _openSection('Participants', Icons.group_outlined),
         onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),
         onEditChat: () => _editChat(state),
-        onPreset: () => _openSection('Presets', Icons.tune_outlined),
         onMemory: () => _openSection('Memory', Icons.book_outlined),
         onUi: _openAppearance,
         onChatGraph: () =>
@@ -370,7 +370,9 @@ class _TranslucentMenuButton extends StatelessWidget {
 /// The chat sidebar. Mirrors agnai's chat menu: an editable chat title on top,
 /// jumps to the other sections, provider/model, and a utility row of chat
 /// actions (settings, image gen, export, restart, delete, notifications).
-class _ChatDrawer extends StatelessWidget {
+/// "Preset" opens an in-drawer panel (list + compact editor) rather than
+/// navigating away.
+class _ChatDrawer extends StatefulWidget {
   const _ChatDrawer({
     required this.onProfile,
     required this.onCharacters,
@@ -378,7 +380,6 @@ class _ChatDrawer extends StatelessWidget {
     required this.onParticipants,
     required this.onGallery,
     required this.onEditChat,
-    required this.onPreset,
     required this.onMemory,
     required this.onUi,
     required this.onChatGraph,
@@ -397,7 +398,6 @@ class _ChatDrawer extends StatelessWidget {
   final VoidCallback onParticipants;
   final VoidCallback onGallery;
   final VoidCallback onEditChat;
-  final VoidCallback onPreset;
   final VoidCallback onMemory;
   final VoidCallback onUi;
   final VoidCallback onChatGraph;
@@ -409,6 +409,13 @@ class _ChatDrawer extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onNotifications;
 
+  @override
+  State<_ChatDrawer> createState() => _ChatDrawerState();
+}
+
+class _ChatDrawerState extends State<_ChatDrawer> {
+  bool _showPresets = false;
+
   /// Runs [action] after the drawer has closed, so the drawer does not sit
   /// open behind whatever the action pushes or shows.
   void _close(BuildContext context, VoidCallback action) {
@@ -418,6 +425,16 @@ class _ChatDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (_showPresets) {
+      return Drawer(
+        child: SafeArea(
+          child: ChatPresetPanel(
+            onBack: () => setState(() => _showPresets = false),
+          ),
+        ),
+      );
+    }
+
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final conversation = state.active;
@@ -426,6 +443,7 @@ class _ChatDrawer extends StatelessWidget {
     final providerSubtitle = active == null
         ? 'No provider yet'
         : '${active.displayName}${model.isEmpty ? '' : ' · $model'}';
+    final presetName = state.presetFor(conversation)?.displayName ?? 'Default';
 
     return Drawer(
       child: SafeArea(
@@ -435,7 +453,7 @@ class _ChatDrawer extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
               child: InkWell(
-                onTap: () => _close(context, onEditChat),
+                onTap: () => _close(context, widget.onEditChat),
                 borderRadius: BorderRadius.circular(10),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
@@ -467,7 +485,7 @@ class _ChatDrawer extends StatelessWidget {
                   _ChatNavItem(
                     icon: Icons.person_outline,
                     label: 'Profile',
-                    onTap: () => _close(context, onProfile),
+                    onTap: () => _close(context, widget.onProfile),
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 2),
@@ -476,14 +494,14 @@ class _ChatDrawer extends StatelessWidget {
                         Expanded(
                           child: _BackNavButton(
                             label: 'Characters',
-                            onTap: () => _close(context, onCharacters),
+                            onTap: () => _close(context, widget.onCharacters),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: _BackNavButton(
                             label: 'Chats',
-                            onTap: () => _close(context, onChats),
+                            onTap: () => _close(context, widget.onChats),
                           ),
                         ),
                       ],
@@ -492,56 +510,57 @@ class _ChatDrawer extends StatelessWidget {
                   _ChatNavItem(
                     icon: Icons.group_outlined,
                     label: 'Participants',
-                    onTap: () => _close(context, onParticipants),
+                    onTap: () => _close(context, widget.onParticipants),
                   ),
                   _ChatNavItem(
                     icon: Icons.photo_library_outlined,
                     label: 'Gallery',
-                    onTap: () => _close(context, onGallery),
+                    onTap: () => _close(context, widget.onGallery),
                   ),
                   _ChatNavItem(
                     icon: Icons.edit_note_outlined,
                     label: 'Edit Chat',
-                    onTap: () => _close(context, onEditChat),
+                    onTap: () => _close(context, widget.onEditChat),
                   ),
                   _ChatNavItem(
                     icon: Icons.tune_outlined,
                     label: 'Preset',
-                    onTap: () => _close(context, onPreset),
+                    subtitle: presetName,
+                    onTap: () => setState(() => _showPresets = true),
                   ),
                   _ChatNavItem(
                     icon: Icons.book_outlined,
                     label: 'Memory',
-                    onTap: () => _close(context, onMemory),
+                    onTap: () => _close(context, widget.onMemory),
                   ),
                   _ChatNavItem(
                     icon: Icons.palette_outlined,
                     label: 'UI',
-                    onTap: () => _close(context, onUi),
+                    onTap: () => _close(context, widget.onUi),
                   ),
                   _ChatNavItem(
                     icon: Icons.account_tree_outlined,
                     label: 'Chat Graph',
-                    onTap: () => _close(context, onChatGraph),
+                    onTap: () => _close(context, widget.onChatGraph),
                   ),
                   const SizedBox(height: 4),
                   _ChatNavItem(
                     icon: Icons.dns_outlined,
                     label: 'Provider & model',
                     subtitle: providerSubtitle,
-                    onTap: () => _close(context, onProviderModel),
+                    onTap: () => _close(context, widget.onProviderModel),
                   ),
                 ],
               ),
             ),
             const Divider(height: 1),
             _ChatDrawerFooter(
-              onSettings: () => _close(context, onSettings),
-              onImageGen: () => _close(context, onImageGen),
-              onExport: () => _close(context, onExport),
-              onRestart: () => _close(context, onRestart),
-              onDelete: () => _close(context, onDelete),
-              onNotifications: () => _close(context, onNotifications),
+              onSettings: () => _close(context, widget.onSettings),
+              onImageGen: () => _close(context, widget.onImageGen),
+              onExport: () => _close(context, widget.onExport),
+              onRestart: () => _close(context, widget.onRestart),
+              onDelete: () => _close(context, widget.onDelete),
+              onNotifications: () => _close(context, widget.onNotifications),
             ),
           ],
         ),
