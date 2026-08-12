@@ -381,7 +381,8 @@ class _AvatarSection extends StatelessWidget {
   }
 }
 
-/// Font-size + alignment controls for one role's sender name.
+/// Font-size, alignment and position controls for one role's sender name,
+/// presented as a collapsible dropdown (matching the avatar sections).
 class _NameControls extends StatelessWidget {
   const _NameControls({
     required this.title,
@@ -407,48 +408,49 @@ class _NameControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            children: [
-              Icon(icon, size: 20),
-              const SizedBox(width: 16),
-              Text(title,
-                  style: Theme.of(context).textTheme.labelLarge),
-            ],
+    final shape =
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12));
+    return Card(
+      margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(
+            '${size.round()} px · ${position.label} · ${align.label}'),
+        shape: shape,
+        collapsedShape: shape,
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        children: [
+          _SizeSliderField(
+            icon: Icons.format_size_outlined,
+            label: 'Name size',
+            value: size,
+            min: kMinNameSize,
+            sliderMax: kMaxNameSize,
+            hardMax: kMaxNameSize,
+            unit: 'px',
+            onChanged: onSize,
+            onChangeEnd: onSizeEnd,
           ),
-        ),
-        _SizeSliderField(
-          icon: Icons.format_size_outlined,
-          label: 'Name size',
-          value: size,
-          min: kMinNameSize,
-          sliderMax: kMaxNameSize,
-          hardMax: kMaxNameSize,
-          unit: 'px',
-          onChanged: onSize,
-          onChangeEnd: onSizeEnd,
-        ),
-        _EnumRow<NameAlign>(
-          icon: Icons.format_align_center_outlined,
-          label: 'Alignment',
-          value: align,
-          values: NameAlign.values,
-          labelOf: (a) => a.label,
-          onChanged: onAlign,
-        ),
-        _EnumRow<NamePosition>(
-          icon: Icons.vertical_align_top_outlined,
-          label: 'Position',
-          value: position,
-          values: NamePosition.values,
-          labelOf: (p) => p.label,
-          onChanged: onPosition,
-        ),
-      ],
+          _EnumRow<NameAlign>(
+            icon: Icons.format_align_center_outlined,
+            label: 'Alignment',
+            value: align,
+            values: NameAlign.values,
+            labelOf: (a) => a.label,
+            onChanged: onAlign,
+          ),
+          _EnumRow<NamePosition>(
+            icon: Icons.vertical_align_top_outlined,
+            label: 'Position (relative to avatar)',
+            value: position,
+            values: NamePosition.values,
+            labelOf: (p) => p.label,
+            onChanged: onPosition,
+          ),
+        ],
+      ),
     );
   }
 }

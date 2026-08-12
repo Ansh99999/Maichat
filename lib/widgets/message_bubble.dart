@@ -83,39 +83,47 @@ class MessageBubble extends StatelessWidget {
     final crossAxis =
         side.isLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
 
-    // Wraps the avatar+bubble group with an optional sender-name label. When
-    // shown, the group is laid over the full message cell so the name can be
-    // aligned (start/centre/end) across the whole row, and sits either above or
-    // below the group per the role's name position.
-    Widget withName(Widget group) {
-      if (!ui.showNames) return group;
-      final position = isUser ? ui.userNamePosition : ui.botNamePosition;
-      final aligned = Align(
-        alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
-        child: group,
-      );
+    final nameW = ui.showNames ? _nameLabel(context, isUser) : null;
+    final nameCross = _crossFor(isUser ? ui.userNameAlign : ui.botNameAlign);
+    final namePosition = isUser ? ui.userNamePosition : ui.botNamePosition;
+
+    // Stacks the sender name directly above/below [anchor] — the avatar when a
+    // standalone one is shown, otherwise the bubble — aligned per the role's
+    // setting.
+    Widget stackName(Widget anchor) {
+      if (nameW == null) return anchor;
       return Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: position == NamePosition.above
-            ? [_nameLabel(context, isUser), aligned]
-            : [aligned, _nameLabel(context, isUser)],
+        crossAxisAlignment: nameCross,
+        children: namePosition == NamePosition.above
+            ? [nameW, anchor]
+            : [anchor, nameW],
       );
     }
+
+    // The name rides with the avatar when there is a standalone one. With the
+    // "around" placement the avatar is inline in the text, so the name falls
+    // back to sitting with the bubble.
+    final nameOnAvatar = avatar != null &&
+        nameW != null &&
+        ui.textPlacement != TextPlacement.around;
+    final Widget? avatarUnit =
+        avatar == null ? null : (nameOnAvatar ? stackName(avatar) : avatar);
+    Widget bubbleUnit(Widget bubble) => nameOnAvatar ? bubble : stackName(bubble);
 // APPEND-BUILD
 
     final Widget inner;
     switch (ui.textPlacement) {
       case TextPlacement.around:
-        inner = _bubble(
-            _text(scheme, textColor, showCaret, leading: avatar), bubbleColor);
+        inner = bubbleUnit(_bubble(
+            _text(scheme, textColor, showCaret, leading: avatar), bubbleColor));
       case TextPlacement.below:
         inner = Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: crossAxis,
           children: [
-            if (avatar != null) ...[avatar, const SizedBox(height: 6)],
-            _bubble(_text(scheme, textColor, showCaret), bubbleColor),
+            if (avatarUnit != null) ...[avatarUnit, const SizedBox(height: 6)],
+            bubbleUnit(_bubble(_text(scheme, textColor, showCaret), bubbleColor)),
           ],
         );
       case TextPlacement.beside:
@@ -126,9 +134,10 @@ class MessageBubble extends StatelessWidget {
           // (LTR) direction.
           textDirection: side.isLeft ? TextDirection.ltr : TextDirection.rtl,
           children: [
-            if (avatar != null) ...[avatar, const SizedBox(width: 8)],
+            if (avatarUnit != null) ...[avatarUnit, const SizedBox(width: 8)],
             Flexible(
-              child: _bubble(_text(scheme, textColor, showCaret), bubbleColor),
+              child: bubbleUnit(
+                  _bubble(_text(scheme, textColor, showCaret), bubbleColor)),
             ),
           ],
         );
@@ -146,11 +155,19 @@ class MessageBubble extends StatelessWidget {
               (message.content.isEmpty
                   ? null
                   : () => _copy(context, message.content)),
-          child: withName(inner),
+          child: inner,
         ),
       ),
     );
   }
+
+  /// Maps a name's horizontal alignment onto the cross-axis of the column that
+  /// stacks it with its anchor (avatar or bubble).
+  static CrossAxisAlignment _crossFor(NameAlign a) => switch (a) {
+        NameAlign.start => CrossAxisAlignment.start,
+        NameAlign.center => CrossAxisAlignment.center,
+        NameAlign.end => CrossAxisAlignment.end,
+      };
 
   Widget _nameLabel(BuildContext context, bool isUser) {
     final name = isUser

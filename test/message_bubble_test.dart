@@ -37,6 +37,34 @@ void main() {
     }
   }
 
+  // Names stacked with the avatar (above/below) must lay out in every
+  // placement, both with the avatar shown and hidden.
+  for (final position in NamePosition.values) {
+    for (final show in [true, false]) {
+      testWidgets('renders name ${position.name}, avatar=$show',
+          (tester) async {
+        await tester.pumpWidget(host(
+          ListView(
+            children: [
+              for (final placement in TextPlacement.values)
+                MessageBubble(
+                  message: ChatMessage(role: 'assistant', content: 'Hi'),
+                  ui: ChatInterface(
+                    textPlacement: placement,
+                    showNames: true,
+                    botNamePosition: position,
+                    botAvatar: AvatarStyle(show: show, side: ChatSide.left),
+                  ),
+                ),
+            ],
+          ),
+        ));
+        expect(tester.takeException(), isNull);
+        expect(find.text('Assistant'), findsNWidgets(TextPlacement.values.length));
+      });
+    }
+  }
+
   testWidgets('interactive avatar reports drag and resize deltas',
       (tester) async {
     Offset? drag;
