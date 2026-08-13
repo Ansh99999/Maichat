@@ -195,4 +195,29 @@ void main() {
       });
     }
   }
+
+  // Every action-bar placement should lay out without throwing and still show
+  // the configured inline actions (regenerate icon present for a bot turn).
+  for (final placement in ActionBarPlacement.values) {
+    for (final showNames in [true, false]) {
+      testWidgets('action placement ${placement.name}, names=$showNames',
+          (tester) async {
+        await tester.pumpWidget(host(
+          ListView(children: [
+            MessageBubble(
+              message: ChatMessage(role: 'assistant', content: 'A reply.'),
+              ui: ChatInterface(
+                actionBarPlacement: placement,
+                showNames: showNames,
+              ),
+              onAction: (_) {},
+            ),
+          ]),
+        ));
+        expect(tester.takeException(), isNull);
+        expect(find.byIcon(Icons.refresh), findsOneWidget);
+        expect(find.byIcon(Icons.more_vert), findsOneWidget);
+      });
+    }
+  }
 }

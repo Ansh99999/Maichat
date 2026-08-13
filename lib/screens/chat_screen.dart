@@ -38,6 +38,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
 
+  /// The index of the message currently being edited in place, or null.
+  int? _editingIndex;
+
   @override
   void initState() {
     super.initState();
@@ -294,6 +297,17 @@ class _ChatScreenState extends State<ChatScreen> {
       itemBuilder: (context, index) {
         final isLast = index == conversation.messages.length - 1;
         final message = conversation.messages[index];
+        if (index == _editingIndex) {
+          return _InlineMessageEditor(
+            key: ValueKey('edit-${conversation.id}-$index'),
+            initial: message.content,
+            onCancel: () => setState(() => _editingIndex = null),
+            onSave: (text) async {
+              setState(() => _editingIndex = null);
+              await state.editMessage(conversation.id, index, text);
+            },
+          );
+        }
         return MessageBubble(
           message: message,
           ui: ui,
@@ -323,7 +337,7 @@ class _ChatScreenState extends State<ChatScreen> {
         state.regenerateMessage(conversation.id, index);
         _scrollToEnd();
       case MessageAction.edit:
-        _editMessage(state, conversation, index);
+        setState(() => _editingIndex = index);
       case MessageAction.delete:
         state.deleteMessage(conversation.id, index);
       case MessageAction.copy:
@@ -412,7 +426,7 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('Edit'),
               onTap: () {
                 Navigator.of(sheet).pop();
-                _editMessage(state, conversation, index);
+                setState(() => _editingIndex = index);
               },
             ),
             if (isAssistant)
@@ -470,43 +484,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
-  }
-
-  /// Edits a single turn's text in place.
-  Future<void> _editMessage(
-    AppState state,
-    Conversation conversation,
-    int index,
-  ) async {
-    final controller =
-        TextEditingController(text: conversation.messages[index].content);
-    final edited = await showDialog<String>(
-      context: context,
-      builder: (dialog) => AlertDialog(
-        title: const Text('Edit message'),
-        content: TextField(
-          controller: controller,
-          autofocus: false,
-          minLines: 1,
-          maxLines: 10,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialog).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialog).pop(controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (edited != null && edited.trim().isNotEmpty) {
-      await state.editMessage(conversation.id, index, edited);
-    }
   }
 
   Widget _composer(AppState state) {
@@ -610,6 +587,89 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 // APPEND-MARKER-2
+
+/// Edits a message in place, right where it sits in the thread — no dialog. A
+/// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
+/// there is room to type.
+class _InlineMessageEditor extends StatefulWidget {
+  const _InlineMessageEditor({
+    super.key,
+    required this.initial,
+    required this.onSave,
+    required this.onCancel,
+  });
+
+  final String initial;
+  final ValueChanged<String> onSave;
+  final VoidCallback onCancel;
+
+  @override
+  State<_InlineMessageEditor> createState() => _InlineMessageEditorState();
+}
+
+class _InlineMessageEditorState extends State<_InlineMessageEditor> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+      padding: const EdgeInsets.fromLTRB(12, 4, 8, 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.primary, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: 'Cancel',
+                iconSize: 20,
+                visualDensity: VisualDensity.compact,
+                onPressed: widget.onCancel,
+                icon: const Icon(Icons.close),
+              ),
+              IconButton(
+                tooltip: 'Save',
+                iconSize: 20,
+                visualDensity: VisualDensity.compact,
+                color: scheme.primary,
+                onPressed: () => widget.onSave(_controller.text),
+                icon: const Icon(Icons.check),
+              ),
+            ],
+          ),
+          TextField(
+            controller: _controller,
+            autofocus: false,
+            minLines: 1,
+            maxLines: null,
+            keyboardType: TextInputType.multiline,
+            decoration: const InputDecoration(
+              isDense: true,
+              border: InputBorder.none,
+              hintText: 'Edit message',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 /// The lone bit of chat chrome: a small, frosted, semi-transparent circle that
 /// carries the menu icon. Translucent enough to let the thread show through,

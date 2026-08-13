@@ -185,6 +185,25 @@ enum ContentWidth {
     return ContentWidth.medium;
   }
 }
+
+/// Where the per-message action bar sits relative to a message.
+enum ActionBarPlacement {
+  belowMessage('Below message'),
+  besideName('Beside name'),
+  besideAvatar('Beside avatar'),
+  messageRight('Right of message');
+
+  const ActionBarPlacement(this.label);
+
+  final String label;
+
+  static ActionBarPlacement byName(String? name) {
+    for (final p in values) {
+      if (p.name == name) return p;
+    }
+    return ActionBarPlacement.belowMessage;
+  }
+}
 // APPEND-AVATARSTYLE
 
 /// A per-message action, offered either inline (as an icon beside the message)
@@ -407,6 +426,7 @@ class ChatInterface {
     this.quoteColor,
     this.messageActionsEnabled = true,
     this.messageActions = kDefaultMessageActions,
+    this.actionBarPlacement = ActionBarPlacement.belowMessage,
   });
 
   final AvatarStyle botAvatar;
@@ -471,6 +491,9 @@ class ChatInterface {
   /// Always the full set of [MessageAction]s once normalised.
   final List<MessageActionPref> messageActions;
 
+  /// Where the action bar sits relative to a message.
+  final ActionBarPlacement actionBarPlacement;
+
   /// The inline actions, in order.
   List<MessageAction> get inlineActions => [
         for (final p in messageActions)
@@ -513,6 +536,7 @@ class ChatInterface {
     Object? quoteColor = _unset,
     bool? messageActionsEnabled,
     List<MessageActionPref>? messageActions,
+    ActionBarPlacement? actionBarPlacement,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -542,6 +566,7 @@ class ChatInterface {
         messageActionsEnabled:
             messageActionsEnabled ?? this.messageActionsEnabled,
         messageActions: messageActions ?? this.messageActions,
+        actionBarPlacement: actionBarPlacement ?? this.actionBarPlacement,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -589,6 +614,7 @@ class ChatInterface {
         if (quoteColor != null) 'quoteColor': quoteColor,
         'messageActionsEnabled': messageActionsEnabled,
         'messageActions': messageActions.map((p) => p.toJson()).toList(),
+        'actionBarPlacement': actionBarPlacement.name,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -644,6 +670,8 @@ class ChatInterface {
       quoteColor: (json['quoteColor'] as num?)?.toInt(),
       messageActionsEnabled: json['messageActionsEnabled'] as bool? ?? true,
       messageActions: _messageActionsFromJson(json['messageActions']),
+      actionBarPlacement:
+          ActionBarPlacement.byName(json['actionBarPlacement'] as String?),
     );
   }
 
@@ -691,7 +719,8 @@ class ChatInterface {
       other.emphasisColor == emphasisColor &&
       other.quoteColor == quoteColor &&
       other.messageActionsEnabled == messageActionsEnabled &&
-      listEquals(other.messageActions, messageActions);
+      listEquals(other.messageActions, messageActions) &&
+      other.actionBarPlacement == actionBarPlacement;
 
   @override
   int get hashCode => Object.hash(
@@ -714,7 +743,7 @@ class ChatInterface {
         backgroundColor,
         emphasisColor,
         quoteColor,
-        messageActionsEnabled,
+        Object.hash(messageActionsEnabled, actionBarPlacement),
         Object.hashAll(messageActions),
       );
 }

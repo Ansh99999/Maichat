@@ -229,6 +229,17 @@ void main() {
       expect(MessageAction.edit.appliesTo(true), isTrue);
       expect(MessageAction.delete.appliesTo(true), isTrue);
     });
+
+    test('action bar placement defaults to below and round trips', () {
+      expect(const ChatInterface().actionBarPlacement,
+          ActionBarPlacement.belowMessage);
+      for (final p in ActionBarPlacement.values) {
+        final custom = const ChatInterface().copyWith(actionBarPlacement: p);
+        final restored = ChatInterface.fromJson(custom.toJson());
+        expect(restored.actionBarPlacement, p);
+        expect(restored, custom);
+      }
+    });
   });
 
   group('content width', () {

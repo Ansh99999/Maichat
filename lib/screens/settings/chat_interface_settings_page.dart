@@ -810,7 +810,18 @@ class _MessageActionsSection extends StatelessWidget {
           subtitle: const Text(
               'Inline actions beside each message; the rest under a ⋮ menu'),
         ),
-        if (ui.messageActionsEnabled)
+        if (ui.messageActionsEnabled) ...[
+          _EnumRow<ActionBarPlacement>(
+            icon: Icons.place_outlined,
+            label: 'Placement',
+            value: ui.actionBarPlacement,
+            values: ActionBarPlacement.values,
+            labelOf: (p) => p.label,
+            onChanged: (p) {
+              update(ui.copyWith(actionBarPlacement: p));
+              notify('Actions ${p.label.toLowerCase()}');
+            },
+          ),
           ReorderableListView(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -821,6 +832,7 @@ class _MessageActionsSection extends StatelessWidget {
                 _actionRow(context, scheme, ui.messageActions[i], i),
             ],
           ),
+        ],
       ],
     );
   }

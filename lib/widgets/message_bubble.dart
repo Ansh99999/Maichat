@@ -99,11 +99,42 @@ class MessageBubble extends StatelessWidget {
     }
 
     final showCaret = pending && message.content.isEmpty;
-    final avatar = style.show ? _avatar(context, isUser, style) : null;
+    var avatar = style.show ? _avatar(context, isUser, style) : null;
     final crossAxis =
         side.isLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
 
-    final nameW = ui.showNames ? _nameLabel(context, isUser) : null;
+    // The action bar is suppressed for a still-streaming caret-only turn
+    // (nothing to act on yet) and whenever no dispatcher is wired (the preview).
+    final actionsBar = showCaret ? null : _actionsBar(context, isUser);
+    var placement = ui.actionBarPlacement;
+    // Fall back to below-message when the chosen anchor isn't available.
+    if (placement == ActionBarPlacement.besideAvatar &&
+        (avatar == null || ui.textPlacement == TextPlacement.around)) {
+      placement = ActionBarPlacement.belowMessage;
+    }
+    // Beside-avatar: hang the bar under the avatar so it rides with it.
+    if (actionsBar != null && placement == ActionBarPlacement.besideAvatar) {
+      avatar = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: crossAxis,
+        children: [avatar!, const SizedBox(height: 2), actionsBar],
+      );
+    }
+
+    // Name label, optionally sharing its row with the action bar.
+    Widget? nameW = ui.showNames ? _nameLabel(context, isUser) : null;
+    if (actionsBar != null && placement == ActionBarPlacement.besideName) {
+      nameW = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (nameW != null) ...[
+            Flexible(child: nameW),
+            const SizedBox(width: 4),
+          ],
+          actionsBar,
+        ],
+      );
+    }
     final nameCross = _crossFor(isUser ? ui.userNameAlign : ui.botNameAlign);
     final namePosition = isUser ? ui.userNamePosition : ui.botNamePosition;
 
@@ -163,17 +194,27 @@ class MessageBubble extends StatelessWidget {
         );
     }
 
-    // The action bar sits directly under the message, aligned to its side. It's
-    // suppressed for a still-streaming caret-only turn (nothing to act on yet)
-    // and whenever no dispatcher is wired (the settings preview).
-    final actionsBar = showCaret ? null : _actionsBar(context, isUser);
-    final body = actionsBar == null
-        ? inner
-        : Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: crossAxis,
-            children: [inner, actionsBar],
-          );
+    // Below / right placements wrap the assembled message; beside-name and
+    // beside-avatar have already folded the bar into the name/avatar above.
+    Widget body = inner;
+    if (actionsBar != null && placement == ActionBarPlacement.belowMessage) {
+      body = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: crossAxis,
+        children: [inner, actionsBar],
+      );
+    } else if (actionsBar != null &&
+        placement == ActionBarPlacement.messageRight) {
+      body = Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Flexible(child: inner),
+          const SizedBox(width: 4),
+          actionsBar,
+        ],
+      );
+    }
 
     return Align(
       alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
