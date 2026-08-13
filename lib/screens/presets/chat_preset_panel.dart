@@ -114,8 +114,14 @@ class _ChatPresetPanelState extends State<ChatPresetPanel> {
                         preset: p,
                         isCurrent: current?.id == p.id,
                         onChoose: () => _choose(state, p),
+                        // Seed the editor from the EFFECTIVE preset for the
+                        // current chat (which may be a chat-specific override),
+                        // not the bare library copy — otherwise a "this chat"
+                        // save is invisible on re-open and looks like it reverted.
                         onEdit: () => setState(
-                          () => _editing = Preset.fromJson(p.toJson()),
+                          () => _editing = Preset.fromJson(
+                            (current?.id == p.id ? current! : p).toJson(),
+                          ),
                         ),
                       ),
                   ],

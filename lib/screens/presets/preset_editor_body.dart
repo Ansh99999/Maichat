@@ -65,6 +65,10 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
 
   Provider? get _resolvedProvider {
     final state = context.read<AppState>();
+    // In the chat sidebar, provider/model are the app's active connection (kept
+    // in step with the quick-settings sheet); a per-preset binding only applies
+    // in the full-screen editor.
+    if (widget.compact) return state.activeProvider;
     if (_p.providerId != null) {
       for (final p in state.providers) {
         if (p.id == _p.providerId) return p;
@@ -75,6 +79,31 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
 
   Future<void> _pickProvider() async {
     final state = context.read<AppState>();
+    // Sidebar: pick the app's active provider directly, so the choice shows and
+    // takes effect immediately and matches the quick-settings sheet.
+    if (widget.compact) {
+      final chosen = await showSearchPicker(
+        context: context,
+        title: 'Choose provider',
+        entries: [
+          for (final p in state.providers)
+            PickerEntry(
+                id: p.id,
+                title: p.displayName,
+                subtitle:
+                    '${p.kind.label} · ${p.model.isEmpty ? 'no model' : p.model}'),
+        ],
+        selectedId: state.activeProvider?.id ?? '',
+      );
+      if (chosen == null || chosen.isEmpty) return;
+      await state.selectProvider(chosen);
+      // Drop any stale per-preset binding so the preset cleanly follows active.
+      _change(() {
+        _p.providerId = null;
+        _p.model = '';
+      });
+      return;
+    }
     final chosen = await showSearchPicker(
       context: context,
       title: 'Choose provider',
@@ -102,7 +131,7 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
       entries: [
         for (final m in state.cachedModels(provider.id)) PickerEntry(id: m, title: m),
       ],
-      selectedId: _p.model,
+      selectedId: widget.compact ? provider.model : _p.model,
       allowCustom: true,
       onRefresh: () async {
         try {
@@ -115,6 +144,15 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
       refreshOnEmpty: state.cachedModels(provider.id).isEmpty,
     );
     if (chosen == null) return;
+    // Sidebar: set the active provider's model (global); the preset defers to it.
+    if (widget.compact) {
+      await state.setActiveModel(chosen);
+      _change(() {
+        _p.providerId = null;
+        _p.model = '';
+      });
+      return;
+    }
     _change(() => _p.model = chosen);
   }
 
@@ -147,10 +185,21 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
     final tabCount = advanced ? 3 : 2;
     final pad = widget.compact ? 12.0 : 16.0;
 
-    final providerLabel = _p.providerId == null
-        ? 'Active provider'
-        : (_providerName(state) ?? 'Unknown provider');
-    final modelLabel = _p.model.trim().isEmpty ? 'Default' : _p.model.trim();
+    final String providerLabel;
+    final String modelLabel;
+    if (widget.compact) {
+      // Sidebar: mirror the app's active connection.
+      final active = state.activeProvider;
+      providerLabel = active?.displayName ?? 'No provider';
+      modelLabel = (active?.model.trim().isEmpty ?? true)
+          ? 'None selected'
+          : active!.model.trim();
+    } else {
+      providerLabel = _p.providerId == null
+          ? 'Active provider'
+          : (_providerName(state) ?? 'Unknown provider');
+      modelLabel = _p.model.trim().isEmpty ? 'Default' : _p.model.trim();
+    }
 
     return Column(
       children: [
