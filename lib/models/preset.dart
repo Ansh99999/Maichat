@@ -28,7 +28,7 @@ class Preset {
     // Core sampling
     this.temperature = 1.0,
     this.maxResponseTokens = 300,
-    this.maxContext = 4095,
+    this.maxContext = defaultMaxContext,
     this.useMaxContext = false,
     this.topP = 1.0,
     this.topK = 0,
@@ -63,6 +63,15 @@ class Preset {
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         name: name,
       );
+
+  /// Default context window for a new or partially-specified preset.
+  ///
+  /// SillyTavern's own default is 4095, which is a GPT-3.5-era number: with a
+  /// modern preset frame and a large character sheet it leaves nothing for the
+  /// conversation, so imported presets that omit `openai_max_context` silently
+  /// behaved as if the chat had no history. Every model this app talks to
+  /// handles far more than this.
+  static const int defaultMaxContext = 32768;
 
   final String id;
   String name;
@@ -232,7 +241,7 @@ class Preset {
       mode: PresetMode.byName(json['mode'] as String?),
       temperature: (json['temperature'] as num?)?.toDouble() ?? 1.0,
       maxResponseTokens: (json['maxResponseTokens'] as num?)?.toInt() ?? 300,
-      maxContext: (json['maxContext'] as num?)?.toInt() ?? 4095,
+      maxContext: (json['maxContext'] as num?)?.toInt() ?? defaultMaxContext,
       useMaxContext: json['useMaxContext'] as bool? ?? false,
       topP: (json['topP'] as num?)?.toDouble() ?? 1.0,
       topK: (json['topK'] as num?)?.toInt() ?? 0,

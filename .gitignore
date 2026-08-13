@@ -46,3 +46,6 @@ app.*.map.json
 
 # OMC operational state (local only)
 .omc/
+
+# Kotlin build-session scratch dir (created by Gradle/AGP builds).
+/android/.kotlin/

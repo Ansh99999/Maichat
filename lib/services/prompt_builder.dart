@@ -46,6 +46,11 @@ class PromptBuilder {
   /// SillyTavern reserves per message.
   static const int _perMessageOverhead = 4;
 
+  /// The share of the prompt budget chat history is guaranteed, however large
+  /// the fixed blocks are. Without a floor, a heavy preset frame plus a big
+  /// character sheet silently reduces the conversation to nothing.
+  static const double _historyFloorFraction = 0.25;
+
   BuiltPrompt build({
     required Preset preset,
     Character? character,
@@ -194,7 +199,18 @@ class PromptBuilder {
     }
 
     // Chat history greedily fills the remaining budget, newest first.
+    //
+    // A heavy preset frame plus a large character sheet can consume the entire
+    // budget on its own — a real, common case: a 4095-token preset (SillyTavern's
+    // default, and what a partial preset export imports as) with an 8 KB
+    // character sheet leaves ~0 tokens, so every prior turn was silently dropped
+    // and the model saw the instructions and the newest message only. A chat app
+    // sending no conversation is never the useful answer, so guarantee history a
+    // floor of the budget even when that means overshooting `maxContext` — which
+    // is a preset field, not a hard limit the host enforces.
+    final floor = (budget * _historyFloorFraction).round();
     var remaining = (budget - fixedTokens).clamp(0, 1 << 30).toInt();
+    if (remaining < floor) remaining = floor;
     final chosen = <ChatMessage>[];
     for (final msg in resolvedHistory.reversed) {
       final c = cost(msg);

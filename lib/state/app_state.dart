@@ -809,7 +809,7 @@ class AppState extends ChangeNotifier {
     final persona = impersonation == null
         ? ''
         : impersonation.userPersona(charName: character?.displayName ?? 'the character');
-    final maxContext = preset?.maxContext ?? 4095;
+    final maxContext = preset?.maxContext ?? Preset.defaultMaxContext;
 
     // Leading system turns injected by AppState (ahead of the built prompt),
     // each surfaced as its own breakdown section.
