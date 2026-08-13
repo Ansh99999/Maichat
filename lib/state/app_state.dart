@@ -842,11 +842,20 @@ class AppState extends ChangeNotifier {
         input: input,
       );
       // Robustness: the preset fills the character definition from the *live*
-      // character via its marker blocks. If that character is gone (deleted, or
-      // an older thread that never linked one) the definition would silently
-      // vanish and the model would "only have instructions" — so fall back to
-      // the persona snapshot stored on the thread at creation.
-      if (character == null) addPrefix('Character (stored)', conversation.systemPrompt);
+      // character via its marker blocks. Two ways that definition can silently
+      // vanish — leaving the model with "only the instructions and the last
+      // message" — and a fallback for each:
+      //  1. The linked character is gone (deleted, or an older thread that
+      //     never linked one): fall back to the persona snapshot stored on the
+      //     thread at creation.
+      //  2. The character is present but the active preset carries none of the
+      //     definition markers (a trimmed or imported preset, markers removed/
+      //     disabled): inject the live character's definition directly.
+      if (character == null) {
+        addPrefix('Character (stored)', conversation.systemPrompt);
+      } else if (!_presetEmitsDefinition(preset)) {
+        addPrefix('Character definition', character.definition(userName: userName));
+      }
       // The persona reaches the payload through the preset's personaDescription
       // block when it has one; otherwise inject it as a leading system turn so
       // impersonation always takes effect regardless of preset shape.
@@ -899,6 +908,31 @@ class AppState extends ChangeNotifier {
   bool _presetEmitsPersona(Preset preset) {
     for (final entry in preset.promptOrder) {
       if (entry.identifier == PromptId.personaDescription && entry.enabled) {
+        final block = preset.blockById(entry.identifier);
+        if (block != null && block.marker) return true;
+      }
+    }
+    return false;
+  }
+
+  /// Whether [preset] will actually emit the character's definition — i.e. it
+  /// has at least one enabled definition marker (description / personality /
+  /// scenario / example dialogue) whose block still exists and is a marker.
+  ///
+  /// A preset that carries none of these (a trimmed or imported preset, or one
+  /// whose markers were removed/disabled) would send only its instruction text
+  /// and the chat, silently dropping the whole character definition. When this
+  /// returns false, [_assemble] injects the definition as a fallback so it
+  /// always reaches the model.
+  bool _presetEmitsDefinition(Preset preset) {
+    const definitionMarkers = <String>{
+      PromptId.charDescription,
+      PromptId.charPersonality,
+      PromptId.scenario,
+      PromptId.dialogueExamples,
+    };
+    for (final entry in preset.promptOrder) {
+      if (entry.enabled && definitionMarkers.contains(entry.identifier)) {
         final block = preset.blockById(entry.identifier);
         if (block != null && block.marker) return true;
       }

@@ -167,6 +167,37 @@ class Character {
     ).trim();
   }
 
+  /// Just the character's definition sections — description, personality,
+  /// scenario, example dialogue — with macros resolved. This is the content the
+  /// preset's marker blocks (charDescription/charPersonality/scenario/
+  /// dialogueExamples) stand in for. Used as a safety net when the active preset
+  /// carries none of those markers, so the definition never silently vanishes
+  /// from the request even under a trimmed or imported preset. The card's own
+  /// system prompt and post-history note are deliberately excluded — the main
+  /// and jailbreak blocks carry those.
+  String definition({String userName = 'User'}) {
+    final buffer = StringBuffer();
+    void section(String heading, String value) {
+      final v = value.trim();
+      if (v.isEmpty) return;
+      if (buffer.isNotEmpty) buffer.writeln();
+      buffer
+        ..writeln('# $heading')
+        ..writeln(v);
+    }
+
+    section('Description', description);
+    section('Personality', personality);
+    section('Scenario', scenario);
+    section('Example dialogue', mesExample);
+
+    return resolveMacros(
+      buffer.toString().trim(),
+      charName: displayName,
+      userName: userName,
+    ).trim();
+  }
+
   /// The opening line with macros resolved, ready to seed a new chat.
   String resolvedGreeting({String userName = 'User'}) => resolveMacros(
         firstMes,
