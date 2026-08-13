@@ -8,6 +8,25 @@ import 'package:maichat/services/chat_client.dart';
 
 /// Exercises the real HTTP/SSE path against a loopback server, so parsing and
 /// error mapping are covered rather than mocked away.
+/// The visible text of a whole reply, joined — the tests assert on what the chat
+/// would show, with any reasoning read separately.
+Future<String> textOf(Stream<ChatDelta> stream) async {
+  final out = StringBuffer();
+  await for (final delta in stream) {
+    out.write(delta.text);
+  }
+  return out.toString();
+}
+
+/// Every reasoning chunk of a reply, joined.
+Future<String> reasoningOf(Stream<ChatDelta> stream) async {
+  final out = StringBuffer();
+  await for (final delta in stream) {
+    out.write(delta.reasoning);
+  }
+  return out.toString();
+}
+
 void main() {
   late HttpServer server;
   late Provider provider;
@@ -60,12 +79,12 @@ void main() {
       await request.response.close();
     });
 
-    final text = await ChatClient()
-        .streamChat(
-          provider: provider,
-          history: [ChatMessage(role: 'user', content: 'hi')],
-        )
-        .join();
+    final text = await textOf(
+      ChatClient().streamChat(
+        provider: provider,
+        history: [ChatMessage(role: 'user', content: 'hi')],
+      ),
+    );
 
     expect(text, 'Hello, world');
     expect(requests.single['model'], 'test-model');
@@ -121,12 +140,12 @@ void main() {
       },
     );
 
-    final text = await ChatClient()
-        .streamChat(
-          provider: provider,
-          history: [ChatMessage(role: 'user', content: 'hi')],
-        )
-        .join();
+    final text = await textOf(
+      ChatClient().streamChat(
+        provider: provider,
+        history: [ChatMessage(role: 'user', content: 'hi')],
+      ),
+    );
 
     expect(text, 'Hello');
     expect(requests.single['model'], 'test-model');
@@ -285,12 +304,12 @@ void main() {
       },
     );
 
-    final text = await ChatClient()
-        .streamChat(
-          provider: provider,
-          history: [ChatMessage(role: 'user', content: 'hi')],
-        )
-        .join();
+    final text = await textOf(
+      ChatClient().streamChat(
+        provider: provider,
+        history: [ChatMessage(role: 'user', content: 'hi')],
+      ),
+    );
 
     expect(text, 'Hello');
     // Gemini names the assistant role "model" and wraps text in parts.

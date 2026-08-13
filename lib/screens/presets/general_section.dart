@@ -1,16 +1,26 @@
 import 'package:flutter/material.dart';
 
 import '../../models/preset.dart';
+import '../../services/model_context.dart';
 import 'preset_controls.dart';
 
 /// The "General" section, mirroring Agnaistic's General preset tab: the handful
 /// of settings most chats actually tune — response length, context size,
 /// temperature, min-p, streaming, and stopping strings.
 class GeneralSection extends StatefulWidget {
-  const GeneralSection({super.key, required this.preset, required this.onChanged});
+  const GeneralSection({
+    super.key,
+    required this.preset,
+    required this.onChanged,
+    this.model = '',
+  });
 
   final Preset preset;
   final VoidCallback onChanged;
+
+  /// The model this preset will run on, so the context row can report the limit
+  /// it resolves to. Empty when none is selected yet.
+  final String model;
 
   @override
   State<GeneralSection> createState() => _GeneralSectionState();
@@ -22,6 +32,20 @@ class _GeneralSectionState extends State<GeneralSection> {
   void _set(VoidCallback mutate) {
     setState(mutate);
     widget.onChanged();
+  }
+
+  /// What the "use the model's limit" switch actually resolves to right now —
+  /// the whole point of the switch is that the number in use is not the one on
+  /// the slider, so say which it is.
+  String get _maxContextSubtitle {
+    if (!_p.useMaxContext) {
+      return 'Prefer the model\'s own limit over the value above.';
+    }
+    final model = widget.model.trim();
+    if (model.isEmpty) return 'No model selected yet — using the value above.';
+    final known = knownMaxContext(model);
+    if (known == null) return 'No known limit for $model — using the value above.';
+    return 'Using ${_thousands(known)} tokens for $model.';
   }
 
   @override
@@ -45,7 +69,7 @@ class _GeneralSectionState extends State<GeneralSection> {
         ),
         PresetSwitch(
           label: 'Use model max context if known',
-          subtitle: 'Prefer the model\'s own limit over the value above.',
+          subtitle: _maxContextSubtitle,
           value: _p.useMaxContext,
           onChanged: (v) => _set(() => _p.useMaxContext = v),
         ),
@@ -65,6 +89,7 @@ class _GeneralSectionState extends State<GeneralSection> {
         ),
         PresetSwitch(
           label: 'Stream response',
+          subtitle: 'Off waits for the whole reply, with no streaming request.',
           value: _p.stream,
           onChanged: (v) => _set(() => _p.stream = v),
         ),
@@ -76,6 +101,17 @@ class _GeneralSectionState extends State<GeneralSection> {
       ],
     );
   }
+}
+
+/// `131072` as `131,072` — a context window is easier to recognise grouped.
+String _thousands(int value) {
+  final digits = value.toString();
+  final out = StringBuffer();
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) out.write(',');
+    out.write(digits[i]);
+  }
+  return out.toString();
 }
 
 /// A small chip editor for stopping strings.

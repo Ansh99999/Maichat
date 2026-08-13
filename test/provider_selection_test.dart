@@ -10,13 +10,13 @@ class _CaptureClient extends ChatClient {
   Provider? last;
 
   @override
-  Stream<String> streamChat({
+  Stream<ChatDelta> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
     GenParams params = const GenParams(),
   }) async* {
     last = provider;
-    yield 'x';
+    yield const ChatDelta(text: 'x');
   }
 
   @override

@@ -11,13 +11,13 @@ class FakeClient extends ChatClient {
   List<ChatMessage>? lastHistory;
 
   @override
-  Stream<String> streamChat({
+  Stream<ChatDelta> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
     GenParams params = const GenParams(),
   }) async* {
     lastHistory = List<ChatMessage>.from(history);
-    yield 'ok';
+    yield const ChatDelta(text: 'ok');
   }
 
   @override

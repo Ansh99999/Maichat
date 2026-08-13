@@ -17,7 +17,7 @@ class FakeClient extends ChatClient {
   Provider? lastProvider;
 
   @override
-  Stream<String> streamChat({
+  Stream<ChatDelta> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
     GenParams params = const GenParams(),
@@ -26,7 +26,7 @@ class FakeClient extends ChatClient {
     lastHistory = List<ChatMessage>.from(history);
     if (failure != null) throw ChatApiException(failure!);
     for (final delta in deltas) {
-      yield delta;
+      yield ChatDelta(text: delta);
     }
   }
 

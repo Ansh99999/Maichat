@@ -28,6 +28,10 @@ class GenParams {
     this.seed,
     this.n,
     this.stop = const <String>[],
+    this.stream = true,
+    this.thinking = false,
+    this.thinkingBudget = 0,
+    this.reasoningEffort = '',
   });
 
   final double? temperature;
@@ -39,6 +43,38 @@ class GenParams {
   final int? seed;
   final int? n;
   final List<String> stop;
+
+  /// Whether to stream the reply. False takes a plain request/response round
+  /// trip — no SSE at all — rather than streaming and hiding it.
+  final bool stream;
+
+  /// Whether to ask the model to think before answering.
+  final bool thinking;
+
+  /// Tokens the model may spend thinking; 0 leaves it to the provider.
+  final int thinkingBudget;
+
+  /// `''` | `low` | `medium` | `high`, for the hosts that take
+  /// `reasoning_effort`.
+  final String reasoningEffort;
+}
+
+/// One chunk of a reply: visible [text], the model's [reasoning], or both. The
+/// two travel together (and in order) so a thinking block can be timed against
+/// the moment the answer starts.
+class ChatDelta {
+  const ChatDelta({this.text = '', this.reasoning = ''});
+
+  /// Message text meant for the chat.
+  final String text;
+
+  /// Thinking the provider returned in its own field — Anthropic's
+  /// `thinking_delta`, Gemini's `thought` parts, `reasoning_content` on the
+  /// OpenAI-compatible hosts. Thinking a model writes inline in its reply is not
+  /// here: it arrives as [text] and is separated later by `splitReasoning`.
+  final String reasoning;
+
+  bool get isEmpty => text.isEmpty && reasoning.isEmpty;
 }
 
 /// Minimal client for chat and model listing. Speaks two wire formats depending
@@ -113,6 +149,15 @@ class ChatClient {
         if (params.topP != null && params.topP != 1.0) 'topP': params.topP,
         if ((params.topK ?? 0) > 0) 'topK': params.topK,
         if (stop.isNotEmpty) 'stopSequences': stop,
+        // Gemini takes thinking as a budget in tokens plus a flag asking for the
+        // thoughts themselves back; omitting the budget leaves it to the model.
+        // Thinking off sends nothing rather than a 0 budget, because several
+        // 2.5-era models reject an attempt to switch thinking off outright.
+        if (params.thinking)
+          'thinkingConfig': <String, dynamic>{
+            'includeThoughts': true,
+            if (params.thinkingBudget > 0) 'thinkingBudget': params.thinkingBudget,
+          },
       };
       return {
         'contents': contents,
@@ -137,23 +182,37 @@ class ChatClient {
           .where((m) => m.role != 'system')
           .map((m) => m.toApi())
           .toList(growable: false);
+      var maxTokens = (params.maxTokens ?? 0) > 0 ? params.maxTokens! : 4096;
+      // Extended thinking: the budget is a floor of 1024 and must leave room for
+      // the answer, so a small response length is raised rather than rejected.
+      // Sampling is fixed while thinking (the API refuses temperature/top_p/
+      // top_k alongside it), so those are dropped instead of sent and refused.
+      Map<String, dynamic>? thinking;
+      if (params.thinking) {
+        final budget =
+            params.thinkingBudget > 1024 ? params.thinkingBudget : 1024;
+        if (maxTokens <= budget) maxTokens = budget + 1024;
+        thinking = {'type': 'enabled', 'budget_tokens': budget};
+      }
       return {
         'model': model,
-        'max_tokens': (params.maxTokens ?? 0) > 0 ? params.maxTokens : 4096,
-        'stream': true,
+        'max_tokens': maxTokens,
+        'stream': params.stream,
         if (system.isNotEmpty) 'system': system,
         'messages': turns,
+        if (params.thinking) 'thinking': thinking,
         // Anthropic's temperature tops out at 1.0.
-        if (params.temperature != null)
+        if (thinking == null && params.temperature != null)
           'temperature': params.temperature!.clamp(0.0, 1.0),
-        if (params.topP != null && params.topP != 1.0) 'top_p': params.topP,
-        if ((params.topK ?? 0) > 0) 'top_k': params.topK,
+        if (thinking == null && params.topP != null && params.topP != 1.0)
+          'top_p': params.topP,
+        if (thinking == null && (params.topK ?? 0) > 0) 'top_k': params.topK,
         if (stop.isNotEmpty) 'stop_sequences': stop,
       };
     }
     return {
       'model': model,
-      'stream': true,
+      'stream': params.stream,
       'messages': history.map((m) => m.toApi()).toList(growable: false),
       if (params.temperature != null) 'temperature': params.temperature,
       if ((params.maxTokens ?? 0) > 0) 'max_tokens': params.maxTokens,
@@ -165,6 +224,18 @@ class ChatClient {
       if ((params.seed ?? -1) >= 0) 'seed': params.seed,
       if ((params.n ?? 1) > 1) 'n': params.n,
       if (stop.isNotEmpty) 'stop': stop,
+      // `reasoning_effort` is OpenAI's own parameter and is understood by most
+      // OpenAI-compatible hosts (OpenRouter, DeepSeek, Groq, the local servers).
+      if (params.thinking && params.reasoningEffort.isNotEmpty)
+        'reasoning_effort': params.reasoningEffort,
+      // A token budget is not part of OpenAI's schema — OpenRouter's `reasoning`
+      // object is the closest thing to a standard — so it is only sent when the
+      // user has actually set one, keeping a strict host untouched by default.
+      if (params.thinking && params.thinkingBudget > 0)
+        'reasoning': <String, dynamic>{
+          'max_tokens': params.thinkingBudget,
+          if (params.reasoningEffort.isNotEmpty) 'effort': params.reasoningEffort,
+        },
     };
   }
 
@@ -177,8 +248,8 @@ class ChatClient {
     List<ChatMessage> history, {
     GenParams params = const GenParams(),
   }) {
-    final uri = requestUri(provider);
-    final headers = _headers(provider, stream: true)
+    final uri = requestUri(provider, stream: params.stream);
+    final headers = _headers(provider, stream: params.stream)
       // Never put a credential on the clipboard.
       ..updateAll((key, value) => _isSecretHeader(key) ? '<redacted>' : value);
     final body =
@@ -195,15 +266,19 @@ class ChatClient {
         lower == 'x-goog-api-key';
   }
 
-  /// The endpoint a chat turn is POSTed to, by provider format.
-  static Uri requestUri(Provider provider) {
+  /// The endpoint a chat turn is POSTed to, by provider format. Gemini puts the
+  /// choice between streaming and a single response in the URL (a different
+  /// method plus the `alt=sse` transport), where the other two formats carry it
+  /// as a body field.
+  static Uri requestUri(Provider provider, {bool stream = true}) {
     switch (provider.kind) {
       case ProviderKind.gemini:
-        return endpoint(
+        final uri = endpoint(
           provider.baseUrl,
           '/models/${Uri.encodeComponent(provider.model.trim())}'
-              ':streamGenerateContent',
-        ).replace(queryParameters: {'alt': 'sse'});
+              '${stream ? ':streamGenerateContent' : ':generateContent'}',
+        );
+        return stream ? uri.replace(queryParameters: {'alt': 'sse'}) : uri;
       case ProviderKind.anthropic:
         return endpoint(provider.baseUrl, '/messages');
       case ProviderKind.openai:
@@ -211,8 +286,13 @@ class ChatClient {
     }
   }
 
-  /// Streams assistant text deltas for [history] until the model stops.
-  Stream<String> streamChat({
+  /// Streams a reply for [history] until the model stops: visible text and, when
+  /// the provider returns it separately, the model's thinking.
+  ///
+  /// With `params.stream` off this makes an ordinary request and yields the whole
+  /// reply as a single event — genuinely no streaming, rather than a stream the
+  /// UI pretends not to see.
+  Stream<ChatDelta> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
     GenParams params = const GenParams(),
@@ -222,18 +302,25 @@ class ChatClient {
     }
     final anthropic = provider.kind == ProviderKind.anthropic;
     final gemini = provider.kind == ProviderKind.gemini;
-    final uri = requestUri(provider);
+    final uri = requestUri(provider, stream: params.stream);
     final client = http.Client();
     _active = client;
     try {
       final request = http.Request('POST', uri)
-        ..headers.addAll(_headers(provider, stream: true))
+        ..headers.addAll(_headers(provider, stream: params.stream))
         ..body = jsonEncode(_body(provider, history, params));
 
       final response = await client.send(request);
       if (response.statusCode != 200) {
         final body = await response.stream.bytesToString();
         throw ChatApiException(_describeFailure(response.statusCode, body));
+      }
+
+      if (!params.stream) {
+        final body = await response.stream.bytesToString();
+        final whole = _extractWhole(provider, body);
+        if (!whole.isEmpty) yield whole;
+        return;
       }
 
       final lines = response.stream
@@ -246,17 +333,17 @@ class ChatClient {
         if (payload.isEmpty) continue;
         if (gemini) {
           if (payload == '[DONE]') break;
-          final text = _extractGeminiDelta(payload);
-          if (text != null && text.isNotEmpty) yield text;
+          final delta = _extractGeminiDelta(payload);
+          if (delta != null && !delta.isEmpty) yield delta;
         } else if (anthropic) {
           final event = _extractAnthropicDelta(payload);
           if (event.stop) break;
-          final text = event.text;
-          if (text != null && text.isNotEmpty) yield text;
+          final delta = event.delta;
+          if (delta != null && !delta.isEmpty) yield delta;
         } else {
           if (payload == '[DONE]') break;
           final delta = _extractDelta(payload);
-          if (delta != null && delta.isNotEmpty) yield delta;
+          if (delta != null && !delta.isEmpty) yield delta;
         }
       }
     } on ChatApiException {
@@ -367,9 +454,13 @@ class ChatClient {
     }
   }
 
-  /// Pulls the text delta out of one SSE chunk, ignoring keep-alives and
-  /// vendor-specific extras.
-  static String? _extractDelta(String payload) {
+  /// Pulls the text (and any separately-returned reasoning) out of one SSE
+  /// chunk, ignoring keep-alives and vendor-specific extras.
+  ///
+  /// Reasoning has no standard field on the OpenAI-compatible hosts: DeepSeek
+  /// and most gateways use `reasoning_content`, OpenRouter uses `reasoning`.
+  /// Both are read.
+  static ChatDelta? _extractDelta(String payload) {
     try {
       final json = jsonDecode(payload);
       if (json is! Map<String, dynamic>) return null;
@@ -381,10 +472,10 @@ class ChatClient {
       final choice = choices.first;
       if (choice is! Map<String, dynamic>) return null;
       final delta = choice['delta'];
-      if (delta is Map<String, dynamic>) return delta['content'] as String?;
+      if (delta is Map<String, dynamic>) return _openAiParts(delta);
       // Some hosts echo non-streaming shapes even when stream is requested.
       final message = choice['message'];
-      if (message is Map<String, dynamic>) return message['content'] as String?;
+      if (message is Map<String, dynamic>) return _openAiParts(message);
       return null;
     } on ChatApiException {
       rethrow;
@@ -393,10 +484,21 @@ class ChatClient {
     }
   }
 
-  /// Pulls concatenated text out of one Gemini SSE chunk. Gemini nests text in
-  /// `candidates[].content.parts[].text` and signals errors with a top-level
-  /// `error` object; the stream simply closes when generation is done.
-  static String? _extractGeminiDelta(String payload) {
+  /// Reads `content` plus either reasoning field out of an OpenAI-shaped delta
+  /// or message object.
+  static ChatDelta _openAiParts(Map<String, dynamic> part) {
+    final reasoning = part['reasoning_content'] ?? part['reasoning'];
+    return ChatDelta(
+      text: part['content'] is String ? part['content'] as String : '',
+      reasoning: reasoning is String ? reasoning : '',
+    );
+  }
+
+  /// Pulls text and thoughts out of one Gemini SSE chunk. Gemini nests text in
+  /// `candidates[].content.parts[].text` and marks a thinking part with
+  /// `thought: true`; it signals errors with a top-level `error` object, and the
+  /// stream simply closes when generation is done.
+  static ChatDelta? _extractGeminiDelta(String payload) {
     try {
       final json = jsonDecode(payload);
       if (json is! Map<String, dynamic>) return null;
@@ -407,17 +509,7 @@ class ChatClient {
       if (candidates is! List || candidates.isEmpty) return null;
       final first = candidates.first;
       if (first is! Map<String, dynamic>) return null;
-      final content = first['content'];
-      if (content is! Map<String, dynamic>) return null;
-      final parts = content['parts'];
-      if (parts is! List) return null;
-      final buffer = StringBuffer();
-      for (final part in parts) {
-        if (part is Map<String, dynamic> && part['text'] is String) {
-          buffer.write(part['text'] as String);
-        }
-      }
-      return buffer.isEmpty ? null : buffer.toString();
+      return _geminiParts(first['content']);
     } on ChatApiException {
       rethrow;
     } catch (_) {
@@ -425,29 +517,112 @@ class ChatClient {
     }
   }
 
-  /// Pulls the text delta out of one Anthropic SSE chunk. Returns whether the
-  /// stream has ended ([stop]) alongside any [text] to append. Anthropic ends
-  /// with a `message_stop` event rather than OpenAI's `[DONE]` sentinel.
-  static ({String? text, bool stop}) _extractAnthropicDelta(String payload) {
+  /// Splits a Gemini `content` object's parts into answer text and thoughts.
+  static ChatDelta? _geminiParts(Object? content) {
+    if (content is! Map<String, dynamic>) return null;
+    final parts = content['parts'];
+    if (parts is! List) return null;
+    final text = StringBuffer();
+    final thoughts = StringBuffer();
+    for (final part in parts) {
+      if (part is! Map<String, dynamic> || part['text'] is! String) continue;
+      (part['thought'] == true ? thoughts : text).write(part['text'] as String);
+    }
+    return ChatDelta(text: text.toString(), reasoning: thoughts.toString());
+  }
+
+  /// Pulls the deltas out of one Anthropic SSE chunk. Returns whether the stream
+  /// has ended ([stop]) alongside anything to append. Anthropic ends with a
+  /// `message_stop` event rather than OpenAI's `[DONE]` sentinel, and extended
+  /// thinking arrives as `thinking_delta` events ahead of the text ones.
+  static ({ChatDelta? delta, bool stop}) _extractAnthropicDelta(String payload) {
     try {
       final json = jsonDecode(payload);
-      if (json is! Map<String, dynamic>) return (text: null, stop: false);
+      if (json is! Map<String, dynamic>) return (delta: null, stop: false);
       final type = json['type'];
       if (type == 'error') {
         throw ChatApiException(_describeErrorBody(json));
       }
-      if (type == 'message_stop') return (text: null, stop: true);
+      if (type == 'message_stop') return (delta: null, stop: true);
       if (type == 'content_block_delta') {
         final delta = json['delta'];
-        if (delta is Map<String, dynamic> && delta['text'] is String) {
-          return (text: delta['text'] as String, stop: false);
+        if (delta is Map<String, dynamic>) {
+          if (delta['thinking'] is String) {
+            return (
+              delta: ChatDelta(reasoning: delta['thinking'] as String),
+              stop: false,
+            );
+          }
+          if (delta['text'] is String) {
+            return (
+              delta: ChatDelta(text: delta['text'] as String),
+              stop: false,
+            );
+          }
         }
       }
-      return (text: null, stop: false);
+      return (delta: null, stop: false);
     } on ChatApiException {
       rethrow;
     } catch (_) {
-      return (text: null, stop: false);
+      return (delta: null, stop: false);
+    }
+  }
+
+  /// Reads a whole (non-streamed) response body into one delta, by provider
+  /// format. Used when streaming is switched off, where there are no SSE events
+  /// to parse — just one JSON document.
+  static ChatDelta _extractWhole(Provider provider, String body) {
+    final Object? json;
+    try {
+      json = jsonDecode(body);
+    } catch (_) {
+      throw ChatApiException('The host sent a malformed response.');
+    }
+    if (json is! Map<String, dynamic>) {
+      throw ChatApiException('The host sent an unexpected response shape.');
+    }
+    if (json['error'] != null) {
+      throw ChatApiException(_describeErrorBody(json));
+    }
+    switch (provider.kind) {
+      case ProviderKind.gemini:
+        final candidates = json['candidates'];
+        if (candidates is List && candidates.isNotEmpty) {
+          final first = candidates.first;
+          if (first is Map<String, dynamic>) {
+            final parts = _geminiParts(first['content']);
+            if (parts != null) return parts;
+          }
+        }
+        return const ChatDelta();
+      case ProviderKind.anthropic:
+        // `content` is a list of blocks: `thinking` ones first, then `text`.
+        final blocks = json['content'];
+        if (blocks is! List) return const ChatDelta();
+        final text = StringBuffer();
+        final thoughts = StringBuffer();
+        for (final block in blocks) {
+          if (block is! Map<String, dynamic>) continue;
+          if (block['type'] == 'thinking' && block['thinking'] is String) {
+            thoughts.write(block['thinking'] as String);
+          } else if (block['text'] is String) {
+            text.write(block['text'] as String);
+          }
+        }
+        return ChatDelta(text: text.toString(), reasoning: thoughts.toString());
+      case ProviderKind.openai:
+        final choices = json['choices'];
+        if (choices is! List || choices.isEmpty) return const ChatDelta();
+        final choice = choices.first;
+        if (choice is! Map<String, dynamic>) return const ChatDelta();
+        final message = choice['message'];
+        if (message is Map<String, dynamic>) return _openAiParts(message);
+        // Legacy completion shape.
+        if (choice['text'] is String) {
+          return ChatDelta(text: choice['text'] as String);
+        }
+        return const ChatDelta();
     }
   }
 

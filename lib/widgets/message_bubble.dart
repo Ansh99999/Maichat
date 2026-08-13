@@ -7,6 +7,7 @@ import '../models/message.dart';
 import 'character_avatar.dart';
 import 'message_html.dart';
 import 'message_markdown.dart';
+import 'thinking_block.dart';
 
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
 /// (size/shape/fit/offset and which side it sits on), where the text sits
@@ -160,7 +161,31 @@ class MessageBubble extends StatelessWidget {
         ui.textPlacement != TextPlacement.around;
     final Widget? avatarUnit =
         avatar == null ? null : (nameOnAvatar ? stackName(avatar) : avatar);
-    Widget bubbleUnit(Widget bubble) => nameOnAvatar ? bubble : stackName(bubble);
+
+    // The model's thinking, when this turn has any: a collapsed bar directly
+    // above the reply, so it reads as belonging to this message and never
+    // displaces the answer.
+    final Widget? thinking = message.hasReasoning
+        ? ThinkingBlock(
+            reasoning: message.reasoning,
+            thinkingMs: message.thinkingMs,
+            // Still thinking while the turn is streaming and no duration has
+            // been recorded — that only happens once the answer starts.
+            inProgress: pending && message.thinkingMs == null,
+            fontSize: ui.fontSize,
+          )
+        : null;
+
+    Widget bubbleUnit(Widget bubble) {
+      final unit = thinking == null
+          ? bubble
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: crossAxis,
+              children: [thinking, bubble],
+            );
+      return nameOnAvatar ? unit : stackName(unit);
+    }
 // APPEND-BUILD
 
     final Widget inner;

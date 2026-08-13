@@ -137,3 +137,105 @@ class PresetSwitch extends StatelessWidget {
     );
   }
 }
+
+/// A labelled dropdown for a small fixed set of choices — the compact control
+/// this app uses instead of a wide `SegmentedButton` (see the provider editor).
+class PresetDropdown<T> extends StatelessWidget {
+  const PresetDropdown({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final String label;
+  final T value;
+
+  /// Choices as value/label pairs, in the order they should appear.
+  final List<(T, String)> options;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          ),
+          const SizedBox(width: 12),
+          DropdownButton<T>(
+            value: value,
+            underline: const SizedBox.shrink(),
+            borderRadius: BorderRadius.circular(12),
+            items: [
+              for (final (v, text) in options)
+                DropdownMenuItem<T>(value: v, child: Text(text)),
+            ],
+            onChanged: (v) {
+              if (v != null) onChanged(v);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A small single-line text field for a preset string, owning its own
+/// controller so the section around it can stay a plain builder. Reports every
+/// keystroke, and reflects an external change unless the user is mid-edit.
+class PresetTextField extends StatefulWidget {
+  const PresetTextField({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    this.hint,
+  });
+
+  final String label;
+  final String value;
+  final String? hint;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<PresetTextField> createState() => _PresetTextFieldState();
+}
+
+class _PresetTextFieldState extends State<PresetTextField> {
+  late final TextEditingController _field =
+      TextEditingController(text: widget.value);
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void didUpdateWidget(PresetTextField old) {
+    super.didUpdateWidget(old);
+    if (!_focus.hasFocus && widget.value != _field.text) {
+      _field.text = widget.value;
+    }
+  }
+
+  @override
+  void dispose() {
+    _field.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _field,
+      focusNode: _focus,
+      decoration: InputDecoration(
+        labelText: widget.label,
+        hintText: widget.hint,
+        isDense: true,
+      ),
+      onChanged: widget.onChanged,
+    );
+  }
+}

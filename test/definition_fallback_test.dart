@@ -12,13 +12,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _CaptureClient extends ChatClient {
   List<ChatMessage>? lastHistory;
   @override
-  Stream<String> streamChat({
+  Stream<ChatDelta> streamChat({
     required Provider provider,
     required List<ChatMessage> history,
     GenParams params = const GenParams(),
   }) async* {
     lastHistory = history;
-    yield 'ok';
+    yield const ChatDelta(text: 'ok');
   }
 
   @override

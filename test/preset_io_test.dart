@@ -178,4 +178,97 @@ void main() {
           throwsA(isA<FormatException>()));
     });
   });
+
+  group('thinking settings across formats', () {
+    test('SillyTavern show_thoughts and reasoning_effort are read', () {
+      final json = _loadStDefault()
+        ..['show_thoughts'] = true
+        ..['reasoning_effort'] = 'high';
+      final p = importPreset(json);
+      expect(p.thinking, isTrue);
+      expect(p.reasoningEffort, 'high');
+    });
+
+    test('SillyTavern efforts outside our scale are normalised', () {
+      String effortOf(String value) =>
+          importPreset(_loadStDefault()..['reasoning_effort'] = value)
+              .reasoningEffort;
+      // ST's own extremes and its "leave it to the model" default.
+      expect(effortOf('min'), 'low');
+      expect(effortOf('max'), 'high');
+      expect(effortOf('auto'), isEmpty);
+      expect(effortOf('something-new'), isEmpty);
+    });
+
+    test('exportSillyTavern writes both keys back', () {
+      final p = Preset.create()
+        ..thinking = true
+        ..reasoningEffort = 'medium';
+      final out = exportSillyTavern(p);
+      expect(out['show_thoughts'], isTrue);
+      expect(out['reasoning_effort'], 'medium');
+      // An unset effort goes back as ST's own "auto".
+      expect(
+        exportSillyTavern(Preset.create())['reasoning_effort'],
+        'auto',
+      );
+    });
+
+    test('Agnai carries the whole reasoning object', () {
+      final json = _agnaiSample()
+        ..['reasoning'] = {
+          'start': '<reason>',
+          'end': '</reason>',
+          'effort': 'low',
+          'enabled': true,
+          'exclude': false,
+          'maxTokens': 3000,
+        };
+      final p = importPreset(json);
+      expect(p.thinking, isTrue);
+      expect(p.thinkingBudget, 3000);
+      expect(p.reasoningEffort, 'low');
+      expect(p.thinkStartTag, '<reason>');
+      expect(p.thinkEndTag, '</reason>');
+
+      final out = exportAgnai(p);
+      expect(out['reasoning'], {
+        'start': '<reason>',
+        'end': '</reason>',
+        'effort': 'low',
+        'enabled': true,
+        'exclude': false,
+        'maxTokens': 3000,
+      });
+    });
+
+    test('native round-trip keeps every thinking field', () {
+      final p = Preset.create()
+        ..thinking = true
+        ..thinkingBudget = 8192
+        ..reasoningEffort = 'high'
+        ..thinkStartTag = '<thinking>'
+        ..thinkEndTag = '</thinking>'
+        ..useMaxContext = true
+        ..stream = false;
+      final rt = importPreset(exportNative(p));
+
+      expect(rt.thinking, isTrue);
+      expect(rt.thinkingBudget, 8192);
+      expect(rt.reasoningEffort, 'high');
+      expect(rt.thinkStartTag, '<thinking>');
+      expect(rt.thinkEndTag, '</thinking>');
+      expect(rt.useMaxContext, isTrue);
+      expect(rt.stream, isFalse);
+    });
+
+    test('a preset saved before thinking existed picks up the default tags', () {
+      // No thinking keys at all — the shape an older save has.
+      final rt = Preset.fromJson({'id': 'x', 'name': 'Old'});
+      expect(rt.thinkStartTag, '<think>');
+      expect(rt.thinkEndTag, '</think>');
+      expect(rt.thinking, isFalse);
+      expect(rt.thinkingBudget, 0);
+    });
+  });
 }

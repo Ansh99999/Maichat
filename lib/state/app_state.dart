@@ -15,7 +15,9 @@ import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
+import '../services/model_context.dart';
 import '../services/prompt_builder.dart';
+import '../services/reasoning.dart';
 import '../services/storage.dart';
 import '../services/tokenizer.dart';
 import '../services/update_service.dart';
@@ -575,6 +577,11 @@ class AppState extends ChangeNotifier {
   /// Streams an assistant reply into [conversation], whose messages already end
   /// with the user's latest turn (this does NOT append the user message). Shared
   /// by [send] and [regenerateMessage].
+  ///
+  /// Two kinds of thinking are folded into the same place on the message: what
+  /// the provider returns in its own field, and what the model writes inline
+  /// between the preset's thinking tags. Either way the reply text stays clean
+  /// and the thinking is timed, so the chat can show "Thought for X seconds".
   Future<void> _generate(Conversation conversation) async {
     final preset = presetFor(conversation);
     final base = _resolveProvider(preset);
@@ -583,6 +590,10 @@ class AppState extends ChangeNotifier {
     final assembled = _assemble(conversation);
     final history = assembled.messages;
     final params = assembled.params;
+    final tags = ReasoningTags(
+      start: preset?.thinkStartTag.trim() ?? '',
+      end: preset?.thinkEndTag.trim() ?? '',
+    );
 
     conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
     conversation.updatedAt = DateTime.now();
@@ -591,31 +602,68 @@ class AppState extends ChangeNotifier {
     _stopRequested = false;
     notifyListeners();
 
-    final reply = StringBuffer();
+    // Everything the model sent as message text, tags included; the split into
+    // answer and thinking is re-derived from it after every delta.
+    final raw = StringBuffer();
+    // Thinking the provider handed over separately.
+    final thoughts = StringBuffer();
+    final clock = Stopwatch()..start();
+    int? thinkingMs;
+    var answer = '';
+    var thinking = '';
+
     // Narrow the key pool to the one this request should use.
     final provider = _applyKey(base);
     try {
       final deltas =
           _client.streamChat(provider: provider, history: history, params: params);
       await for (final delta in deltas) {
-        reply.write(delta);
-        _replaceLast(conversation, content: reply.toString());
+        if (delta.reasoning.isNotEmpty) thoughts.write(delta.reasoning);
+        if (delta.text.isNotEmpty) raw.write(delta.text);
+        final split = splitReasoning(raw.toString(), tags);
+        answer = split.text;
+        thinking = _joinThinking(thoughts.toString(), split.reasoning);
+        // Thinking is over the moment the answer starts — or, for tagged
+        // thinking, when the closing tag lands.
+        if (thinkingMs == null &&
+            thinking.trim().isNotEmpty &&
+            !split.open &&
+            answer.trim().isNotEmpty) {
+          thinkingMs = clock.elapsedMilliseconds;
+        }
+        _replaceLast(conversation,
+            content: answer, reasoning: thinking, thinkingMs: thinkingMs);
         notifyListeners();
       }
-      if (reply.isEmpty) {
+      // A block the model never closed, or a reply that was thinking and nothing
+      // else, still gets a duration once the stream ends.
+      if (thinkingMs == null && thinking.trim().isNotEmpty) {
+        thinkingMs = clock.elapsedMilliseconds;
+      }
+      if (answer.trim().isEmpty) {
         _replaceLast(
           conversation,
-          content: 'The model returned an empty response.',
+          content: thinking.trim().isEmpty
+              ? 'The model returned an empty response.'
+              // Almost always a thinking budget that left no room for the reply.
+              : 'The model finished thinking but returned no answer.',
+          reasoning: thinking,
+          thinkingMs: thinkingMs,
           error: true,
         );
+      } else {
+        _replaceLast(conversation,
+            content: answer, reasoning: thinking, thinkingMs: thinkingMs);
       }
     } on ChatApiException catch (e) {
       if (_stopRequested) {
-        _finishStopped(conversation, reply.toString());
+        _finishStopped(conversation, answer,
+            reasoning: thinking, thinkingMs: thinkingMs);
       } else {
         // A failed request rotates an error-based pool to the next key.
         _advanceKeyOnError(base);
-        _replaceLast(conversation, content: e.message, error: true);
+        _replaceLast(conversation,
+            content: e.message, reasoning: '', error: true);
       }
     } finally {
       _streaming = false;
@@ -626,6 +674,14 @@ class AppState extends ChangeNotifier {
       // Macros may have mutated variables; persist both scopes.
       await _storage.saveGlobalVars(_globalVars);
     }
+  }
+
+  /// Joins provider-returned thinking with thinking parsed out of the reply
+  /// text. A model normally produces one or the other, but a gateway that
+  /// forwards both should not lose half of it.
+  static String _joinThinking(String native, String inline) {
+    final parts = [native.trim(), inline.trim()]..removeWhere((p) => p.isEmpty);
+    return parts.join('\n\n');
   }
 
   /// Finds a thread by [id] without materializing one — for the message-level
@@ -850,7 +906,7 @@ class AppState extends ChangeNotifier {
     final persona = impersonation == null
         ? ''
         : impersonation.userPersona(charName: character?.displayName ?? 'the character');
-    final maxContext = preset?.maxContext ?? Preset.defaultMaxContext;
+    final maxContext = _effectiveMaxContext(preset, model);
 
     // Leading system turns injected by AppState (ahead of the built prompt),
     // each surfaced as its own breakdown section.
@@ -874,6 +930,7 @@ class AppState extends ChangeNotifier {
         character: character,
         history: priorTurns,
         model: model,
+        maxContext: maxContext,
         userName: userName,
         persona: persona,
         variables: MacroVariables(
@@ -985,6 +1042,19 @@ class AppState extends ChangeNotifier {
     return false;
   }
 
+  /// The context window a turn is budgeted against.
+  ///
+  /// Normally the preset's own number. With "Use model max context if known" on,
+  /// the selected model's published window wins whenever it is one the app
+  /// recognises — so a preset downloaded with a GPT-3.5-era 4095 in it stops
+  /// throttling a 200k model. An unrecognised model keeps the preset's value
+  /// rather than guessing at one.
+  int _effectiveMaxContext(Preset? preset, String model) {
+    final fallback = preset?.maxContext ?? Preset.defaultMaxContext;
+    if (preset == null || !preset.useMaxContext) return fallback;
+    return knownMaxContext(model) ?? fallback;
+  }
+
   GenParams _paramsFor(Preset p) => GenParams(
         temperature: p.temperature,
         maxTokens: p.maxResponseTokens,
@@ -995,6 +1065,10 @@ class AppState extends ChangeNotifier {
         seed: p.seed,
         n: p.n,
         stop: p.stopSequences,
+        stream: p.stream,
+        thinking: p.thinking,
+        thinkingBudget: p.thinkingBudget,
+        reasoningEffort: p.reasoningEffort,
       );
 
   /// Aborts streaming and keeps whatever text already arrived.
@@ -1031,20 +1105,33 @@ class AppState extends ChangeNotifier {
     Conversation conversation, {
     required String content,
     bool error = false,
+    String? reasoning,
+    int? thinkingMs,
   }) {
     if (conversation.messages.isEmpty) return;
     final last = conversation.messages.last;
-    conversation.messages[conversation.messages.length - 1] =
-        last.copyWith(content: content, error: error);
+    conversation.messages[conversation.messages.length - 1] = last.copyWith(
+      content: content,
+      error: error,
+      reasoning: reasoning,
+      thinkingMs: thinkingMs,
+    );
   }
 
-  /// A stop with no text yet leaves nothing worth keeping.
-  void _finishStopped(Conversation conversation, String partial) {
-    if (partial.trim().isEmpty) {
+  /// A stop with no text yet leaves nothing worth keeping — unless the model had
+  /// already produced some thinking, which is worth showing on its own.
+  void _finishStopped(
+    Conversation conversation,
+    String partial, {
+    String reasoning = '',
+    int? thinkingMs,
+  }) {
+    if (partial.trim().isEmpty && reasoning.trim().isEmpty) {
       if (conversation.messages.isNotEmpty) conversation.messages.removeLast();
       return;
     }
-    _replaceLast(conversation, content: partial);
+    _replaceLast(conversation,
+        content: partial, reasoning: reasoning, thinkingMs: thinkingMs);
   }
 
   void _moveToTop(Conversation conversation) {

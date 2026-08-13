@@ -4,6 +4,8 @@ class ChatMessage {
     required this.role,
     required this.content,
     this.error = false,
+    this.reasoning = '',
+    this.thinkingMs,
   });
 
   /// Either `user` or `assistant`.
@@ -13,27 +15,51 @@ class ChatMessage {
   /// Set when the turn holds a failure notice rather than model output.
   final bool error;
 
+  /// The model's thinking for this turn, with the tags (if any) stripped —
+  /// either returned separately by the provider or lifted out of the reply text.
+  /// Shown as a collapsed block above the message; never sent back to the model.
+  final String reasoning;
+
+  /// How long the model spent thinking, in milliseconds, or null while it is
+  /// still thinking (or if it never did).
+  final int? thinkingMs;
+
   bool get isUser => role == 'user';
 
-  ChatMessage copyWith({String? content, bool? error}) => ChatMessage(
+  bool get hasReasoning => reasoning.trim().isNotEmpty;
+
+  ChatMessage copyWith({
+    String? content,
+    bool? error,
+    String? reasoning,
+    int? thinkingMs,
+  }) =>
+      ChatMessage(
         role: role,
         content: content ?? this.content,
         error: error ?? this.error,
+        reasoning: reasoning ?? this.reasoning,
+        thinkingMs: thinkingMs ?? this.thinkingMs,
       );
 
   Map<String, dynamic> toJson() => {
         'role': role,
         'content': content,
         if (error) 'error': true,
+        if (reasoning.isNotEmpty) 'reasoning': reasoning,
+        if (thinkingMs != null) 'thinkingMs': thinkingMs,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
         role: json['role'] as String? ?? 'assistant',
         content: json['content'] as String? ?? '',
         error: json['error'] as bool? ?? false,
+        reasoning: json['reasoning'] as String? ?? '',
+        thinkingMs: (json['thinkingMs'] as num?)?.toInt(),
       );
 
-  /// Wire format for the chat completions endpoint.
+  /// Wire format for the chat completions endpoint. Thinking is deliberately
+  /// absent: it is a display artefact of one turn, not part of the transcript.
   Map<String, String> toApi() => {'role': role, 'content': content};
 }
 

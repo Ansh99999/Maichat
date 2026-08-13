@@ -102,10 +102,32 @@ const _stConsumed = <String>{
   'wrap_in_quotes',
   'squash_system_messages',
   'max_context_unlocked',
+  'show_thoughts',
+  'reasoning_effort',
   'prompts',
   'prompt_order',
   'extensions',
 };
+
+/// SillyTavern's effort scale is wider than ours: `auto` means "leave it to the
+/// model", and `min`/`max` are its own extremes. Map them onto what this app
+/// sends, and drop anything unrecognised rather than forwarding it to a host.
+String _importEffort(Object? value) {
+  final effort = value?.toString().trim().toLowerCase() ?? '';
+  switch (effort) {
+    case 'min':
+      return 'low';
+    case 'max':
+      return 'high';
+    case 'low':
+    case 'medium':
+    case 'high':
+      return effort;
+    default:
+      // 'auto', 'none', 'custom', empty, anything new.
+      return '';
+  }
+}
 
 Preset _importSillyTavern(Map<String, dynamic> json) {
   final d = Preset.create();
@@ -165,6 +187,12 @@ Preset _importSillyTavern(Map<String, dynamic> json) {
         json['squash_system_messages'] as bool? ?? d.squashSystemMessages,
     maxContextUnlocked:
         json['max_context_unlocked'] as bool? ?? d.maxContextUnlocked,
+    // SillyTavern's `show_thoughts` is the same intent: ask the model for its
+    // reasoning and display it.
+    thinking: json['show_thoughts'] as bool? ?? d.thinking,
+    reasoningEffort: json.containsKey('reasoning_effort')
+        ? _importEffort(json['reasoning_effort'])
+        : d.reasoningEffort,
     prompts: prompts.isNotEmpty ? prompts : null,
     promptOrder: promptOrder.isNotEmpty ? promptOrder : null,
     extensions: (json['extensions'] as Map?)?.cast<String, dynamic>(),
@@ -209,6 +237,12 @@ Preset _importAgnai(Map<String, dynamic> json) {
 
   final stops = json['stopSequences'];
 
+  // Agnai groups this under one `reasoning` object (common/types/presets.ts:
+  // {start, end, effort, enabled, exclude, maxTokens}), which lines up field for
+  // field with ours.
+  final reasoning = json['reasoning'];
+  final r = reasoning is Map ? reasoning.cast<String, dynamic>() : null;
+
   return Preset(
     id: d.id,
     name: json['name'] as String? ?? '',
@@ -228,6 +262,12 @@ Preset _importAgnai(Map<String, dynamic> json) {
     repetitionPenalty:
         (json['repetitionPenalty'] as num?)?.toDouble() ?? d.repetitionPenalty,
     stream: json['streamResponse'] as bool? ?? d.stream,
+    thinking: r?['enabled'] as bool? ?? d.thinking,
+    thinkingBudget: (r?['maxTokens'] as num?)?.toInt() ?? d.thinkingBudget,
+    reasoningEffort:
+        r != null ? _importEffort(r['effort']) : d.reasoningEffort,
+    thinkStartTag: r?['start'] as String? ?? d.thinkStartTag,
+    thinkEndTag: r?['end'] as String? ?? d.thinkEndTag,
     stopSequences: stops is List
         ? stops.map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
         : null,
@@ -262,6 +302,8 @@ Map<String, dynamic> exportSillyTavern(Preset p) {
     'wrap_in_quotes': p.wrapInQuotes,
     'squash_system_messages': p.squashSystemMessages,
     'max_context_unlocked': p.maxContextUnlocked,
+    'show_thoughts': p.thinking,
+    'reasoning_effort': p.reasoningEffort.isEmpty ? 'auto' : p.reasoningEffort,
     'prompts': p.prompts.map((b) => b.toJson()).toList(),
     'prompt_order': [
       {
@@ -293,6 +335,14 @@ Map<String, dynamic> exportAgnai(Preset p) {
     'repetitionPenalty': p.repetitionPenalty,
     'streamResponse': p.stream,
     'stopSequences': p.stopSequences,
+    'reasoning': <String, dynamic>{
+      'start': p.thinkStartTag,
+      'end': p.thinkEndTag,
+      'effort': p.reasoningEffort.isEmpty ? 'none' : p.reasoningEffort,
+      'enabled': p.thinking,
+      'exclude': false,
+      'maxTokens': p.thinkingBudget,
+    },
     'gaslight': main,
     'systemPrompt': main,
     'ultimeJailbreak': jailbreak,

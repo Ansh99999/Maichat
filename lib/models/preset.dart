@@ -47,6 +47,11 @@ class Preset {
     this.squashSystemMessages = false,
     this.maxContextUnlocked = false,
     this.reasoningEffort = '',
+    // Thinking / reasoning
+    this.thinking = false,
+    this.thinkingBudget = 0,
+    this.thinkStartTag = '<think>',
+    this.thinkEndTag = '</think>',
     // Prompt blocks
     List<PromptBlock>? prompts,
     List<PromptOrderEntry>? promptOrder,
@@ -115,6 +120,24 @@ class Preset {
   /// `''` | `low` | `medium` | `high` (empty = model default).
   String reasoningEffort;
 
+  // --- Thinking ------------------------------------------------------------
+  /// Whether to ask the model to think before answering. Sent per provider
+  /// format: Anthropic `thinking`, Gemini `thinkingConfig`, and
+  /// `reasoning_effort` on the OpenAI-compatible hosts that accept it.
+  bool thinking;
+
+  /// Tokens the model may spend thinking; 0 leaves it to the provider's own
+  /// default. Anthropic requires at least 1024 and treats it as a hard cap;
+  /// Gemini takes it as `thinkingBudget`.
+  int thinkingBudget;
+
+  /// The tag pair that wraps thinking a model writes inline in its reply
+  /// (`<think>` … `</think>`). When both are set, anything between them is
+  /// lifted out of the message and shown as a collapsed "Thought for …" block
+  /// instead. Clearing either one turns inline parsing off.
+  String thinkStartTag;
+  String thinkEndTag;
+
   // --- Prompt blocks -------------------------------------------------------
   final List<PromptBlock> prompts;
   final List<PromptOrderEntry> promptOrder;
@@ -162,6 +185,10 @@ class Preset {
         squashSystemMessages: squashSystemMessages,
         maxContextUnlocked: maxContextUnlocked,
         reasoningEffort: reasoningEffort,
+        thinking: thinking,
+        thinkingBudget: thinkingBudget,
+        thinkStartTag: thinkStartTag,
+        thinkEndTag: thinkEndTag,
         prompts: prompts.map((b) => b.copy()).toList(),
         promptOrder: promptOrder.map((e) => e.copy()).toList(),
         extensions: Map<String, dynamic>.from(extensions),
@@ -198,6 +225,10 @@ class Preset {
         'squashSystemMessages': squashSystemMessages,
         'maxContextUnlocked': maxContextUnlocked,
         'reasoningEffort': reasoningEffort,
+        'thinking': thinking,
+        'thinkingBudget': thinkingBudget,
+        'thinkStartTag': thinkStartTag,
+        'thinkEndTag': thinkEndTag,
         'prompts': prompts.map((b) => b.toJson()).toList(),
         'promptOrder': promptOrder.map((e) => e.toJson()).toList(),
         if (extensions.isNotEmpty) 'extensions': extensions,
@@ -259,6 +290,13 @@ class Preset {
       squashSystemMessages: json['squashSystemMessages'] as bool? ?? false,
       maxContextUnlocked: json['maxContextUnlocked'] as bool? ?? false,
       reasoningEffort: json['reasoningEffort'] as String? ?? '',
+      thinking: json['thinking'] as bool? ?? false,
+      thinkingBudget: (json['thinkingBudget'] as num?)?.toInt() ?? 0,
+      // A preset saved before inline-thinking support had no tags; default it to
+      // the standard pair rather than "off", so existing presets pick the
+      // feature up.
+      thinkStartTag: json['thinkStartTag'] as String? ?? '<think>',
+      thinkEndTag: json['thinkEndTag'] as String? ?? '</think>',
       prompts: blocks(),
       promptOrder: order(),
       extensions: (json['extensions'] as Map?)?.cast<String, dynamic>(),

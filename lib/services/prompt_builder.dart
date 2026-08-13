@@ -60,9 +60,13 @@ class PromptBuilder {
     String model = '',
     MacroVariables? variables,
     String input = '',
+    int? maxContext,
   }) {
     final charName = character?.displayName ?? '';
-    final budget = (preset.maxContext - preset.maxResponseTokens)
+    // The caller may resolve a different window than the preset carries (the
+    // "use the model's own limit" case); the preset's value is the fallback.
+    final contextWindow = maxContext ?? preset.maxContext;
+    final budget = (contextWindow - preset.maxResponseTokens)
         .clamp(0, 1 << 30)
         .toInt();
 
@@ -92,7 +96,7 @@ class PromptBuilder {
       character: character,
       messages: resolvedHistory,
       model: model.isEmpty ? preset.model : model,
-      maxContext: preset.maxContext,
+      maxContext: contextWindow,
       maxResponse: preset.maxResponseTokens,
       maxPrompt: budget,
       input: input,

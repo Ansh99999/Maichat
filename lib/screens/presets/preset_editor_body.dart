@@ -201,6 +201,14 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
       modelLabel = _p.model.trim().isEmpty ? 'Default' : _p.model.trim();
     }
 
+    // The model id this preset will actually run on (not its label), so the
+    // General section can resolve the model's own context window.
+    final modelId = widget.compact
+        ? (state.activeProvider?.model.trim() ?? '')
+        : (_p.model.trim().isNotEmpty
+            ? _p.model.trim()
+            : (_resolvedProvider?.model.trim() ?? ''));
+
     return Column(
       children: [
         Padding(
@@ -280,7 +288,13 @@ class _PresetEditorBodyState extends State<PresetEditorBody> {
                 Expanded(
                   child: TabBarView(
                     children: [
-                      _scroll(GeneralSection(preset: _p, onChanged: widget.onChanged), pad),
+                      _scroll(
+                          GeneralSection(
+                            preset: _p,
+                            onChanged: widget.onChanged,
+                            model: modelId,
+                          ),
+                          pad),
                       _scroll(PromptSection(preset: _p, onChanged: widget.onChanged), pad),
                       if (advanced)
                         _scroll(AdvancedSection(preset: _p, onChanged: widget.onChanged), pad),
