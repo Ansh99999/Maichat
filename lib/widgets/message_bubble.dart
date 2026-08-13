@@ -30,6 +30,7 @@ class MessageBubble extends StatelessWidget {
     this.onAvatarResize,
     this.onLongPress,
     this.onAction,
+    this.onSwipe,
     this.streaming = false,
   });
 
@@ -57,6 +58,11 @@ class MessageBubble extends StatelessWidget {
   /// Dispatches an inline/overflow message action. Null in the settings preview
   /// (which passes [interactive]), where the action bar is suppressed.
   final void Function(MessageAction)? onAction;
+
+  /// Selects one of this turn's swipes by index — wired to the ‹ 1/2 › control,
+  /// which is only drawn when the turn actually holds alternatives. Null leaves
+  /// the control read-only (the preview).
+  final void Function(int)? onSwipe;
 
   /// Whether a reply is currently streaming — disables mutating actions.
   final bool streaming;
@@ -186,20 +192,33 @@ class MessageBubble extends StatelessWidget {
             );
       return nameOnAvatar ? unit : stackName(unit);
     }
+
+    // The turn's text, with the swipe control tucked under it when this turn
+    // holds more than one alternative.
+    Widget content({Widget? leading}) {
+      final text = _text(scheme, textColor, showCaret, leading: leading);
+      if (!message.hasSwipes) return text;
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        // Centred under the message, per the spec — the bubble hugs whichever of
+        // the two is wider.
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [text, _swipeBar(context, textColor)],
+      );
+    }
 // APPEND-BUILD
 
     final Widget inner;
     switch (ui.textPlacement) {
       case TextPlacement.around:
-        inner = bubbleUnit(_bubble(
-            _text(scheme, textColor, showCaret, leading: avatar), bubbleColor));
+        inner = bubbleUnit(_bubble(content(leading: avatar), bubbleColor));
       case TextPlacement.below:
         inner = Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: crossAxis,
           children: [
             if (avatarUnit != null) ...[avatarUnit, const SizedBox(height: 6)],
-            bubbleUnit(_bubble(_text(scheme, textColor, showCaret), bubbleColor)),
+            bubbleUnit(_bubble(content(), bubbleColor)),
           ],
         );
       case TextPlacement.beside:
@@ -211,10 +230,7 @@ class MessageBubble extends StatelessWidget {
           textDirection: side.isLeft ? TextDirection.ltr : TextDirection.rtl,
           children: [
             if (avatarUnit != null) ...[avatarUnit, const SizedBox(width: 8)],
-            Flexible(
-              child: bubbleUnit(
-                  _bubble(_text(scheme, textColor, showCaret), bubbleColor)),
-            ),
+            Flexible(child: bubbleUnit(_bubble(content(), bubbleColor))),
           ],
         );
     }
@@ -318,6 +334,52 @@ class MessageBubble extends StatelessWidget {
                   ),
               ],
             ),
+        ],
+      ),
+    );
+  }
+
+  /// The swipe selector: `‹ 1 / 2 ›`, centred at the bottom of the message.
+  ///
+  /// Only reached when the turn holds more than one alternative — a turn with a
+  /// single reply shows nothing at all, so the chat stays clean. The arrow at
+  /// each end is disabled rather than wrapping, and both are disabled while a
+  /// reply is streaming (the incoming swipe is still being written).
+  Widget _swipeBar(BuildContext context, Color color) {
+    final index = message.swipeIndex;
+    final count = message.swipeCount;
+    final live = onSwipe != null && !streaming;
+    final faded = color.withValues(alpha: 0.75);
+    final size = (ui.fontSize * 0.82).clamp(10.0, 18.0);
+
+    Widget arrow(IconData icon, String tooltip, int? target) => IconButton(
+          tooltip: tooltip,
+          iconSize: size + 6,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 28, minHeight: 24),
+          color: faded,
+          onPressed:
+              live && target != null ? () => onSwipe!(target) : null,
+          icon: Icon(icon),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          arrow(Icons.chevron_left, 'Previous', index > 0 ? index - 1 : null),
+          Text(
+            '${index + 1} / $count',
+            style: TextStyle(
+              fontSize: size,
+              color: faded,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          arrow(Icons.chevron_right, 'Next',
+              index < count - 1 ? index + 1 : null),
         ],
       ),
     );

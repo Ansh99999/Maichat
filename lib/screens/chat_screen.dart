@@ -317,6 +317,7 @@ class _ChatScreenState extends State<ChatScreen> {
           streaming: state.streaming,
           onAction: (action) =>
               _runMessageAction(state, conversation, index, action),
+          onSwipe: (swipe) => state.setSwipe(conversation.id, index, swipe),
           onLongPress: message.content.isEmpty
               ? null
               : () => _showMessageActions(state, conversation, index),

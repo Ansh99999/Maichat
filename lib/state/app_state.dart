@@ -458,9 +458,25 @@ class AppState extends ChangeNotifier {
     return copy;
   }
 
+  /// Every greeting [character] offers, in card order: the main one first, then
+  /// its alternates, blanks dropped. Seeded as the swipes of the opening turn so
+  /// a card's alternate greetings are finally reachable — flip through them with
+  /// the message's ‹ › control instead of only ever seeing `first_mes`.
+  ///
+  /// Greetings are kept with {{char}}/{{user}} intact so they track the current
+  /// identity (e.g. after the user starts impersonating) — resolution happens at
+  /// prompt-build and display time, not once at write time.
+  static List<MessageVariant> _greetingSwipes(Character character) => <String>[
+        character.firstMes.trim(),
+        ...character.alternateGreetings.map((g) => g.trim()),
+      ]
+          .where((g) => g.isNotEmpty)
+          .map((g) => MessageVariant(content: g))
+          .toList();
+
   /// Opens a fresh thread bound to [character]: titles it after the character,
   /// stores the composed persona as the thread's (invisible) system prompt, and
-  /// seeds the resolved greeting as the opening assistant turn when there is one.
+  /// seeds its greetings as the opening assistant turn when there are any.
   /// Returns the new conversation's id so the caller can navigate to it.
   String startChatWithCharacter(Character character) {
     final conversation = Conversation.empty()
@@ -468,12 +484,10 @@ class AppState extends ChangeNotifier {
       ..characterId = character.id
       ..characterName = character.displayName
       ..systemPrompt = character.composedSystemPrompt();
-    // The greeting is stored with {{char}}/{{user}} intact so it tracks the
-    // current identity (e.g. after the user starts impersonating) — resolution
-    // happens at prompt-build and display time, not once at write time.
-    final greeting = character.firstMes.trim();
-    if (greeting.isNotEmpty) {
-      conversation.messages.add(ChatMessage(role: 'assistant', content: greeting));
+    final greetings = _greetingSwipes(character);
+    if (greetings.isNotEmpty) {
+      conversation.messages
+          .add(ChatMessage(role: 'assistant', swipes: greetings));
     }
     _conversations.insert(0, conversation);
     _activeId = conversation.id;
@@ -526,15 +540,15 @@ class AppState extends ChangeNotifier {
     if (_streaming) stop();
     final conversation = active;
     conversation.messages.clear();
-    // A character thread keeps its identity and re-seeds the greeting; a plain
+    // A character thread keeps its identity and re-seeds the greetings; a plain
     // thread resets to an untitled one.
     if (conversation.hasCharacter) {
       final character = characterById(conversation.characterId);
       if (character != null) {
-        final greeting = character.firstMes.trim();
-        if (greeting.isNotEmpty) {
+        final greetings = _greetingSwipes(character);
+        if (greetings.isNotEmpty) {
           conversation.messages
-              .add(ChatMessage(role: 'assistant', content: greeting));
+              .add(ChatMessage(role: 'assistant', swipes: greetings));
         }
       }
     } else {
@@ -578,16 +592,22 @@ class AppState extends ChangeNotifier {
   /// with the user's latest turn (this does NOT append the user message). Shared
   /// by [send] and [regenerateMessage].
   ///
+  /// With [swipeInto] set, the reply is written as a new swipe on the existing
+  /// assistant turn at that index rather than as a new turn — so a regeneration
+  /// keeps the reply it replaced and the two can be flipped between. The prompt
+  /// is then the history that came *before* that turn: a reply is never part of
+  /// its own input.
+  ///
   /// Two kinds of thinking are folded into the same place on the message: what
   /// the provider returns in its own field, and what the model writes inline
   /// between the preset's thinking tags. Either way the reply text stays clean
   /// and the thinking is timed, so the chat can show "Thought for X seconds".
-  Future<void> _generate(Conversation conversation) async {
+  Future<void> _generate(Conversation conversation, {int? swipeInto}) async {
     final preset = presetFor(conversation);
     final base = _resolveProvider(preset);
     if (base == null) return;
 
-    final assembled = _assemble(conversation);
+    final assembled = _assemble(conversation, historyEnd: swipeInto);
     final history = assembled.messages;
     final params = assembled.params;
     final tags = ReasoningTags(
@@ -595,7 +615,17 @@ class AppState extends ChangeNotifier {
       end: preset?.thinkEndTag.trim() ?? '',
     );
 
-    conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
+    // The turn the reply streams into, and (for a regeneration) the swipe that
+    // was live before it, so an aborted attempt can be rolled back cleanly.
+    final int target;
+    if (swipeInto == null) {
+      conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
+      target = conversation.messages.length - 1;
+    } else {
+      target = swipeInto;
+      conversation.messages[target] = conversation.messages[target]
+          .addSwipe(const MessageVariant(content: ''));
+    }
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
     _streaming = true;
@@ -631,7 +661,7 @@ class AppState extends ChangeNotifier {
             answer.trim().isNotEmpty) {
           thinkingMs = clock.elapsedMilliseconds;
         }
-        _replaceLast(conversation,
+        _replaceAt(conversation, target,
             content: answer, reasoning: thinking, thinkingMs: thinkingMs);
         notifyListeners();
       }
@@ -641,8 +671,9 @@ class AppState extends ChangeNotifier {
         thinkingMs = clock.elapsedMilliseconds;
       }
       if (answer.trim().isEmpty) {
-        _replaceLast(
+        _replaceAt(
           conversation,
+          target,
           content: thinking.trim().isEmpty
               ? 'The model returned an empty response.'
               // Almost always a thinking budget that left no room for the reply.
@@ -652,17 +683,17 @@ class AppState extends ChangeNotifier {
           error: true,
         );
       } else {
-        _replaceLast(conversation,
+        _replaceAt(conversation, target,
             content: answer, reasoning: thinking, thinkingMs: thinkingMs);
       }
     } on ChatApiException catch (e) {
       if (_stopRequested) {
-        _finishStopped(conversation, answer,
+        _finishStopped(conversation, target, answer,
             reasoning: thinking, thinkingMs: thinkingMs);
       } else {
         // A failed request rotates an error-based pool to the next key.
         _advanceKeyOnError(base);
-        _replaceLast(conversation,
+        _replaceAt(conversation, target,
             content: e.message, reasoning: '', error: true);
       }
     } finally {
@@ -758,17 +789,40 @@ class AppState extends ChangeNotifier {
     return fork.id;
   }
 
-  /// Regenerates the assistant turn at [index]: drops it and everything after,
-  /// then streams a fresh reply from the remaining history — the "retry" action.
-  /// A no-op for a user turn, an unknown thread, or while streaming.
+  /// Regenerates the assistant turn at [index]: keeps the existing reply as a
+  /// swipe, drops the turns that followed it (they answered the old reply), and
+  /// streams a fresh alternative from the history before it — the "retry"
+  /// action. Both replies stay on the turn, so the ‹ › control can flip between
+  /// them. A no-op for a user turn, an unknown thread, or while streaming.
   Future<void> regenerateMessage(String conversationId, int index) async {
     if (_streaming) return;
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     if (index < 0 || index >= conversation.messages.length) return;
     if (conversation.messages[index].isUser) return;
-    conversation.messages.removeRange(index, conversation.messages.length);
-    await _generate(conversation);
+    conversation.messages.removeRange(index + 1, conversation.messages.length);
+    await _generate(conversation, swipeInto: index);
+  }
+
+  /// Selects the swipe at [swipeIndex] on the message at [index] — the ‹ 1/2 ›
+  /// control under a turn that has alternatives. The selected variant is what
+  /// the chat shows and what later requests send; the others are kept.
+  Future<void> setSwipe(
+      String conversationId, int index, int swipeIndex) async {
+    if (_streaming) return;
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (index < 0 || index >= conversation.messages.length) return;
+    final message = conversation.messages[index];
+    if (swipeIndex < 0 ||
+        swipeIndex >= message.swipeCount ||
+        swipeIndex == message.swipeIndex) {
+      return;
+    }
+    conversation.messages[index] = message.withSwipe(swipeIndex);
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
   }
 
   /// The provider a request runs on. The user's active provider selection is
@@ -1101,16 +1155,18 @@ class AppState extends ChangeNotifier {
     return models;
   }
 
-  void _replaceLast(
-    Conversation conversation, {
+  /// Writes streamed output into the live swipe of the turn at [index] — the one
+  /// place a reply lands, whether it is a fresh turn or a regenerated swipe.
+  void _replaceAt(
+    Conversation conversation,
+    int index, {
     required String content,
     bool error = false,
     String? reasoning,
     int? thinkingMs,
   }) {
-    if (conversation.messages.isEmpty) return;
-    final last = conversation.messages.last;
-    conversation.messages[conversation.messages.length - 1] = last.copyWith(
+    if (index < 0 || index >= conversation.messages.length) return;
+    conversation.messages[index] = conversation.messages[index].copyWith(
       content: content,
       error: error,
       reasoning: reasoning,
@@ -1119,18 +1175,27 @@ class AppState extends ChangeNotifier {
   }
 
   /// A stop with no text yet leaves nothing worth keeping — unless the model had
-  /// already produced some thinking, which is worth showing on its own.
+  /// already produced some thinking, which is worth showing on its own. An
+  /// abandoned regeneration drops its empty swipe and hands the turn back to the
+  /// reply that was live before it; an abandoned fresh turn goes away entirely.
   void _finishStopped(
     Conversation conversation,
+    int index,
     String partial, {
     String reasoning = '',
     int? thinkingMs,
   }) {
+    if (index < 0 || index >= conversation.messages.length) return;
     if (partial.trim().isEmpty && reasoning.trim().isEmpty) {
-      if (conversation.messages.isNotEmpty) conversation.messages.removeLast();
+      final message = conversation.messages[index];
+      if (message.hasSwipes) {
+        conversation.messages[index] = message.removeSwipe(message.swipeIndex);
+      } else {
+        conversation.messages.removeAt(index);
+      }
       return;
     }
-    _replaceLast(conversation,
+    _replaceAt(conversation, index,
         content: partial, reasoning: reasoning, thinkingMs: thinkingMs);
   }
 
