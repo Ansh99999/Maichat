@@ -137,4 +137,39 @@ void main() {
           reason: 'unresolved macros must not be sent as literal text');
     }
   });
+
+  test('exactly one system message, at the front, carrying the definition',
+      () async {
+    // The framing this preset injects at a chat depth (</chat_history>,
+    // <last_message>, and a trailing <task>/<output_format>) used to be sent as
+    // `system` messages scattered after the conversation. A host that folds
+    // several system messages into one field could then keep only the last —
+    // the task block — so the model was told to roleplay with no sheet, read the
+    // chat for clues, and reported having no character definition. The same
+    // character worked under a preset with no depth injections, which is what
+    // pinned it down.
+    final state = await boot();
+    final character = alice();
+    await state.addCharacter(character);
+    state.startChatWithCharacter(character);
+    await state.send('TURN_ONE hi');
+    await state.send('TURN_TWO who are you?');
+
+    final msgs = wireMessages();
+    final systems = msgs.where((m) => m['role'] == 'system').toList();
+    expect(systems.length, 1, reason: 'exactly one system message');
+    expect(msgs.first['role'], 'system', reason: 'and it leads the request');
+    expect(systems.single['content'] as String, contains('DESC_TOKEN'));
+
+    // The in-chat framing still travels, still in place, as a user turn — the
+    // task block stays last so it is the freshest instruction before generation.
+    final last = msgs.last;
+    expect(last['role'], 'user');
+    expect(last['content'] as String, contains('<task>'));
+    expect(last['content'] as String, contains('TURN_TWO'));
+
+    for (var i = 1; i < msgs.length; i++) {
+      expect(msgs[i]['role'], isNot(msgs[i - 1]['role']));
+    }
+  });
 }

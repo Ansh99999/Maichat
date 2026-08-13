@@ -249,7 +249,7 @@ class PromptBuilder {
       }
     }
 
-    final parts = <_Part>[...leading, ...history0, ...trailing];
+    final parts = _oneSystemBlock(<_Part>[...leading, ...history0, ...trailing]);
     // Collapse consecutive same-role turns into one. This is not cosmetic:
     //
     //  * Presets that frame the prompt with many small blocks (tags, headings,
@@ -272,6 +272,40 @@ class PromptBuilder {
     final sections = _sectionsFrom(parts, cost);
     final total = parts.fold<int>(0, (sum, p) => sum + cost(p.msg));
     return BuiltPrompt(messages, total, sections);
+  }
+
+  /// Keeps `system` for the leading run only; any system block that would land
+  /// *after* the conversation has started is re-tagged `user`.
+  ///
+  /// Presets that wrap the chat in tags (`</chat_history>`, `<last_message>`,
+  /// a trailing `<task>` / `<output_format>`) place those blocks at a chat depth,
+  /// so they naturally fall between and after the turns. Sending them as `system`
+  /// leaves several system messages scattered through the request, and hosts
+  /// disagree badly about what that means: a gateway that folds them into one
+  /// system field can end up keeping only the *last* one, which is the trailing
+  /// task block — instructions to roleplay, with the character sheet nowhere in
+  /// sight. The model then reads the conversation, guesses from context, and says
+  /// it was never given a definition.
+  ///
+  /// One leading system block plus in-chat framing as `user` turns is what
+  /// SillyTavern sends, is unambiguous everywhere, and preserves both the content
+  /// and its position — only the role label of the in-chat framing changes.
+  static List<_Part> _oneSystemBlock(List<_Part> parts) {
+    final out = <_Part>[];
+    var conversationStarted = false;
+    for (final part in parts) {
+      final isSystem = part.msg.role == 'system';
+      if (!isSystem) conversationStarted = true;
+      if (isSystem && conversationStarted) {
+        out.add(_Part(
+          part.label,
+          ChatMessage(role: 'user', content: part.msg.content),
+        ));
+      } else {
+        out.add(part);
+      }
+    }
+    return out;
   }
 
   /// A human-readable section label for a prompt [block].
@@ -325,25 +359,6 @@ class PromptBuilder {
           tokens: t,
           messageCount: 1,
         ));
-      }
-    }
-    return out;
-  }
-
-  /// Collapses runs of consecutive same-role messages into one, joined by blank
-  /// lines. A superset of SillyTavern's `squash_system_messages`, applied to
-  /// every role because hosts differ on how many same-role turns they accept
-  /// (Anthropic rejects them; several proxies keep only the first `system`).
-  static List<ChatMessage> mergeSameRole(List<ChatMessage> input) {
-    final out = <ChatMessage>[];
-    for (final m in input) {
-      if (out.isNotEmpty && out.last.role == m.role) {
-        out[out.length - 1] = ChatMessage(
-          role: m.role,
-          content: '${out.last.content}\n\n${m.content}',
-        );
-      } else {
-        out.add(m);
       }
     }
     return out;

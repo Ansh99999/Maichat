@@ -78,6 +78,7 @@ class Provider {
   /// How to choose among [apiKeys] when there is more than one.
   final KeyRotationStrategy keyStrategy;
 
+
   /// The first credential worth sending, or empty when none is set. Callers that
   /// only need "a key" (headers, display) read this; rotation happens upstream
   /// in [AppState], which narrows the pool to the chosen key via [withActiveKey].

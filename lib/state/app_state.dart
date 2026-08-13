@@ -928,7 +928,7 @@ class AppState extends ChangeNotifier {
       // turn cannot re-fragment the payload. This is the exact list handed to
       // the wire layer, and the same list "View prompt" renders — the inspector
       // shows what is actually sent, not a pre-merge idealisation.
-      messages: PromptBuilder.mergeSameRole(messages),
+      messages: mergeSameRole(messages),
       params: params,
       sections: sections,
       totalTokens: total,
