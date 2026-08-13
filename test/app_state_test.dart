@@ -124,11 +124,12 @@ void main() {
     resumed.active.messages.addAll(state.active.messages);
     await resumed.send('two');
 
+    // Consecutive same-role turns are merged into one, so assert on the text.
     expect(
-      second.lastHistory!.map((m) => m.content),
-      containsAllInOrder(['one', 'two']),
+      second.lastHistory!.map((m) => m.content).join('\n'),
+      stringContainsInOrder(['one', 'two']),
     );
-    expect(second.lastHistory!.any((m) => m.content == 'boom'), isFalse);
+    expect(second.lastHistory!.any((m) => m.content.contains('boom')), isFalse);
   });
 
   test('new chat reuses an existing empty thread', () async {

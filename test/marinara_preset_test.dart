@@ -21,7 +21,7 @@ Character _alice() => Character(
     );
 
 int _indexOf(List<ChatMessage> m, String needle) =>
-    m.indexWhere((x) => x.content.trim() == needle);
+    m.map((x) => x.content).join('\n').indexOf(needle);
 
 void main() {
   final json = jsonDecode(
@@ -57,9 +57,9 @@ void main() {
       preset: preset,
       character: _alice(),
       history: [
-        ChatMessage(role: 'user', content: 'first'),
-        ChatMessage(role: 'assistant', content: 'reply'),
-        ChatMessage(role: 'user', content: 'Who are you?'),
+        ChatMessage(role: 'user', content: 'HIST_ONE'),
+        ChatMessage(role: 'assistant', content: 'HIST_TWO'),
+        ChatMessage(role: 'user', content: 'HIST_LAST'),
       ],
     );
     final m = built.messages;
@@ -78,13 +78,40 @@ void main() {
 
     // ...and in the right structural order: older history inside
     // <chat_history>…</chat_history>, the latest turn inside
-    // <last_message>…</last_message>, then the task block after it.
-    expect(_indexOf(m, '<chat_history>'), lessThan(_indexOf(m, 'first')));
-    expect(_indexOf(m, 'first'), lessThan(_indexOf(m, 'reply')));
-    expect(_indexOf(m, 'reply'), lessThan(_indexOf(m, '</chat_history>')));
+    // <last_message>…</last_message>, then the task block after it. Offsets are
+    // measured in the assembled text, since same-role runs are merged into one
+    // turn before sending.
+    expect(_indexOf(m, '<chat_history>'), lessThan(_indexOf(m, 'HIST_ONE')));
+    expect(_indexOf(m, 'HIST_ONE'), lessThan(_indexOf(m, 'HIST_TWO')));
+    expect(_indexOf(m, 'HIST_TWO'), lessThan(_indexOf(m, '</chat_history>')));
     expect(_indexOf(m, '</chat_history>'), lessThan(_indexOf(m, '<last_message>')));
-    expect(_indexOf(m, '<last_message>'), lessThan(_indexOf(m, 'Who are you?')));
-    expect(_indexOf(m, 'Who are you?'), lessThan(_indexOf(m, '</last_message>')));
+    expect(_indexOf(m, '<last_message>'), lessThan(_indexOf(m, 'HIST_LAST')));
+    expect(_indexOf(m, 'HIST_LAST'), lessThan(_indexOf(m, '</last_message>')));
     expect(_indexOf(m, '</last_message>'), lessThan(_indexOf(m, '<task>')));
+  });
+
+  test('the payload is merged into few turns, not dozens of system fragments',
+      () {
+    final built = builder.build(
+      preset: preset,
+      character: _alice(),
+      history: [ChatMessage(role: 'user', content: 'Who are you?')],
+    );
+    // Before merging this preset produced ~38 messages, 37 of them `system`
+    // fragments as short as a bare `<role>` tag — hosts that honour only the
+    // first system message then saw none of the definition.
+    expect(built.messages.length, lessThan(12));
+    // The definition must ride in the FIRST system turn, which is the one a
+    // system-collapsing host keeps.
+    final firstSystem =
+        built.messages.firstWhere((x) => x.role == 'system').content;
+    expect(firstSystem, contains('A curious explorer.'));
+    expect(firstSystem, contains('Bold and kind.'));
+    expect(firstSystem, contains('A market at dawn.'));
+    // No two adjacent turns share a role.
+    for (var i = 1; i < built.messages.length; i++) {
+      expect(built.messages[i].role, isNot(built.messages[i - 1].role),
+          reason: 'adjacent turns at $i share a role');
+    }
   });
 }

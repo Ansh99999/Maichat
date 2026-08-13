@@ -40,16 +40,23 @@ void main() {
       history: _history(2),
     );
     final contents = built.messages.map((m) => m.content).toList();
+    // Consecutive same-role blocks are merged into one turn, so assert on the
+    // assembled text and its ordering rather than on message boundaries.
+    final joined = contents.join('\n');
 
-    // Leading system blocks: main, description, personality, scenario, examples.
     expect(built.messages.first.role, 'system');
     expect(contents.first, contains('Alice')); // {{char}} resolved in main
-    expect(contents, contains('A curious explorer.'));
-    expect(contents, contains('Bold and kind.'));
-    expect(contents, contains('A market at dawn.'));
-    // History follows, in chronological order.
+    expect(
+      joined,
+      stringContainsInOrder([
+        'A curious explorer.',
+        'Bold and kind.',
+        'A market at dawn.',
+      ]),
+    );
+    // History follows, in chronological order, as its own turns.
     expect(contents.sublist(contents.length - 2), ['msg 0', 'msg 1']);
-    // Empty blocks (nsfw, worldInfo, jailbreak) are dropped.
+    // Empty blocks (nsfw, worldInfo, jailbreak) contribute nothing.
     expect(contents.where((c) => c.trim().isEmpty), isEmpty);
   });
 
@@ -59,7 +66,8 @@ void main() {
       character: _alice()..systemPrompt = 'Custom {{char}} directive.',
       history: const [],
     );
-    expect(built.messages.first.content, 'Custom Alice directive.');
+    // The override leads the merged system turn.
+    expect(built.messages.first.content, startsWith('Custom Alice directive.'));
   });
 
   test('history is truncated newest-first to fit the context budget', () {

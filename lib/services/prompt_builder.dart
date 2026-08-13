@@ -234,11 +234,27 @@ class PromptBuilder {
     }
 
     final parts = <_Part>[...leading, ...history0, ...trailing];
-    var messages = parts.map((p) => p.msg).toList();
-    if (preset.squashSystemMessages) messages = _squashSystem(messages);
+    // Collapse consecutive same-role turns into one. This is not cosmetic:
+    //
+    //  * Presets that frame the prompt with many small blocks (tags, headings,
+    //    one block per rule) otherwise emit dozens of tiny `system` messages.
+    //    Plenty of OpenAI-compatible hosts and proxies honour only the *first*
+    //    system message and discard the rest — which silently reduced the whole
+    //    character definition and instruction frame to whatever the first
+    //    fragment happened to be (often a bare `<role>` tag).
+    //  * Anthropic rejects consecutive same-role turns outright.
+    //
+    // Adjacent blocks of the same role are contiguous document text by design,
+    // so joining them with a blank line is what the preset author intended. The
+    // preset's own `squashSystemMessages` flag is a strict subset of this and is
+    // kept only for lossless preset import/export.
+    final messages = mergeSameRole(parts.map((p) => p.msg).toList());
 
+    // The breakdown stays per-block (unmerged) so the Info view can still name
+    // each section; its total is measured on the same unmerged parts so the two
+    // agree with each other.
     final sections = _sectionsFrom(parts, cost);
-    final total = messages.fold<int>(0, (sum, m) => sum + cost(m));
+    final total = parts.fold<int>(0, (sum, p) => sum + cost(p.msg));
     return BuiltPrompt(messages, total, sections);
   }
 
@@ -298,14 +314,16 @@ class PromptBuilder {
     return out;
   }
 
-  /// Collapses runs of consecutive `system` messages into one, joined by blank
-  /// lines — SillyTavern's `squash_system_messages`.
-  static List<ChatMessage> _squashSystem(List<ChatMessage> input) {
+  /// Collapses runs of consecutive same-role messages into one, joined by blank
+  /// lines. A superset of SillyTavern's `squash_system_messages`, applied to
+  /// every role because hosts differ on how many same-role turns they accept
+  /// (Anthropic rejects them; several proxies keep only the first `system`).
+  static List<ChatMessage> mergeSameRole(List<ChatMessage> input) {
     final out = <ChatMessage>[];
     for (final m in input) {
-      if (m.role == 'system' && out.isNotEmpty && out.last.role == 'system') {
+      if (out.isNotEmpty && out.last.role == m.role) {
         out[out.length - 1] = ChatMessage(
-          role: 'system',
+          role: m.role,
           content: '${out.last.content}\n\n${m.content}',
         );
       } else {
