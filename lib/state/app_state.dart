@@ -329,6 +329,31 @@ class AppState extends ChangeNotifier {
     await _storage.saveConversations(_conversations);
   }
 
+  /// Drops a chat's preset override so it follows the shared library preset
+  /// again. Without this, a single "this chat only" save pins the chat to a
+  /// frozen copy forever: later edits to the library preset (raising the context
+  /// size, say) apply everywhere *except* that chat, with nothing on screen to
+  /// explain why.
+  Future<void> clearChatPresetOverride(String conversationId) async {
+    var changed = false;
+    for (final c in _conversations) {
+      if (c.id == conversationId && c.presetOverride != null) {
+        c.presetOverride = null;
+        c.updatedAt = DateTime.now();
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return;
+    notifyListeners();
+    await _storage.saveConversations(_conversations);
+  }
+
+  /// Whether [conversation] runs on a chat-specific copy rather than the shared
+  /// library preset.
+  bool hasPresetOverride(Conversation conversation) =>
+      conversation.presetOverride != null;
+
   /// Saves an edited preset back to the shared library (the "save for the whole
   /// preset" path) and binds the chat to it, clearing any override.
   Future<void> savePresetToLibrary(String conversationId, Preset preset) async {

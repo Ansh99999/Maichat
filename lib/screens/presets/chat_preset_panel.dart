@@ -95,6 +95,13 @@ class _ChatPresetPanelState extends State<ChatPresetPanel> {
     return Column(
       children: [
         _PanelHeader(title: 'Presets', onBack: widget.onBack),
+        if (state.hasPresetOverride(state.active))
+          _OverrideNotice(
+            presetName: current?.displayName ?? 'this preset',
+            contextSize: current?.maxContext,
+            onRevert: () =>
+                state.clearChatPresetOverride(state.active.id),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
           child: SearchBar(
@@ -153,6 +160,56 @@ class _ChatPresetPanelState extends State<ChatPresetPanel> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Tells the user this chat is pinned to its own copy of the preset — so edits
+/// made to the preset elsewhere do not reach it — and offers a way back.
+class _OverrideNotice extends StatelessWidget {
+  const _OverrideNotice({
+    required this.presetName,
+    required this.contextSize,
+    required this.onRevert,
+  });
+
+  final String presetName;
+  final int? contextSize;
+  final VoidCallback onRevert;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      color: theme.colorScheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'This chat uses its own copy of "$presetName"'
+              '${contextSize == null ? '' : ' (context $contextSize)'}.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Changes you make to the preset elsewhere will not apply here.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSecondaryContainer,
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onRevert,
+                child: const Text('Follow the preset again'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
