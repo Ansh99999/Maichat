@@ -39,6 +39,16 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scroll = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    // Never pop the soft keyboard just because the chat opened — drop any focus
+    // carried in from the previous screen once the first frame is laid out.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) FocusManager.instance.primaryFocus?.unfocus();
+    });
+  }
+
+  @override
   void dispose() {
     _input.dispose();
     _scroll.dispose();
@@ -107,7 +117,7 @@ class _ChatScreenState extends State<ChatScreen> {
         title: const Text('Rename chat'),
         content: TextField(
           controller: controller,
-          autofocus: true,
+          autofocus: false,
           decoration: const InputDecoration(labelText: 'Title'),
           onSubmitted: (v) => Navigator.of(context).pop(v),
         ),
@@ -476,7 +486,7 @@ class _ChatScreenState extends State<ChatScreen> {
         title: const Text('Edit message'),
         content: TextField(
           controller: controller,
-          autofocus: true,
+          autofocus: false,
           minLines: 1,
           maxLines: 10,
           decoration: const InputDecoration(border: OutlineInputBorder()),

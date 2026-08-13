@@ -247,7 +247,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
         title: Text(source.label),
         content: TextField(
           controller: controller,
-          autofocus: true,
+          autofocus: false,
           minLines: multiline ? 4 : 1,
           maxLines: multiline ? 10 : 1,
           keyboardType:

@@ -690,24 +690,28 @@ class AppState extends ChangeNotifier {
     await _generate(conversation);
   }
 
-  /// The provider a preset runs on: its bound provider (else the active one),
-  /// with the preset's model applied on top when it names one.
+  /// The provider a request runs on. The user's active provider selection is
+  /// authoritative — a preset's bound provider/model is only a fallback for when
+  /// nothing is actively selected (or the provider names no model). Previously
+  /// a preset's binding silently overrode the picker, so switching provider or
+  /// model "did nothing" and the old one lived on.
   Provider? _resolveProvider(Preset? preset) {
-    Provider? base;
-    final id = preset?.providerId;
-    if (id != null) {
+    Provider? base = activeProvider;
+    // Fall back to the preset's bound provider only when there is no active one.
+    if (base == null && preset?.providerId != null) {
       for (final p in _providers) {
-        if (p.id == id) {
+        if (p.id == preset!.providerId) {
           base = p;
           break;
         }
       }
     }
-    base ??= activeProvider;
     if (base == null) return null;
-    final model = (preset?.model.trim().isNotEmpty ?? false)
-        ? preset!.model.trim()
-        : base.model;
+    // The active provider's own model wins; the preset's model is used only when
+    // that provider has none set.
+    final model = base.model.trim().isNotEmpty
+        ? base.model
+        : (preset?.model.trim() ?? '');
     return model == base.model ? base : base.copyWith(model: model);
   }
 

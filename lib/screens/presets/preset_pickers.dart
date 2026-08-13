@@ -130,7 +130,7 @@ class _SearchPickerDialogState extends State<_SearchPickerDialog> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: TextField(
-                autofocus: true,
+                autofocus: false,
                 decoration: const InputDecoration(
                   hintText: 'Search',
                   prefixIcon: Icon(Icons.search),
