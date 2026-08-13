@@ -801,6 +801,22 @@ class AppState extends ChangeNotifier {
     return _client.countTokens(provider, assembled.messages);
   }
 
+  /// The literal HTTP request a send would make for [assembled] — endpoint,
+  /// headers (credentials redacted) and the JSON body — built by the same code
+  /// that performs the send. For the inspector's "copy raw request", so a report
+  /// about what the app transmits can be checked against the actual bytes
+  /// instead of an approximation. Null when no provider is configured.
+  String? requestPreview(AssembledPrompt assembled) {
+    final preset = presetFor(_activeOrNull() ?? active);
+    final provider = _resolveProvider(preset);
+    if (provider == null) return null;
+    return _client.requestPreview(
+      _applyKey(provider),
+      assembled.messages,
+      params: assembled.params,
+    );
+  }
+
   /// Assembles the exact request for [conversation] — the single code path used
   /// by real sends ([_generate]) *and* the "View prompt" / "Info" inspectors, so
   /// what the user inspects is what the model receives. [historyEnd], when set,

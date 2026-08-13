@@ -168,6 +168,49 @@ class ChatClient {
     };
   }
 
+  /// The exact JSON request body this client would POST for [history], pretty
+  /// printed — the inspector's "copy raw request", so what a user reports is the
+  /// literal payload rather than a re-derivation of it. Shares [_body] with
+  /// [streamChat], so the two can never drift.
+  String requestPreview(
+    Provider provider,
+    List<ChatMessage> history, {
+    GenParams params = const GenParams(),
+  }) {
+    final uri = requestUri(provider);
+    final headers = _headers(provider, stream: true)
+      // Never put a credential on the clipboard.
+      ..updateAll((key, value) => _isSecretHeader(key) ? '<redacted>' : value);
+    final body =
+        const JsonEncoder.withIndent('  ').convert(_body(provider, history, params));
+    return 'POST $uri\n'
+        '${headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
+        '$body';
+  }
+
+  static bool _isSecretHeader(String name) {
+    final lower = name.toLowerCase();
+    return lower == 'authorization' ||
+        lower == 'x-api-key' ||
+        lower == 'x-goog-api-key';
+  }
+
+  /// The endpoint a chat turn is POSTed to, by provider format.
+  static Uri requestUri(Provider provider) {
+    switch (provider.kind) {
+      case ProviderKind.gemini:
+        return endpoint(
+          provider.baseUrl,
+          '/models/${Uri.encodeComponent(provider.model.trim())}'
+              ':streamGenerateContent',
+        ).replace(queryParameters: {'alt': 'sse'});
+      case ProviderKind.anthropic:
+        return endpoint(provider.baseUrl, '/messages');
+      case ProviderKind.openai:
+        return endpoint(provider.baseUrl, '/chat/completions');
+    }
+  }
+
   /// Streams assistant text deltas for [history] until the model stops.
   Stream<String> streamChat({
     required Provider provider,
@@ -179,20 +222,7 @@ class ChatClient {
     }
     final anthropic = provider.kind == ProviderKind.anthropic;
     final gemini = provider.kind == ProviderKind.gemini;
-    final Uri uri;
-    if (gemini) {
-      // Gemini names the method on the model path and streams via `alt=sse`.
-      uri = endpoint(
-        provider.baseUrl,
-        '/models/${Uri.encodeComponent(provider.model.trim())}'
-            ':streamGenerateContent',
-      ).replace(queryParameters: {'alt': 'sse'});
-    } else {
-      uri = endpoint(
-        provider.baseUrl,
-        anthropic ? '/messages' : '/chat/completions',
-      );
-    }
+    final uri = requestUri(provider);
     final client = http.Client();
     _active = client;
     try {

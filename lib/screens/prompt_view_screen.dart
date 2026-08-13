@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../models/message.dart';
 import '../state/app_state.dart';
@@ -17,6 +18,26 @@ class PromptViewScreen extends StatelessWidget {
       .map((m) => '[${m.role}]\n${m.content}')
       .join('\n\n');
 
+  /// Copies the literal HTTP request a send would make — endpoint, headers with
+  /// credentials redacted, and the JSON body — so what the app transmits can be
+  /// inspected directly rather than inferred from this rendering.
+  void _copyRawRequest(BuildContext context) {
+    final raw = context.read<AppState>().requestPreview(assembled);
+    final messenger = ScaffoldMessenger.of(context);
+    if (raw == null) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('No provider configured'),
+        duration: Duration(seconds: 2),
+      ));
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: raw));
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Raw request copied (API key redacted)'),
+      duration: Duration(seconds: 2),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -27,6 +48,11 @@ class PromptViewScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Prompt'),
         actions: [
+          IconButton(
+            tooltip: 'Copy raw request',
+            icon: const Icon(Icons.data_object),
+            onPressed: () => _copyRawRequest(context),
+          ),
           IconButton(
             tooltip: 'Copy all',
             icon: const Icon(Icons.copy_all_outlined),
