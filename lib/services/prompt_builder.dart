@@ -171,14 +171,25 @@ class PromptBuilder {
     var fixedTokens =
         [...leading, ...trailing].fold<int>(0, (sum, p) => sum + cost(p.msg));
 
-    // Absolute-injection blocks are reserved before history fills the rest.
-    final injections = <_Part>[];
-    for (final block in absolute
-      ..sort((a, b) => b.injectionOrder.compareTo(a.injectionOrder))) {
+    // Absolute-injection blocks are placed into the chat history at a depth
+    // from the end rather than inline. Resolve them now (so their tokens are
+    // reserved before history greedily fills the remaining budget), keeping
+    // each block's depth and order attached to its message. Crucially we do NOT
+    // map injections back to `absolute` by list index later: the instant one
+    // block resolves to empty and is skipped, an index map desynchronizes and
+    // silently drops or mis-depths the rest (real presets inject empty comment
+    // blocks, so this happened constantly).
+    final injections = <_Injection>[];
+    for (final block in absolute) {
       final text = macros.evaluate(block.content, ctx).trim();
       if (text.isEmpty) continue;
       final msg = ChatMessage(role: block.role, content: text);
-      injections.add(_Part('Injected (depth ${block.injectionDepth})', msg));
+      injections.add(_Injection(
+        depth: block.injectionDepth,
+        order: block.injectionOrder,
+        seq: injections.length,
+        part: _Part('Injected (depth ${block.injectionDepth})', msg),
+      ));
       fixedTokens += cost(msg);
     }
 
@@ -194,20 +205,31 @@ class PromptBuilder {
     final history0 =
         chosen.reversed.map((m) => _Part('Chat history', m)).toList();
 
-    // Merge absolute injections in at their depth-from-end (highest order first).
+    // Merge absolute injections in at their depth-from-end. Depth d means "d
+    // messages follow this block", so it lands at index (len - d). Within a
+    // depth, a higher injection order sits earlier; equal orders keep prompt
+    // order (stable). Depths are applied shallowest-last (ascending) so a
+    // deeper insert at a lower index does not shift an already-placed shallower
+    // group.
     if (injections.isNotEmpty) {
-      final byDepth = <int, List<_Part>>{};
-      for (var i = 0; i < absolute.length; i++) {
-        if (i < injections.length) {
-          byDepth
-              .putIfAbsent(absolute[i].injectionDepth, () => [])
-              .add(injections[i]);
-        }
+      final byDepth = <int, List<_Injection>>{};
+      for (final inj in injections) {
+        byDepth.putIfAbsent(inj.depth, () => []).add(inj);
       }
+      // Positions are measured against the history length *before* any injection
+      // — inserting a group must not shift the target index of the next one.
+      // Processing depths ascending inserts at strictly decreasing indices, so
+      // each insert leaves every not-yet-used (lower) target index untouched.
+      final baseLen = history0.length;
       final depths = byDepth.keys.toList()..sort();
       for (final depth in depths) {
-        final at = (history0.length - depth).clamp(0, history0.length);
-        history0.insertAll(at, byDepth[depth]!);
+        final bucket = byDepth[depth]!
+          ..sort((a, b) {
+            final byOrder = b.order.compareTo(a.order);
+            return byOrder != 0 ? byOrder : a.seq.compareTo(b.seq);
+          });
+        final at = (baseLen - depth).clamp(0, history0.length);
+        history0.insertAll(at, bucket.map((i) => i.part));
       }
     }
 
@@ -300,4 +322,20 @@ class _Part {
   const _Part(this.label, this.msg);
   final String label;
   final ChatMessage msg;
+}
+
+/// An absolute (depth) injection awaiting placement in the chat history: its
+/// target [depth] from the end, its [order] tiebreaker within that depth, a
+/// stable [seq] (prompt-order index) for equal orders, and the [part] to place.
+class _Injection {
+  const _Injection({
+    required this.depth,
+    required this.order,
+    required this.seq,
+    required this.part,
+  });
+  final int depth;
+  final int order;
+  final int seq;
+  final _Part part;
 }
