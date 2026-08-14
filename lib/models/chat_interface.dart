@@ -66,8 +66,11 @@ enum NameAlign {
   }
 }
 
-/// Whether a sender's name label sits above or below its message (the avatar +
-/// bubble group it labels).
+/// Whether a sender's name label sits above its message or below its avatar.
+///
+/// [above] puts it over the whole turn; [below] hangs it under the avatar, in the
+/// empty space beside the text — falling back to under the message when this turn
+/// has no standalone avatar to hang from.
 enum NamePosition {
   above('Above'),
   below('Below');

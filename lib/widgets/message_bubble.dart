@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -241,10 +240,11 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    // The name is a band of its own across the whole row, above or below the
-    // message it labels — that is what lets its alignment be read against the
-    // screen ("Right" = the right edge of the chat) rather than against the
-    // width of the bubble it happens to sit over.
+    // The name is drawn in a band across the whole row, so its alignment reads
+    // against the *screen* ("Right" = the right edge of the chat) rather than
+    // against the width of the bubble it happens to sit over. Vertically it goes
+    // above the message, or — when this turn has a standalone avatar beside its
+    // text — directly under that avatar, where it used to sit.
     Widget outer = body;
     if (nameW != null) {
       final band = Align(alignment: nameStyle.align.alignment, child: nameW);
@@ -253,9 +253,20 @@ class MessageBubble extends StatelessWidget {
         child: body,
       );
       final above = nameStyle.position == NamePosition.above;
-      // The band is always the *last* child so it paints over the message;
+
+      // Keeps the band's slot in the layout without drawing it, so a nudged or
+      // overlaid label never makes the turn jump or run into its neighbour.
+      Widget reserved() => Visibility(
+            visible: false,
+            maintainSize: true,
+            maintainAnimation: true,
+            maintainState: true,
+            child: band,
+          );
+
+      // The band is the *last* child so it paints over the message;
       // [verticalDirection] is what puts it above or below.
-      Column stack(Widget bandSlot) => Column(
+      Column stacked(Widget bandSlot) => Column(
             mainAxisSize: MainAxisSize.min,
             // Stretch so both the band and the message get the full row width
             // to align themselves within.
@@ -265,24 +276,46 @@ class MessageBubble extends StatelessWidget {
             children: [messageRow, bandSlot],
           );
 
-      if (!nameStyle.isNudged) {
-        outer = stack(band);
-      } else {
-        // A nudged label has to keep a hit box where it is *drawn*, not where it
-        // was laid out — a `Transform` would paint it over the message but leave
-        // it ungrabbable, so a name could be dragged once and never again. The
-        // band keeps its slot (invisible, so the layout doesn't jump) and the
-        // label is positioned within the turn's own Stack instead.
+      // "Below" means below the avatar, which is only a place when there is a
+      // standalone avatar with the text beside it. The space under it is empty,
+      // so the label is laid over the turn at exactly that height — full row
+      // width, so its alignment still spans the screen.
+      final belowAvatar = !above &&
+          avatar != null &&
+          ui.textPlacement == TextPlacement.beside &&
+          placement != ActionBarPlacement.besideAvatar;
+
+      if (belowAvatar) {
+        final anchor = style.size + 2;
         outer = Stack(
           clipBehavior: Clip.none,
           children: [
-            stack(Visibility(
-              visible: false,
-              maintainSize: true,
-              maintainAnimation: true,
-              maintainState: true,
+            messageRow,
+            // Room under the avatar for the label, whatever the message's own
+            // height turns out to be.
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [SizedBox(height: anchor), reserved()],
+            ),
+            Positioned(
+              top: anchor + nameStyle.offsetY,
+              left: nameStyle.offsetX,
+              right: -nameStyle.offsetX,
               child: band,
-            )),
+            ),
+          ],
+        );
+      } else if (!nameStyle.isNudged) {
+        outer = stacked(band);
+      } else {
+        // A nudged label has to keep a hit box where it is *drawn*, not where it
+        // was laid out — a `Transform` would paint it over the message but leave
+        // it ungrabbable, so a name could be dragged once and never again.
+        outer = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            stacked(reserved()),
             Positioned(
               left: nameStyle.offsetX,
               right: -nameStyle.offsetX,
@@ -697,13 +730,14 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
-/// A drag handle for the settings preview that beats the list it sits in.
+/// A drag handle for the settings preview.
 ///
-/// A plain `onPanUpdate` loses the gesture arena to the enclosing scrollable
-/// whenever the drag is mostly vertical — which is exactly the direction a name
-/// or avatar needs to move — so the preview would scroll instead of nudging.
-/// [ImmediateMultiDragGestureRecognizer] claims the pointer the moment it moves,
-/// before the scroll's slop is reached, the way Flutter's own reorder handles do.
+/// A plain pan is deliberate: it is what worked on real hardware. The clever
+/// alternative — an immediate multi-drag recogniser, to beat an enclosing
+/// scrollable to the gesture — turned out not to fire on a physical touch screen
+/// at all, so both the avatar and the name went dead. The preview's mock chat is
+/// non-scrolling instead ([ChatInterfacePreviewPage]), which leaves nothing to
+/// compete with and lets the simple thing work.
 class _NudgeHandle extends StatelessWidget {
   const _NudgeHandle({required this.onDrag, required this.child});
 
@@ -712,30 +746,14 @@ class _NudgeHandle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RawGestureDetector(
+    return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      gestures: <Type, GestureRecognizerFactory>{
-        ImmediateMultiDragGestureRecognizer:
-            GestureRecognizerFactoryWithHandlers<
-                ImmediateMultiDragGestureRecognizer>(
-          ImmediateMultiDragGestureRecognizer.new,
-          (recognizer) => recognizer.onStart = (_) => _NudgeDrag(onDrag),
-        ),
-      },
+      // Pan and (vertical/horizontal) drag callbacks are mutually exclusive on
+      // one detector, so pan alone covers every direction.
+      onPanUpdate: (d) => onDrag(d.delta),
       child: child,
     );
   }
-}
-
-/// The [Drag] an active [_NudgeHandle] returns: it forwards every movement as a
-/// delta and has nothing to clean up on release.
-class _NudgeDrag extends Drag {
-  _NudgeDrag(this.onDrag);
-
-  final ValueChanged<Offset> onDrag;
-
-  @override
-  void update(DragUpdateDetails details) => onDrag(details.delta);
 }
 
 /// A stand-in avatar for the user's turns (and bot turns in a character-less

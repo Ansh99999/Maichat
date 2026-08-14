@@ -11,6 +11,13 @@ void main() {
         ),
       );
 
+  /// A host with no scrollable in it, mirroring the settings preview: a
+  /// scrollable would take any mostly-vertical drag off the handles for itself,
+  /// which is why the real preview does not scroll either.
+  Widget dragHost(List<Widget> children) => host(
+        Column(mainAxisSize: MainAxisSize.min, children: children),
+      );
+
   // Every placement × bubble mode should lay out without throwing (guards the
   // Row/Column/WidgetSpan layout and the flat-vs-bubble branches).
   for (final placement in TextPlacement.values) {
@@ -60,7 +67,11 @@ void main() {
           ),
         ));
         expect(tester.takeException(), isNull);
-        expect(find.text('Assistant'), findsNWidgets(TextPlacement.values.length));
+        // A "below" label with an avatar to hang under keeps an invisible
+        // placeholder for its slot, so the count is per-turn, not per-label.
+        expect(find.byType(MessageBubble),
+            findsNWidgets(TextPlacement.values.length));
+        expect(find.text('Assistant'), findsWidgets);
       });
     }
   }
@@ -69,23 +80,20 @@ void main() {
       (tester) async {
     Offset? drag;
     double? resize;
-    // Inside a ListView on purpose: a mostly-vertical drag must nudge the
-    // avatar, not scroll the preview out from under it.
-    await tester.pumpWidget(host(
-      ListView(children: [
-        MessageBubble(
-          message: ChatMessage(role: 'assistant', content: 'Drag me'),
-          ui: const ChatInterface(
-            botAvatar: AvatarStyle(size: 60, side: ChatSide.left),
-          ),
-          interactive: true,
-          onAvatarDrag: (d) => drag = d,
-          onAvatarResize: (d) => resize = d,
+    await tester.pumpWidget(dragHost([
+      MessageBubble(
+        message: ChatMessage(role: 'assistant', content: 'Drag me'),
+        ui: const ChatInterface(
+          botAvatar: AvatarStyle(size: 60, side: ChatSide.left),
         ),
-      ]),
-    ));
+        interactive: true,
+        onAvatarDrag: (d) => drag = d,
+        onAvatarResize: (d) => resize = d,
+      ),
+    ]));
 
-    // Dragging the avatar body reports a movement delta.
+    // Dragging the avatar body reports a movement delta — downwards too, which
+    // is the direction a scrollable would otherwise have stolen.
     await tester.drag(
       find.byIcon(Icons.smart_toy_outlined),
       const Offset(6, 40),
@@ -279,16 +287,14 @@ void main() {
     testWidgets('is draggable in the preview and reports the delta',
         (tester) async {
       Offset? moved;
-      await tester.pumpWidget(host(
-        ListView(children: [
-          MessageBubble(
-            message: ChatMessage(role: 'assistant', content: 'Hi'),
-            ui: const ChatInterface(showNames: true),
-            interactive: true,
-            onNameDrag: (d) => moved = d,
-          ),
-        ]),
-      ));
+      await tester.pumpWidget(dragHost([
+        MessageBubble(
+          message: ChatMessage(role: 'assistant', content: 'Hi'),
+          ui: const ChatInterface(showNames: true),
+          interactive: true,
+          onNameDrag: (d) => moved = d,
+        ),
+      ]));
 
       // Past the pan slop, so the gesture is actually recognised.
       await tester.drag(find.text('Assistant'), const Offset(6, 40));
@@ -360,19 +366,17 @@ void main() {
     testWidgets('stays grabbable once nudged over its own message',
         (tester) async {
       var total = Offset.zero;
-      Widget build(double offsetY) => host(
-            ListView(children: [
-              MessageBubble(
-                message: ChatMessage(role: 'assistant', content: 'Hi'),
-                ui: ChatInterface(
-                  showNames: true,
-                  botNameStyle: NameStyle(offsetY: offsetY),
-                ),
-                interactive: true,
-                onNameDrag: (d) => total += d,
+      Widget build(double offsetY) => dragHost([
+            MessageBubble(
+              message: ChatMessage(role: 'assistant', content: 'Hi'),
+              ui: ChatInterface(
+                showNames: true,
+                botNameStyle: NameStyle(offsetY: offsetY),
               ),
-            ]),
-          );
+              interactive: true,
+              onNameDrag: (d) => total += d,
+            ),
+          ]);
 
       await tester.pumpWidget(build(0));
       await tester.drag(find.text('Assistant'), const Offset(0, 40));
@@ -386,6 +390,79 @@ void main() {
       await tester.drag(find.text('Assistant').last, const Offset(0, 30));
       await tester.pump();
       expect(total.dy, greaterThan(first));
+    });
+
+    testWidgets('"below" means below the avatar, not below the whole message',
+        (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(
+                role: 'assistant',
+                content: 'A reply long enough to run to several lines in this '
+                    'narrow host, so its bubble is clearly taller than the '
+                    'avatar beside it.'),
+            ui: const ChatInterface(
+              showNames: true,
+              botNameStyle: NameStyle(position: NamePosition.below),
+              botAvatar: AvatarStyle(size: 48, side: ChatSide.left),
+            ),
+          ),
+        ]),
+      ));
+
+      final avatar = tester.getRect(find.byIcon(Icons.smart_toy_outlined));
+      final label = tester.getRect(find.text('Assistant').last);
+      // Directly under the avatar — and well above the bottom of the much
+      // taller bubble it sits beside.
+      expect(label.top, greaterThanOrEqualTo(avatar.bottom - 1));
+      final bubble = tester.getRect(find.byType(MessageBubble));
+      expect(label.bottom, lessThan(bubble.bottom));
+    });
+
+    testWidgets('"below" falls back under the message with no avatar to hang on',
+        (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Short'),
+            ui: const ChatInterface(
+              showNames: true,
+              botNameStyle: NameStyle(position: NamePosition.below),
+              botAvatar: AvatarStyle(show: false, side: ChatSide.left),
+            ),
+          ),
+        ]),
+      ));
+
+      expect(tester.takeException(), isNull);
+      final text = tester.getRect(find.text('Short'));
+      final label = tester.getRect(find.text('Assistant'));
+      expect(label.top, greaterThan(text.top));
+    });
+
+    testWidgets('a below-the-avatar label still aligns across the screen',
+        (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: const ChatInterface(
+              showNames: true,
+              botNameStyle: NameStyle(
+                position: NamePosition.below,
+                align: NameAlign.end,
+              ),
+              botAvatar: AvatarStyle(size: 48, side: ChatSide.left),
+            ),
+          ),
+        ]),
+      ));
+
+      // Right-aligned against the row, even though the avatar it hangs under is
+      // on the far left.
+      expect(tester.getCenter(find.text('Assistant').last).dx,
+          greaterThan(300));
     });
 
     testWidgets('is not a drag target in the chat itself', (tester) async {

@@ -47,10 +47,17 @@ class ChatInterfacePreviewPage extends StatelessWidget {
     void update(ChatInterface next) =>
         context.read<AppState>().updateChatInterface(next);
 
+    // Every nudge reads the *live* settings rather than this build's snapshot: a
+    // finger produces several move events per frame, and against a stale
+    // snapshot each one would overwrite the last instead of adding to it — which
+    // is most of why dragging felt like it did nothing.
+    ChatInterface live() => context.read<AppState>().chatInterface;
+
     // Nudge/resize the given role's own avatar (sync is honoured by withAvatar).
     void drag(bool isUser, Offset d) {
-      final s = ui.avatarFor(isUser);
-      update(ui.withAvatar(
+      final now = live();
+      final s = now.avatarFor(isUser);
+      update(now.withAvatar(
         isUser,
         s.copyWith(
           offsetX: (s.offsetX + d.dx).clamp(-200.0, 200.0),
@@ -60,8 +67,9 @@ class ChatInterfacePreviewPage extends StatelessWidget {
     }
 
     void resize(bool isUser, double d) {
-      final s = ui.avatarFor(isUser);
-      update(ui.withAvatar(
+      final now = live();
+      final s = now.avatarFor(isUser);
+      update(now.withAvatar(
         isUser,
         s.copyWith(size: (s.size + d).clamp(kMinAvatarSize, kMaxAvatarSize)),
       ));
@@ -69,8 +77,9 @@ class ChatInterfacePreviewPage extends StatelessWidget {
 
     // Drag a name label around (sync is honoured by withName).
     void dragName(bool isUser, Offset d) {
-      final n = ui.nameFor(isUser);
-      update(ui.withName(
+      final now = live();
+      final n = now.nameFor(isUser);
+      update(now.withName(
         isUser,
         n.copyWith(
           offsetX: (n.offsetX + d.dx).clamp(-kMaxNameOffset, kMaxNameOffset),
@@ -103,22 +112,28 @@ class ChatInterfacePreviewPage extends StatelessWidget {
           Expanded(
             child: Container(
               color: bg,
-              child: ListView.builder(
+              width: double.infinity,
+              // The mock chat deliberately does not scroll. A scrollable would
+              // take any mostly-vertical drag off the handles for itself, which
+              // is exactly the direction an avatar or a name needs to move.
+              child: SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                itemCount: _mock.length,
-                itemBuilder: (context, i) {
-                  final message = _mock[i];
-                  final isUser = message.isUser;
-                  return MessageBubble(
-                    message: message,
-                    ui: ui,
-                    character: isUser ? null : _character,
-                    interactive: true,
-                    onAvatarDrag: (d) => drag(isUser, d),
-                    onAvatarResize: (d) => resize(isUser, d),
-                    onNameDrag: (d) => dragName(isUser, d),
-                  );
-                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final message in _mock)
+                      MessageBubble(
+                        message: message,
+                        ui: ui,
+                        character: message.isUser ? null : _character,
+                        interactive: true,
+                        onAvatarDrag: (d) => drag(message.isUser, d),
+                        onAvatarResize: (d) => resize(message.isUser, d),
+                        onNameDrag: (d) => dragName(message.isUser, d),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -161,7 +176,8 @@ class _Hint extends StatelessWidget {
               showNames
                   ? 'Drag either avatar to reposition it, pull its corner handle '
                       'to resize — and drag a name label to sit it where you '
-                      'want it.'
+                      'want it. This mock chat does not scroll, so a drag always '
+                      'lands.'
                   : 'Each avatar is independent — drag either one to reposition '
                       'it, pull its corner handle to resize.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(

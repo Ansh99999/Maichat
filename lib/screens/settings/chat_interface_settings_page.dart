@@ -500,13 +500,15 @@ class _NameControls extends StatelessWidget {
           ),
           _EnumRow<NamePosition>(
             icon: Icons.vertical_align_top_outlined,
-            label: 'Position',
+            label: 'Position (above the message / below the avatar)',
             value: style.position,
             values: NamePosition.values,
             labelOf: (p) => p.label,
             onChanged: (p) {
               onChanged(style.copyWith(position: p));
-              notify('$role ${p.label.toLowerCase()} the message');
+              notify(p == NamePosition.above
+                  ? '$role above the message'
+                  : '$role below the avatar');
             },
           ),
           _ColorRow(
