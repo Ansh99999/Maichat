@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -9,16 +10,6 @@ import 'character_avatar.dart';
 import 'message_html.dart';
 import 'message_markdown.dart';
 import 'thinking_block.dart';
-
-/// Height the inline action bar takes when it hangs under the avatar — a compact
-/// [IconButton] row (32 px minimum tap target plus its own padding). Used to sit a
-/// "below the avatar" name label under the bar rather than on top of it.
-const double _kActionBarHeight = 34;
-
-/// Room the interactive (preview-only) avatar frame leaves around itself for its
-/// resize handle, so anything anchored to the avatar's bottom clears the handle
-/// instead of landing on it.
-const double _kHandleInset = 22;
 
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
 /// (size/shape/corner rounding/fit/offset and which side it sits on), where the
@@ -219,13 +210,11 @@ class MessageBubble extends StatelessWidget {
         );
 
     final nameAbove = nameStyle.position == NamePosition.above;
-    final barUnderAvatar =
-        actionsBar != null && placement == ActionBarPlacement.besideAvatar;
 
     // "Below" means below the *avatar*. Where that is depends on how this turn
     // is laid out:
     //  - text beside the avatar: the space under the avatar is empty, so the
-    //    label is laid over the turn at exactly the avatar's height.
+    //    label is laid over the turn at the avatar's measured bottom.
     //  - text below the avatar: the label goes straight into the column between
     //    the two, no measuring needed — until it is nudged, when it has to be
     //    lifted out into the overlay so its hit box travels with it.
@@ -234,141 +223,138 @@ class MessageBubble extends StatelessWidget {
     final hasAvatar = band != null && avatar != null;
     final belowAvatar = hasAvatar && !nameAbove;
     final inColumn = belowAvatar && ui.textPlacement == TextPlacement.below;
-    final overlaidUnderAvatar = belowAvatar &&
+    final anchorToAvatar = belowAvatar &&
         (ui.textPlacement == TextPlacement.beside ||
             (inColumn && nameStyle.isNudged));
 
-    // The avatar unit's bottom edge, following any nudge the avatar itself has
-    // been given, clearing the action bar when that hangs under it, and allowing
-    // for the resize handle the preview's framed avatar carries.
-    final avatarBottom = style.size +
-        style.offsetY +
-        (interactive ? _kHandleInset : 0) +
-        (barUnderAvatar ? 2 + _kActionBarHeight : 0);
-    // Where an overlaid label's own top sits: the column leaves a 6 px gap under
-    // the avatar, the beside layout only needs breathing room.
-    final underAvatarAnchor = avatarBottom + (inColumn ? 6 : 2);
+    // Assembles the turn around whichever avatar widget it is handed — so the
+    // anchored case can pass in a measured one without duplicating any of this.
+    Widget buildBody(Widget? avatarUnit) {
+      final Widget inner;
+      switch (ui.textPlacement) {
+        case TextPlacement.around:
+          inner = bubbleUnit(_bubble(content(leading: avatarUnit), bubbleColor));
+        case TextPlacement.below:
+          inner = Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: crossAxis,
+            children: [
+              if (avatarUnit != null) ...[
+                avatarUnit,
+                const SizedBox(height: 6),
+              ],
+              // Between the avatar and the text is literally below the avatar.
+              // Once nudged the slot stays but the label moves to the overlay.
+              if (inColumn) ...[
+                nameStyle.isNudged ? reserved(band) : band,
+                const SizedBox(height: 2),
+              ],
+              bubbleUnit(_bubble(content(), bubbleColor)),
+            ],
+          );
+        case TextPlacement.beside:
+          inner = Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            // Lay the avatar on this role's side; the text keeps the ambient
+            // (LTR) direction.
+            textDirection: side.isLeft ? TextDirection.ltr : TextDirection.rtl,
+            children: [
+              if (avatarUnit != null) ...[avatarUnit, const SizedBox(width: 8)],
+              Flexible(child: bubbleUnit(_bubble(content(), bubbleColor))),
+            ],
+          );
+      }
 
-    final Widget inner;
-    switch (ui.textPlacement) {
-      case TextPlacement.around:
-        inner = bubbleUnit(_bubble(content(leading: avatar), bubbleColor));
-      case TextPlacement.below:
-        inner = Column(
+      // Below / right placements wrap the assembled message; beside-name and
+      // beside-avatar have already folded the bar into the name/avatar above.
+      if (actionsBar != null && placement == ActionBarPlacement.belowMessage) {
+        return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: crossAxis,
-          children: [
-            if (avatar != null) ...[avatar, const SizedBox(height: 6)],
-            // Between the avatar and the text is literally below the avatar. Once
-            // nudged the slot stays but the label itself moves to the overlay.
-            if (inColumn) ...[
-              nameStyle.isNudged ? reserved(band) : band,
-              const SizedBox(height: 2),
-            ],
-            bubbleUnit(_bubble(content(), bubbleColor)),
-          ],
+          children: [inner, actionsBar],
         );
-      case TextPlacement.beside:
-        inner = Row(
+      }
+      if (actionsBar != null && placement == ActionBarPlacement.messageRight) {
+        return Row(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          // Lay the avatar on this role's side; the text keeps the ambient
-          // (LTR) direction.
-          textDirection: side.isLeft ? TextDirection.ltr : TextDirection.rtl,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            if (avatar != null) ...[avatar, const SizedBox(width: 8)],
-            Flexible(child: bubbleUnit(_bubble(content(), bubbleColor))),
+            Flexible(child: inner),
+            const SizedBox(width: 4),
+            actionsBar,
           ],
         );
+      }
+      return inner;
     }
 
-    // Below / right placements wrap the assembled message; beside-name and
-    // beside-avatar have already folded the bar into the name/avatar above.
-    Widget body = inner;
-    if (actionsBar != null && placement == ActionBarPlacement.belowMessage) {
-      body = Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: crossAxis,
-        children: [inner, actionsBar],
-      );
-    } else if (actionsBar != null &&
-        placement == ActionBarPlacement.messageRight) {
-      body = Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Flexible(child: inner),
-          const SizedBox(width: 4),
-          actionsBar,
-        ],
-      );
-    }
+    final sideAlignment =
+        side.isLeft ? Alignment.centerLeft : Alignment.centerRight;
 
     // Place the name band. A label already sitting in the message column is done;
     // everything else is laid out around the assembled turn.
-    Widget outer = body;
-    if (band != null && !(inColumn && !nameStyle.isNudged)) {
-      final messageRow = Align(
-        alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
-        child: body,
+    final Widget outer;
+    if (anchorToAvatar) {
+      // The avatar's bottom edge is *measured*, never computed: a "free"-fit
+      // picture is shorter than its nominal size, an action bar hanging under it
+      // makes it taller, and the preview's frame adds room for its resize
+      // handle. Every one of those guesses has been wrong at least once, and each
+      // time the label jumped the moment it was nudged.
+      outer = _NameUnderAvatar(
+        avatar: avatar,
+        band: band,
+        reservedBand: reserved(band),
+        // The column layout already keeps the label's slot; the beside layout has
+        // to reserve one so a long name never reaches the next turn.
+        reserveInStack: !inColumn,
+        gap: inColumn ? 6 : 2,
+        avatarOffsetY: style.offsetY,
+        fallbackHeight: style.size,
+        nudge: nameStyle.offset,
+        sideAlignment: sideAlignment,
+        buildBody: buildBody,
       );
-
-      // The band is the *last* child so it paints over the message;
-      // [verticalDirection] is what puts it above or below.
-      Column stacked(Widget bandSlot) => Column(
-            mainAxisSize: MainAxisSize.min,
-            // Stretch so both the band and the message get the full row width
-            // to align themselves within.
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            verticalDirection:
-                nameAbove ? VerticalDirection.up : VerticalDirection.down,
-            children: [messageRow, bandSlot],
-          );
-
-      if (overlaidUnderAvatar) {
-        outer = Stack(
-          clipBehavior: Clip.none,
-          children: [
-            messageRow,
-            // Room under the avatar for the label, whatever the message's own
-            // height turns out to be. The column layout already reserved its
-            // slot, so only the beside layout needs this.
-            if (!inColumn)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(height: underAvatarAnchor),
-                  reserved(band),
-                ],
-              ),
-            Positioned(
-              top: underAvatarAnchor + nameStyle.offsetY,
-              left: nameStyle.offsetX,
-              right: -nameStyle.offsetX,
-              child: band,
-            ),
-          ],
-        );
-      } else if (!nameStyle.isNudged) {
-        outer = stacked(band);
+    } else {
+      final body = buildBody(avatar);
+      if (band == null || (inColumn && !nameStyle.isNudged)) {
+        outer = body;
       } else {
-        // A nudged label has to keep a hit box where it is *drawn*, not where it
-        // was laid out — a `Transform` would paint it over the message but leave
-        // it ungrabbable, so a name could be dragged once and never again.
-        outer = Stack(
-          clipBehavior: Clip.none,
-          children: [
-            stacked(reserved(band)),
-            Positioned(
-              left: nameStyle.offsetX,
-              right: -nameStyle.offsetX,
-              top: nameAbove ? nameStyle.offsetY : null,
-              bottom: nameAbove ? null : -nameStyle.offsetY,
-              child: band,
-            ),
-          ],
-        );
+        final messageRow = Align(alignment: sideAlignment, child: body);
+
+        // The band is the *last* child so it paints over the message;
+        // [verticalDirection] is what puts it above or below.
+        Column stacked(Widget bandSlot) => Column(
+              mainAxisSize: MainAxisSize.min,
+              // Stretch so both the band and the message get the full row width
+              // to align themselves within.
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              verticalDirection:
+                  nameAbove ? VerticalDirection.up : VerticalDirection.down,
+              children: [messageRow, bandSlot],
+            );
+
+        if (!nameStyle.isNudged) {
+          outer = stacked(band);
+        } else {
+          // A nudged label has to keep a hit box where it is *drawn*, not where
+          // it was laid out — a `Transform` would paint it over the message but
+          // leave it ungrabbable, so a name could be dragged once and never
+          // again.
+          outer = Stack(
+            clipBehavior: Clip.none,
+            children: [
+              stacked(reserved(band)),
+              Positioned(
+                left: nameStyle.offsetX,
+                right: -nameStyle.offsetX,
+                top: nameAbove ? nameStyle.offsetY : null,
+                bottom: nameAbove ? null : -nameStyle.offsetY,
+                child: band,
+              ),
+            ],
+          );
+        }
       }
     }
 
@@ -771,6 +757,131 @@ class MessageBubble extends StatelessWidget {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)),
     );
+  }
+}
+
+/// A turn whose sender name hangs under the avatar, anchored to the avatar's
+/// **measured** height.
+///
+/// Every attempt to compute that height from the settings has been wrong in some
+/// configuration — a `free`-fit picture is shorter than its nominal size, an
+/// action bar hanging under the avatar makes it taller, the preview's frame adds
+/// room for a resize handle — and each time the label jumped somewhere else the
+/// moment it was nudged. So the avatar is measured instead: [buildBody] is handed
+/// the avatar wrapped in a reporter, and the label is placed at whatever bottom
+/// edge comes back.
+class _NameUnderAvatar extends StatefulWidget {
+  const _NameUnderAvatar({
+    required this.avatar,
+    required this.band,
+    required this.reservedBand,
+    required this.reserveInStack,
+    required this.gap,
+    required this.avatarOffsetY,
+    required this.fallbackHeight,
+    required this.nudge,
+    required this.sideAlignment,
+    required this.buildBody,
+  });
+
+  /// The avatar unit to measure and lay out (bar and frame included).
+  final Widget avatar;
+
+  /// The full-width, aligned name label, and an invisible copy of it that holds
+  /// its slot in the layout.
+  final Widget band;
+  final Widget reservedBand;
+
+  /// Whether this layout still needs a slot reserved for the label; the column
+  /// layout keeps one of its own.
+  final bool reserveInStack;
+
+  /// Space between the avatar's bottom and the label.
+  final double gap;
+
+  /// The avatar's own visual nudge, so the label follows where it was dragged to.
+  final double avatarOffsetY;
+
+  /// Anchor to use for the one frame before the first measurement lands.
+  final double fallbackHeight;
+
+  final Offset nudge;
+  final Alignment sideAlignment;
+  final Widget Function(Widget avatar) buildBody;
+
+  @override
+  State<_NameUnderAvatar> createState() => _NameUnderAvatarState();
+}
+
+class _NameUnderAvatarState extends State<_NameUnderAvatar> {
+  double? _avatarHeight;
+
+  void _onSize(Size size) {
+    if (!mounted || size.height == _avatarHeight) return;
+    setState(() => _avatarHeight = size.height);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final body = widget.buildBody(
+      _MeasureSize(onChange: _onSize, child: widget.avatar),
+    );
+    final anchor = (_avatarHeight ?? widget.fallbackHeight) +
+        widget.avatarOffsetY +
+        widget.gap;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Align(alignment: widget.sideAlignment, child: body),
+        if (widget.reserveInStack)
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [SizedBox(height: anchor), widget.reservedBand],
+          ),
+        Positioned(
+          top: anchor + widget.nudge.dy,
+          left: widget.nudge.dx,
+          right: -widget.nudge.dx,
+          child: widget.band,
+        ),
+      ],
+    );
+  }
+}
+
+/// Reports its child's laid-out size, once per change, after the frame that
+/// produced it — the cheapest honest way to learn a sibling's height.
+class _MeasureSize extends SingleChildRenderObjectWidget {
+  const _MeasureSize({required this.onChange, required Widget super.child});
+
+  final ValueChanged<Size> onChange;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderMeasureSize(onChange);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderMeasureSize renderObject) {
+    renderObject.onChange = onChange;
+  }
+}
+
+class _RenderMeasureSize extends RenderProxyBox {
+  _RenderMeasureSize(this.onChange);
+
+  ValueChanged<Size> onChange;
+  Size? _reported;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final next = child?.size ?? Size.zero;
+    if (_reported == next) return;
+    _reported = next;
+    // Never call back during layout: the listener rebuilds.
+    WidgetsBinding.instance.addPostFrameCallback((_) => onChange(next));
   }
 }
 

@@ -496,8 +496,8 @@ void main() {
       ActionBarPlacement bar = ActionBarPlacement.belowMessage,
       bool actions = false,
       bool showAvatar = true,
-    }) =>
-        tester.pumpWidget(host(
+    }) async {
+      await tester.pumpWidget(host(
           ListView(children: [
             MessageBubble(
               message: ChatMessage(role: 'assistant', content: long),
@@ -514,6 +514,10 @@ void main() {
             ),
           ]),
         ));
+      // A second frame: the label's anchor is the avatar's *measured* height, so
+      // it lands one frame after the first layout.
+      await tester.pump();
+    }
 
     Rect avatarRect(WidgetTester tester) =>
         tester.getRect(find.byIcon(Icons.smart_toy_outlined));
@@ -604,6 +608,7 @@ void main() {
           ),
         ]),
       ));
+      await tester.pump();
       return tester.getRect(find.text('Assistant').last);
     }
 
@@ -630,6 +635,66 @@ void main() {
               dy: 25,
             );
             expect(moved.left - plain.left, closeTo(15, 0.5));
+            expect(moved.top - plain.top, closeTo(25, 0.5));
+          });
+        }
+      }
+    }
+  });
+
+  // The chat wires an action bar; the settings preview does not. That difference
+  // has hidden layout bugs before, so the nudge has to track exactly with the bar
+  // present too, wherever it is put.
+  group('a nudge tracks with the action bar present', () {
+    Future<Rect> rectFor(
+      WidgetTester tester, {
+      required TextPlacement placement,
+      required NamePosition position,
+      required ActionBarPlacement bar,
+      required double dy,
+    }) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(
+                role: 'assistant',
+                content: 'A reply with enough words in it to give the bubble '
+                    'a couple of lines of height.'),
+            ui: ChatInterface(
+              showNames: true,
+              textPlacement: placement,
+              actionBarPlacement: bar,
+              botNameStyle: NameStyle(position: position, offsetY: dy),
+              botAvatar: const AvatarStyle(size: 48, side: ChatSide.left),
+            ),
+            onAction: (_) {},
+          ),
+        ]),
+      ));
+      await tester.pump();
+      return tester.getRect(find.text('Assistant').last);
+    }
+
+    for (final placement in TextPlacement.values) {
+      for (final position in NamePosition.values) {
+        for (final bar in ActionBarPlacement.values) {
+          testWidgets(
+              'text ${placement.name}, name ${position.name}, '
+              'actions ${bar.name}', (tester) async {
+            final plain = await rectFor(
+              tester,
+              placement: placement,
+              position: position,
+              bar: bar,
+              dy: 0,
+            );
+            final moved = await rectFor(
+              tester,
+              placement: placement,
+              position: position,
+              bar: bar,
+              dy: 25,
+            );
             expect(moved.top - plain.top, closeTo(25, 0.5));
           });
         }
