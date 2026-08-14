@@ -16,9 +16,11 @@ const double kAvatarHardMax = 2000;
 const double kMinFontSize = 11;
 const double kMaxFontSize = 26;
 
-/// Bounds for the sender-name font-size sliders, in logical pixels.
+/// Bounds for the sender-name font-size sliders, in logical pixels. The ceiling
+/// is deliberately generous — a name can be a headline over its message, not
+/// just a caption.
 const double kMinNameSize = 8;
-const double kMaxNameSize = 28;
+const double kMaxNameSize = 100;
 
 /// Bounds for the gap between consecutive messages, in logical pixels. The
 /// default leaves a clear break between turns — tight enough to read as one
@@ -28,14 +30,16 @@ const double kMaxMessageSpacing = 48;
 const double kDefaultMessageSpacing = 14;
 
 /// How far a name label may be nudged from its anchored spot, in logical
-/// pixels — the bound the preview's drag-to-move honours.
-const double kMaxNameOffset = 200;
+/// pixels — the bound both the preview's drag and the settings sliders honour.
+const double kMaxNameOffset = 100;
 
-/// Where a sender's name label sits across the message row.
+/// Where a sender's name label sits across the message row. The label spans the
+/// whole row, so this aligns it against the *screen*, not against the message it
+/// belongs to: "Right" really means the right edge of the chat.
 enum NameAlign {
-  start('Start'),
+  start('Left'),
   center('Center'),
-  end('End');
+  end('Right');
 
   const NameAlign(this.label);
 
@@ -47,6 +51,13 @@ enum NameAlign {
         NameAlign.end => TextAlign.right,
       };
 
+  /// Where to place the label within the full-width band it is drawn in.
+  Alignment get alignment => switch (this) {
+        NameAlign.start => Alignment.centerLeft,
+        NameAlign.center => Alignment.center,
+        NameAlign.end => Alignment.centerRight,
+      };
+
   static NameAlign byName(String? name) {
     for (final a in values) {
       if (a.name == name) return a;
@@ -56,7 +67,7 @@ enum NameAlign {
 }
 
 /// Whether a sender's name label sits above or below its message (the avatar +
-/// bubble group).
+/// bubble group it labels).
 enum NamePosition {
   above('Above'),
   below('Below');
@@ -474,6 +485,7 @@ class NameStyle {
     this.align = NameAlign.start,
     this.position = NamePosition.above,
     this.fontFamily,
+    this.color,
     this.offsetX = 0,
     this.offsetY = 0,
   });
@@ -484,6 +496,9 @@ class NameStyle {
 
   /// A Google Fonts family for this name only; null follows the app font.
   final String? fontFamily;
+
+  /// ARGB colour for this name only; null follows the theme.
+  final int? color;
 
   final double offsetX;
   final double offsetY;
@@ -501,6 +516,7 @@ class NameStyle {
     NameAlign? align,
     NamePosition? position,
     Object? fontFamily = _unsetName,
+    Object? color = _unsetName,
     double? offsetX,
     double? offsetY,
   }) =>
@@ -511,11 +527,12 @@ class NameStyle {
         fontFamily: identical(fontFamily, _unsetName)
             ? this.fontFamily
             : fontFamily as String?,
+        color: identical(color, _unsetName) ? this.color : color as int?,
         offsetX: offsetX ?? this.offsetX,
         offsetY: offsetY ?? this.offsetY,
       );
 
-  // Sentinel so copyWith can tell "leave the font" from "clear it to null".
+  // Sentinel so copyWith can tell "leave it" from "clear it to null".
   static const Object _unsetName = Object();
 
   Map<String, dynamic> toJson() => {
@@ -523,6 +540,7 @@ class NameStyle {
         'align': align.name,
         'position': position.name,
         if (fontFamily != null) 'fontFamily': fontFamily,
+        if (color != null) 'color': color,
         'offsetX': offsetX,
         'offsetY': offsetY,
       };
@@ -543,6 +561,7 @@ class NameStyle {
             ? fallback.position
             : NamePosition.byName(json['position'] as String?),
         fontFamily: json['fontFamily'] as String? ?? fallback.fontFamily,
+        color: (json['color'] as num?)?.toInt() ?? fallback.color,
         offsetX: (json['offsetX'] as num?)?.toDouble() ?? fallback.offsetX,
         offsetY: (json['offsetY'] as num?)?.toDouble() ?? fallback.offsetY,
       );
@@ -554,12 +573,13 @@ class NameStyle {
       other.align == align &&
       other.position == position &&
       other.fontFamily == fontFamily &&
+      other.color == color &&
       other.offsetX == offsetX &&
       other.offsetY == offsetY;
 
   @override
-  int get hashCode =>
-      Object.hash(size, align, position, fontFamily, offsetX, offsetY);
+  int get hashCode => Object.hash(
+      size, align, position, fontFamily, color, offsetX, offsetY);
 }
 
 /// Everything the "Chat Interface" section controls. Avatars are configured per
@@ -581,7 +601,7 @@ class ChatInterface {
     this.showNames = false,
     this.userName = 'You',
     this.botNameStyle = const NameStyle(),
-    this.userNameStyle = const NameStyle(),
+    this.userNameStyle = const NameStyle(align: NameAlign.end),
     this.syncNames = false,
     this.markdown = true,
     this.userTextColor,
@@ -628,9 +648,10 @@ class ChatInterface {
   /// as the fallback label when the user is not impersonating a character.
   final String userName;
 
-  /// Each role's name label: size, font, placement and nudge. Held separately
-  /// so they can be tuned independently, or kept in step via [syncNames] —
-  /// mirroring how the two [AvatarStyle]s work.
+  /// Each role's name label: size, font, colour, placement and nudge. Held
+  /// separately so they can be tuned independently, or kept in step via
+  /// [syncNames] — mirroring how the two [AvatarStyle]s work. The defaults put
+  /// each name over its own side of the thread (bot left, user right).
   final NameStyle botNameStyle;
   final NameStyle userNameStyle;
 
@@ -834,8 +855,10 @@ class ChatInterface {
       bubbleOpacity: (json['bubbleOpacity'] as num?)?.toDouble() ?? 1,
       showNames: json['showNames'] as bool? ?? false,
       userName: json['userName'] as String? ?? 'You',
-      botNameStyle: _nameStyleFromJson(json, 'botNameStyle', 'bot'),
-      userNameStyle: _nameStyleFromJson(json, 'userNameStyle', 'user'),
+      botNameStyle: _nameStyleFromJson(json, 'botNameStyle', 'bot',
+          const NameStyle()),
+      userNameStyle: _nameStyleFromJson(json, 'userNameStyle', 'user',
+          const NameStyle(align: NameAlign.end)),
       syncNames: json['syncNames'] as bool? ?? false,
       markdown: json['markdown'] as bool? ?? true,
       userTextColor: (json['userTextColor'] as num?)?.toInt(),
@@ -854,14 +877,19 @@ class ChatInterface {
 
   /// Reads one role's [NameStyle], migrating the pre-nested flat keys
   /// (`botNameSize`/`botNameAlign`/`botNamePosition` and the `user` pair) when
-  /// the nested object is absent — so a config saved before names grew fonts
-  /// and offsets keeps the typography it had.
-  static NameStyle _nameStyleFromJson(
-      Map<String, dynamic> json, String key, String role) {
-    final legacy = NameStyle(
-      size: (json['${role}NameSize'] as num?)?.toDouble() ?? 12,
-      align: NameAlign.byName(json['${role}NameAlign'] as String?),
-      position: NamePosition.byName(json['${role}NamePosition'] as String?),
+  /// the nested object is absent — so a config saved before names grew fonts,
+  /// colours and offsets keeps the typography it had. [defaults] carries the
+  /// role's own starting point for anything neither shape stored.
+  static NameStyle _nameStyleFromJson(Map<String, dynamic> json, String key,
+      String role, NameStyle defaults) {
+    final legacy = defaults.copyWith(
+      size: (json['${role}NameSize'] as num?)?.toDouble(),
+      align: json['${role}NameAlign'] == null
+          ? null
+          : NameAlign.byName(json['${role}NameAlign'] as String?),
+      position: json['${role}NamePosition'] == null
+          ? null
+          : NamePosition.byName(json['${role}NamePosition'] as String?),
     );
     final nested = json[key];
     if (nested is! Map) return legacy;

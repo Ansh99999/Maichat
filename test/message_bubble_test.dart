@@ -228,30 +228,29 @@ void main() {
 
   group('sender name label', () {
     testWidgets('honours its role size and nudge', (tester) async {
-      await tester.pumpWidget(host(
-        ListView(children: [
-          MessageBubble(
-            message: ChatMessage(role: 'assistant', content: 'Hi'),
-            ui: const ChatInterface(
-              showNames: true,
-              botNameStyle: NameStyle(size: 19, offsetX: 3, offsetY: 7),
+      Future<Offset> topLeftFor(NameStyle style) async {
+        await tester.pumpWidget(host(
+          ListView(children: [
+            MessageBubble(
+              message: ChatMessage(role: 'assistant', content: 'Hi'),
+              ui: ChatInterface(showNames: true, botNameStyle: style),
             ),
-          ),
-        ]),
-      ));
+          ]),
+        ));
+        // A nudged label keeps an invisible placeholder in its old slot; the
+        // drawn one is the later of the two.
+        return tester.getTopLeft(find.text('Assistant').last);
+      }
 
-      expect(tester.widget<Text>(find.text('Assistant')).style?.fontSize, 19);
-      // The nudge moves the label without disturbing the layout: a Transform,
-      // not padding.
-      expect(
-        find.ancestor(
-          of: find.text('Assistant'),
-          matching: find.byWidgetPredicate((w) =>
-              w is Transform &&
-              w.transform == Matrix4.translationValues(3, 7, 0)),
-        ),
-        findsOneWidget,
-      );
+      final plain = await topLeftFor(const NameStyle(size: 19));
+      expect(tester.widget<Text>(find.text('Assistant').last).style?.fontSize,
+          19);
+
+      // The nudge moves where the label is actually drawn.
+      final nudged =
+          await topLeftFor(const NameStyle(size: 19, offsetX: 3, offsetY: 7));
+      expect(nudged.dx - plain.dx, closeTo(3, 0.5));
+      expect(nudged.dy - plain.dy, closeTo(7, 0.5));
     });
 
     testWidgets('each role keeps its own label style', (tester) async {
@@ -296,6 +295,97 @@ void main() {
       await tester.pump();
       expect(moved, isNotNull);
       expect(moved!.dy, greaterThan(0));
+    });
+
+    testWidgets('carries its own colour', (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: const ChatInterface(
+              showNames: true,
+              botNameStyle: NameStyle(color: 0xFF9911EE),
+            ),
+          ),
+        ]),
+      ));
+      expect(tester.widget<Text>(find.text('Assistant')).style?.color,
+          const Color(0xFF9911EE));
+    });
+
+    testWidgets('a headline-sized name renders', (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: const ChatInterface(
+              showNames: true,
+              botNameStyle: NameStyle(size: kMaxNameSize),
+            ),
+          ),
+        ]),
+      ));
+      expect(tester.takeException(), isNull);
+      expect(tester.widget<Text>(find.text('Assistant')).style?.fontSize, 100);
+    });
+
+    testWidgets('aligns across the whole row, not just its own message',
+        (tester) async {
+      Future<double> centreX(NameAlign align) async {
+        await tester.pumpWidget(host(
+          ListView(children: [
+            MessageBubble(
+              message: ChatMessage(role: 'assistant', content: 'Hi'),
+              ui: ChatInterface(
+                showNames: true,
+                botNameStyle: NameStyle(align: align),
+              ),
+            ),
+          ]),
+        ));
+        return tester.getCenter(find.text('Assistant')).dx;
+      }
+
+      final left = await centreX(NameAlign.start);
+      final centre = await centreX(NameAlign.center);
+      final right = await centreX(NameAlign.end);
+
+      // The host is 400 wide and the message is a short left-hand bubble, so a
+      // centred name has to leave the bubble behind to reach mid-screen.
+      expect(centre, closeTo(200, 6));
+      expect(left, lessThan(centre));
+      expect(right, greaterThan(300));
+    });
+
+    testWidgets('stays grabbable once nudged over its own message',
+        (tester) async {
+      var total = Offset.zero;
+      Widget build(double offsetY) => host(
+            ListView(children: [
+              MessageBubble(
+                message: ChatMessage(role: 'assistant', content: 'Hi'),
+                ui: ChatInterface(
+                  showNames: true,
+                  botNameStyle: NameStyle(offsetY: offsetY),
+                ),
+                interactive: true,
+                onNameDrag: (d) => total += d,
+              ),
+            ]),
+          );
+
+      await tester.pumpWidget(build(0));
+      await tester.drag(find.text('Assistant'), const Offset(0, 40));
+      await tester.pump();
+      final first = total.dy;
+      expect(first, greaterThan(0));
+
+      // The label now sits over the bubble. It must still win the hit test —
+      // otherwise a name could be dragged down once and never moved again.
+      await tester.pumpWidget(build(40));
+      await tester.drag(find.text('Assistant').last, const Offset(0, 30));
+      await tester.pump();
+      expect(total.dy, greaterThan(first));
     });
 
     testWidgets('is not a drag target in the chat itself', (tester) async {

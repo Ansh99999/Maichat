@@ -127,6 +127,9 @@ class MessageBubble extends StatelessWidget {
         (avatar == null || ui.textPlacement == TextPlacement.around)) {
       placement = ActionBarPlacement.belowMessage;
     }
+    if (placement == ActionBarPlacement.besideName && !ui.showNames) {
+      placement = ActionBarPlacement.belowMessage;
+    }
     // Beside-avatar: hang the bar under the avatar so it rides with it.
     if (actionsBar != null && placement == ActionBarPlacement.besideAvatar) {
       avatar = Column(
@@ -138,44 +141,19 @@ class MessageBubble extends StatelessWidget {
 
     // Name label, optionally sharing its row with the action bar.
     Widget? nameW = ui.showNames ? _nameLabel(context, isUser) : null;
-    if (actionsBar != null && placement == ActionBarPlacement.besideName) {
+    if (nameW != null &&
+        actionsBar != null &&
+        placement == ActionBarPlacement.besideName) {
       nameW = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (nameW != null) ...[
-            Flexible(child: nameW),
-            const SizedBox(width: 4),
-          ],
+          Flexible(child: nameW),
+          const SizedBox(width: 4),
           actionsBar,
         ],
       );
     }
     final nameStyle = ui.nameFor(isUser);
-    final nameCross = _crossFor(nameStyle.align);
-    final namePosition = nameStyle.position;
-
-    // Stacks the sender name directly above/below [anchor] — the avatar when a
-    // standalone one is shown, otherwise the bubble — aligned per the role's
-    // setting.
-    Widget stackName(Widget anchor) {
-      if (nameW == null) return anchor;
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: nameCross,
-        children: namePosition == NamePosition.above
-            ? [nameW, anchor]
-            : [anchor, nameW],
-      );
-    }
-
-    // The name rides with the avatar when there is a standalone one. With the
-    // "around" placement the avatar is inline in the text, so the name falls
-    // back to sitting with the bubble.
-    final nameOnAvatar = avatar != null &&
-        nameW != null &&
-        ui.textPlacement != TextPlacement.around;
-    final Widget? avatarUnit =
-        avatar == null ? null : (nameOnAvatar ? stackName(avatar) : avatar);
 
     // The model's thinking, when this turn has any: a collapsed bar directly
     // above the reply, so it reads as belonging to this message and never
@@ -191,16 +169,13 @@ class MessageBubble extends StatelessWidget {
           )
         : null;
 
-    Widget bubbleUnit(Widget bubble) {
-      final unit = thinking == null
-          ? bubble
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: crossAxis,
-              children: [thinking, bubble],
-            );
-      return nameOnAvatar ? unit : stackName(unit);
-    }
+    Widget bubbleUnit(Widget bubble) => thinking == null
+        ? bubble
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: crossAxis,
+            children: [thinking, bubble],
+          );
 
     // The turn's text, with the swipe control tucked under it when this turn
     // holds more than one alternative.
@@ -226,7 +201,7 @@ class MessageBubble extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: crossAxis,
           children: [
-            if (avatarUnit != null) ...[avatarUnit, const SizedBox(height: 6)],
+            if (avatar != null) ...[avatar, const SizedBox(height: 6)],
             bubbleUnit(_bubble(content(), bubbleColor)),
           ],
         );
@@ -238,7 +213,7 @@ class MessageBubble extends StatelessWidget {
           // (LTR) direction.
           textDirection: side.isLeft ? TextDirection.ltr : TextDirection.rtl,
           children: [
-            if (avatarUnit != null) ...[avatarUnit, const SizedBox(width: 8)],
+            if (avatar != null) ...[avatar, const SizedBox(width: 8)],
             Flexible(child: bubbleUnit(_bubble(content(), bubbleColor))),
           ],
         );
@@ -266,6 +241,60 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    // The name is a band of its own across the whole row, above or below the
+    // message it labels — that is what lets its alignment be read against the
+    // screen ("Right" = the right edge of the chat) rather than against the
+    // width of the bubble it happens to sit over.
+    Widget outer = body;
+    if (nameW != null) {
+      final band = Align(alignment: nameStyle.align.alignment, child: nameW);
+      final messageRow = Align(
+        alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
+        child: body,
+      );
+      final above = nameStyle.position == NamePosition.above;
+      // The band is always the *last* child so it paints over the message;
+      // [verticalDirection] is what puts it above or below.
+      Column stack(Widget bandSlot) => Column(
+            mainAxisSize: MainAxisSize.min,
+            // Stretch so both the band and the message get the full row width
+            // to align themselves within.
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            verticalDirection:
+                above ? VerticalDirection.up : VerticalDirection.down,
+            children: [messageRow, bandSlot],
+          );
+
+      if (!nameStyle.isNudged) {
+        outer = stack(band);
+      } else {
+        // A nudged label has to keep a hit box where it is *drawn*, not where it
+        // was laid out — a `Transform` would paint it over the message but leave
+        // it ungrabbable, so a name could be dragged once and never again. The
+        // band keeps its slot (invisible, so the layout doesn't jump) and the
+        // label is positioned within the turn's own Stack instead.
+        outer = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            stack(Visibility(
+              visible: false,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: band,
+            )),
+            Positioned(
+              left: nameStyle.offsetX,
+              right: -nameStyle.offsetX,
+              top: above ? nameStyle.offsetY : null,
+              bottom: above ? null : -nameStyle.offsetY,
+              child: band,
+            ),
+          ],
+        );
+      }
+    }
+
     return Align(
       alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
@@ -283,7 +312,7 @@ class MessageBubble extends StatelessWidget {
               (message.content.isEmpty
                   ? null
                   : () => _copy(context, _displayContent)),
-          child: body,
+          child: outer,
         ),
       ),
     );
@@ -399,14 +428,11 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  /// Maps a name's horizontal alignment onto the cross-axis of the column that
-  /// stacks it with its anchor (avatar or bubble).
-  static CrossAxisAlignment _crossFor(NameAlign a) => switch (a) {
-        NameAlign.start => CrossAxisAlignment.start,
-        NameAlign.center => CrossAxisAlignment.center,
-        NameAlign.end => CrossAxisAlignment.end,
-      };
-
+  /// This turn's sender name, as the label that fills the name band: its own
+  /// size, Google font and colour. In the preview it is also the drag handle for
+  /// the role's nudge, framed and given a comfortable touch target (a 12 px
+  /// caption is far too small to grab with a finger). The nudge itself is applied
+  /// by the caller, which owns the layout the label has to stay hittable in.
   Widget _nameLabel(BuildContext context, bool isUser) {
     final name = isUser
         ? (userPersona?.displayName ??
@@ -437,29 +463,38 @@ class MessageBubble extends StatelessWidget {
         textAlign: ns.align.textAlign,
         style: (base ?? const TextStyle()).copyWith(
           fontSize: ns.size,
-          color: scheme.onSurfaceVariant,
+          color: ns.color != null ? Color(ns.color!) : scheme.onSurfaceVariant,
           fontWeight: FontWeight.w600,
         ),
       ),
     );
 
-    // In the preview the label is a drag handle of its own, framed like the
-    // avatar so it reads as grabbable.
     if (interactive && onNameDrag != null) {
       label = _NudgeHandle(
         onDrag: onNameDrag!,
         child: Container(
+          // Padding first, so the grab area is a finger wide even around a
+          // small name.
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
             border: Border.all(
-                color: scheme.primary.withValues(alpha: 0.6), width: 1),
-            borderRadius: BorderRadius.circular(4),
+                color: scheme.primary.withValues(alpha: 0.7), width: 1),
+            borderRadius: BorderRadius.circular(6),
+            color: scheme.primary.withValues(alpha: 0.06),
           ),
-          child: label,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.drag_indicator, size: 16, color: scheme.primary),
+              const SizedBox(width: 2),
+              Flexible(child: label),
+            ],
+          ),
         ),
       );
     }
 
-    return Transform.translate(offset: ns.offset, child: label);
+    return label;
   }
 // APPEND-HELPERS
 

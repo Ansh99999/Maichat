@@ -144,16 +144,52 @@ void main() {
   test('name defaults fall back sensibly', () {
     const ui = ChatInterface();
     expect(ui.botNameStyle, const NameStyle());
-    expect(ui.userNameStyle, const NameStyle());
+    // Each name starts over its own side of the thread: bot left, user right.
+    expect(ui.userNameStyle, const NameStyle(align: NameAlign.end));
     expect(ui.botNameStyle.size, 12);
     expect(ui.botNameStyle.align, NameAlign.start);
     expect(ui.botNameStyle.position, NamePosition.above);
     expect(ui.botNameStyle.fontFamily, isNull);
+    expect(ui.botNameStyle.color, isNull);
     expect(NameAlign.byName('nonsense'), NameAlign.start);
     expect(NameAlign.byName('center'), NameAlign.center);
     expect(NameAlign.center.textAlign, TextAlign.center);
     expect(NamePosition.byName('nonsense'), NamePosition.above);
     expect(NamePosition.byName('below'), NamePosition.below);
+  });
+
+  test('alignment maps onto the full-width band, screen-relative', () {
+    // Left/Center/Right, not "wherever the bubble happens to end".
+    expect(NameAlign.start.label, 'Left');
+    expect(NameAlign.center.label, 'Center');
+    expect(NameAlign.end.label, 'Right');
+    expect(NameAlign.start.alignment, Alignment.centerLeft);
+    expect(NameAlign.center.alignment, Alignment.center);
+    expect(NameAlign.end.alignment, Alignment.centerRight);
+  });
+
+  test('a name colour round trips, is omitted when unset, and clears', () {
+    expect(const NameStyle().toJson().containsKey('color'), isFalse);
+
+    const original = ChatInterface(
+      botNameStyle: NameStyle(color: 0xFF9911EE),
+      userNameStyle: NameStyle(align: NameAlign.end, color: 0xFF00CCAA),
+    );
+    final restored = ChatInterface.fromJson(original.toJson());
+    expect(restored, original);
+    expect(restored.botNameStyle.color, 0xFF9911EE);
+    expect(restored.userNameStyle.color, 0xFF00CCAA);
+
+    const coloured = NameStyle(color: 0xFF123456);
+    expect(coloured.copyWith().color, 0xFF123456);
+    expect(coloured.copyWith(size: 30).color, 0xFF123456);
+    expect(coloured.copyWith(color: null).color, isNull);
+  });
+
+  test('a name can be as large as a headline', () {
+    expect(kMaxNameSize, 100);
+    const big = ChatInterface(botNameStyle: NameStyle(size: 96));
+    expect(ChatInterface.fromJson(big.toJson()).botNameStyle.size, 96);
   });
 
   group('avatar corner rounding', () {

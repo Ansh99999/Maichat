@@ -489,7 +489,7 @@ class _NameControls extends StatelessWidget {
           ),
           _EnumRow<NameAlign>(
             icon: Icons.format_align_center_outlined,
-            label: 'Alignment',
+            label: 'Alignment (across the screen)',
             value: style.align,
             values: NameAlign.values,
             labelOf: (a) => a.label,
@@ -500,14 +500,43 @@ class _NameControls extends StatelessWidget {
           ),
           _EnumRow<NamePosition>(
             icon: Icons.vertical_align_top_outlined,
-            label: 'Position (relative to avatar)',
+            label: 'Position',
             value: style.position,
             values: NamePosition.values,
             labelOf: (p) => p.label,
             onChanged: (p) {
               onChanged(style.copyWith(position: p));
-              notify('$role ${p.label.toLowerCase()} the avatar');
+              notify('$role ${p.label.toLowerCase()} the message');
             },
+          ),
+          _ColorRow(
+            label: 'Colour',
+            value: style.color,
+            fallback: Theme.of(context).colorScheme.onSurfaceVariant,
+            onChanged: (c) {
+              onChanged(style.copyWith(color: c));
+              notify(c == null ? '$role follows the theme' : '$role recoloured');
+            },
+          ),
+          // The same nudge the preview's drag writes, for when a value is easier
+          // to set than to drag.
+          _SliderRow(
+            icon: Icons.swap_horiz_outlined,
+            label: 'Nudge across',
+            value: style.offsetX.clamp(-kMaxNameOffset, kMaxNameOffset),
+            min: -kMaxNameOffset,
+            max: kMaxNameOffset,
+            suffix: '${style.offsetX.round()} px',
+            onChanged: (v) => onChanged(style.copyWith(offsetX: v.roundToDouble())),
+          ),
+          _SliderRow(
+            icon: Icons.swap_vert_outlined,
+            label: 'Nudge down',
+            value: style.offsetY.clamp(-kMaxNameOffset, kMaxNameOffset),
+            min: -kMaxNameOffset,
+            max: kMaxNameOffset,
+            suffix: '${style.offsetY.round()} px',
+            onChanged: (v) => onChanged(style.copyWith(offsetY: v.roundToDouble())),
           ),
           ListTile(
             dense: true,
@@ -516,8 +545,8 @@ class _NameControls extends StatelessWidget {
             subtitle: Text(
               style.isNudged
                   ? 'Moved ${style.offsetX.round()}, ${style.offsetY.round()} '
-                      '— drag the name in the preview'
-                  : 'Drag the name in the preview to sit it closer to the text',
+                      '— or drag the name in the preview'
+                  : 'Drag the name in the preview, or use the sliders above',
             ),
             trailing: style.isNudged
                 ? TextButton(

@@ -123,4 +123,31 @@ void main() {
     expect(find.text('Font'), findsOneWidget);
     expect(find.text('Same as app font'), findsOneWidget);
   });
+
+  testWidgets('each name offers a colour, a nudge and screen-wide alignment',
+      (tester) async {
+    final state = AppState();
+    state.updateChatInterface(const ChatInterface(showNames: true));
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    await open(tester, 'Character name');
+
+    // Alignment reads as screen positions, not container-relative ones.
+    expect(find.text('Left'), findsOneWidget);
+    expect(find.text('Center'), findsOneWidget);
+    expect(find.text('Right'), findsOneWidget);
+
+    // A colour of its own, defaulting to the theme.
+    expect(find.text('Colour'), findsOneWidget);
+    expect(find.text('Auto (theme)'), findsOneWidget);
+
+    // The nudge is settable without dragging anything.
+    expect(find.text('Nudge across'), findsOneWidget);
+    expect(find.text('Nudge down'), findsOneWidget);
+    final sliders = tester.widgetList<Slider>(find.byType(Slider));
+    expect(sliders.any((s) => s.min == -kMaxNameOffset), isTrue);
+    // The size ceiling is a headline, not a caption.
+    expect(sliders.any((s) => s.max == kMaxNameSize), isTrue);
+  });
 }
