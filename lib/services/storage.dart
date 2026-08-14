@@ -286,4 +286,25 @@ class Storage {
 
   Future<void> saveTokenizerConfig(TokenizerConfig config) async =>
       (await _prefs).setString(_tokenizerKey, jsonEncode(config.toJson()));
+
+  /// How much room each stored entry takes, in bytes, largest first.
+  ///
+  /// The whole store is read into memory at every launch and rewritten whole on
+  /// every save, so one oversized entry — a character avatar straight off the
+  /// camera roll, say — slows down starting the app and sending a message. This
+  /// is the readout behind Settings ▸ About ▸ Storage, so that is visible
+  /// instead of merely felt.
+  Future<Map<String, int>> usage() async {
+    final prefs = await _prefs;
+    final sizes = <String, int>{};
+    for (final key in prefs.getKeys()) {
+      final value = prefs.get(key);
+      sizes[key] = value is String
+          ? utf8.encode(value).length
+          : value.toString().length;
+    }
+    final ordered = sizes.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return Map<String, int>.fromEntries(ordered);
+  }
 }

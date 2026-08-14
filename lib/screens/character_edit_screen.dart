@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../models/character.dart';
 import '../state/app_state.dart';
+import '../widgets/avatar_image.dart';
 
 /// Create or edit a character. Passed a [character] it edits in place;
 /// otherwise it builds a fresh one. Fields are grouped into calm sections
@@ -201,16 +202,11 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   Widget _avatarSection() {
     final scheme = Theme.of(context).colorScheme;
     final eff = _effectiveAvatar();
-    ImageProvider? image;
-    if (eff.startsWith('http')) {
-      image = NetworkImage(eff);
-    } else if (eff.isNotEmpty) {
-      try {
-        image = MemoryImage(base64Decode(eff));
-      } catch (_) {
-        image = null;
-      }
-    }
+    final image = avatarImage(
+      eff,
+      displaySize: 88,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(

@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/material.dart';
 
 /// Colours and base text style used when turning a message's markdown/HTML into
@@ -20,7 +22,42 @@ class MarkdownStyles {
   final Color codeBackground;
   final Color codeForeground;
   final Color link;
+
+  @override
+  bool operator ==(Object other) =>
+      other is MarkdownStyles &&
+      other.base == base &&
+      other.emphasis == emphasis &&
+      other.quote == quote &&
+      other.codeBackground == codeBackground &&
+      other.codeForeground == codeForeground &&
+      other.link == link;
+
+  @override
+  int get hashCode => Object.hash(
+        base,
+        emphasis,
+        quote,
+        codeBackground,
+        codeForeground,
+        link,
+      );
 }
+
+/// Parsed spans by `stylesHash:text`, most recently used last.
+///
+/// The chat rebuilds every visible turn on each streaming delta and each scroll,
+/// and re-parsing a message's markdown each time is the single largest cost in
+/// that rebuild. The spans are immutable and hold no gesture recognizers, so
+/// handing back the same list — the same instances — is safe, and it also lets
+/// the enclosing `TextSpan` compare equal so the paragraph is not laid out
+/// again.
+final LinkedHashMap<String, List<InlineSpan>> _spanCache =
+    LinkedHashMap<String, List<InlineSpan>>();
+
+/// Enough for a screenful of turns several times over, small enough that the
+/// text it pins is negligible next to the conversation itself.
+const int _spanCacheMax = 96;
 
 /// Renders [text] as a light subset of markdown **and** HTML into inline spans:
 /// headings, bullet/numbered lists and blockquotes at the line level, and
@@ -30,6 +67,24 @@ class MarkdownStyles {
 /// entities. Anything that doesn't parse is left as literal text, so raw prose
 /// is never mangled.
 List<InlineSpan> buildMessageSpans(String text, MarkdownStyles styles) {
+  final key = '${styles.hashCode}:$text';
+  final cached = _spanCache.remove(key);
+  if (cached != null) {
+    _spanCache[key] = cached; // Re-insert as most recently used.
+    return cached;
+  }
+  final spans = List<InlineSpan>.unmodifiable(_parseMessage(text, styles));
+  _spanCache[key] = spans;
+  while (_spanCache.length > _spanCacheMax) {
+    _spanCache.remove(_spanCache.keys.first);
+  }
+  return spans;
+}
+
+/// Drops the parsed-span cache. For tests.
+void clearMessageSpanCache() => _spanCache.clear();
+
+List<InlineSpan> _parseMessage(String text, MarkdownStyles styles) {
   final lines = _preprocessHtmlBlocks(text).split('\n');
   final out = <InlineSpan>[];
   for (var i = 0; i < lines.length; i++) {

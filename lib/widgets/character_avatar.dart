@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/character.dart';
 import '../models/chat_interface.dart';
+import 'avatar_image.dart';
 
 /// An avatar for a character: its picture when it has one (a URL or the base64
 /// image an imported card carried), falling back to a tinted monogram.
@@ -45,11 +46,14 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
   double get _diameter => widget.size ?? widget.radius * 2;
 
   ImageProvider? _resolveProvider() {
-    final c = widget.character;
-    if (c.avatarIsUrl) return NetworkImage(c.avatar.trim());
-    final bytes = c.avatarBytes;
-    if (bytes != null) return MemoryImage(bytes);
-    return null;
+    // Shared, size-capped and deduplicated: the same picture at the same size
+    // is the same provider object everywhere, so it is decoded once and held
+    // once no matter how many turns show it.
+    return avatarImage(
+      widget.character.avatar,
+      displaySize: _diameter,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
   }
 
   @override
@@ -62,7 +66,9 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
   void didUpdateWidget(CharacterAvatar old) {
     super.didUpdateWidget(old);
     if (old.character.avatar != widget.character.avatar ||
-        old.fit != widget.fit) {
+        old.fit != widget.fit ||
+        old.size != widget.size ||
+        old.radius != widget.radius) {
       _ratio = null;
       _syncStream();
     }

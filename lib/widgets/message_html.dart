@@ -23,6 +23,28 @@ class HtmlMessageStyle {
   final Color codeForeground;
   final Color link;
   final double fontSize;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HtmlMessageStyle &&
+      other.base == base &&
+      other.emphasis == emphasis &&
+      other.quote == quote &&
+      other.codeBackground == codeBackground &&
+      other.codeForeground == codeForeground &&
+      other.link == link &&
+      other.fontSize == fontSize;
+
+  @override
+  int get hashCode => Object.hash(
+        base,
+        emphasis,
+        quote,
+        codeBackground,
+        codeForeground,
+        link,
+        fontSize,
+      );
 }
 
 /// Whether [text] contains any HTML tag — the signal to route a message to the
@@ -44,19 +66,149 @@ String messageToHtml(String text) {
   );
   final normalized =
       html.replaceAll(_curlyQuotes, '"').replaceAll('&quot;', '"');
-  return normalized.replaceAllMapped(_quoteSpan, (m) {
+  final quoted = normalized.replaceAllMapped(_quoteSpan, (m) {
     final quoted = m.group(1);
     if (quoted == null) return m.group(0)!;
     // Drop the surrounding quotes; <q> re-adds a single pair when rendered.
     return '<q>${quoted.substring(1, quoted.length - 1)}</q>';
   });
+  return resolveFontFamilies(quoted);
+}
+
+// --- font-family ------------------------------------------------------------
+
+/// Desktop/web font names mapped onto the generic families the platform font
+/// manager actually knows. Android ships `serif`, `sans-serif`, `monospace` and
+/// `cursive` (fonts.xml); "Times New Roman" and friends exist on neither
+/// Android nor iOS, so asking for them by name silently yields the default
+/// font.
+const Map<String, String> _genericFor = {
+  // Serif
+  'times new roman': 'serif', 'times': 'serif', 'georgia': 'serif',
+  'garamond': 'serif', 'palatino': 'serif', 'palatino linotype': 'serif',
+  'book antiqua': 'serif', 'baskerville': 'serif', 'cambria': 'serif',
+  'constantia': 'serif', 'didot': 'serif', 'bodoni mt': 'serif',
+  'noto serif': 'serif', 'droid serif': 'serif', 'pt serif': 'serif',
+  'liberation serif': 'serif', 'dejavu serif': 'serif',
+  'ms serif': 'serif', 'serif': 'serif', 'ui-serif': 'serif',
+  // Sans-serif
+  'arial': 'sans-serif', 'helvetica': 'sans-serif',
+  'helvetica neue': 'sans-serif', 'verdana': 'sans-serif',
+  'tahoma': 'sans-serif', 'trebuchet ms': 'sans-serif',
+  'segoe ui': 'sans-serif', 'calibri': 'sans-serif',
+  'candara': 'sans-serif', 'optima': 'sans-serif',
+  'gill sans': 'sans-serif', 'futura': 'sans-serif',
+  'century gothic': 'sans-serif', 'lucida grande': 'sans-serif',
+  'noto sans': 'sans-serif', 'open sans': 'sans-serif',
+  'liberation sans': 'sans-serif', 'dejavu sans': 'sans-serif',
+  'sans-serif': 'sans-serif', 'ui-sans-serif': 'sans-serif',
+  'system-ui': 'sans-serif', '-apple-system': 'sans-serif',
+  'blinkmacsystemfont': 'sans-serif', 'roboto': 'sans-serif',
+  // Monospace
+  'courier new': 'monospace', 'courier': 'monospace',
+  'consolas': 'monospace', 'monaco': 'monospace', 'menlo': 'monospace',
+  'lucida console': 'monospace', 'dejavu sans mono': 'monospace',
+  'liberation mono': 'monospace', 'sf mono': 'monospace',
+  'source code pro': 'monospace', 'fira code': 'monospace',
+  'monospace': 'monospace', 'ui-monospace': 'monospace',
+  // Handwriting / display
+  'comic sans ms': 'cursive', 'brush script mt': 'cursive',
+  'segoe script': 'cursive', 'lucida handwriting': 'cursive',
+  'cursive': 'cursive', 'fantasy': 'cursive',
+};
+
+final _styleAttr = RegExp(r'''style\s*=\s*(["'])(.*?)\1''',
+    caseSensitive: false, dotAll: true);
+final _fontFamilyDecl =
+    RegExp(r'font-family\s*:\s*([^;]*)', caseSensitive: false);
+final _faceAttr = RegExp(r'''(<font\b[^>]*?\bface\s*=\s*)(["'])(.*?)\2''',
+    caseSensitive: false, dotAll: true);
+final _outerQuotes = RegExp(r'''^\s*["']|["']\s*$''');
+
+/// Rewrites every `font-family` in [html] to a family the device can resolve.
+///
+/// Two things make this necessary. Flutter can only use fonts the platform (or
+/// the app bundle) provides, and `flutter_html` keeps just the *first* name in a
+/// font stack — it never sets `fontFamilyFallback` — so `font-family: 'Times New
+/// Roman', serif` asked for a font no phone has and threw away the `serif`
+/// fallback that would have worked. We do the substitution the browser would
+/// effectively end up doing: the first name that maps to a generic family wins,
+/// and an unrecognised name is passed through (with its quotes stripped) in case
+/// it really is installed.
+String resolveFontFamilies(String html) {
+  if (!html.contains('font')) return html;
+  var out = html.replaceAllMapped(_styleAttr, (m) {
+    final quote = m.group(1)!;
+    final body = m.group(2)!;
+    final rewritten = body.replaceAllMapped(_fontFamilyDecl, (decl) {
+      final resolved = resolveFontFamilyList(decl.group(1)!);
+      return resolved == null ? decl.group(0)! : 'font-family: $resolved';
+    });
+    return 'style=$quote$rewritten$quote';
+  });
+  out = out.replaceAllMapped(_faceAttr, (m) {
+    final resolved = resolveFontFamilyList(m.group(3)!);
+    return resolved == null
+        ? m.group(0)!
+        : '${m.group(1)}${m.group(2)}$resolved${m.group(2)}';
+  });
+  return out;
+}
+
+/// The family to actually ask for, given a CSS font stack, or null when the
+/// stack is empty.
+String? resolveFontFamilyList(String value) {
+  final names = value
+      .split(',')
+      .map((n) => n.replaceAll(_outerQuotes, '').trim())
+      .where((n) => n.isNotEmpty)
+      .toList();
+  if (names.isEmpty) return null;
+  for (final name in names) {
+    final generic = _genericFor[name.toLowerCase()];
+    if (generic != null) return generic;
+  }
+  return names.first;
 }
 // APPEND-HTMLWIDGET
 
 /// Renders [text] as HTML/CSS with the full engine. Honours inline `style=`,
 /// tables, images, lists, links, etc., while base/emphasis/quote/code colours
 /// and font size follow the Chat Interface settings.
-Widget buildMessageHtml(String text, HtmlMessageStyle s) {
+///
+/// The result is cached per (text, style): parsing markdown, then HTML, then
+/// building the render tree is by far the most expensive thing a message can
+/// do, and the chat rebuilds every visible turn on each streaming delta and
+/// each scroll. Returning the *same* widget instance for unchanged input lets
+/// Flutter skip the subtree entirely.
+Widget buildMessageHtml(String text, HtmlMessageStyle s) =>
+    MessageHtml(text: text, style: s);
+
+class MessageHtml extends StatefulWidget {
+  const MessageHtml({super.key, required this.text, required this.style});
+
+  final String text;
+  final HtmlMessageStyle style;
+
+  @override
+  State<MessageHtml> createState() => _MessageHtmlState();
+}
+
+class _MessageHtmlState extends State<MessageHtml> {
+  Widget? _built;
+
+  @override
+  void didUpdateWidget(MessageHtml old) {
+    super.didUpdateWidget(old);
+    if (old.text != widget.text || old.style != widget.style) _built = null;
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _built ??= _html(widget.text, widget.style);
+}
+
+Widget _html(String text, HtmlMessageStyle s) {
   return Html(
     data: messageToHtml(text),
     onLinkTap: (url, _, _) => _open(url),

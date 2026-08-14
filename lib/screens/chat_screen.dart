@@ -13,6 +13,7 @@ import '../state/app_state.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
+import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
 import 'chats_screen.dart';
 import 'prompt_view_screen.dart';
@@ -220,9 +221,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    if (!state.ready) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+    if (!state.ready) return const StartupScreen();
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
     final topInset = MediaQuery.paddingOf(context).top;

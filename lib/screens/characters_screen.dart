@@ -6,6 +6,7 @@ import '../services/character_codec.dart';
 import '../services/character_sources.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
+import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import 'character_actions.dart';
 import 'character_edit_screen.dart';
@@ -776,19 +777,18 @@ class _CardImage extends StatelessWidget {
           ),
         );
 
-    final bytes = character.avatarBytes;
-    if (character.avatarIsUrl) {
-      return Image.network(
-        character.avatar.trim(),
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => fallback(),
-      );
-    }
-    if (bytes != null) {
-      return Image.memory(bytes, fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => fallback());
-    }
-    return fallback();
+    // Shared provider: decoded once, at card size, however many cards show it.
+    final provider = avatarImage(
+      character.avatar,
+      displaySize: 320,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
+    if (provider == null) return fallback();
+    return Image(
+      image: provider,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => fallback(),
+    );
   }
 }
 

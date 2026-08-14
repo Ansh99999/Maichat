@@ -13,6 +13,7 @@ import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
+import '../services/image_tools.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
 import '../services/model_context.dart';
@@ -24,14 +25,23 @@ import '../services/update_service.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
-  AppState({Storage? storage, ChatClient? client, UpdateService? updateService})
-      : _storage = storage ?? Storage(),
+  AppState({
+    Storage? storage,
+    ChatClient? client,
+    UpdateService? updateService,
+    this.loadTimeout = const Duration(seconds: 30),
+  })  : _storage = storage ?? Storage(),
         _client = client ?? ChatClient(),
         _updateService = updateService ?? UpdateService();
 
   final Storage _storage;
   final ChatClient _client;
   final UpdateService _updateService;
+
+  /// How long the startup read is given before the app opens anyway. Generous
+  /// enough for a big store on a slow phone, short enough that the app is never
+  /// simply stuck.
+  final Duration loadTimeout;
 
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
@@ -62,6 +72,14 @@ class AppState extends ChangeNotifier {
   bool _stopRequested = false;
   UpdateInfo? _availableUpdate;
 
+  /// What went wrong while reading stored data, or null when startup was clean.
+  String? _loadError;
+
+  /// Set when startup could not read the store. Writing is then refused, so a
+  /// half-loaded (or empty) session can never overwrite data that is still on
+  /// disk — see [_writable].
+  bool _loadFailed = false;
+
   List<Conversation> get conversations => List.unmodifiable(_conversations);
   List<Provider> get providers => List.unmodifiable(_providers);
   List<Character> get characters => List.unmodifiable(_characters);
@@ -70,6 +88,10 @@ class AppState extends ChangeNotifier {
   ChatInterface get chatInterface => _chatInterface;
   bool get ready => _ready;
   bool get streaming => _streaming;
+
+  /// A human-readable reason the stored data could not be read, or null.
+  /// Non-null means the session is read-only until [retryLoad] succeeds.
+  String? get loadError => _loadError;
 
   /// A newer release found on GitHub, or null when up to date / not yet checked.
   UpdateInfo? get availableUpdate => _availableUpdate;
@@ -119,7 +141,33 @@ class AppState extends ChangeNotifier {
     return _conversations.isEmpty ? null : _conversations.first;
   }
 
+  /// Reads everything the app needs to open.
+  ///
+  /// Startup must always finish. Whatever happens down in the storage layer —
+  /// a corrupt entry, a platform channel that fails, a store so large that
+  /// reading it runs out of memory — the app still opens and says what went
+  /// wrong, because the alternative (what shipped before) was an
+  /// indistinguishable spinner forever: [ready] never became true and there was
+  /// no way back in. When the load does fail, [_loadFailed] makes the session
+  /// read-only so the half-empty state cannot overwrite what is still on disk.
   Future<void> init() async {
+    try {
+      await _load().timeout(loadTimeout);
+    } on TimeoutException {
+      _fail('Reading saved data took too long and was given up on.');
+    } catch (error) {
+      _fail('Saved data could not be read: $error');
+    } finally {
+      _ready = true;
+      notifyListeners();
+      // Best-effort, non-blocking: surfaces an update affordance if one exists.
+      unawaited(checkForUpdates());
+    }
+  }
+
+  /// Reads each store in turn. Anything that throws in here aborts the whole
+  /// read — [init] catches it and the session goes read-only.
+  Future<void> _load() async {
     final providerState = await _storage.loadProviders();
     _providers
       ..clear()
@@ -144,10 +192,26 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(stored);
     _activeId = await _storage.loadActiveId();
-    _ready = true;
+  }
+
+  void _fail(String message) {
+    _loadError = message;
+    _loadFailed = true;
+    debugPrint('MaiChat: $message');
+  }
+
+  /// Whether persisting is allowed. False after a failed load, so a session
+  /// that came up without the user's data never writes over it.
+  bool get _writable => !_loadFailed;
+
+  /// Tries the failed load again, from the UI's "Retry" action.
+  Future<void> retryLoad() async {
+    if (!_loadFailed) return;
+    _loadError = null;
+    _loadFailed = false;
+    _ready = false;
     notifyListeners();
-    // Best-effort, non-blocking: surfaces an update affordance if one exists.
-    unawaited(checkForUpdates());
+    await init();
   }
 
   /// Asks GitHub whether a newer release exists and, if so, exposes it via
@@ -160,8 +224,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> _persistProviders() =>
-      _storage.saveProviders(ProviderState(_providers, _activeProviderId));
+  Future<void> _persistProviders() async {
+    if (!_writable) return;
+    await _storage.saveProviders(ProviderState(_providers, _activeProviderId));
+  }
 
   /// Adds [provider] and makes it the active one.
   Future<void> addProvider(Provider provider) async {
@@ -208,6 +274,7 @@ class AppState extends ChangeNotifier {
     if (next == _appearance) return;
     _appearance = next;
     notifyListeners();
+    if (!_writable) return;
     await _storage.saveAppearance(next);
   }
 
@@ -215,6 +282,7 @@ class AppState extends ChangeNotifier {
     if (next == _chatInterface) return;
     _chatInterface = next;
     notifyListeners();
+    if (!_writable) return;
     await _storage.saveChatInterface(next);
   }
 
@@ -238,8 +306,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> _persistPresets() =>
-      _storage.savePresets(PresetState(_presets, _defaultPresetId));
+  Future<void> _persistPresets() async {
+    if (!_writable) return;
+    await _storage.savePresets(PresetState(_presets, _defaultPresetId));
+  }
 
   Preset? presetById(String? id) {
     if (id == null) return null;
@@ -314,7 +384,7 @@ class AppState extends ChangeNotifier {
       }
     }
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Stores an edited preset as a chat-specific override (the "save for this
@@ -328,7 +398,7 @@ class AppState extends ChangeNotifier {
       }
     }
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Drops a chat's preset override so it follows the shared library preset
@@ -348,7 +418,7 @@ class AppState extends ChangeNotifier {
     }
     if (!changed) return;
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Whether [conversation] runs on a chat-specific copy rather than the shared
@@ -369,7 +439,7 @@ class AppState extends ChangeNotifier {
       }
     }
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// The character the user is impersonating in [conversation], or null when
@@ -387,12 +457,29 @@ class AppState extends ChangeNotifier {
     conversation.impersonateName = character?.displayName;
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   // --- Characters ----------------------------------------------------------
 
-  Future<void> _persistCharacters() => _storage.saveCharacters(_characters);
+  Future<void> _persistCharacters() async {
+    if (!_writable) return;
+    await _storage.saveCharacters(_characters);
+  }
+
+  /// The whole conversation list, rewritten. Everything that changes a thread
+  /// funnels through here (and the siblings below) so the read-only guard after
+  /// a failed load is impossible to bypass.
+  Future<void> _saveConversations() async {
+    if (!_writable) return;
+    await _storage.saveConversations(_conversations);
+  }
+
+  Future<void> _saveActiveId(String id) async {
+    if (!_writable) return;
+    await _storage.saveActiveId(id);
+  }
+
 
   Character? characterById(String? id) {
     if (id == null) return null;
@@ -413,6 +500,9 @@ class AppState extends ChangeNotifier {
   /// once.
   Future<void> addCharacters(List<Character> characters) async {
     if (characters.isEmpty) return;
+    for (final character in characters) {
+      await _fitAvatar(character);
+    }
     _characters.insertAll(0, characters);
     notifyListeners();
     await _persistCharacters();
@@ -422,6 +512,7 @@ class AppState extends ChangeNotifier {
   /// there is no match yet.
   Future<void> saveCharacter(Character character) async {
     character.updatedAt = DateTime.now();
+    await _fitAvatar(character);
     final index = _characters.indexWhere((c) => c.id == character.id);
     if (index == -1) {
       _characters.insert(0, character);
@@ -430,6 +521,15 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     await _persistCharacters();
+  }
+
+  /// Caps the picture a character carries into storage. Every avatar reaches the
+  /// store through here — a picked photo, an imported card, a CharX asset — and
+  /// a camera-roll-sized one would otherwise be read back on every launch and
+  /// rewritten on every save.
+  Future<void> _fitAvatar(Character character) async {
+    final fitted = await shrinkAvatarBase64(character.avatar);
+    if (fitted != character.avatar) character.avatar = fitted;
   }
 
   Future<void> deleteCharacter(String id) async {
@@ -510,13 +610,13 @@ class AppState extends ChangeNotifier {
     if (existing == null) _conversations.insert(0, target);
     _activeId = target.id;
     notifyListeners();
-    _storage.saveActiveId(target.id);
+    _saveActiveId(target.id);
   }
 
   void selectConversation(String id) {
     _activeId = id;
     notifyListeners();
-    _storage.saveActiveId(id);
+    _saveActiveId(id);
   }
 
   /// Renames a thread and persists it — the "edit chat" action.
@@ -531,7 +631,7 @@ class AppState extends ChangeNotifier {
       }
     }
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Empties the active thread but keeps it around — the "restart chat"
@@ -556,7 +656,7 @@ class AppState extends ChangeNotifier {
     }
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   Future<void> deleteConversation(String id) async {
@@ -564,7 +664,7 @@ class AppState extends ChangeNotifier {
     _conversations.removeWhere((c) => c.id == id);
     if (_activeId == id) _activeId = null;
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Sends [text] and streams the reply into a placeholder turn.
@@ -701,9 +801,11 @@ class AppState extends ChangeNotifier {
       _stopRequested = false;
       conversation.updatedAt = DateTime.now();
       notifyListeners();
-      await _storage.saveConversations(_conversations);
-      // Macros may have mutated variables; persist both scopes.
-      await _storage.saveGlobalVars(_globalVars);
+      await _saveConversations();
+      // Deliberately *not* saving the macro scopes here. The engine never
+      // touches MacroVariables (grep macro_engine.dart), so this was a second
+      // full rewrite of the entire preferences store after every single reply —
+      // on Android each write rewrites the whole file, avatars included.
     }
   }
 
@@ -737,7 +839,7 @@ class AppState extends ChangeNotifier {
         conversation.messages[index].copyWith(content: trimmed);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Removes the message at [index] — the "delete turn" action. Ignored while
@@ -750,7 +852,7 @@ class AppState extends ChangeNotifier {
     conversation.messages.removeAt(index);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// Copies messages [0..index] (inclusive) into a NEW thread, makes it active,
@@ -784,8 +886,8 @@ class AppState extends ChangeNotifier {
     _conversations.insert(0, fork);
     _activeId = fork.id;
     notifyListeners();
-    await _storage.saveActiveId(fork.id);
-    await _storage.saveConversations(_conversations);
+    await _saveActiveId(fork.id);
+    await _saveConversations();
     return fork.id;
   }
 
@@ -822,7 +924,7 @@ class AppState extends ChangeNotifier {
     conversation.messages[index] = message.withSwipe(swipeIndex);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _storage.saveConversations(_conversations);
+    await _saveConversations();
   }
 
   /// The provider a request runs on. The user's active provider selection is
@@ -896,6 +998,7 @@ class AppState extends ChangeNotifier {
     if (next == _tokenizerConfig) return;
     _tokenizerConfig = next;
     notifyListeners();
+    if (!_writable) return;
     await _storage.saveTokenizerConfig(next);
   }
 
@@ -1151,7 +1254,7 @@ class AppState extends ChangeNotifier {
     final models = await _client.listModels(provider);
     _modelCache[provider.id] = models;
     notifyListeners();
-    await _storage.saveModelCache(_modelCache);
+    if (_writable) await _storage.saveModelCache(_modelCache);
     return models;
   }
 

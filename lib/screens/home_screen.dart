@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
+import '../widgets/startup_screen.dart';
 import 'chat_screen.dart';
 import 'chats_screen.dart';
 import 'settings_screen.dart';
@@ -40,13 +41,12 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    if (!state.ready) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+    if (!state.ready) return const StartupScreen();
     // Brand-new, never-sent threads stay hidden until they hold a message.
     final chats = state.conversations.where((c) => !c.isEmpty).toList();
     final recent = chats.take(3).toList();
     final bottom = MediaQuery.paddingOf(context).bottom;
+    final loadError = state.loadError;
 
     return Scaffold(
       drawer: const AppDrawer(selected: DrawerSection.home),
@@ -58,6 +58,13 @@ class HomeScreen extends StatelessWidget {
       body: CustomScrollView(
         slivers: [
           const SliverAppBar.large(title: Text('Home')),
+          if (loadError != null)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              sliver: SliverToBoxAdapter(
+                child: LoadErrorCard(message: loadError),
+              ),
+            ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
             sliver: SliverToBoxAdapter(
