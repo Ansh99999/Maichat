@@ -486,6 +486,94 @@ void main() {
     });
   });
 
+  group('a "below" name goes under the avatar, in every layout', () {
+    const long = 'A reply long enough to wrap onto several lines in this narrow '
+        'host, so its bubble ends up much taller than the avatar it sits with.';
+
+    Future<void> pump(
+      WidgetTester tester, {
+      required TextPlacement placement,
+      ActionBarPlacement bar = ActionBarPlacement.belowMessage,
+      bool actions = false,
+      bool showAvatar = true,
+    }) =>
+        tester.pumpWidget(host(
+          ListView(children: [
+            MessageBubble(
+              message: ChatMessage(role: 'assistant', content: long),
+              ui: ChatInterface(
+                showNames: true,
+                textPlacement: placement,
+                botNameStyle: const NameStyle(position: NamePosition.below),
+                botAvatar:
+                    AvatarStyle(show: showAvatar, size: 48, side: ChatSide.left),
+                actionBarPlacement: bar,
+                messageActionsEnabled: actions,
+              ),
+              onAction: actions ? (_) {} : null,
+            ),
+          ]),
+        ));
+
+    Rect avatarRect(WidgetTester tester) =>
+        tester.getRect(find.byIcon(Icons.smart_toy_outlined));
+    Rect labelRect(WidgetTester tester) =>
+        tester.getRect(find.text('Assistant').last);
+
+    // The two layouts that actually have an avatar with a bottom edge to hang
+    // from: text beside it, and text under it.
+    for (final placement in [TextPlacement.beside, TextPlacement.below]) {
+      testWidgets('text ${placement.name}: under the avatar, not the message',
+          (tester) async {
+        await pump(tester, placement: placement);
+        final avatar = avatarRect(tester);
+        final label = labelRect(tester);
+        final turn = tester.getRect(find.byType(MessageBubble));
+
+        expect(label.top, greaterThanOrEqualTo(avatar.bottom - 1),
+            reason: 'below the avatar');
+        // And nowhere near the foot of a bubble far taller than the avatar —
+        // which is what "below the whole message" would look like.
+        expect(label.bottom, lessThan(turn.bottom - 20));
+      });
+    }
+
+    // The action bar must not change where the name lands, wherever it sits.
+    for (final bar in ActionBarPlacement.values) {
+      testWidgets('actions ${bar.name}: still under the avatar', (tester) async {
+        await pump(tester,
+            placement: TextPlacement.beside, bar: bar, actions: true);
+        final avatar = avatarRect(tester);
+        final label = labelRect(tester);
+        expect(label.top, greaterThanOrEqualTo(avatar.bottom - 1));
+        if (bar == ActionBarPlacement.besideAvatar) {
+          // The bar is hanging under the avatar, so the name clears it.
+          expect(label.top, greaterThan(avatar.bottom + 20));
+        }
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('an inline avatar (around) has no bottom edge, so it falls back',
+        (tester) async {
+      await pump(tester, placement: TextPlacement.around);
+      expect(tester.takeException(), isNull);
+      final turn = tester.getRect(find.byType(MessageBubble));
+      final label = labelRect(tester);
+      // Under the message, which is the honest answer when the avatar is inline
+      // in the text itself.
+      expect(label.bottom, closeTo(turn.bottom, 8));
+    });
+
+    testWidgets('no avatar at all falls back under the message',
+        (tester) async {
+      await pump(tester, placement: TextPlacement.beside, showAvatar: false);
+      expect(tester.takeException(), isNull);
+      final turn = tester.getRect(find.byType(MessageBubble));
+      expect(labelRect(tester).bottom, closeTo(turn.bottom, 8));
+    });
+  });
+
   group('message spacing', () {
     Future<Iterable<EdgeInsets>> margins(
         WidgetTester tester, ChatInterface ui) async {

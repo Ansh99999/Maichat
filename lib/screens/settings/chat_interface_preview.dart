@@ -23,7 +23,10 @@ class ChatInterfacePreviewPage extends StatelessWidget {
     ChatMessage(
       role: 'assistant',
       content: 'Hey! Drag my avatar to move it, or pull the corner handle to '
-          'resize it. I keep my own settings.',
+          'resize it. I keep my own settings.\n\nThis turn runs a few lines on '
+          'purpose: a reply is usually taller than its avatar, so you can see '
+          'where a name set to "below the avatar" actually lands versus one set '
+          'above the message.',
     ),
     ChatMessage(
       role: 'user',

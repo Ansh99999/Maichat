@@ -150,4 +150,30 @@ void main() {
     // The size ceiling is a headline, not a caption.
     expect(sliders.any((s) => s.max == kMaxNameSize), isTrue);
   });
+
+  testWidgets('says so when "below" cannot mean below the avatar',
+      (tester) async {
+    final state = AppState();
+    // Text wrapped around an inline avatar: there is no avatar bottom to hang a
+    // name from, so the fallback has to be stated rather than silently applied.
+    state.updateChatInterface(const ChatInterface(
+      showNames: true,
+      textPlacement: TextPlacement.around,
+      botNameStyle: NameStyle(position: NamePosition.below),
+    ));
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    await open(tester, 'Character name');
+    expect(find.textContaining('sits under the message'), findsOneWidget);
+
+    // With the avatar beside the text there is nothing to warn about.
+    state.updateChatInterface(const ChatInterface(
+      showNames: true,
+      textPlacement: TextPlacement.beside,
+      botNameStyle: NameStyle(position: NamePosition.below),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('sits under the message'), findsNothing);
+  });
 }

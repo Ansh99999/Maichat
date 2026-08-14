@@ -173,6 +173,7 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
                     icon: Icons.smart_toy_outlined,
                     role: 'Character name',
                     style: ui.botNameStyle,
+                    belowNote: _belowNote(ui, ui.botAvatar),
                     onChanged: (s) => update(ui.withName(false, s)),
                     notify: notify,
                   ),
@@ -181,6 +182,7 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
                     icon: Icons.person_outline,
                     role: 'Your name',
                     style: ui.userNameStyle,
+                    belowNote: _belowNote(ui, ui.userAvatar),
                     onChanged: (s) => update(ui.withName(true, s)),
                     notify: notify,
                   ),
@@ -281,8 +283,7 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
   }
 }
 
-Widget _header(BuildContext context, String text) => Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+Widget _header(BuildContext context, String text) => Padding(      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Text(
         text,
         style: Theme.of(context).textTheme.titleSmall?.copyWith(
@@ -291,6 +292,20 @@ Widget _header(BuildContext context, String text) => Padding(
             ),
       ),
     );
+
+/// Why a "below" name will not land under the avatar in the current layout, or
+/// null when it will. Said out loud in the settings card, because a silent
+/// fallback is indistinguishable from a broken setting.
+String? _belowNote(ChatInterface ui, AvatarStyle avatar) {
+  if (!avatar.show) {
+    return 'This avatar is hidden, so a "below" name sits under the message.';
+  }
+  if (ui.textPlacement == TextPlacement.around) {
+    return 'Text wraps around the avatar in this layout, so there is no avatar '
+        'bottom to hang from — a "below" name sits under the message.';
+  }
+  return null;
+}
 
 /// One role's avatar controls, presented as a collapsible dropdown (an
 /// [ExpansionTile] in a card) to keep the settings list uncluttered. Expands to
@@ -438,6 +453,7 @@ class _NameControls extends StatelessWidget {
     required this.style,
     required this.onChanged,
     required this.notify,
+    this.belowNote,
   });
 
   final String title;
@@ -449,6 +465,9 @@ class _NameControls extends StatelessWidget {
   final NameStyle style;
   final ValueChanged<NameStyle> onChanged;
   final ValueChanged<String> notify;
+
+  /// Set when "Below" cannot mean "below the avatar" in the current layout.
+  final String? belowNote;
 
   @override
   Widget build(BuildContext context) {
@@ -511,6 +530,16 @@ class _NameControls extends StatelessWidget {
                   : '$role below the avatar');
             },
           ),
+          if (style.position == NamePosition.below && belowNote != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(52, 0, 16, 8),
+              child: Text(
+                belowNote!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ),
           _ColorRow(
             label: 'Colour',
             value: style.color,
