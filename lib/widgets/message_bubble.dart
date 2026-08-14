@@ -15,6 +15,11 @@ import 'thinking_block.dart';
 /// "below the avatar" name label under the bar rather than on top of it.
 const double _kActionBarHeight = 34;
 
+/// Room the interactive (preview-only) avatar frame leaves around itself for its
+/// resize handle, so anything anchored to the avatar's bottom clears the handle
+/// instead of landing on it.
+const double _kHandleInset = 22;
+
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
 /// (size/shape/corner rounding/fit/offset and which side it sits on), where the
 /// text sits relative to the avatar, bubble-vs-document, an optional sender name
@@ -214,20 +219,35 @@ class MessageBubble extends StatelessWidget {
         );
 
     final nameAbove = nameStyle.position == NamePosition.above;
+    final barUnderAvatar =
+        actionsBar != null && placement == ActionBarPlacement.besideAvatar;
 
     // "Below" means below the *avatar*. Where that is depends on how this turn
     // is laid out:
     //  - text beside the avatar: the space under the avatar is empty, so the
-    //    label is laid over the turn at exactly the avatar's height (below).
+    //    label is laid over the turn at exactly the avatar's height.
     //  - text below the avatar: the label goes straight into the column between
-    //    the two, no measuring needed (bandInColumn).
+    //    the two, no measuring needed — until it is nudged, when it has to be
+    //    lifted out into the overlay so its hit box travels with it.
     //  - text wrapped around an inline avatar, or no avatar at all: there is no
     //    avatar bottom to speak of, so the label sits under the message.
     final hasAvatar = band != null && avatar != null;
-    final bandUnderAvatar =
-        hasAvatar && !nameAbove && ui.textPlacement == TextPlacement.beside;
-    final bandInColumn =
-        hasAvatar && !nameAbove && ui.textPlacement == TextPlacement.below;
+    final belowAvatar = hasAvatar && !nameAbove;
+    final inColumn = belowAvatar && ui.textPlacement == TextPlacement.below;
+    final overlaidUnderAvatar = belowAvatar &&
+        (ui.textPlacement == TextPlacement.beside ||
+            (inColumn && nameStyle.isNudged));
+
+    // The avatar unit's bottom edge, following any nudge the avatar itself has
+    // been given, clearing the action bar when that hangs under it, and allowing
+    // for the resize handle the preview's framed avatar carries.
+    final avatarBottom = style.size +
+        style.offsetY +
+        (interactive ? _kHandleInset : 0) +
+        (barUnderAvatar ? 2 + _kActionBarHeight : 0);
+    // Where an overlaid label's own top sits: the column leaves a 6 px gap under
+    // the avatar, the beside layout only needs breathing room.
+    final underAvatarAnchor = avatarBottom + (inColumn ? 6 : 2);
 
     final Widget inner;
     switch (ui.textPlacement) {
@@ -239,8 +259,12 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: crossAxis,
           children: [
             if (avatar != null) ...[avatar, const SizedBox(height: 6)],
-            // Between the avatar and the text is literally below the avatar.
-            if (bandInColumn) ...[band, const SizedBox(height: 2)],
+            // Between the avatar and the text is literally below the avatar. Once
+            // nudged the slot stays but the label itself moves to the overlay.
+            if (inColumn) ...[
+              nameStyle.isNudged ? reserved(band) : band,
+              const SizedBox(height: 2),
+            ],
             bubbleUnit(_bubble(content(), bubbleColor)),
           ],
         );
@@ -280,10 +304,10 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    // Place the name band: already handled inside the column for the
-    // avatar-above-text layout, otherwise laid out around the assembled turn.
+    // Place the name band. A label already sitting in the message column is done;
+    // everything else is laid out around the assembled turn.
     Widget outer = body;
-    if (band != null && !bandInColumn) {
+    if (band != null && !(inColumn && !nameStyle.isNudged)) {
       final messageRow = Align(
         alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
         child: body,
@@ -301,28 +325,25 @@ class MessageBubble extends StatelessWidget {
             children: [messageRow, bandSlot],
           );
 
-      if (bandUnderAvatar) {
-        // The avatar's own bottom edge, following any nudge it has been given —
-        // plus the action bar when that is hanging under it.
-        final anchor = style.size +
-            style.offsetY +
-            2 +
-            (placement == ActionBarPlacement.besideAvatar && actionsBar != null
-                ? _kActionBarHeight
-                : 0);
+      if (overlaidUnderAvatar) {
         outer = Stack(
           clipBehavior: Clip.none,
           children: [
             messageRow,
             // Room under the avatar for the label, whatever the message's own
-            // height turns out to be.
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [SizedBox(height: anchor), reserved(band)],
-            ),
+            // height turns out to be. The column layout already reserved its
+            // slot, so only the beside layout needs this.
+            if (!inColumn)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(height: underAvatarAnchor),
+                  reserved(band),
+                ],
+              ),
             Positioned(
-              top: anchor + nameStyle.offsetY,
+              top: underAvatarAnchor + nameStyle.offsetY,
               left: nameStyle.offsetX,
               right: -nameStyle.offsetX,
               child: band,

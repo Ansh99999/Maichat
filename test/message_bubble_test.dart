@@ -574,6 +574,69 @@ void main() {
     });
   });
 
+  // A nudge is written by both the preview's drag and the settings sliders, so if
+  // any layout ignores it both of them look broken. Every combination has to move
+  // the label by exactly the offset it was given.
+  group('a nudge moves the label in every layout', () {
+    Future<Rect> rectFor(
+      WidgetTester tester, {
+      required TextPlacement placement,
+      required NamePosition position,
+      required bool showAvatar,
+      required double dx,
+      required double dy,
+    }) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(
+                role: 'assistant',
+                content: 'A reply with enough words in it to give the bubble '
+                    'a couple of lines of height.'),
+            ui: ChatInterface(
+              showNames: true,
+              textPlacement: placement,
+              botNameStyle:
+                  NameStyle(position: position, offsetX: dx, offsetY: dy),
+              botAvatar:
+                  AvatarStyle(show: showAvatar, size: 48, side: ChatSide.left),
+            ),
+          ),
+        ]),
+      ));
+      return tester.getRect(find.text('Assistant').last);
+    }
+
+    for (final placement in TextPlacement.values) {
+      for (final position in NamePosition.values) {
+        for (final showAvatar in [true, false]) {
+          testWidgets(
+              'text ${placement.name}, name ${position.name}, '
+              'avatar=$showAvatar', (tester) async {
+            final plain = await rectFor(
+              tester,
+              placement: placement,
+              position: position,
+              showAvatar: showAvatar,
+              dx: 0,
+              dy: 0,
+            );
+            final moved = await rectFor(
+              tester,
+              placement: placement,
+              position: position,
+              showAvatar: showAvatar,
+              dx: 15,
+              dy: 25,
+            );
+            expect(moved.left - plain.left, closeTo(15, 0.5));
+            expect(moved.top - plain.top, closeTo(25, 0.5));
+          });
+        }
+      }
+    }
+  });
+
   group('message spacing', () {
     Future<Iterable<EdgeInsets>> margins(
         WidgetTester tester, ChatInterface ui) async {

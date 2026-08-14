@@ -80,6 +80,29 @@ void main() {
     expect(state.chatInterface.userNameStyle.offsetY, bot.offsetY);
   });
 
+  testWidgets('dragging works with the avatar above the text too',
+      (tester) async {
+    final state = AppState();
+    // The layout where the name lives inside the message column rather than in a
+    // band around it — the one where a nudge used to be silently dropped, so
+    // neither dragging nor the sliders did anything.
+    state.updateChatInterface(const ChatInterface(
+      showNames: true,
+      textPlacement: TextPlacement.below,
+      botNameStyle: NameStyle(position: NamePosition.below),
+    ));
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    final before = tester.getRect(firstName());
+    await tester.drag(firstName(), const Offset(0, 45));
+    await tester.pumpAndSettle();
+
+    expect(state.chatInterface.botNameStyle.offsetY, greaterThan(0));
+    // And it actually moved on screen, not just in the settings.
+    expect(tester.getRect(firstName()).top, greaterThan(before.top));
+  });
+
   testWidgets('dragging an avatar still moves it', (tester) async {
     final state = AppState();
     await tester.pumpWidget(host(state));
