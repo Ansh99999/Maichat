@@ -13,7 +13,7 @@ import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
-import '../services/image_tools.dart';
+import '../services/avatar_store.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
 import '../services/model_context.dart';
@@ -29,10 +29,13 @@ class AppState extends ChangeNotifier {
     Storage? storage,
     ChatClient? client,
     UpdateService? updateService,
+    AvatarStore? avatars,
     this.loadTimeout = const Duration(seconds: 30),
   })  : _storage = storage ?? Storage(),
         _client = client ?? ChatClient(),
-        _updateService = updateService ?? UpdateService();
+        _updateService = updateService ?? UpdateService() {
+    _avatars = avatars;
+  }
 
   final Storage _storage;
   final ChatClient _client;
@@ -42,6 +45,12 @@ class AppState extends ChangeNotifier {
   /// enough for a big store on a slow phone, short enough that the app is never
   /// simply stuck.
   final Duration loadTimeout;
+
+  /// Where character pictures are kept. Resolved in `main()` before the first
+  /// frame and handed in, so nothing here has to wait on a platform channel;
+  /// null when the platform would not say where to put them, in which case
+  /// pictures stay where an older build left them.
+  AvatarStore? _avatars;
 
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
@@ -192,6 +201,38 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(stored);
     _activeId = await _storage.loadActiveId();
+    await _adoptStoredAvatars();
+  }
+
+  /// Moves any picture still living as base64 in the preferences store into the
+  /// pictures directory, once, on the first launch that has this code. A store
+  /// written by an older build carries its avatars inline; leaving them there is
+  /// what made the store slow to read, slow to write and — past Android's
+  /// preference-parser limits — unreadable.
+  ///
+  /// Deliberately best-effort: if it cannot be done the app carries on with the
+  /// pictures where they are.
+  Future<void> _adoptStoredAvatars() async {
+    final store = _avatars;
+    if (store == null) return;
+    try {
+      var moved = 0;
+      for (final character in _characters) {
+        final ref = await store.adopt(character.avatar);
+        if (ref != character.avatar) {
+          character.avatar = ref;
+          moved++;
+        }
+      }
+      if (moved > 0) {
+        debugPrint('MaiChat: moved $moved character picture(s) out of the '
+            'preferences store and into files');
+        await _persistCharacters();
+      }
+      await _sweepAvatars();
+    } catch (error) {
+      debugPrint('MaiChat: could not move pictures into files ($error)');
+    }
   }
 
   void _fail(String message) {
@@ -491,6 +532,7 @@ class AppState extends ChangeNotifier {
 
   /// Adds [character] to the top of the roster.
   Future<void> addCharacter(Character character) async {
+    await _storeAvatar(character);
     _characters.insert(0, character);
     notifyListeners();
     await _persistCharacters();
@@ -501,7 +543,7 @@ class AppState extends ChangeNotifier {
   Future<void> addCharacters(List<Character> characters) async {
     if (characters.isEmpty) return;
     for (final character in characters) {
-      await _fitAvatar(character);
+      await _storeAvatar(character);
     }
     _characters.insertAll(0, characters);
     notifyListeners();
@@ -512,7 +554,7 @@ class AppState extends ChangeNotifier {
   /// there is no match yet.
   Future<void> saveCharacter(Character character) async {
     character.updatedAt = DateTime.now();
-    await _fitAvatar(character);
+    await _storeAvatar(character);
     final index = _characters.indexWhere((c) => c.id == character.id);
     if (index == -1) {
       _characters.insert(0, character);
@@ -523,19 +565,29 @@ class AppState extends ChangeNotifier {
     await _persistCharacters();
   }
 
-  /// Caps the picture a character carries into storage. Every avatar reaches the
-  /// store through here — a picked photo, an imported card, a CharX asset — and
-  /// a camera-roll-sized one would otherwise be read back on every launch and
-  /// rewritten on every save.
-  Future<void> _fitAvatar(Character character) async {
-    final fitted = await shrinkAvatarBase64(character.avatar);
-    if (fitted != character.avatar) character.avatar = fitted;
+  /// Moves the picture a character arrived with out of the preferences store and
+  /// into a file. Every avatar reaches storage through here — a picked photo, an
+  /// imported card, a CharX asset — so nothing puts an image back in the store.
+  /// No size limit: the file can be as large as the picture is.
+  Future<void> _storeAvatar(Character character) async {
+    final store = _avatars;
+    if (store == null) return; // No directory: keep the old base64 behaviour.
+    final stored = await store.adopt(character.avatar);
+    if (stored != character.avatar) character.avatar = stored;
   }
 
   Future<void> deleteCharacter(String id) async {
     _characters.removeWhere((c) => c.id == id);
     notifyListeners();
     await _persistCharacters();
+    await _sweepAvatars();
+  }
+
+  /// Deletes picture files no character refers to any more.
+  Future<void> _sweepAvatars() async {
+    final store = _avatars;
+    if (store == null || !_writable) return;
+    await store.sweep(_characters.map((c) => c.avatar));
   }
 
   /// Flips a character's starred flag — the pin-to-top action.

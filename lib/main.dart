@@ -6,23 +6,30 @@ import 'package:provider/provider.dart';
 
 import 'models/appearance.dart';
 import 'screens/home_screen.dart';
+import 'services/avatar_store.dart';
 import 'state/app_state.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Draw behind the status and navigation bars so the system chrome takes on
   // the app's colours instead of sitting in an opaque strip.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  runApp(const MaiChatApp());
+  // Resolved here, once, before anything can be drawn: character pictures are
+  // files, and the widget that draws one looks the directory up synchronously.
+  final avatars = await AvatarStore.open();
+  runApp(MaiChatApp(avatars: avatars));
 }
 
 class MaiChatApp extends StatelessWidget {
-  const MaiChatApp({super.key});
+  const MaiChatApp({super.key, this.avatars});
+
+  /// The pictures directory, or null when the platform would not name one.
+  final AvatarStore? avatars;
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<AppState>(
-      create: (_) => AppState()..init(),
+      create: (_) => AppState(avatars: avatars)..init(),
       // Outside the builder so a late palette does not rebuild app state.
       child: DynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {

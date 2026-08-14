@@ -106,19 +106,20 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
   Future<void> _repair() async {
     final scan = _scan;
     if (scan == null || !scan.hasOversized) return;
+    final many = scan.oversized.length != 1;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove oversized pictures?'),
+        title: const Text('Move pictures out of the store?'),
         content: Text(
-          '${scan.oversized.length} character '
-          '${scan.oversized.length == 1 ? 'picture' : 'pictures'} take '
-          '${_size(scan.oversizedBytes)} of the '
-          '${_size(scan.totalBytes)} stored here — more than the phone can load '
-          'in one go, which is why nothing opens.\n\n'
-          'Removing them leaves your chats, characters, presets and settings '
-          'exactly as they are; the characters just lose their picture. The '
-          'original file is kept alongside, so nothing is destroyed.',
+          '${scan.oversized.length} character ${many ? 'pictures' : 'picture'} '
+          'sit inside the settings store, taking '
+          '${_size(scan.oversizedBytes)} of ${_size(scan.totalBytes)} — more '
+          'than the phone can load in one go, which is why nothing opens.\n\n'
+          'They belong in files, and that is where they are going: each one '
+          'moves to its own file at full size and stays attached to its '
+          'character. Chats, characters, presets and settings are untouched, '
+          'and the original store is kept alongside.',
         ),
         actions: [
           TextButton(
@@ -127,7 +128,7 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove pictures'),
+            child: const Text('Move pictures'),
           ),
         ],
       ),
@@ -163,17 +164,30 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
     }
 
     if (!mounted) return;
+    final done = result;
+    final moved = done.recovered;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('Pictures removed'),
+        title: Text(moved == 0
+            ? 'Store repaired'
+            : '$moved ${moved == 1 ? 'picture' : 'pictures'} moved to files'),
         content: Text(
-          'The store went from ${_size(result!.bytesBefore)} to '
-          '${_size(result.bytesAfter)}.\n\n'
-          'Android only reads the store once per run, so MaiChat has to be '
-          'closed and opened again for this to take effect. Your chats will be '
-          'there.',
+          [
+            'The settings store went from ${_size(done.bytesBefore)} to '
+                '${_size(done.bytesAfter)}; the '
+                '${moved == 1 ? 'picture' : 'pictures'} now '
+                '${moved == 1 ? 'lives' : 'live'} in '
+                "${moved == 1 ? 'its' : 'their'} own file at full size.",
+            if (done.removed > 0)
+              '${done.removed} oversized '
+                  '${done.removed == 1 ? 'block' : 'blocks'} of data could not '
+                  'be traced to a character and had to be dropped.',
+            'Android only reads the store once per run, so MaiChat has to be '
+                'closed and opened again for this to take effect. Your chats '
+                'and characters will be there.',
+          ].join('\n\n'),
         ),
         actions: [
           FilledButton(
@@ -223,11 +237,13 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
               scan != null && scan.hasOversized
                   ? '${scan.oversized.length} character '
                       '${scan.oversized.length == 1 ? 'picture is' : 'pictures are'} '
-                      'using ${_size(scan.oversizedBytes)} of the '
-                      '${_size(scan.totalBytes)} stored here, which is more than '
-                      'the phone can load at once.\n\nRemoving the pictures gets '
-                      'everything else back. Nothing is deleted in the meantime: '
-                      'saving is paused, so what is on disk stays as it is.'
+                      'stored inside the settings file, using '
+                      '${_size(scan.oversizedBytes)} of '
+                      '${_size(scan.totalBytes)} — more than the phone can load '
+                      'at once.\n\nMoving them into their own files fixes that '
+                      'for good, at full size and still attached to their '
+                      'characters. Nothing is deleted in the meantime: saving is '
+                      'paused, so what is on disk stays as it is.'
                   : '${widget.message}\n\nNothing has been deleted: saving is '
                       'paused until this succeeds, so what is on disk stays as '
                       'it is.',
@@ -249,8 +265,8 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
                             width: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.cleaning_services_outlined),
-                    label: const Text('Remove pictures'),
+                        : const Icon(Icons.drive_file_move_outlined),
+                    label: const Text('Move pictures out'),
                   ),
                 OutlinedButton.icon(
                   onPressed: _working

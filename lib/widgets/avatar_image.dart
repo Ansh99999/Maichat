@@ -4,10 +4,13 @@ import 'dart:typed_data';
 
 import 'package:flutter/painting.dart';
 
+import '../services/avatar_store.dart';
+
 /// Image providers for character avatars, deduplicated and size-capped.
 ///
-/// Avatars are stored on the character as base64 (an imported card keeps its own
-/// picture), so a naive `MemoryImage(base64Decode(...))` has two problems: the
+/// An avatar is a file reference, a URL, or — until the startup migration has
+/// moved it — base64 sitting in the preferences store. For that last case a
+/// naive `MemoryImage(base64Decode(...))` has two problems: the
 /// decode runs again for every widget that shows the avatar, and — because
 /// `MemoryImage` compares its byte list by identity — each fresh `Uint8List`
 /// becomes a *different* key in Flutter's [ImageCache]. One character shown on
@@ -89,10 +92,18 @@ ImageProvider? avatarImage(
 
   final ImageProvider? base;
   final int sourceBytes;
-  if (avatarIsUrl(trimmed)) {
+  final localFile = avatarRefFile(trimmed);
+  if (localFile != null) {
+    // A picture on disk: nothing is held in memory but the decoded bitmap,
+    // which ResizeImage caps below. Size is therefore not our problem.
+    base = localFile.existsSync() ? FileImage(localFile) : null;
+    sourceBytes = 0;
+  } else if (avatarIsUrl(trimmed)) {
     base = NetworkImage(trimmed);
     sourceBytes = 0; // The bytes live in Flutter's own image cache, not here.
   } else {
+    // Legacy: base64 still sitting in the preferences store, until the startup
+    // migration moves it into a file.
     final bytes = _decode(trimmed);
     base = bytes == null ? null : MemoryImage(bytes);
     sourceBytes = bytes?.length ?? 0;

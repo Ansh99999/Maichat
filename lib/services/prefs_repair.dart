@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'avatar_store.dart';
 
 /// Repairing a preferences store the platform can no longer even read.
 ///
@@ -47,13 +50,20 @@ class PrefsScan {
 @immutable
 class PrefsRepair {
   const PrefsRepair({
+    required this.recovered,
     required this.removed,
     required this.bytesBefore,
     required this.bytesAfter,
     required this.backupPath,
   });
 
+  /// Pictures moved out to their own file and still attached to their character.
+  final int recovered;
+
+  /// Blobs too large to leave in place that could not be attributed to a
+  /// character, and so were dropped.
   final int removed;
+
   final int bytesBefore;
   final int bytesAfter;
 
@@ -61,10 +71,15 @@ class PrefsRepair {
   final String backupPath;
 }
 
-/// Runs longer than this are an embedded image, not data anyone typed: no
-/// ordinary value in this store is a megabyte of unbroken base64. Avatars below
-/// it are left alone, so a repair costs only the outsized pictures.
+/// Runs longer than this are treated as an embedded image rather than anything
+/// anyone typed: no ordinary value in this store is a megabyte of unbroken
+/// base64. This is a detection threshold, not a size limit — an oversized
+/// picture is moved into a file at whatever size it is, never shrunk.
 const int kMaxEmbeddedRunBytes = 1024 * 1024;
+
+/// How much context before a run is kept, to tell a character's picture from
+/// some other giant blob.
+const int _lookbehind = 40;
 
 /// The platform's preferences file, or null when it cannot be located (or does
 /// not exist yet).
@@ -121,41 +136,73 @@ Future<PrefsScan> scanPreferences({File? file}) async {
   );
 }
 
-/// Streams the store through, dropping every base64 run longer than
-/// [maxRunBytes], and swaps the result into place. The original is kept beside
+/// Streams the store through, moving every embedded picture longer than
+/// [maxRunBytes] out into its own file in [pictures] and leaving a `local:`
+/// reference in its place, then swaps the result in. The original is kept beside
 /// it as `<name>.oversized-<timestamp>`, so nothing is destroyed.
+///
+/// The picture stays attached to its character: the reference is substituted at
+/// exactly the position the base64 occupied, so the surrounding JSON is
+/// otherwise untouched. A giant blob that is *not* a character's picture cannot
+/// be attributed to anything, and is dropped so the store can be read again.
+///
+/// Nothing is ever held whole in memory — the base64 is decoded to the file as
+/// it streams — and nothing is resized: a picture is moved at whatever size it
+/// is.
 ///
 /// The platform caches the store the first time it is read, so the app has to be
 /// restarted before the repaired file takes effect.
 Future<PrefsRepair?> repairPreferences({
   File? file,
+  Directory? pictures,
   int maxRunBytes = kMaxEmbeddedRunBytes,
 }) async {
   final store = file ?? await preferencesFile();
   if (store == null || !store.existsSync()) return null;
+  final dir = pictures ?? avatarDirectory ?? (await AvatarStore.open())?.directory;
 
   final before = store.lengthSync();
   final temp = File('${store.path}.repairing');
   if (temp.existsSync()) temp.deleteSync();
   final out = temp.openWrite();
+  var recovered = 0;
   var removed = 0;
 
-  // Bytes of the run currently being read. A run is only written out once we
-  // know it is short enough to keep, so a huge one never lands in memory whole:
-  // past the threshold it is counted and discarded as it streams.
+  // The run being read. While it is short enough to keep it is buffered, so it
+  // can be written back verbatim; once it crosses the threshold the buffer is
+  // handed to an extractor (which decodes it into a file as it streams) or
+  // discarded. Either way a huge run never sits in memory whole.
   var run = BytesBuilder(copy: false);
   var runLength = 0;
   var dropping = false;
+  _RunExtractor? extractor;
 
-  void endRun() {
-    if (dropping) {
+  // The bytes just before the current run, so a character's picture can be told
+  // apart from any other large blob.
+  var tail = <int>[];
+  void remember(List<int> bytes) {
+    tail = <int>[...tail, ...bytes];
+    if (tail.length > _lookbehind) {
+      tail = tail.sublist(tail.length - _lookbehind);
+    }
+  }
+
+  Future<void> endRun() async {
+    if (extractor != null) {
+      final name = await extractor!.finish();
+      out.add(utf8.encode(avatarRef(name)));
+      recovered++;
+    } else if (dropping) {
       removed++;
     } else if (runLength > 0) {
-      out.add(run.takeBytes());
+      final bytes = run.takeBytes();
+      out.add(bytes);
+      remember(bytes);
     }
     run = BytesBuilder(copy: false);
     runLength = 0;
     dropping = false;
+    extractor = null;
   }
 
   try {
@@ -164,34 +211,56 @@ Future<PrefsRepair?> repairPreferences({
       for (var i = 0; i < chunk.length; i++) {
         if (_isBase64Byte(chunk[i])) {
           if (runLength == 0) {
-            // Flush the plain bytes seen since the last run.
-            if (i > start) out.add(chunk.sublist(start, i));
+            if (i > start) {
+              final plain = chunk.sublist(start, i);
+              out.add(plain);
+              remember(plain);
+            }
             start = i;
           }
           runLength++;
-          if (!dropping && runLength > maxRunBytes) {
-            // Only now does it count as a picture: throw away what was buffered.
-            dropping = true;
-            run.clear();
+          if (extractor == null && !dropping && runLength > maxRunBytes) {
+            // Past the threshold: this is a picture. Move it out if we can see
+            // whose it is and have somewhere to put it.
+            final buffered = run.takeBytes();
+            if (dir != null && _tailNamesAnAvatar(tail)) {
+              extractor = _RunExtractor(dir, recovered);
+              await extractor!.add(buffered);
+            } else {
+              dropping = true;
+            }
           }
         } else {
           if (runLength > 0) {
-            if (!dropping) run.add(chunk.sublist(start, i));
-            endRun();
+            final rest = chunk.sublist(start, i);
+            if (extractor != null) {
+              await extractor!.add(rest);
+            } else if (!dropping) {
+              run.add(rest);
+            }
+            await endRun();
             start = i;
           }
         }
       }
       if (runLength > 0) {
-        if (!dropping) run.add(chunk.sublist(start));
+        final rest = chunk.sublist(start);
+        if (extractor != null) {
+          await extractor!.add(rest);
+        } else if (!dropping) {
+          run.add(rest);
+        }
       } else if (start < chunk.length) {
-        out.add(chunk.sublist(start));
+        final plain = chunk.sublist(start);
+        out.add(plain);
+        remember(plain);
       }
     }
-    endRun();
+    await endRun();
     await out.flush();
     await out.close();
   } catch (error) {
+    await extractor?.abandon();
     await out.close();
     if (temp.existsSync()) temp.deleteSync();
     debugPrint('MaiChat: storage repair failed ($error)');
@@ -203,11 +272,72 @@ Future<PrefsRepair?> repairPreferences({
   store.renameSync(backup);
   temp.renameSync(store.path);
   return PrefsRepair(
+    recovered: recovered,
     removed: removed,
     bytesBefore: before,
     bytesAfter: File(store.path).lengthSync(),
     backupPath: backup,
   );
+}
+
+/// Whether the bytes just before a run look like a character's `avatar` field.
+/// Covers both stores: `&quot;avatar&quot;:&quot;` in Android's XML and
+/// `\"avatar\":\"` in the desktop JSON.
+bool _tailNamesAnAvatar(List<int> tail) =>
+    String.fromCharCodes(tail).toLowerCase().contains('avatar');
+
+/// Decodes one base64 run straight into a file, 4 characters at a time, so a
+/// picture of any size costs a few kilobytes of memory.
+class _RunExtractor {
+  _RunExtractor(this.directory, int index)
+      : _part = File('${directory.path}/recovered-'
+            '${DateTime.now().microsecondsSinceEpoch}-$index.part') {
+    _sink = _part.openWrite();
+  }
+
+  final Directory directory;
+  final File _part;
+  late final IOSink _sink;
+
+  /// Base64 characters not yet part of a complete 4-character group.
+  var _carry = '';
+
+  /// The first decoded bytes, kept only to sniff the format for the extension.
+  final _head = <int>[];
+
+  Future<void> add(List<int> base64Chunk) async {
+    _carry += String.fromCharCodes(base64Chunk);
+    final aligned = _carry.length - (_carry.length % 4);
+    if (aligned <= 0) return;
+    final bytes = base64Decode(_carry.substring(0, aligned));
+    _carry = _carry.substring(aligned);
+    if (_head.length < 12) _head.addAll(bytes.take(12 - _head.length));
+    _sink.add(bytes);
+  }
+
+  /// Flushes what is left, names the file by its format, and returns that name.
+  Future<String> finish() async {
+    if (_carry.isNotEmpty) {
+      // A trailing group, padding included.
+      final padded = _carry.padRight((_carry.length + 3) ~/ 4 * 4, '=');
+      _sink.add(base64Decode(padded));
+    }
+    await _sink.flush();
+    await _sink.close();
+    final name = _part.uri.pathSegments.last
+        .replaceAll('.part', avatarExtensionFor(_head));
+    _part.renameSync('${directory.path}/$name');
+    return name;
+  }
+
+  Future<void> abandon() async {
+    try {
+      await _sink.close();
+      if (_part.existsSync()) _part.deleteSync();
+    } catch (_) {
+      // Nothing to do: this is already the error path.
+    }
+  }
 }
 
 /// The base64 alphabet (plus its padding). Deliberately excludes whitespace and
