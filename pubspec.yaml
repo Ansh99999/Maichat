@@ -43,6 +43,9 @@ dependencies:
   file_picker: 11.0.3
   # Opening the release / APK download in the browser for in-app update.
   url_launcher: 6.3.2
+  # Finding the preferences file itself, for the storage repair that has to work
+  # when SharedPreferences cannot even be loaded (see services/prefs_repair.dart).
+  path_provider: 2.1.6
   # Reading CharX (.charx) character cards — a ZIP archive, standalone or
   # appended after a JPEG/PNG. Pure Dart, so no native-plugin build concerns.
   archive: 4.0.7
