@@ -59,36 +59,162 @@ void main() {
   test('name typography + alignment round trip', () {
     const original = ChatInterface(
       showNames: true,
-      botNameSize: 18,
-      userNameSize: 9,
-      botNameAlign: NameAlign.center,
-      userNameAlign: NameAlign.end,
-      botNamePosition: NamePosition.below,
-      userNamePosition: NamePosition.above,
+      syncNames: true,
+      botNameStyle: NameStyle(
+        size: 18,
+        align: NameAlign.center,
+        position: NamePosition.below,
+        fontFamily: 'Roboto Slab',
+        offsetX: 6,
+        offsetY: -12,
+      ),
+      userNameStyle: NameStyle(size: 9, align: NameAlign.end),
     );
     final restored = ChatInterface.fromJson(original.toJson());
     expect(restored, original);
-    expect(restored.botNameSize, 18);
-    expect(restored.userNameSize, 9);
-    expect(restored.botNameAlign, NameAlign.center);
-    expect(restored.userNameAlign, NameAlign.end);
-    expect(restored.botNamePosition, NamePosition.below);
-    expect(restored.userNamePosition, NamePosition.above);
+    expect(restored.botNameStyle.size, 18);
+    expect(restored.userNameStyle.size, 9);
+    expect(restored.botNameStyle.align, NameAlign.center);
+    expect(restored.userNameStyle.align, NameAlign.end);
+    expect(restored.botNameStyle.position, NamePosition.below);
+    expect(restored.userNameStyle.position, NamePosition.above);
+    expect(restored.botNameStyle.fontFamily, 'Roboto Slab');
+    expect(restored.botNameStyle.offset, const Offset(6, -12));
+    expect(restored.syncNames, isTrue);
   });
 
-  test('name defaults and enum byName fall back sensibly', () {
+  test('an unset name font is omitted from JSON and cleared via the sentinel',
+      () {
+    expect(const NameStyle().toJson().containsKey('fontFamily'), isFalse);
+    const styled = NameStyle(fontFamily: 'Inter');
+    expect(styled.copyWith().fontFamily, 'Inter');
+    expect(styled.copyWith(fontFamily: null).fontFamily, isNull);
+    expect(styled.copyWith(size: 20).fontFamily, 'Inter');
+  });
+
+  test('nameFor picks the right role and isNudged tracks the offset', () {
+    const ui = ChatInterface(
+      botNameStyle: NameStyle(size: 15),
+      userNameStyle: NameStyle(size: 21, offsetY: 4),
+    );
+    expect(ui.nameFor(false).size, 15);
+    expect(ui.nameFor(true).size, 21);
+    expect(ui.nameFor(false).isNudged, isFalse);
+    expect(ui.nameFor(true).isNudged, isTrue);
+  });
+
+  test('withName respects the sync flag', () {
+    const independent = ChatInterface(syncNames: false);
+    final one = independent.withName(
+        false, independent.botNameStyle.copyWith(size: 20));
+    expect(one.botNameStyle.size, 20);
+    expect(one.userNameStyle.size, 12);
+
+    const synced = ChatInterface(syncNames: true);
+    final both =
+        synced.withName(true, synced.userNameStyle.copyWith(fontFamily: 'Lato'));
+    expect(both.userNameStyle.fontFamily, 'Lato');
+    expect(both.botNameStyle.fontFamily, 'Lato');
+  });
+
+  test('the pre-nested flat name keys migrate onto both styles', () {
+    final legacy = {
+      'showNames': true,
+      'botNameSize': 17.0,
+      'botNameAlign': 'center',
+      'botNamePosition': 'below',
+      'userNameSize': 10.0,
+      'userNameAlign': 'end',
+    };
+
+    final migrated = ChatInterface.fromJson(legacy);
+
+    expect(migrated.botNameStyle.size, 17);
+    expect(migrated.botNameStyle.align, NameAlign.center);
+    expect(migrated.botNameStyle.position, NamePosition.below);
+    expect(migrated.userNameStyle.size, 10);
+    expect(migrated.userNameStyle.align, NameAlign.end);
+    expect(migrated.userNameStyle.position, NamePosition.above);
+    // Nothing was stored for the new fields, so they take their defaults.
+    expect(migrated.botNameStyle.fontFamily, isNull);
+    expect(migrated.botNameStyle.isNudged, isFalse);
+    expect(migrated.syncNames, isFalse);
+  });
+
+  test('name defaults fall back sensibly', () {
     const ui = ChatInterface();
-    expect(ui.botNameSize, 12);
-    expect(ui.userNameSize, 12);
-    expect(ui.botNameAlign, NameAlign.start);
-    expect(ui.userNameAlign, NameAlign.start);
-    expect(ui.botNamePosition, NamePosition.above);
-    expect(ui.userNamePosition, NamePosition.above);
+    expect(ui.botNameStyle, const NameStyle());
+    expect(ui.userNameStyle, const NameStyle());
+    expect(ui.botNameStyle.size, 12);
+    expect(ui.botNameStyle.align, NameAlign.start);
+    expect(ui.botNameStyle.position, NamePosition.above);
+    expect(ui.botNameStyle.fontFamily, isNull);
     expect(NameAlign.byName('nonsense'), NameAlign.start);
     expect(NameAlign.byName('center'), NameAlign.center);
     expect(NameAlign.center.textAlign, TextAlign.center);
     expect(NamePosition.byName('nonsense'), NamePosition.above);
     expect(NamePosition.byName('below'), NamePosition.below);
+  });
+
+  group('avatar corner rounding', () {
+    test('a level scales with the frame and round trips', () {
+      const original = ChatInterface(
+        botAvatar: AvatarStyle(shape: AvatarShape.rounded, corner: CornerRounding.xs),
+        userAvatar: AvatarStyle(shape: AvatarShape.rounded, corner: CornerRounding.xxl),
+      );
+      final restored = ChatInterface.fromJson(original.toJson());
+      expect(restored, original);
+      expect(restored.botAvatar.corner, CornerRounding.xs);
+      expect(restored.userAvatar.corner, CornerRounding.xxl);
+
+      // The radius is a fraction of the short side, so a level looks the same
+      // at any size.
+      expect(restored.botAvatar.radiusFor(100), closeTo(7, 0.001));
+      expect(restored.userAvatar.radiusFor(50), closeTo(16, 0.001));
+    });
+
+    test('circle and square ignore the level', () {
+      const circle =
+          AvatarStyle(shape: AvatarShape.circle, corner: CornerRounding.none);
+      const square =
+          AvatarStyle(shape: AvatarShape.square, corner: CornerRounding.xxl);
+      expect(circle.radiusFor(64), 32);
+      expect(square.radiusFor(64), 0);
+      expect(circle.cornerLabel, 'Circle');
+      expect(square.cornerLabel, 'Square');
+    });
+
+    test('the default is a restrained M, and junk falls back to it', () {
+      const style = AvatarStyle(shape: AvatarShape.rounded);
+      expect(style.corner, CornerRounding.m);
+      expect(style.cornerLabel, 'Rounded · M');
+      expect(CornerRounding.byName('nonsense'), CornerRounding.m);
+      expect(CornerRounding.byName('xxs'), CornerRounding.xxs);
+      // Softer than the single hardcoded "rounded" look it replaces (0.24).
+      expect(style.radiusFor(100), lessThan(24));
+      expect(CornerRounding.none.factor, 0);
+      // The scale climbs monotonically from none to xxl.
+      for (var i = 1; i < CornerRounding.values.length; i++) {
+        expect(CornerRounding.values[i].factor,
+            greaterThan(CornerRounding.values[i - 1].factor));
+      }
+    });
+  });
+
+  test('message spacing defaults, clamps into range and round trips', () {
+    const ui = ChatInterface();
+    expect(ui.messageSpacing, kDefaultMessageSpacing);
+    // Wider than the 8 px gap it replaces, so two avatars never touch.
+    expect(kDefaultMessageSpacing, greaterThan(8));
+
+    const custom = ChatInterface(messageSpacing: 32);
+    final restored = ChatInterface.fromJson(custom.toJson());
+    expect(restored, custom);
+    expect(restored.messageSpacing, 32);
+
+    // A config saved before the setting existed reads as the default.
+    expect(ChatInterface.fromJson(<String, dynamic>{}).messageSpacing,
+        kDefaultMessageSpacing);
   });
 
   test('copyWith clears a colour to null (follow theme) via the sentinel', () {

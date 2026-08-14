@@ -52,7 +52,7 @@ void main() {
                   ui: ChatInterface(
                     textPlacement: placement,
                     showNames: true,
-                    botNamePosition: position,
+                    botNameStyle: NameStyle(position: position),
                     botAvatar: AvatarStyle(show: show, side: ChatSide.left),
                   ),
                 ),
@@ -69,25 +69,30 @@ void main() {
       (tester) async {
     Offset? drag;
     double? resize;
+    // Inside a ListView on purpose: a mostly-vertical drag must nudge the
+    // avatar, not scroll the preview out from under it.
     await tester.pumpWidget(host(
-      MessageBubble(
-        message: ChatMessage(role: 'assistant', content: 'Drag me'),
-        ui: const ChatInterface(
-          botAvatar: AvatarStyle(size: 60, side: ChatSide.left),
+      ListView(children: [
+        MessageBubble(
+          message: ChatMessage(role: 'assistant', content: 'Drag me'),
+          ui: const ChatInterface(
+            botAvatar: AvatarStyle(size: 60, side: ChatSide.left),
+          ),
+          interactive: true,
+          onAvatarDrag: (d) => drag = d,
+          onAvatarResize: (d) => resize = d,
         ),
-        interactive: true,
-        onAvatarDrag: (d) => drag = d,
-        onAvatarResize: (d) => resize = d,
-      ),
+      ]),
     ));
 
     // Dragging the avatar body reports a movement delta.
     await tester.drag(
       find.byIcon(Icons.smart_toy_outlined),
-      const Offset(28, 18),
+      const Offset(6, 40),
     );
     await tester.pump();
     expect(drag, isNotNull);
+    expect(drag!.dy, greaterThan(0));
 
     // Dragging the corner handle reports a resize delta.
     await tester.drag(find.byIcon(Icons.open_in_full), const Offset(24, 24));
@@ -220,4 +225,162 @@ void main() {
       });
     }
   }
+
+  group('sender name label', () {
+    testWidgets('honours its role size and nudge', (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: const ChatInterface(
+              showNames: true,
+              botNameStyle: NameStyle(size: 19, offsetX: 3, offsetY: 7),
+            ),
+          ),
+        ]),
+      ));
+
+      expect(tester.widget<Text>(find.text('Assistant')).style?.fontSize, 19);
+      // The nudge moves the label without disturbing the layout: a Transform,
+      // not padding.
+      expect(
+        find.ancestor(
+          of: find.text('Assistant'),
+          matching: find.byWidgetPredicate((w) =>
+              w is Transform &&
+              w.transform == Matrix4.translationValues(3, 7, 0)),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('each role keeps its own label style', (tester) async {
+      const ui = ChatInterface(
+        showNames: true,
+        botNameStyle: NameStyle(size: 20),
+        userNameStyle: NameStyle(size: 9),
+      );
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: ui,
+          ),
+          MessageBubble(
+            message: ChatMessage(role: 'user', content: 'Hello'),
+            ui: ui,
+          ),
+        ]),
+      ));
+
+      expect(tester.widget<Text>(find.text('Assistant')).style?.fontSize, 20);
+      expect(tester.widget<Text>(find.text('You')).style?.fontSize, 9);
+    });
+
+    testWidgets('is draggable in the preview and reports the delta',
+        (tester) async {
+      Offset? moved;
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: const ChatInterface(showNames: true),
+            interactive: true,
+            onNameDrag: (d) => moved = d,
+          ),
+        ]),
+      ));
+
+      // Past the pan slop, so the gesture is actually recognised.
+      await tester.drag(find.text('Assistant'), const Offset(6, 40));
+      await tester.pump();
+      expect(moved, isNotNull);
+      expect(moved!.dy, greaterThan(0));
+    });
+
+    testWidgets('is not a drag target in the chat itself', (tester) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: const ChatInterface(showNames: true),
+          ),
+        ]),
+      ));
+      // No grab frame around the label when it isn't interactive.
+      expect(
+        find.ancestor(
+          of: find.text('Assistant'),
+          matching: find.byWidgetPredicate(
+              (w) => w is Container && w.decoration is BoxDecoration),
+        ),
+        findsNothing,
+      );
+    });
+  });
+
+  group('message spacing', () {
+    Future<Iterable<EdgeInsets>> margins(
+        WidgetTester tester, ChatInterface ui) async {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'Hi'),
+            ui: ui,
+          ),
+        ]),
+      ));
+      return tester
+          .widgetList<Container>(find.byType(Container))
+          .map((c) => c.margin)
+          .whereType<EdgeInsets>();
+    }
+
+    testWidgets('splits the configured gap above and below a turn',
+        (tester) async {
+      final found =
+          await margins(tester, const ChatInterface(messageSpacing: 22));
+      expect(found.any((m) => m.top == 11 && m.bottom == 11), isTrue);
+    });
+
+    testWidgets('the default leaves a clear break between turns',
+        (tester) async {
+      final found = await margins(tester, const ChatInterface());
+      expect(
+        found.any((m) =>
+            m.top == kDefaultMessageSpacing / 2 &&
+            m.bottom == kDefaultMessageSpacing / 2),
+        isTrue,
+      );
+    });
+
+    testWidgets('zero spacing is allowed', (tester) async {
+      final found =
+          await margins(tester, const ChatInterface(messageSpacing: 0));
+      expect(found.any((m) => m.top == 0 && m.bottom == 0), isTrue);
+    });
+  });
+
+  // Every rounding level should clip without throwing, at a tiny and a large
+  // avatar alike.
+  testWidgets('every corner rounding level lays out', (tester) async {
+    for (final rounding in CornerRounding.values) {
+      await tester.pumpWidget(host(
+        ListView(children: [
+          for (final size in [24.0, 120.0])
+            MessageBubble(
+              message: ChatMessage(role: 'assistant', content: 'Hi'),
+              ui: ChatInterface(
+                botAvatar: AvatarStyle(
+                  size: size,
+                  shape: AvatarShape.rounded,
+                  corner: rounding,
+                ),
+              ),
+            ),
+        ]),
+      ));
+      expect(tester.takeException(), isNull);
+    }
+  });
 }

@@ -9,8 +9,10 @@ import '../../widgets/message_bubble.dart';
 
 /// A live mock chat that reflects the current Chat Interface settings and lets
 /// them be tuned by hand. Both avatars are independent: drag either framed
-/// avatar to move it, pull its corner handle to resize it. Every change writes
-/// straight back to the saved settings (respecting the sync toggle).
+/// avatar to move it, pull its corner handle to resize it. With names on, each
+/// name label is draggable too — that is how a name is pulled down close to the
+/// message body it labels. Every change writes straight back to the saved
+/// settings (respecting the sync toggles).
 class ChatInterfacePreviewPage extends StatelessWidget {
   const ChatInterfacePreviewPage({super.key});
 
@@ -65,6 +67,18 @@ class ChatInterfacePreviewPage extends StatelessWidget {
       ));
     }
 
+    // Drag a name label around (sync is honoured by withName).
+    void dragName(bool isUser, Offset d) {
+      final n = ui.nameFor(isUser);
+      update(ui.withName(
+        isUser,
+        n.copyWith(
+          offsetX: (n.offsetX + d.dx).clamp(-kMaxNameOffset, kMaxNameOffset),
+          offsetY: (n.offsetY + d.dy).clamp(-kMaxNameOffset, kMaxNameOffset),
+        ),
+      ));
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Preview'),
@@ -74,6 +88,10 @@ class ChatInterfacePreviewPage extends StatelessWidget {
               onPressed: () => update(ui.copyWith(
                 botAvatar: ui.botAvatar.copyWith(offsetX: 0, offsetY: 0),
                 userAvatar: ui.userAvatar.copyWith(offsetX: 0, offsetY: 0),
+                botNameStyle:
+                    ui.botNameStyle.copyWith(offsetX: 0, offsetY: 0),
+                userNameStyle:
+                    ui.userNameStyle.copyWith(offsetX: 0, offsetY: 0),
               )),
               child: const Text('Reset positions'),
             ),
@@ -81,7 +99,7 @@ class ChatInterfacePreviewPage extends StatelessWidget {
       ),
       body: Column(
         children: [
-          _Hint(),
+          _Hint(showNames: ui.showNames),
           Expanded(
             child: Container(
               color: bg,
@@ -98,6 +116,7 @@ class ChatInterfacePreviewPage extends StatelessWidget {
                     interactive: true,
                     onAvatarDrag: (d) => drag(isUser, d),
                     onAvatarResize: (d) => resize(isUser, d),
+                    onNameDrag: (d) => dragName(isUser, d),
                   );
                 },
               ),
@@ -113,12 +132,18 @@ class ChatInterfacePreviewPage extends StatelessWidget {
       ui.botAvatar.offsetX != 0 ||
       ui.botAvatar.offsetY != 0 ||
       ui.userAvatar.offsetX != 0 ||
-      ui.userAvatar.offsetY != 0;
+      ui.userAvatar.offsetY != 0 ||
+      ui.botNameStyle.isNudged ||
+      ui.userNameStyle.isNudged;
 }
 // APPEND-PREVIEW
 
 /// The instruction strip above the mock chat.
 class _Hint extends StatelessWidget {
+  const _Hint({required this.showNames});
+
+  final bool showNames;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -133,8 +158,12 @@ class _Hint extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Each avatar is independent — drag either one to reposition it, '
-              'pull its corner handle to resize.',
+              showNames
+                  ? 'Drag either avatar to reposition it, pull its corner handle '
+                      'to resize — and drag a name label to sit it where you '
+                      'want it.'
+                  : 'Each avatar is independent — drag either one to reposition '
+                      'it, pull its corner handle to resize.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSecondaryContainer,
                   ),
@@ -147,7 +176,8 @@ class _Hint extends StatelessWidget {
 }
 
 /// A compact tuning bar pinned under the mock chat: the layout-level options
-/// most worth seeing change live.
+/// most worth seeing change live — where the text sits, the toggles that decide
+/// what is even on screen, and the gap between turns.
 class _QuickControls extends StatelessWidget {
   const _QuickControls({required this.ui, required this.onChanged});
 
@@ -184,27 +214,55 @@ class _QuickControls extends StatelessWidget {
                       onChanged(ui.copyWith(textPlacement: s.first)),
                 ),
               ),
+              const SizedBox(height: 8),
+              // Chips instead of switches: four toggles fit on one narrow row.
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  FilterChip(
+                    label: const Text('Bubbles'),
+                    selected: ui.bubbles,
+                    onSelected: (v) => onChanged(ui.copyWith(bubbles: v)),
+                  ),
+                  FilterChip(
+                    label: const Text('Names'),
+                    selected: ui.showNames,
+                    onSelected: (v) => onChanged(ui.copyWith(showNames: v)),
+                  ),
+                  FilterChip(
+                    label: const Text('Sync avatars'),
+                    selected: ui.syncAvatars,
+                    onSelected: (v) => onChanged(ui.copyWith(syncAvatars: v)),
+                  ),
+                  FilterChip(
+                    label: const Text('Sync names'),
+                    selected: ui.syncNames,
+                    onSelected: (v) => onChanged(ui.copyWith(syncNames: v)),
+                  ),
+                ],
+              ),
               Row(
                 children: [
+                  Icon(Icons.height_outlined,
+                      size: 18, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Text('Spacing',
+                      style: Theme.of(context).textTheme.labelMedium),
                   Expanded(
-                    child: SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      value: ui.bubbles,
-                      onChanged: (v) => onChanged(ui.copyWith(bubbles: v)),
-                      title: const Text('Bubbles'),
+                    child: Slider(
+                      value: ui.messageSpacing
+                          .clamp(kMinMessageSpacing, kMaxMessageSpacing),
+                      min: kMinMessageSpacing,
+                      max: kMaxMessageSpacing,
+                      onChanged: (v) => onChanged(
+                          ui.copyWith(messageSpacing: v.roundToDouble())),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      value: ui.syncAvatars,
-                      onChanged: (v) => onChanged(ui.copyWith(syncAvatars: v)),
-                      title: const Text('Sync'),
-                    ),
-                  ),
+                  Text('${ui.messageSpacing.round()} px',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          )),
                 ],
               ),
             ],

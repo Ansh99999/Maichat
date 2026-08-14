@@ -20,6 +20,7 @@ class CharacterAvatar extends StatefulWidget {
     this.radius = 24,
     this.size,
     this.shape = AvatarShape.circle,
+    this.corner = CornerRounding.m,
     this.fit = AvatarFit.cover,
   });
 
@@ -29,6 +30,10 @@ class CharacterAvatar extends StatefulWidget {
   /// Diameter in logical pixels; overrides [radius] when set.
   final double? size;
   final AvatarShape shape;
+
+  /// How far a [AvatarShape.rounded] frame's corners are rounded.
+  final CornerRounding corner;
+
   final AvatarFit fit;
 
   @override
@@ -137,7 +142,8 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
       }
     }
 
-    final radius = widget.shape.radiusFor(w < h ? w : h);
+    final radius =
+        widget.shape.radiusFor(w < h ? w : h, rounding: widget.corner);
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: Container(

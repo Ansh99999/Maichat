@@ -221,8 +221,17 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Avatars',
     section: 'Chat Interface',
     icon: Icons.account_circle_outlined,
-    keywords: 'avatar size shape corners circle square fit picture image free',
+    keywords: 'avatar size shape corners circle square fit picture image free '
+        'rounded roundness radius none xxs xs small medium large xl xxl',
     builder: _chatAvatarsPage,
+  ),
+  _SearchEntry(
+    title: 'Message spacing',
+    section: 'Chat Interface',
+    icon: Icons.height_outlined,
+    keywords: 'gap space spacing between messages turns margin padding close '
+        'tight distance avatars touching',
+    builder: _spacingPage,
   ),
   _SearchEntry(
     title: 'Text placement',
@@ -235,7 +244,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Sender names',
     section: 'Chat Interface',
     icon: Icons.badge_outlined,
-    keywords: 'name label title font size placement align alignment character user',
+    keywords: 'name label title font google fonts typeface size placement align '
+        'alignment position nudge offset drag sync independent character user',
     builder: _namesPage,
   ),
   _SearchEntry(
@@ -283,6 +293,8 @@ Widget _chatAvatarsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatAvatars);
 Widget _textPlacementPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.textPlacement);
+Widget _spacingPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.spacing);
 Widget _namesPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.names);
 Widget _messageActionsPage() =>

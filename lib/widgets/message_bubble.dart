@@ -1,5 +1,7 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../models/character.dart';
 import '../models/chat_interface.dart';
@@ -10,13 +12,14 @@ import 'message_markdown.dart';
 import 'thinking_block.dart';
 
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
-/// (size/shape/fit/offset and which side it sits on), where the text sits
-/// relative to the avatar, bubble-vs-document, an optional sender name, font
-/// size and colour overrides.
+/// (size/shape/corner rounding/fit/offset and which side it sits on), where the
+/// text sits relative to the avatar, bubble-vs-document, an optional sender name
+/// (its own size, font, placement and nudge), font size and colour overrides.
 ///
-/// The preview passes [interactive] with [onAvatarDrag]/[onAvatarResize] so the
-/// mock chat can be tuned by dragging each avatar and its resize handle; the
-/// callbacks are role-agnostic (the caller knows which role this turn is).
+/// The preview passes [interactive] with [onAvatarDrag]/[onAvatarResize]/
+/// [onNameDrag] so the mock chat can be tuned by dragging each avatar, its
+/// resize handle and each name label; the callbacks are role-agnostic (the
+/// caller knows which role this turn is).
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
     super.key,
@@ -28,6 +31,7 @@ class MessageBubble extends StatelessWidget {
     this.interactive = false,
     this.onAvatarDrag,
     this.onAvatarResize,
+    this.onNameDrag,
     this.onLongPress,
     this.onAction,
     this.onSwipe,
@@ -50,6 +54,10 @@ class MessageBubble extends StatelessWidget {
   final bool interactive;
   final ValueChanged<Offset>? onAvatarDrag;
   final ValueChanged<double>? onAvatarResize;
+
+  /// Reports a drag of this turn's name label (preview only), so the name can be
+  /// pulled towards — or away from — the message body it labels.
+  final ValueChanged<Offset>? onNameDrag;
 
   /// Opens the per-message actions (edit/delete/fork/regenerate). Falls back to
   /// copy-on-long-press when not supplied (e.g. the preview).
@@ -142,8 +150,9 @@ class MessageBubble extends StatelessWidget {
         ],
       );
     }
-    final nameCross = _crossFor(isUser ? ui.userNameAlign : ui.botNameAlign);
-    final namePosition = isUser ? ui.userNamePosition : ui.botNamePosition;
+    final nameStyle = ui.nameFor(isUser);
+    final nameCross = _crossFor(nameStyle.align);
+    final namePosition = nameStyle.position;
 
     // Stacks the sender name directly above/below [anchor] — the avatar when a
     // standalone one is shown, otherwise the bubble — aligned per the role's
@@ -260,7 +269,12 @@ class MessageBubble extends StatelessWidget {
     return Align(
       alignment: side.isLeft ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        // Half the configured gap above and below, so consecutive turns (and
+        // their avatars) sit [ChatInterface.messageSpacing] apart.
+        margin: EdgeInsets.symmetric(
+          vertical: (ui.messageSpacing / 2).clamp(0.0, kMaxMessageSpacing),
+          horizontal: 12,
+        ),
         constraints: BoxConstraints(
           maxWidth: ui.contentWidth.maxWidthFor(MediaQuery.sizeOf(context).width),
         ),
@@ -398,20 +412,54 @@ class MessageBubble extends StatelessWidget {
         ? (userPersona?.displayName ??
             (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim()))
         : (character?.displayName ?? 'Assistant');
-    final size = isUser ? ui.userNameSize : ui.botNameSize;
-    final align = isUser ? ui.userNameAlign : ui.botNameAlign;
-    return Padding(
-      padding: const EdgeInsets.only(left: 2, right: 2, bottom: 2),
+    final ns = ui.nameFor(isUser);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    // Per-role Google font, when one is chosen; a family the bundle can't
+    // resolve must never take the whole turn down with it.
+    TextStyle? base = theme.textTheme.labelSmall;
+    final family = ns.fontFamily;
+    if (family != null && family.isNotEmpty) {
+      try {
+        base = GoogleFonts.getFont(family, textStyle: base);
+      } catch (_) {
+        base = theme.textTheme.labelSmall;
+      }
+    }
+
+    // Only a hair of padding: the label should read as part of the message, not
+    // as a floating caption. Anything further is the user's own nudge.
+    Widget label = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Text(
         name,
-        textAlign: align.textAlign,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              fontSize: size,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
-            ),
+        textAlign: ns.align.textAlign,
+        style: (base ?? const TextStyle()).copyWith(
+          fontSize: ns.size,
+          color: scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
+
+    // In the preview the label is a drag handle of its own, framed like the
+    // avatar so it reads as grabbable.
+    if (interactive && onNameDrag != null) {
+      label = _NudgeHandle(
+        onDrag: onNameDrag!,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+                color: scheme.primary.withValues(alpha: 0.6), width: 1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: label,
+        ),
+      );
+    }
+
+    return Transform.translate(offset: ns.offset, child: label);
   }
 // APPEND-HELPERS
 
@@ -426,6 +474,7 @@ class MessageBubble extends StatelessWidget {
         character: character!,
         size: size,
         shape: style.shape,
+        corner: style.corner,
         fit: style.fit,
       );
     } else if (isUser && userPersona != null) {
@@ -434,12 +483,13 @@ class MessageBubble extends StatelessWidget {
         character: userPersona!,
         size: size,
         shape: style.shape,
+        corner: style.corner,
         fit: style.fit,
       );
     } else {
       base = _GenericAvatar(
         size: size,
-        shape: style.shape,
+        radius: style.radiusFor(size),
         icon: isUser ? Icons.person : Icons.smart_toy_outlined,
       );
     }
@@ -456,14 +506,12 @@ class MessageBubble extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(right: 22, bottom: 22),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (d) => onAvatarDrag?.call(d.delta),
+            child: _NudgeHandle(
+              onDrag: (d) => onAvatarDrag?.call(d),
               child: Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: scheme.primary, width: 2),
-                  borderRadius:
-                      BorderRadius.circular(style.shape.radiusFor(size)),
+                  borderRadius: BorderRadius.circular(style.radiusFor(size)),
                 ),
                 child: base,
               ),
@@ -472,10 +520,8 @@ class MessageBubble extends StatelessWidget {
           Positioned(
             right: 0,
             bottom: 0,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (d) =>
-                  onAvatarResize?.call((d.delta.dx + d.delta.dy) / 2),
+            child: _NudgeHandle(
+              onDrag: (d) => onAvatarResize?.call((d.dx + d.dy) / 2),
               child: Container(
                 width: 20,
                 height: 20,
@@ -616,25 +662,69 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
+/// A drag handle for the settings preview that beats the list it sits in.
+///
+/// A plain `onPanUpdate` loses the gesture arena to the enclosing scrollable
+/// whenever the drag is mostly vertical — which is exactly the direction a name
+/// or avatar needs to move — so the preview would scroll instead of nudging.
+/// [ImmediateMultiDragGestureRecognizer] claims the pointer the moment it moves,
+/// before the scroll's slop is reached, the way Flutter's own reorder handles do.
+class _NudgeHandle extends StatelessWidget {
+  const _NudgeHandle({required this.onDrag, required this.child});
+
+  final ValueChanged<Offset> onDrag;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return RawGestureDetector(
+      behavior: HitTestBehavior.opaque,
+      gestures: <Type, GestureRecognizerFactory>{
+        ImmediateMultiDragGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<
+                ImmediateMultiDragGestureRecognizer>(
+          ImmediateMultiDragGestureRecognizer.new,
+          (recognizer) => recognizer.onStart = (_) => _NudgeDrag(onDrag),
+        ),
+      },
+      child: child,
+    );
+  }
+}
+
+/// The [Drag] an active [_NudgeHandle] returns: it forwards every movement as a
+/// delta and has nothing to clean up on release.
+class _NudgeDrag extends Drag {
+  _NudgeDrag(this.onDrag);
+
+  final ValueChanged<Offset> onDrag;
+
+  @override
+  void update(DragUpdateDetails details) => onDrag(details.delta);
+}
+
 /// A stand-in avatar for the user's turns (and bot turns in a character-less
 /// chat): a glyph on the same tinted, shape-matched frame the picture avatars
 /// use, so both sides of the conversation read consistently.
 class _GenericAvatar extends StatelessWidget {
   const _GenericAvatar({
     required this.size,
-    required this.shape,
+    required this.radius,
     required this.icon,
   });
 
   final double size;
-  final AvatarShape shape;
+
+  /// Corner radius, already resolved from the role's shape + rounding level.
+  final double radius;
+
   final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(shape.radiusFor(size)),
+      borderRadius: BorderRadius.circular(radius),
       child: Container(
         width: size,
         height: size,

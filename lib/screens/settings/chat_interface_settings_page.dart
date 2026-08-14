@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/chat_interface.dart';
 import '../../state/app_state.dart';
 import '../../widgets/color_picker.dart';
+import '../../widgets/font_picker_row.dart';
 import 'chat_interface_preview.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
@@ -112,6 +113,19 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             suffix: '${ui.fontSize.round()} px',
             onChanged: (v) => update(ui.copyWith(fontSize: v)),
           ),
+          SettingHighlight(
+            active: highlight == SettingAnchor.spacing,
+            child: _SliderRow(
+              icon: Icons.height_outlined,
+              label: 'Message spacing',
+              value: ui.messageSpacing,
+              min: kMinMessageSpacing,
+              max: kMaxMessageSpacing,
+              suffix: '${ui.messageSpacing.round()} px',
+              onChanged: (v) =>
+                  update(ui.copyWith(messageSpacing: v.roundToDouble())),
+            ),
+          ),
           SwitchListTile(
             dense: true,
             value: ui.markdown,
@@ -132,7 +146,24 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             title: const Text('Show names'),
             subtitle: const Text('Label each turn with its sender'),
           ),
-          if (ui.showNames)
+          if (ui.showNames) ...[
+            SwitchListTile(
+              dense: true,
+              value: ui.syncNames,
+              onChanged: (v) {
+                // Adopting sync copies the character's look onto both, so the
+                // two names don't stay silently out of step.
+                final next = ui.copyWith(syncNames: v);
+                update(v
+                    ? next.copyWith(userNameStyle: ui.botNameStyle)
+                    : next);
+                notify(v ? 'Names synced' : 'Names independent');
+              },
+              secondary: const Icon(Icons.link_outlined),
+              title: const Text('Sync names'),
+              subtitle: const Text(
+                  'Keep both name labels in step (size, font, placement, nudge)'),
+            ),
             SettingHighlight(
               active: highlight == SettingAnchor.names,
               child: Column(
@@ -140,41 +171,23 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
                   _NameControls(
                     title: 'Character name',
                     icon: Icons.smart_toy_outlined,
-                    size: ui.botNameSize,
-                    align: ui.botNameAlign,
-                    position: ui.botNamePosition,
-                    onSize: (v) => update(ui.copyWith(botNameSize: v)),
-                    onAlign: (a) {
-                      update(ui.copyWith(botNameAlign: a));
-                      notify('Character name aligned ${a.label.toLowerCase()}');
-                    },
-                    onPosition: (p) {
-                      update(ui.copyWith(botNamePosition: p));
-                      notify('Character name ${p.label.toLowerCase()} the avatar');
-                    },
-                    onSizeEnd: (v) =>
-                        notify('Character name size ${v.round()} px'),
+                    role: 'Character name',
+                    style: ui.botNameStyle,
+                    onChanged: (s) => update(ui.withName(false, s)),
+                    notify: notify,
                   ),
                   _NameControls(
                     title: 'Your name',
                     icon: Icons.person_outline,
-                    size: ui.userNameSize,
-                    align: ui.userNameAlign,
-                    position: ui.userNamePosition,
-                    onSize: (v) => update(ui.copyWith(userNameSize: v)),
-                    onAlign: (a) {
-                      update(ui.copyWith(userNameAlign: a));
-                      notify('Your name aligned ${a.label.toLowerCase()}');
-                    },
-                    onPosition: (p) {
-                      update(ui.copyWith(userNamePosition: p));
-                      notify('Your name ${p.label.toLowerCase()} the avatar');
-                    },
-                    onSizeEnd: (v) => notify('Your name size ${v.round()} px'),
+                    role: 'Your name',
+                    style: ui.userNameStyle,
+                    onChanged: (s) => update(ui.withName(true, s)),
+                    notify: notify,
                   ),
                 ],
               ),
             ),
+          ],
           const Divider(height: 24),
           _header(context, 'Message actions'),
           SettingHighlight(
@@ -304,7 +317,7 @@ class _AvatarSection extends StatelessWidget {
 
   String get _summary {
     if (!style.show) return 'Hidden';
-    return 'Shown · ${style.size.round()} px · ${style.shape.label}';
+    return 'Shown · ${style.size.round()} px · ${style.cornerLabel}';
   }
 
   @override
@@ -355,6 +368,20 @@ class _AvatarSection extends StatelessWidget {
                 notify('$role avatar corners: ${s.label}');
               },
             ),
+            // Only a rounded frame has a roundness to choose; a circle and a
+            // square are already fully specified.
+            if (style.shape == AvatarShape.rounded)
+              _DropdownRow<CornerRounding>(
+                icon: Icons.rounded_corner_outlined,
+                label: 'Roundness',
+                value: style.corner,
+                values: CornerRounding.values,
+                labelOf: (r) => r.label,
+                onChanged: (r) {
+                  onChanged(style.copyWith(corner: r));
+                  notify('$role avatar roundness: ${r.label}');
+                },
+              ),
             _EnumRow<AvatarFit>(
               icon: Icons.aspect_ratio_outlined,
               label: 'Image fit',
@@ -399,30 +426,29 @@ class _AvatarSection extends StatelessWidget {
   }
 }
 
-/// Font-size, alignment and position controls for one role's sender name,
-/// presented as a collapsible dropdown (matching the avatar sections).
+/// One role's sender-name controls — size, font, alignment, position and the
+/// nudge the preview's drag writes — as a collapsible dropdown matching the
+/// avatar sections. Writes back a whole [NameStyle], so the caller can route it
+/// through [ChatInterface.withName] and honour the sync toggle.
 class _NameControls extends StatelessWidget {
   const _NameControls({
     required this.title,
     required this.icon,
-    required this.size,
-    required this.align,
-    required this.position,
-    required this.onSize,
-    required this.onAlign,
-    required this.onPosition,
-    required this.onSizeEnd,
+    required this.role,
+    required this.style,
+    required this.onChanged,
+    required this.notify,
   });
 
   final String title;
   final IconData icon;
-  final double size;
-  final NameAlign align;
-  final NamePosition position;
-  final ValueChanged<double> onSize;
-  final ValueChanged<NameAlign> onAlign;
-  final ValueChanged<NamePosition> onPosition;
-  final ValueChanged<double> onSizeEnd;
+
+  /// "Character name" / "Your name" — used in the change notifications.
+  final String role;
+
+  final NameStyle style;
+  final ValueChanged<NameStyle> onChanged;
+  final ValueChanged<String> notify;
 
   @override
   Widget build(BuildContext context) {
@@ -434,8 +460,7 @@ class _NameControls extends StatelessWidget {
       child: ExpansionTile(
         leading: Icon(icon),
         title: Text(title),
-        subtitle: Text(
-            '${size.round()} px · ${position.label} · ${align.label}'),
+        subtitle: Text(style.summary),
         shape: shape,
         collapsedShape: shape,
         childrenPadding: const EdgeInsets.only(bottom: 8),
@@ -443,29 +468,66 @@ class _NameControls extends StatelessWidget {
           _SizeSliderField(
             icon: Icons.format_size_outlined,
             label: 'Name size',
-            value: size,
+            value: style.size,
             min: kMinNameSize,
             sliderMax: kMaxNameSize,
             hardMax: kMaxNameSize,
             unit: 'px',
-            onChanged: onSize,
-            onChangeEnd: onSizeEnd,
+            onChanged: (v) => onChanged(style.copyWith(size: v)),
+            onChangeEnd: (v) => notify('$role size ${v.round()} px'),
+          ),
+          FontPickerRow(
+            title: 'Font',
+            pickerTitle: '$title font',
+            fontFamily: style.fontFamily,
+            systemLabel: 'Same as app font',
+            systemSubtitle: 'Inherit the app-wide font',
+            onChanged: (family) {
+              onChanged(style.copyWith(fontFamily: family));
+              notify('$role font: ${family ?? 'app font'}');
+            },
           ),
           _EnumRow<NameAlign>(
             icon: Icons.format_align_center_outlined,
             label: 'Alignment',
-            value: align,
+            value: style.align,
             values: NameAlign.values,
             labelOf: (a) => a.label,
-            onChanged: onAlign,
+            onChanged: (a) {
+              onChanged(style.copyWith(align: a));
+              notify('$role aligned ${a.label.toLowerCase()}');
+            },
           ),
           _EnumRow<NamePosition>(
             icon: Icons.vertical_align_top_outlined,
             label: 'Position (relative to avatar)',
-            value: position,
+            value: style.position,
             values: NamePosition.values,
             labelOf: (p) => p.label,
-            onChanged: onPosition,
+            onChanged: (p) {
+              onChanged(style.copyWith(position: p));
+              notify('$role ${p.label.toLowerCase()} the avatar');
+            },
+          ),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.open_with_outlined),
+            title: const Text('Nudge'),
+            subtitle: Text(
+              style.isNudged
+                  ? 'Moved ${style.offsetX.round()}, ${style.offsetY.round()} '
+                      '— drag the name in the preview'
+                  : 'Drag the name in the preview to sit it closer to the text',
+            ),
+            trailing: style.isNudged
+                ? TextButton(
+                    onPressed: () {
+                      onChanged(style.copyWith(offsetX: 0, offsetY: 0));
+                      notify('$role position reset');
+                    },
+                    child: const Text('Reset'),
+                  )
+                : null,
           ),
         ],
       ),
@@ -700,6 +762,53 @@ class _EnumRow<T> extends StatelessWidget {
               ],
               selected: {value},
               onSelectionChanged: (s) => onChanged(s.first),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A labelled row whose choices live in a dropdown — for enums with more values
+/// than a segmented button can show without shrinking the labels to nothing.
+class _DropdownRow<T> extends StatelessWidget {
+  const _DropdownRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.values,
+    required this.labelOf,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String label;
+  final T value;
+  final List<T> values;
+  final String Function(T) labelOf;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 20),
+          const SizedBox(width: 16),
+          Expanded(child: Text(label)),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<T>(
+              value: value,
+              borderRadius: BorderRadius.circular(12),
+              onChanged: (next) {
+                if (next != null) onChanged(next);
+              },
+              items: [
+                for (final v in values)
+                  DropdownMenuItem<T>(value: v, child: Text(labelOf(v))),
+              ],
             ),
           ),
         ],
