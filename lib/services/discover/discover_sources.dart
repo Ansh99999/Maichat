@@ -3,6 +3,7 @@ import 'chub_source.dart';
 import 'discover_source.dart';
 import 'janny_source.dart';
 
+export 'browser_clearance.dart';
 export 'chub_source.dart';
 export 'discover_source.dart';
 export 'janny_source.dart';

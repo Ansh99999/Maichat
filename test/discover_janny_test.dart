@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/discover.dart';
+import 'package:maichat/services/discover/browser_clearance.dart';
 import 'package:maichat/services/discover/discover_source.dart';
 import 'package:maichat/services/discover/janny_source.dart';
 
@@ -287,7 +288,12 @@ void main() {
       request.response.write(body);
     }
 
-    setUp(paths.clear);
+    setUp(() {
+      paths.clear();
+      // The clearance store is app-wide, so a leak from another group would
+      // change which route this one takes.
+      browserClearances.clear();
+    });
     tearDown(() async {
       source.close();
       await server.close(force: true);
@@ -455,6 +461,182 @@ void main() {
           contains('no longer carries the character'),
         )),
       );
+    });
+  });
+
+  group('reusing a browser clearance', () {
+    late HttpServer server;
+    late JannySource source;
+    late String base;
+    final seen = <Map<String, String>>[];
+
+    final png = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAABzenr0AAAADUlEQVR42mP8'
+      '/5+BAQAI/AL+6nWJPwAAAABJRU5ErkJggg==',
+    );
+
+    const item = DiscoverItem(
+      sourceId: 'janny',
+      kind: DiscoverKind.character,
+      id: 'uuid-1',
+      name: 'Ann',
+    );
+
+    const clearedUa = 'Mozilla/5.0 (Linux; Android 14; Pixel) Chrome/124';
+
+    String characterPage(String imageUrl) {
+      final props = <String, Object?>{
+        'character': <Object?>[
+          0,
+          <String, Object?>{
+            'name': <Object?>[0, 'Ann'],
+            'personality': <Object?>[0, 'A librarian who guards the stacks.'],
+            'firstMessage': <Object?>[0, 'Shh.'],
+          },
+        ],
+        'imageUrl': <Object?>[0, imageUrl],
+      };
+      final escaped =
+          jsonEncode(props).replaceAll('&', '&amp;').replaceAll('"', '&quot;');
+      return '<!doctype html><html><body>'
+          '<astro-island component-export="CharacterButtons" '
+          'props="$escaped" ssr></astro-island>'
+          '${'<p>filler</p>' * 100}</body></html>';
+    }
+
+    const challengePage = '<!DOCTYPE html><html><head>'
+        '<title>Just a moment...</title></head><body>'
+        '<div id="challenge-platform"></div></body></html>';
+
+    /// Serves the character page only to a request that presents a clearance —
+    /// which is exactly how Cloudflare behaves once one has been earned.
+    Future<void> serveGatedOnClearance({required bool honourClearance}) async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      base = 'http://${server.address.host}:${server.port}';
+      source = JannySource(
+        searchBase: base,
+        downloadBase: base,
+        imageBase: '$base/bot-avatars',
+        siteBase: base,
+      );
+      server.listen((request) async {
+        if (request.uri.path == '/a.png') {
+          request.response.headers.contentType = ContentType('image', 'png');
+          request.response.add(png);
+          await request.response.close();
+          return;
+        }
+        seen.add(<String, String>{
+          'cookie': request.headers.value('cookie') ?? '',
+          'ua': request.headers.value('user-agent') ?? '',
+        });
+        final cleared = honourClearance &&
+            (request.headers.value('cookie') ?? '').contains('cf_clearance');
+        if (request.uri.path.startsWith('/characters/') && cleared) {
+          request.response.headers.contentType = ContentType.html;
+          request.response.write(characterPage('$base/a.png'));
+        } else {
+          request.response.statusCode = 403;
+          request.response.headers.contentType = ContentType.html;
+          request.response.write(challengePage);
+        }
+        await request.response.close();
+      });
+    }
+
+    setUp(() {
+      seen.clear();
+      browserClearances.clear();
+    });
+    tearDown(() async {
+      browserClearances.clear();
+      source.close();
+      await server.close(force: true);
+    });
+
+    test('a stored clearance fetches the page with no browser at all', () async {
+      await serveGatedOnClearance(honourClearance: true);
+      browserClearances.remember(
+        Uri.parse(base).host,
+        BrowserClearance(
+          cookies: 'cf_clearance=abc123',
+          userAgent: clearedUa,
+        ),
+      );
+
+      final character = (await source.fetch(item)).character!;
+      expect(character.description, 'A librarian who guards the stacks.');
+      // The credentials went out together: the cookie is useless under any other
+      // User-Agent.
+      expect(seen.single['cookie'], contains('cf_clearance=abc123'));
+      expect(seen.single['ua'], clearedUa);
+    });
+
+    test('the clearance outlives the first card, so later ones are plain HTTP',
+        () async {
+      await serveGatedOnClearance(honourClearance: true);
+      browserClearances.remember(
+        Uri.parse(base).host,
+        BrowserClearance(cookies: 'cf_clearance=abc123', userAgent: clearedUa),
+      );
+
+      await source.fetch(item);
+      await source.fetch(const DiscoverItem(
+        sourceId: 'janny',
+        kind: DiscoverKind.character,
+        id: 'uuid-2',
+        name: 'Bo',
+      ));
+      // Two cards, two page requests, no challenge raised either time.
+      expect(seen, hasLength(2));
+      expect(seen.last['cookie'], contains('cf_clearance'));
+    });
+
+    test('a lapsed clearance is thrown away, not retried forever', () async {
+      // The server refuses everything: this is what a clearance expiring on
+      // Cloudflare's fixed timer looks like from here.
+      await serveGatedOnClearance(honourClearance: false);
+      final host = Uri.parse(base).host;
+      browserClearances.remember(
+        host,
+        BrowserClearance(cookies: 'cf_clearance=stale', userAgent: clearedUa),
+      );
+
+      await expectLater(
+        source.fetch(item),
+        throwsA(isA<DiscoverChallengeException>()),
+      );
+      // Gone, so the next attempt earns a fresh one in the browser rather than
+      // replaying a cookie that is now refused.
+      expect(browserClearances.forHost(host), isNull);
+    });
+
+    test('a clearance arriving later reopens the route it had given up on',
+        () async {
+      await serveGatedOnClearance(honourClearance: true);
+      final host = Uri.parse(base).host;
+
+      // First attempt, bare: refused, so the source stops trying bare HTTP.
+      await expectLater(
+        source.fetch(item),
+        throwsA(isA<DiscoverChallengeException>()),
+      );
+      seen.clear();
+      await expectLater(
+        source.fetch(item),
+        throwsA(isA<DiscoverChallengeException>()),
+      );
+      expect(seen, isEmpty, reason: 'a doomed bare request is not repeated');
+
+      // The browser view passes the check and leaves a clearance behind. That
+      // makes it a different request, so the route is worth trying again.
+      browserClearances.remember(
+        host,
+        BrowserClearance(cookies: 'cf_clearance=fresh', userAgent: clearedUa),
+      );
+      final character = (await source.fetch(item)).character!;
+      expect(character.description, 'A librarian who guards the stacks.');
+      expect(seen.single['cookie'], contains('cf_clearance=fresh'));
     });
   });
 }

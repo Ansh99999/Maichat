@@ -4,6 +4,7 @@ import '../../models/character.dart';
 import '../../models/discover.dart';
 import '../character_codec.dart';
 import '../character_sources.dart';
+import 'browser_clearance.dart';
 import 'discover_source.dart';
 import 'janny_page.dart';
 
@@ -242,30 +243,41 @@ class JannySource extends DiscoverSource {
   /// 3. Neither worked and a check was served, so raise
   ///    [DiscoverChallengeException] and let the screen offer a browser view.
   ///    That is the only thing that can pass a real challenge.
-  /// Whether a bot check has already been seen this session.
+  /// Whether plain HTTP was refused this session *without* a browser clearance
+  /// to present.
   ///
-  /// Once it has, plain HTTP is not going to start working — the block is on the
-  /// connection, not the card — so later downloads go straight to the browser
-  /// view instead of spending two doomed requests and a few seconds finding out
-  /// again. Session-scoped on purpose: moving between mobile data and wifi
-  /// changes the answer, and [resetTransport] is how a retry asks afresh.
-  bool _browserOnly = false;
+  /// Once that has happened, retrying bare HTTP is a waste of a few seconds —
+  /// the block is on the connection, not on the card. It stops being true the
+  /// moment a clearance exists, because then the request is a different request.
+  /// Session-scoped: moving between mobile data and wifi changes the answer, and
+  /// [resetTransport] is how a retry asks afresh.
+  bool _blockedBare = false;
 
   @override
-  void resetTransport() => _browserOnly = false;
+  void resetTransport() => _blockedBare = false;
 
   @override
   Future<DiscoverPayload> fetch(DiscoverItem item) async {
     final page = pageUri(item);
-    if (_browserOnly) throw _challengeFor(page);
+    // A clearance earned in the browser view earlier is what lets this happen
+    // over plain HTTP now, with no browser in the loop at all.
+    final clearance = browserClearances.forHost(page.host);
+    if (_blockedBare && clearance == null) throw _challengeFor(page);
 
     final stumbles = <String>[];
     var challenged = false;
 
     try {
-      return await _fromPage(item, await _getPage(page));
+      return await _fromPage(item, await _getPage(page, clearance));
     } on _JannyChallenge {
       challenged = true;
+      if (clearance != null) {
+        // It was good once. Cloudflare's clearance expires on a fixed timer, so
+        // this is what lapsing looks like — throw it away and earn another.
+        browserClearances.forget(page.host);
+      } else {
+        _blockedBare = true;
+      }
     } on DiscoverException catch (error) {
       stumbles.add(error.message);
     } on JannyPageException catch (error) {
@@ -278,10 +290,7 @@ class JannySource extends DiscoverSource {
       stumbles.add(error.message);
     }
 
-    if (challenged) {
-      _browserOnly = true;
-      throw _challengeFor(page);
-    }
+    if (challenged) throw _challengeFor(page);
     throw DiscoverException(
       'Could not fetch this character from JannyAI. '
       '${stumbles.join(' Then: ')}',
@@ -299,9 +308,12 @@ class JannySource extends DiscoverSource {
       _fromPage(item, html);
 
   /// Fetches the page, telling a bot check apart from an ordinary failure.
-  Future<String> _getPage(Uri page) async {
-    final response = await _http.getRaw(page, headers: const <String, String>{
+  /// [clearance], when present, makes the request look like the browser that
+  /// already passed the check — same cookies, same User-Agent.
+  Future<String> _getPage(Uri page, BrowserClearance? clearance) async {
+    final response = await _http.getRaw(page, headers: <String, String>{
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      ...?clearance?.headers,
     });
     final body = response.body;
     if (looksLikeChallenge(body)) throw const _JannyChallenge();

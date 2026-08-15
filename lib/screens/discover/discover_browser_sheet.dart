@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../services/discover/browser_clearance.dart';
 import '../../services/discover/janny_page.dart';
 
 /// Whether this platform has a WebView implementation at all. The desktop
@@ -126,33 +127,73 @@ class _BrowserViewScreenState extends State<_BrowserViewScreen> {
     if (html == null) return;
     if (!force) {
       if (looksLikeChallenge(html) || !looksLikeCharacterPage(html)) {
-        setState(() => _status = looksLikeChallenge(html)
-            ? 'Passing the site\'s bot check…'
-            : 'Waiting for the page…');
+        setState(() => _revealed
+            ? _status = looksLikeChallenge(html)
+                ? 'Still being checked.'
+                : 'Waiting for the page…'
+            : _status = 'Checking…');
         return;
       }
     }
     _done = true;
     _poll?.cancel();
+    // Take the clearance with us. This is the whole point of having done it in a
+    // browser: the cookie it earned lets the ordinary HTTP client fetch the next
+    // character without a browser at all.
+    await _rememberClearance();
+    if (!mounted) return;
     Navigator.of(context).pop(html);
+  }
+
+  /// Stores the cookies and User-Agent this browsing context now has for the
+  /// site, so plain requests can present the same credentials.
+  Future<void> _rememberClearance() async {
+    final host = Uri.tryParse(widget.url)?.host;
+    if (host == null || host.isEmpty) return;
+    final cookies = await readWebViewCookies(widget.url);
+    if (cookies == null) return;
+    // The UA has to be the one this WebView actually sent, not a guess —
+    // Cloudflare ties the clearance to it.
+    String? userAgent;
+    try {
+      userAgent = _unwrap(
+        await _controller.runJavaScriptReturningResult('navigator.userAgent'),
+      );
+    } catch (_) {
+      return;
+    }
+    if (userAgent == null || userAgent.isEmpty) return;
+    browserClearances.remember(
+      host,
+      BrowserClearance(cookies: cookies, userAgent: userAgent),
+    );
   }
 
   /// The current document, unwrapped from the JSON string Android hands back.
   Future<String?> _html() async {
     try {
-      final result = await _controller
-          .runJavaScriptReturningResult('document.documentElement.outerHTML');
-      final raw = result is String ? result : '$result';
-      if (raw.isEmpty) return null;
-      if (raw.startsWith('"')) {
-        final decoded = jsonDecode(raw);
-        return decoded is String ? decoded : raw;
-      }
-      return raw;
+      return _unwrap(await _controller
+          .runJavaScriptReturningResult('document.documentElement.outerHTML'));
     } catch (_) {
       // Mid-navigation the controller can refuse; the next poll will retry.
       return null;
     }
+  }
+
+  /// A JavaScript result as a Dart string. Android returns it JSON-encoded, iOS
+  /// returns it bare.
+  String? _unwrap(Object? result) {
+    final raw = result is String ? result : '$result';
+    if (raw.isEmpty) return null;
+    if (raw.startsWith('"')) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is String) return decoded;
+      } catch (_) {
+        // Not JSON after all; use it as it came.
+      }
+    }
+    return raw;
   }
 
   @override
