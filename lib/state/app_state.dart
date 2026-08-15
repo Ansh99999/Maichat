@@ -8,6 +8,7 @@ import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
+import '../models/lorebook.dart';
 import '../models/message.dart';
 import '../models/preset.dart';
 import '../models/prompt_block.dart';
@@ -22,6 +23,7 @@ import '../services/reasoning.dart';
 import '../services/storage.dart';
 import '../services/tokenizer.dart';
 import '../services/update_service.dart';
+import '../services/world_info.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
@@ -55,6 +57,7 @@ class AppState extends ChangeNotifier {
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
   final List<Character> _characters = <Character>[];
+  final List<Lorebook> _lorebooks = <Lorebook>[];
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
   final Map<String, List<String>> _modelCache = <String, List<String>>{};
@@ -72,6 +75,10 @@ class AppState extends ChangeNotifier {
   );
   late final PromptBuilder _prompts =
       PromptBuilder(macros: DefaultMacroEngine(), tokens: _tokenizer);
+
+  /// Decides which lorebook entries each request carries. Shares the app's
+  /// tokenizer so the lore budget is measured the same way the prompt budget is.
+  late final WorldInfoScanner _world = WorldInfoScanner(tokens: _tokenizer);
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
   ChatInterface _chatInterface = const ChatInterface();
@@ -92,6 +99,7 @@ class AppState extends ChangeNotifier {
   List<Conversation> get conversations => List.unmodifiable(_conversations);
   List<Provider> get providers => List.unmodifiable(_providers);
   List<Character> get characters => List.unmodifiable(_characters);
+  List<Lorebook> get lorebooks => List.unmodifiable(_lorebooks);
   List<Preset> get presets => List.unmodifiable(_presets);
   Appearance get appearance => _appearance;
   ChatInterface get chatInterface => _chatInterface;
@@ -187,6 +195,9 @@ class AppState extends ChangeNotifier {
     _characters
       ..clear()
       ..addAll(await _storage.loadCharacters());
+    _lorebooks
+      ..clear()
+      ..addAll(await _storage.loadLorebooks());
     await _loadPresets();
     _globalVars
       ..clear()
@@ -587,7 +598,10 @@ class AppState extends ChangeNotifier {
   Future<void> _sweepAvatars() async {
     final store = _avatars;
     if (store == null || !_writable) return;
-    await store.sweep(_characters.map((c) => c.avatar));
+    await store.sweep([
+      ..._characters.map((c) => c.avatar),
+      ..._lorebooks.map((b) => b.thumbnail),
+    ]);
   }
 
   /// Flips a character's starred flag — the pin-to-top action.
@@ -609,6 +623,137 @@ class AppState extends ChangeNotifier {
     await addCharacter(copy);
     return copy;
   }
+
+  // --- Lorebooks -----------------------------------------------------------
+
+  Future<void> _persistLorebooks() async {
+    if (!_writable) return;
+    await _storage.saveLorebooks(_lorebooks);
+  }
+
+  Lorebook? lorebookById(String? id) {
+    if (id == null) return null;
+    for (final b in _lorebooks) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  /// The books switched on for [conversation], in the order they were added.
+  /// Ids that no longer resolve are skipped rather than reported: a book the
+  /// user deleted should not break sending a message. A repeated id is counted
+  /// once, so a stored list written by hand cannot inject the same lore twice.
+  List<Lorebook> lorebooksFor(Conversation? conversation) {
+    if (conversation == null) return const <Lorebook>[];
+    final out = <Lorebook>[];
+    final seen = <String>{};
+    for (final id in conversation.lorebookIds) {
+      if (!seen.add(id)) continue;
+      final book = lorebookById(id);
+      if (book != null) out.add(book);
+    }
+    return out;
+  }
+
+  /// Moves a book's picture out of the preferences store and into a file, the
+  /// same way character avatars are handled — the store is read whole at every
+  /// launch, so an inline picture is felt on every start.
+  Future<void> _storeThumbnail(Lorebook book) async {
+    final store = _avatars;
+    if (store == null) return;
+    final stored = await store.adopt(book.thumbnail);
+    if (stored != book.thumbnail) book.thumbnail = stored;
+  }
+
+  Future<void> addLorebook(Lorebook book) async {
+    await _storeThumbnail(book);
+    _lorebooks.insert(0, book);
+    notifyListeners();
+    await _persistLorebooks();
+  }
+
+  /// Adds several books at once (an import), newest first, persisting once.
+  Future<void> addLorebooks(List<Lorebook> books) async {
+    if (books.isEmpty) return;
+    for (final book in books) {
+      await _storeThumbnail(book);
+    }
+    _lorebooks.insertAll(0, books);
+    notifyListeners();
+    await _persistLorebooks();
+  }
+
+  /// Replaces the stored book sharing [book]'s id, or adds it when new.
+  Future<void> saveLorebook(Lorebook book) async {
+    book.updatedAt = DateTime.now();
+    await _storeThumbnail(book);
+    final index = _lorebooks.indexWhere((b) => b.id == book.id);
+    if (index == -1) {
+      _lorebooks.insert(0, book);
+    } else {
+      _lorebooks[index] = book;
+    }
+    notifyListeners();
+    await _persistLorebooks();
+  }
+
+  /// Deletes a book and switches it off in every chat that was using it, so no
+  /// thread is left pointing at something that is gone.
+  Future<void> deleteLorebook(String id) async {
+    _lorebooks.removeWhere((b) => b.id == id);
+    var touched = false;
+    for (final conversation in _conversations) {
+      if (conversation.lorebookIds.remove(id)) touched = true;
+    }
+    notifyListeners();
+    await _persistLorebooks();
+    if (touched) await _saveConversations();
+    await _sweepAvatars();
+  }
+
+  Future<void> toggleLorebookStar(String id) async {
+    final book = lorebookById(id);
+    if (book == null) return;
+    book.starred = !book.starred;
+    book.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistLorebooks();
+  }
+
+  Future<Lorebook> duplicateLorebook(Lorebook book) async {
+    final copy = book.copyWith(name: '${book.displayName} (copy)');
+    final fresh = Lorebook.fromJson({
+      ...copy.toJson(),
+      'id': DateTime.now().microsecondsSinceEpoch.toString(),
+    });
+    await addLorebook(fresh);
+    return fresh;
+  }
+
+  /// Switches [bookId] on for a chat, or off again if it was already on.
+  Future<void> toggleConversationLorebook(
+      String conversationId, String bookId) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (!conversation.lorebookIds.remove(bookId)) {
+      conversation.lorebookIds.add(bookId);
+    }
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Replaces the whole set of books a chat runs with.
+  Future<void> setConversationLorebooks(
+      String conversationId, List<String> bookIds) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    conversation.lorebookIds
+      ..clear()
+      ..addAll(bookIds);
+    notifyListeners();
+    await _saveConversations();
+  }
+
 
   /// Every greeting [character] offers, in card order: the main one first, then
   /// its alternates, blanks dropped. Seeded as the swipes of the opening turn so
@@ -934,6 +1079,7 @@ class AppState extends ChangeNotifier {
           ? null
           : Preset.fromJson(source.presetOverride!.toJson()),
       variables: Map<String, String>.from(source.variables),
+      lorebookIds: List<String>.from(source.lorebookIds),
     );
     _conversations.insert(0, fork);
     _activeId = fork.id;
@@ -1117,6 +1263,18 @@ class AppState extends ChangeNotifier {
         : impersonation.userPersona(charName: character?.displayName ?? 'the character');
     final maxContext = _effectiveMaxContext(preset, model);
 
+    // Which lorebook entries this turn should carry. Scanned here so the
+    // inspectors and the real send go through exactly the same code and see the
+    // same history. One caveat worth knowing: an entry carrying a probability is
+    // rolled per scan, so re-opening "View prompt" can show a different draw
+    // than the request that was actually sent.
+    final lore = _world.scan(
+      books: lorebooksFor(conversation),
+      history: priorTurns,
+      charName: character?.displayName ?? conversation.characterName ?? '',
+      userName: userName,
+    );
+
     // Leading system turns injected by AppState (ahead of the built prompt),
     // each surfaced as its own breakdown section.
     final prefix = <ChatMessage>[];
@@ -1147,6 +1305,7 @@ class AppState extends ChangeNotifier {
           global: _globalVars,
         ),
         input: input,
+        lore: lore,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently
@@ -1169,6 +1328,24 @@ class AppState extends ChangeNotifier {
       if (persona.isNotEmpty && !_presetEmitsPersona(preset)) {
         addPrefix('User persona', persona);
       }
+      // Same again for lore: a preset that carries neither world-info marker
+      // would otherwise activate entries and then throw them away. Only the two
+      // definition-anchored slots can be rescued this way — depth-injected lore
+      // needs the builder, which already handled it.
+      if (!_presetEmitsWorldInfo(preset)) {
+        addPrefix(
+          'World info',
+          [lore.before, lore.after].where((s) => s.isNotEmpty).join('\n'),
+        );
+      }
+      if (!_presetEmitsExamples(preset)) {
+        addPrefix(
+          'World info',
+          [lore.exampleTop, lore.exampleBottom]
+              .where((s) => s.isNotEmpty)
+              .join('\n'),
+        );
+      }
       messages = <ChatMessage>[...prefix, ...built.messages];
       sections.addAll(built.sections);
       params = _paramsFor(preset);
@@ -1177,6 +1354,20 @@ class AppState extends ChangeNotifier {
       // plus the impersonated user persona (when set).
       addPrefix('Character (stored)', conversation.systemPrompt);
       if (persona.isNotEmpty) addPrefix('User persona', persona);
+      // With no preset there are no slots to place lore in, so everything that
+      // activated is prefixed as one block. Depth-injected entries lose their
+      // depth here — there is nowhere to inject them — but their text still
+      // reaches the model rather than being scanned for and then discarded.
+      addPrefix(
+        'World info',
+        [
+          lore.before,
+          lore.exampleTop,
+          lore.exampleBottom,
+          lore.after,
+          ...lore.injections.map((i) => i.text),
+        ].where((s) => s.isNotEmpty).join('\n'),
+      );
       messages = <ChatMessage>[...prefix, ...priorTurns];
       if (priorTurns.isNotEmpty) {
         sections.add(PromptSection(
@@ -1244,6 +1435,36 @@ class AppState extends ChangeNotifier {
     };
     for (final entry in preset.promptOrder) {
       if (entry.enabled && definitionMarkers.contains(entry.identifier)) {
+        final block = preset.blockById(entry.identifier);
+        if (block != null && block.marker) return true;
+      }
+    }
+    return false;
+  }
+
+  /// Whether [preset] has an enabled world-info marker to put activated lore in.
+  /// When it has not, [_assemble] prefixes the lore itself rather than letting a
+  /// scan that found something end up sending nothing.
+  bool _presetEmitsWorldInfo(Preset preset) {
+    const worldMarkers = <String>{
+      PromptId.worldInfoBefore,
+      PromptId.worldInfoAfter,
+    };
+    for (final entry in preset.promptOrder) {
+      if (entry.enabled && worldMarkers.contains(entry.identifier)) {
+        final block = preset.blockById(entry.identifier);
+        if (block != null && block.marker) return true;
+      }
+    }
+    return false;
+  }
+
+  /// Whether [preset] has an enabled example-dialogue marker. Lore positioned
+  /// around the examples travels with that marker, so without it the same
+  /// rescue is needed.
+  bool _presetEmitsExamples(Preset preset) {
+    for (final entry in preset.promptOrder) {
+      if (entry.enabled && entry.identifier == PromptId.dialogueExamples) {
         final block = preset.blockById(entry.identifier);
         if (block != null && block.marker) return true;
       }

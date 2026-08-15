@@ -6,6 +6,7 @@ import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
+import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
 import '../models/settings.dart';
@@ -37,6 +38,7 @@ class Storage {
   static const _chatInterfaceKey = 'chatInterface';
   static const _conversationsKey = 'conversations';
   static const _charactersKey = 'characters';
+  static const _lorebooksKey = 'lorebooks';
   static const _activeKey = 'activeConversation';
   static const _presetsKey = 'presets';
   static const _globalVarsKey = 'macroGlobals';
@@ -199,6 +201,32 @@ class Storage {
       (await _prefs).setString(
         _charactersKey,
         jsonEncode(characters.map((c) => c.toJson()).toList()),
+      );
+
+  /// The lorebooks (world info / memory books) the user has saved. Kept in its
+  /// own entry rather than beside the characters so editing a book does not
+  /// rewrite the roster, which is the largest thing in the store.
+  Future<List<Lorebook>> loadLorebooks() async {
+    final raw = (await _prefs).getString(_lorebooksKey);
+    if (raw == null) return <Lorebook>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(Lorebook.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <Lorebook>[];
+  }
+
+  Future<void> saveLorebooks(List<Lorebook> books) async =>
+      (await _prefs).setString(
+        _lorebooksKey,
+        jsonEncode(books.map((b) => b.toJson()).toList()),
       );
 
   /// Loads stored presets and the default-preset id, or an empty state on a

@@ -16,7 +16,9 @@ class Conversation {
     this.presetId,
     this.presetOverride,
     Map<String, String>? variables,
-  }) : variables = variables ?? <String, String>{};
+    List<String>? lorebookIds,
+  })  : variables = variables ?? <String, String>{},
+        lorebookIds = lorebookIds ?? <String>[];
 
   final String id;
   String title;
@@ -52,6 +54,12 @@ class Conversation {
   /// Per-chat macro variables ({{setvar}}/{{getvar}}), SillyTavern's local scope.
   final Map<String, String> variables;
 
+  /// The lorebooks switched on for this thread, by [Lorebook.id]. More than one
+  /// can be active at a time; their entries are pooled before the prompt is
+  /// assembled. Order is the order they were added, which only matters as a
+  /// tiebreaker between two entries of equal weight.
+  final List<String> lorebookIds;
+
   factory Conversation.empty() => Conversation(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         title: 'New chat',
@@ -83,6 +91,7 @@ class Conversation {
         if (presetId != null) 'presetId': presetId,
         if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
         if (variables.isNotEmpty) 'variables': variables,
+        if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -105,6 +114,10 @@ class Conversation {
         variables: (json['variables'] as Map?)?.map(
           (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
         ),
+        lorebookIds: (json['lorebookIds'] as List?)
+            ?.map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList(),
         messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(ChatMessage.fromJson)

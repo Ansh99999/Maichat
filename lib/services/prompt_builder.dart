@@ -4,6 +4,7 @@ import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import 'macro_context.dart';
 import 'token_estimator.dart';
+import 'world_info.dart';
 
 /// The result of assembling a preset into a request: the role-tagged messages
 /// ready for [ChatClient] (which splits out `system` for Anthropic itself), a
@@ -61,6 +62,7 @@ class PromptBuilder {
     MacroVariables? variables,
     String input = '',
     int? maxContext,
+    WorldInfo? lore,
   }) {
     final charName = character?.displayName ?? '';
     // The caller may resolve a different window than the preset carries (the
@@ -104,6 +106,7 @@ class PromptBuilder {
     );
 
     // Resolve the content each marker stands in for (macros applied later).
+    final world = lore ?? WorldInfo.none;
     String markerSource(String id) {
       switch (id) {
         case PromptId.charDescription:
@@ -113,12 +116,19 @@ class PromptBuilder {
         case PromptId.scenario:
           return character?.scenario ?? '';
         case PromptId.dialogueExamples:
-          return character?.mesExample ?? '';
+          // Lore can ask to sit around the examples rather than around the
+          // definitions, so it rides along with this marker.
+          return [
+            world.exampleTop,
+            character?.mesExample ?? '',
+            world.exampleBottom,
+          ].where((s) => s.trim().isNotEmpty).join('\n');
         case PromptId.personaDescription:
           return persona; // the impersonated user persona, when set
         case PromptId.worldInfoBefore:
+          return world.before;
         case PromptId.worldInfoAfter:
-          return ''; // no lorebook system yet
+          return world.after;
         default:
           return '';
       }
@@ -198,6 +208,24 @@ class PromptBuilder {
         order: block.injectionOrder,
         seq: injections.length,
         part: _Part('Injected (depth ${block.injectionDepth})', msg),
+      ));
+      fixedTokens += cost(msg);
+    }
+
+    // Lore that asked to sit inside the conversation rather than in front of it.
+    // Reserved here for the same reason as the blocks above: the history budget
+    // is what is left over, so anything fixed has to be counted first. A lower
+    // injection order than a preset block's default puts lore after the frame at
+    // the same depth, which is the order SillyTavern ends up with too.
+    for (final inj in world.injections) {
+      final text = macros.evaluate(inj.text, ctx).trim();
+      if (text.isEmpty) continue;
+      final msg = ChatMessage(role: inj.role.wireName, content: text);
+      injections.add(_Injection(
+        depth: inj.depth,
+        order: 0,
+        seq: injections.length,
+        part: _Part('World info (depth ${inj.depth})', msg),
       ));
       fixedTokens += cost(msg);
     }
