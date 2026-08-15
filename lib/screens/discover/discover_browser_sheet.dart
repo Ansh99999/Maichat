@@ -17,14 +17,27 @@ bool webViewSupported = Platform.isAndroid || Platform.isIOS;
 /// Opens [url] in a real browsing context and returns the page's HTML once it
 /// stops being a bot check, or null if the user backed out or nothing usable
 /// arrived.
+typedef BrowserViewSolver = Future<String?> Function(
+  BuildContext context, {
+  required String url,
+  required String siteLabel,
+});
+
+/// Opens [url] in a real browsing context and returns the page's HTML once it
+/// stops being a bot check, or null if the user backed out or nothing usable
+/// arrived.
 ///
 /// This exists for one reason: a Cloudflare challenge is a JavaScript
 /// computation plus a browser fingerprint check, and no amount of header-dressing
 /// gets a plain HTTP client past it. The device's own WebView is a genuine
 /// Chromium, so it simply passes — and then the page it is holding is the page we
-/// wanted. The user sees the check happen rather than it being done behind their
-/// back.
-Future<String?> solveInBrowserView(
+/// wanted.
+///
+/// Replaceable because a widget test has no WebView to drive; production never
+/// assigns it.
+BrowserViewSolver solveInBrowserView = _openBrowserView;
+
+Future<String?> _openBrowserView(
   BuildContext context, {
   required String url,
   required String siteLabel,
@@ -49,13 +62,22 @@ class _BrowserViewScreen extends StatefulWidget {
 class _BrowserViewScreenState extends State<_BrowserViewScreen> {
   late final WebViewController _controller;
   Timer? _poll;
+  Timer? _reveal;
   bool _done = false;
+  bool _revealed = false;
   int _progress = 0;
-  String _status = 'Loading…';
+  String _status = 'Checking…';
 
   /// A challenge replaces the page contents without a navigation event, so the
   /// page is re-read on a timer as well as on page-finished.
-  static const Duration _pollEvery = Duration(milliseconds: 1200);
+  static const Duration _pollEvery = Duration(milliseconds: 700);
+
+  /// How long the page stays behind its cover. A non-interactive check clears
+  /// well inside this, and covering it means the common case reads as the app
+  /// doing something rather than a foreign page flashing past. Past this, the
+  /// check probably wants tapping, so hand it over.
+  static const Duration _revealAfter = Duration(seconds: 6);
+
   static const Duration _giveUpAfter = Duration(seconds: 60);
 
   @override
@@ -73,6 +95,14 @@ class _BrowserViewScreenState extends State<_BrowserViewScreen> {
       ..loadRequest(Uri.parse(widget.url));
 
     _poll = Timer.periodic(_pollEvery, (_) => _check());
+    _reveal = Timer(_revealAfter, () {
+      if (mounted && !_done) {
+        setState(() {
+          _revealed = true;
+          _status = 'This check wants you to complete it.';
+        });
+      }
+    });
     Timer(_giveUpAfter, () {
       if (mounted && !_done) {
         setState(() => _status =
@@ -84,6 +114,7 @@ class _BrowserViewScreenState extends State<_BrowserViewScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _reveal?.cancel();
     super.dispose();
   }
 
@@ -126,20 +157,27 @@ class _BrowserViewScreenState extends State<_BrowserViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text('Opening ${widget.siteLabel}'),
+        title: Text('Checking with ${widget.siteLabel}'),
         leading: IconButton(
           tooltip: 'Cancel',
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
-          TextButton(
-            onPressed: () => _check(force: true),
-            child: const Text('Use this page'),
-          ),
+          if (!_revealed)
+            TextButton(
+              onPressed: () => setState(() => _revealed = true),
+              child: const Text('Show page'),
+            ),
+          if (_revealed)
+            TextButton(
+              onPressed: () => _check(force: true),
+              child: const Text('Use this page'),
+            ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(4),
@@ -151,23 +189,66 @@ class _BrowserViewScreenState extends State<_BrowserViewScreen> {
                 ),
         ),
       ),
-      body: Column(
+      // The page is laid out full size and fully opaque underneath, so it
+      // renders and runs exactly as a real page does — a check that is measuring
+      // the browser gets a browser. The cover on top is only what the user sees.
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          Container(
-            width: double.infinity,
-            color: scheme.surfaceContainerHighest,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: Text(
-              _status,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+          WebViewWidget(controller: _controller),
+          if (!_revealed)
+            ColoredBox(
+              color: scheme.surface,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(36),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.shield_outlined,
+                          size: 44, color: scheme.onSurfaceVariant),
+                      const SizedBox(height: 20),
+                      Text(
+                        '${widget.siteLabel} is checking the browser',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This takes a second, and then the character loads. '
+                        'It only needs doing once in a while.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 24),
+                      const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
-          Expanded(child: WebViewWidget(controller: _controller)),
         ],
       ),
+      bottomNavigationBar: _revealed
+          ? Container(
+              width: double.infinity,
+              color: scheme.surfaceContainerHighest,
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: SafeArea(
+                top: false,
+                child: Text(
+                  _status,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            )
+          : null,
     );
   }
 }

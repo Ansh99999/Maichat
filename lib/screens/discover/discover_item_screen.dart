@@ -54,7 +54,11 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
     _load();
   }
 
-  Future<void> _load() async {
+  /// Loads the definition, and — when the site answers with a bot check — goes
+  /// through the browser view for it without waiting to be asked. The user came
+  /// here to read this character; making them press a button to permit the only
+  /// route that works is a toll, not a choice.
+  Future<void> _load({bool allowBrowser = true}) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -74,6 +78,7 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
         _error = challenge.message;
         _loading = false;
       });
+      if (allowBrowser && webViewSupported) await _passCheck();
     } on DiscoverException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -87,6 +92,13 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// A manual retry asks the source to forget which routes it found blocked, so
+  /// a change of network gets a fresh answer.
+  Future<void> _retry() async {
+    widget.source.resetTransport();
+    await _load();
   }
 
   Future<void> _download() async {
@@ -252,7 +264,7 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
           if (_error != null)
             _ErrorNote(
               message: _error!,
-              onRetry: _load,
+              onRetry: _retry,
               // A bot check has a real way through it; offer that instead of a
               // retry that will be refused the same way.
               onPassCheck:

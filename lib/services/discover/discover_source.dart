@@ -85,6 +85,12 @@ abstract class DiscoverSource {
         'This catalogue does not read downloads from a page.',
       );
 
+  /// Forgets anything learned about how to reach this site — which route worked,
+  /// which was refused. A source may remember that plain HTTP is being blocked
+  /// and stop trying it; this is how a manual retry gets a clean attempt, since
+  /// the answer changes with the network the phone is on.
+  void resetTransport() {}
+
   /// Releases the underlying HTTP client.
   void close() {}
 }

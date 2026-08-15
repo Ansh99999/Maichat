@@ -367,8 +367,28 @@ void main() {
         throwsA(isA<DiscoverChallengeException>()
             .having((e) => e.pageUrl, 'pageUrl',
                 '$base/characters/uuid-1_character-ann')
-            .having((e) => e.message, 'message', contains('browser view'))),
+            .having((e) => e.message, 'message',
+                contains('checking the browser'))),
       );
+
+      // Having been checked once, the next card does not spend two doomed
+      // requests finding out again — the block is on the connection, not on the
+      // card.
+      paths.clear();
+      await expectLater(
+        source.fetch(item),
+        throwsA(isA<DiscoverChallengeException>()),
+      );
+      expect(paths, isEmpty);
+
+      // Until a retry asks afresh, because moving between wifi and mobile data
+      // changes the answer.
+      source.resetTransport();
+      await expectLater(
+        source.fetch(item),
+        throwsA(isA<DiscoverChallengeException>()),
+      );
+      expect(paths, isNotEmpty);
     });
 
     test('a page fetched by a browser view finishes the download', () async {

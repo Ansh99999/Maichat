@@ -182,52 +182,92 @@ void main() {
 
   group('a site that wants to check the browser', () {
     final wasSupported = webViewSupported;
-    tearDown(() => webViewSupported = wasSupported);
+    final wasSolver = solveInBrowserView;
 
-    testWidgets('offers the browser view when one is available',
-        (tester) async {
+    /// Stands in for the WebView, which a test host does not have. Records what
+    /// it was asked to open and answers with [reply].
+    List<String> stubSolver(String? reply) {
+      final opened = <String>[];
+      solveInBrowserView = (context, {required url, required siteLabel}) async {
+        opened.add(url);
+        return reply;
+      };
+      return opened;
+    }
+
+    tearDown(() {
+      webViewSupported = wasSupported;
+      solveInBrowserView = wasSolver;
+    });
+
+    _FakeSource blocked() => _FakeSource(
+          challenge: const DiscoverChallengeException(
+            'JannyAI is checking the browser before it will hand over the card.',
+            'https://example.invalid/characters/uuid-1',
+          ),
+        );
+
+    testWidgets('passes the check without being asked to', (tester) async {
       webViewSupported = true;
+      final opened = stubSolver('<html>the real page</html>');
       final state = await ready();
-      final source = _FakeSource(
-        challenge: const DiscoverChallengeException(
-          'JannyAI served a Cloudflare check instead of the card.',
-          'https://example.invalid/characters/uuid-1',
-        ),
-      );
+      final source = blocked();
       await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
       await load(tester);
       await tester.tap(find.text('Aria'));
       await load(tester);
 
+      // No button was pressed: opening the character was the request.
+      expect(opened, ['https://example.invalid/characters/uuid-1']);
+      expect(find.text('From the page: <html>the real page</html>'),
+          findsOneWidget);
+      expect(find.text('Pass the check'), findsNothing);
+      expect(find.widgetWithText(FloatingActionButton, 'Download'),
+          findsOneWidget);
+    });
+
+    testWidgets('backing out of the check leaves the offer standing',
+        (tester) async {
+      webViewSupported = true;
+      final opened = stubSolver(null);
+      final state = await ready();
+      final source = blocked();
+      await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
+      await load(tester);
+      await tester.tap(find.text('Aria'));
+      await load(tester);
+
+      expect(opened, hasLength(1));
       // A check is not the same failure as a broken card, and does not read as
-      // one — there is a way through it.
+      // one — there is still a way through it.
       expect(find.text('The site wants to check the browser'), findsOneWidget);
-      expect(find.text('Pass the check'), findsOneWidget);
       expect(find.text('Could not read the definition'), findsNothing);
+
+      await tester.tap(find.text('Pass the check'));
+      await load(tester);
+      expect(opened, hasLength(2));
     });
 
     testWidgets('says only what is true when there is no browser view',
         (tester) async {
       webViewSupported = false;
+      final opened = stubSolver('<html>never asked for</html>');
       final state = await ready();
-      final source = _FakeSource(
-        challenge: const DiscoverChallengeException(
-          'JannyAI served a Cloudflare check instead of the card.',
-          'https://example.invalid/characters/uuid-1',
-        ),
-      );
+      final source = blocked();
       await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
       await load(tester);
       await tester.tap(find.text('Aria'));
       await load(tester);
 
+      expect(opened, isEmpty);
       expect(find.text('Pass the check'), findsNothing);
       expect(find.text('Could not read the definition'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
     });
 
-    testWidgets('an ordinary failure never offers it', (tester) async {
+    testWidgets('an ordinary failure never opens a browser', (tester) async {
       webViewSupported = true;
+      final opened = stubSolver('<html>never asked for</html>');
       final state = await ready();
       final source = _FakeSource(fetchError: 'That card was taken down.');
       await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
@@ -235,8 +275,28 @@ void main() {
       await tester.tap(find.text('Aria'));
       await load(tester);
 
+      expect(opened, isEmpty);
       expect(find.text('Pass the check'), findsNothing);
       expect(find.text('That card was taken down.'), findsOneWidget);
+    });
+
+    testWidgets('a manual retry makes the source forget what was blocked',
+        (tester) async {
+      webViewSupported = false;
+      stubSolver(null);
+      final state = await ready();
+      final source = _FakeSource(fetchError: 'Refused.');
+      await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
+      await load(tester);
+      await tester.tap(find.text('Aria'));
+      await load(tester);
+
+      expect(source.transportResets, 0);
+      await tester.tap(find.text('Retry'));
+      await load(tester);
+      // Which route works depends on the network the phone is on, so a retry
+      // asks afresh rather than repeating a remembered verdict.
+      expect(source.transportResets, 1);
     });
   });
 }
@@ -270,6 +330,12 @@ class _FakeSource extends DiscoverSource {
   final String? fetchError;
 
   final List<DiscoverQuery> queries = <DiscoverQuery>[];
+
+  /// How many times a retry asked this source to forget what it had learned.
+  int transportResets = 0;
+
+  @override
+  void resetTransport() => transportResets++;
 
   @override
   String get blurb => 'A stand-in catalogue';
@@ -342,4 +408,14 @@ class _FakeSource extends DiscoverSource {
       ),
     );
   }
+
+  @override
+  Future<DiscoverPayload> fetchFromHtml(DiscoverItem item, String html) async =>
+      DiscoverPayload(
+        character: Character(
+          id: 'char-1',
+          name: item.name,
+          description: 'From the page: $html',
+        ),
+      );
 }

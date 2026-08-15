@@ -242,9 +242,23 @@ class JannySource extends DiscoverSource {
   /// 3. Neither worked and a check was served, so raise
   ///    [DiscoverChallengeException] and let the screen offer a browser view.
   ///    That is the only thing that can pass a real challenge.
+  /// Whether a bot check has already been seen this session.
+  ///
+  /// Once it has, plain HTTP is not going to start working — the block is on the
+  /// connection, not the card — so later downloads go straight to the browser
+  /// view instead of spending two doomed requests and a few seconds finding out
+  /// again. Session-scoped on purpose: moving between mobile data and wifi
+  /// changes the answer, and [resetTransport] is how a retry asks afresh.
+  bool _browserOnly = false;
+
+  @override
+  void resetTransport() => _browserOnly = false;
+
   @override
   Future<DiscoverPayload> fetch(DiscoverItem item) async {
     final page = pageUri(item);
+    if (_browserOnly) throw _challengeFor(page);
+
     final stumbles = <String>[];
     var challenged = false;
 
@@ -265,18 +279,20 @@ class JannySource extends DiscoverSource {
     }
 
     if (challenged) {
-      throw DiscoverChallengeException(
-        'JannyAI served a Cloudflare check instead of the card. Opening its '
-        'page in a browser view here will pass the check and read the '
-        'character out of it.',
-        page.toString(),
-      );
+      _browserOnly = true;
+      throw _challengeFor(page);
     }
     throw DiscoverException(
       'Could not fetch this character from JannyAI. '
       '${stumbles.join(' Then: ')}',
     );
   }
+
+  DiscoverChallengeException _challengeFor(Uri page) =>
+      DiscoverChallengeException(
+        'JannyAI is checking the browser before it will hand over the card.',
+        page.toString(),
+      );
 
   @override
   Future<DiscoverPayload> fetchFromHtml(DiscoverItem item, String html) =>
