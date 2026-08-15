@@ -251,8 +251,17 @@ class UrlSource extends CharacterSource {
   /// SillyTavern-style JannyAI/JanitorAI import: ask `api.jannyai.com` for a
   /// download URL for the character, then fetch that card. Falls back to clear
   /// guidance when the API declines or the CDN link is Cloudflare-blocked.
-  static Future<SourcePayload> _fetchJanny(Uri uri) async {
-    final candidates = jannyCharacterIds(uri);
+  static Future<SourcePayload> _fetchJanny(Uri uri) =>
+      fetchJannyCard(jannyCharacterIds(uri));
+
+  /// Resolves the first of [candidates] that JannyAI's download API recognises.
+  /// Discover calls this with the single UUID a feed result carries; the URL
+  /// source calls it with both spellings found in a link. [apiBase] exists so
+  /// the tests can point it at a loopback server.
+  static Future<SourcePayload> fetchJannyCard(
+    List<String> candidates, {
+    String apiBase = 'https://api.jannyai.com',
+  }) async {
     if (candidates.isEmpty) throw CharacterParseException(JannyAiSource.guidance);
 
     for (final id in candidates) {
@@ -260,7 +269,7 @@ class UrlSource extends CharacterSource {
       try {
         api = await http
             .post(
-              Uri.parse('https://api.jannyai.com/api/v1/download'),
+              Uri.parse('$apiBase/api/v1/download'),
               headers: {'Content-Type': 'application/json', ..._browserHeaders},
               body: jsonEncode({'characterId': id}),
             )

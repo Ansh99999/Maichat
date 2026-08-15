@@ -7,6 +7,7 @@ import '../services/update_service.dart';
 import '../state/app_state.dart';
 import '../screens/characters_screen.dart';
 import '../screens/chats_screen.dart';
+import '../screens/discover/discover_screen.dart';
 import '../screens/library/library_screen.dart';
 import '../screens/presets/presets_screen.dart';
 import '../screens/section_screen.dart';
@@ -15,7 +16,7 @@ import '../screens/settings_screen.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
-enum DrawerSection { home, chats, characters, library, presets }
+enum DrawerSection { home, chats, characters, discover, library, presets }
 
 /// The navigation drawer shared by the top-level sections (Home and Chats).
 ///
@@ -62,9 +63,17 @@ class AppDrawer extends StatelessWidget {
     }
   }
 
-  /// Opens the Library, unless it is already the host screen.
-  void _goLibrary(BuildContext context) {
+  /// Opens Discover — the browser for other people's catalogues.
+  void _goDiscover(BuildContext context) {
     Navigator.of(context).pop();
+    if (selected != DrawerSection.discover) {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => const DiscoverScreen()));
+    }
+  }
+
+  /// Opens the Library, unless it is already the host screen.
+  void _goLibrary(BuildContext context) {    Navigator.of(context).pop();
     if (selected != DrawerSection.library) {
       Navigator.of(context)
           .push(MaterialPageRoute<void>(builder: (_) => const LibraryScreen()));
@@ -115,6 +124,12 @@ class AppDrawer extends StatelessWidget {
                     label: 'Characters',
                     selected: selected == DrawerSection.characters,
                     onTap: () => _goCharacters(context),
+                  ),
+                  _NavItem(
+                    icon: Icons.public_outlined,
+                    label: 'Discover',
+                    selected: selected == DrawerSection.discover,
+                    onTap: () => _goDiscover(context),
                   ),
                   _NavItem(
                     icon: Icons.chat_bubble_outline,

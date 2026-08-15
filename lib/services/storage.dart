@@ -6,6 +6,7 @@ import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
+import '../models/discover.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
@@ -44,6 +45,7 @@ class Storage {
   static const _globalVarsKey = 'macroGlobals';
   static const _modelCacheKey = 'modelCache';
   static const _tokenizerKey = 'tokenizer';
+  static const _discoverKey = 'discover';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -314,6 +316,23 @@ class Storage {
 
   Future<void> saveTokenizerConfig(TokenizerConfig config) async =>
       (await _prefs).setString(_tokenizerKey, jsonEncode(config.toJson()));
+
+  /// What Discover was left set to: the selected catalogue, whether adult
+  /// results are allowed, and each section's ordering.
+  Future<DiscoverPrefs> loadDiscoverPrefs() async {
+    final raw = (await _prefs).getString(_discoverKey);
+    if (raw == null) return const DiscoverPrefs();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return DiscoverPrefs.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const DiscoverPrefs();
+  }
+
+  Future<void> saveDiscoverPrefs(DiscoverPrefs prefs) async =>
+      (await _prefs).setString(_discoverKey, jsonEncode(prefs.toJson()));
 
   /// How much room each stored entry takes, in bytes, largest first.
   ///

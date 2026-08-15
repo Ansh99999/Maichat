@@ -1,0 +1,25 @@
+import '../../models/discover.dart';
+import 'chub_source.dart';
+import 'discover_source.dart';
+import 'janny_source.dart';
+
+export 'chub_source.dart';
+export 'discover_source.dart';
+export 'janny_source.dart';
+
+/// The catalogues Discover can browse, in the order their chips appear.
+///
+/// Add a [DiscoverSource] here and it shows up everywhere: the source chips, the
+/// per-section sort menus, the filter sheet. Sources are built lazily and live
+/// for as long as the Discover screen does.
+List<DiscoverSource> buildDiscoverSources() => <DiscoverSource>[
+      ChubSource(),
+      JannySource(),
+    ];
+
+/// The sources that publish [kind], so a section can say who it is asking.
+List<DiscoverSource> sourcesFor(
+  List<DiscoverSource> sources,
+  DiscoverKind kind,
+) =>
+    sources.where((s) => s.supports(kind)).toList(growable: false);

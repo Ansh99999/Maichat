@@ -8,6 +8,7 @@ import '../models/appearance.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
+import '../models/discover.dart';
 import '../models/lorebook.dart';
 import '../models/message.dart';
 import '../models/preset.dart';
@@ -206,6 +207,7 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(await _storage.loadModelCache());
     _tokenizerConfig = await _storage.loadTokenizerConfig();
+    _discoverPrefs = await _storage.loadDiscoverPrefs();
     final stored = await _storage.loadConversations()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _conversations
@@ -1198,6 +1200,23 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (!_writable) return;
     await _storage.saveTokenizerConfig(next);
+  }
+
+  // --- Discover ------------------------------------------------------------
+
+  DiscoverPrefs _discoverPrefs = const DiscoverPrefs();
+
+  /// Which catalogue Discover was left on, plus its adult-content and ordering
+  /// choices. The feed itself is never stored — it is a live view of a remote
+  /// site.
+  DiscoverPrefs get discoverPrefs => _discoverPrefs;
+
+  Future<void> updateDiscoverPrefs(DiscoverPrefs next) async {
+    if (next == _discoverPrefs) return;
+    _discoverPrefs = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveDiscoverPrefs(next);
   }
 
   /// A synchronous token estimate for [text] under the active tokenizer — used

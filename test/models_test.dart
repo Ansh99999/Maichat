@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/appearance.dart';
 import 'package:maichat/models/conversation.dart';
+import 'package:maichat/models/discover.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/models/settings.dart';
@@ -200,5 +201,40 @@ void main() {
     // A blank stored value reads as "no font".
     expect(Appearance.fromJson(<String, dynamic>{'fontFamily': '  '}).fontFamily,
         isNull);
+  });
+
+  test('Discover preferences round-trip, per-section sorts included', () {
+    const original = DiscoverPrefs(
+      sourceId: 'chub',
+      nsfw: true,
+      sorts: <String, String>{'character': 'trending', 'lorebook': 'id'},
+    );
+    final restored = DiscoverPrefs.fromJson(original.toJson());
+
+    expect(restored, original);
+    expect(restored.sortFor(DiscoverKind.character), 'trending');
+    expect(restored.sortFor(DiscoverKind.lorebook), 'id');
+    expect(restored.sortFor(DiscoverKind.preset), isNull);
+
+    // Setting one section's order leaves the others alone.
+    final changed = original.withSort(DiscoverKind.lorebook, 'random');
+    expect(changed.sortFor(DiscoverKind.lorebook), 'random');
+    expect(changed.sortFor(DiscoverKind.character), 'trending');
+    expect(changed == original, isFalse);
+  });
+
+  test('Discover preferences survive junk in the stored sorts map', () {
+    final restored = DiscoverPrefs.fromJson(<String, dynamic>{
+      'sourceId': 'janny',
+      'nsfw': 'not a bool',
+      'sorts': <String, dynamic>{'character': 'newest', 'lorebook': 7},
+    });
+    expect(restored.sourceId, 'janny');
+    expect(restored.nsfw, isFalse);
+    expect(restored.sortFor(DiscoverKind.character), 'newest');
+    // A non-string order is dropped rather than crashing the launch read.
+    expect(restored.sortFor(DiscoverKind.lorebook), isNull);
+    expect(DiscoverPrefs.fromJson(const <String, dynamic>{}),
+        const DiscoverPrefs());
   });
 }
