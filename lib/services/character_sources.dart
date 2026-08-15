@@ -27,7 +27,7 @@ class SourcePayload {
 }
 
 /// A pluggable place to import a character from. Built-ins cover a local file,
-/// pasted JSON, a direct URL and JannyAI/JanitorAI links; [characterSources] is
+/// pasted JSON, a direct URL and JannyAI links; [characterSources] is
 /// a plain list, so more plugins can simply be added to it.
 abstract class CharacterSource {
   const CharacterSource();
@@ -59,7 +59,7 @@ const List<CharacterSource> characterSources = <CharacterSource>[
 ];
 
 /// Browser-ish headers, since some hosts/CDNs reject plain clients. This does
-/// not defeat Cloudflare-style bot walls (JannyAI/JanitorAI pages), only helps
+/// not defeat Cloudflare-style bot walls (a JannyAI card page), only helps
 /// with picky direct asset links.
 const Map<String, String> _browserHeaders = {
   'User-Agent':
@@ -156,7 +156,7 @@ class UrlSource extends CharacterSource {
   @override
   String get label => 'From URL';
   @override
-  String get description => 'A direct link, or a JannyAI/JanitorAI/RisuAI page';
+  String get description => 'A direct link, or a JannyAI/RisuAI page';
   @override
   IconData get icon => Icons.link_outlined;
   @override
@@ -179,6 +179,8 @@ class UrlSource extends CharacterSource {
       throw CharacterParseException('That is not a valid link.');
     }
     final host = uri.host.toLowerCase();
+    // JannyAI's card API is what resolves both hosts — a janitorai.com link is
+    // still accepted here, it just is not something the app advertises.
     if (host.contains('jannyai.com') || host.contains('janitorai')) {
       return _fetchJanny(uri);
     }
@@ -230,7 +232,7 @@ class UrlSource extends CharacterSource {
     return response;
   }
 
-  /// The character-id candidates in a JannyAI/JanitorAI URL: the full
+  /// The character-id candidates in a JannyAI URL: the full
   /// `<uuid>_<slug>` segment after `/characters/`, and the bare UUID. JannyAI's
   /// API has been seen to accept either, so both are tried in turn.
   static List<String> jannyCharacterIds(Uri uri) {
@@ -248,7 +250,7 @@ class UrlSource extends CharacterSource {
     }.toList();
   }
 
-  /// SillyTavern-style JannyAI/JanitorAI import: ask `api.jannyai.com` for a
+  /// SillyTavern-style JannyAI import: ask `api.jannyai.com` for a
   /// download URL for the character, then fetch that card. Falls back to clear
   /// guidance when the API declines or the CDN link is Cloudflare-blocked.
   static Future<SourcePayload> _fetchJanny(Uri uri) =>
@@ -330,18 +332,22 @@ class UrlSource extends CharacterSource {
   }
 }
 
-/// Import from JannyAI / JanitorAI. Like SillyTavern, this resolves the
+/// Import from JannyAI. Like SillyTavern, this resolves the
 /// character through `api.jannyai.com` (not by scraping the Cloudflare-guarded
 /// page), so a normal character-page link works. If the API declines or the
 /// card CDN is bot-blocked, it explains how to import the downloaded file.
+///
+/// Discover's JannyAI source is the better route now — it reads the definition
+/// off the character page and can open a browser view to pass a bot check. This
+/// stays for pasting a link to a specific character.
 class JannyAiSource extends CharacterSource {
   const JannyAiSource();
   @override
   String get id => 'jannyai';
   @override
-  String get label => 'JannyAI / JanitorAI';
+  String get label => 'JannyAI';
   @override
-  String get description => 'Paste a JannyAI/JanitorAI character link';
+  String get description => 'Paste a JannyAI character link';
   @override
   IconData get icon => Icons.extension_outlined;
   @override
@@ -350,11 +356,11 @@ class JannyAiSource extends CharacterSource {
   String get inputHint => 'https://jannyai.com/characters/…';
 
   static const String guidance =
-      'Could not fetch that character from JannyAI/JanitorAI — their API '
-      'declined or the card is behind Cloudflare bot protection. Download the '
-      'card as a PNG or JSON in your browser — e.g. with a "JanitorAI → '
-      'SillyTavern card exporter" userscript — then import it with "From file" '
-      'or "Paste JSON".';
+      'Could not fetch that character from JannyAI — its card API declined, or '
+      'Cloudflare is guarding the download. Try browsing for it in Discover, '
+      'which can open the page in a browser view to get past the check. '
+      'Otherwise save the card as a PNG or JSON in your browser and import it '
+      'with "From file" or "Paste JSON".';
 
   @override
   Future<List<SourcePayload>> fetch(String input) async =>

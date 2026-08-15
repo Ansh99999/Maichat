@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import '../../models/character.dart';
 import '../../models/discover.dart';
 import '../character_codec.dart';
 import '../character_sources.dart';
 import 'discover_source.dart';
+import 'janny_page.dart';
 
 /// JannyAI's numeric tag ids, which is how its search index stores them. There
 /// is no endpoint that lists them, so the map is part of the client — the same
@@ -64,7 +67,7 @@ class JannySource extends DiscoverSource {
   String get label => 'JannyAI';
 
   @override
-  String get blurb => 'JannyAI / JanitorAI cards — characters';
+  String get blurb => 'JannyAI character cards';
 
   @override
   String get homeUrl => siteBase;
@@ -217,8 +220,138 @@ class JannySource extends DiscoverSource {
 
   // --- Download ------------------------------------------------------------
 
+  /// The character page, which is where the definition actually lives.
+  Uri pageUri(DiscoverItem item) {
+    final link = item.pageUrl;
+    if (link != null && link.isNotEmpty) {
+      final parsed = Uri.tryParse(link);
+      if (parsed != null) return parsed;
+    }
+    return Uri.parse('$siteBase/characters/${item.id}_${_slug(item.name)}');
+  }
+
+  /// Downloading a JannyAI character is a ladder, because the site has changed
+  /// shape and the front door is guarded:
+  ///
+  /// 1. The rendered character page over plain HTTP. This is where the
+  ///    definition lives now, and on a home or mobile connection it often comes
+  ///    straight back — Cloudflare's bot rules key off IP reputation, and a
+  ///    phone is not a datacentre.
+  /// 2. `api.jannyai.com/api/v1/download`, the older card endpoint SillyTavern
+  ///    still uses. Kept because when it answers it hands over a complete card.
+  /// 3. Neither worked and a check was served, so raise
+  ///    [DiscoverChallengeException] and let the screen offer a browser view.
+  ///    That is the only thing that can pass a real challenge.
   @override
   Future<DiscoverPayload> fetch(DiscoverItem item) async {
+    final page = pageUri(item);
+    final stumbles = <String>[];
+    var challenged = false;
+
+    try {
+      return await _fromPage(item, await _getPage(page));
+    } on _JannyChallenge {
+      challenged = true;
+    } on DiscoverException catch (error) {
+      stumbles.add(error.message);
+    } on JannyPageException catch (error) {
+      stumbles.add(error.message);
+    }
+
+    try {
+      return await _fromDownloadApi(item);
+    } on DiscoverException catch (error) {
+      stumbles.add(error.message);
+    }
+
+    if (challenged) {
+      throw DiscoverChallengeException(
+        'JannyAI served a Cloudflare check instead of the card. Opening its '
+        'page in a browser view here will pass the check and read the '
+        'character out of it.',
+        page.toString(),
+      );
+    }
+    throw DiscoverException(
+      'Could not fetch this character from JannyAI. '
+      '${stumbles.join(' Then: ')}',
+    );
+  }
+
+  @override
+  Future<DiscoverPayload> fetchFromHtml(DiscoverItem item, String html) =>
+      _fromPage(item, html);
+
+  /// Fetches the page, telling a bot check apart from an ordinary failure.
+  Future<String> _getPage(Uri page) async {
+    final response = await _http.getRaw(page, headers: const <String, String>{
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    });
+    final body = response.body;
+    if (looksLikeChallenge(body)) throw const _JannyChallenge();
+    if (response.statusCode != 200) {
+      throw DiscoverException(
+        DiscoverHttp.describeStatus(page, response.statusCode),
+      );
+    }
+    return body;
+  }
+
+  Future<DiscoverPayload> _fromPage(DiscoverItem item, String html) async {
+    final JannyPage page;
+    try {
+      page = parseJannyPage(html);
+    } on JannyPageException catch (error) {
+      if (looksLikeChallenge(html)) throw const _JannyChallenge();
+      throw DiscoverException(error.message);
+    }
+    if (!page.hasDefinition) {
+      throw const DiscoverException(
+        'JannyAI\'s page for this character carries no definition — the '
+        'creator may have hidden it.',
+      );
+    }
+    final character = CharacterCodec.parseJson(jsonEncode(_cardFrom(page, item)));
+    await _dressUp(character, item, imageUrl: page.imageUrl);
+    return DiscoverPayload(character: character);
+  }
+
+  /// JannyAI's field names against the V2 card spec. `personality` is the
+  /// definition body and `description` is the site blurb — crossed, the same way
+  /// Chub crosses them.
+  Map<String, dynamic> _cardFrom(JannyPage page, DiscoverItem item) {
+    final char = page.character;
+    String field(String key) => asString(char[key]);
+    final tagIds = char['tagIds'];
+    final tags = <String>[];
+    if (tagIds is List) {
+      for (final raw in tagIds) {
+        final id = asInt(raw);
+        if (id != null) tags.add(kJannyTags[id] ?? 'Tag $id');
+      }
+    }
+    return <String, dynamic>{
+      'spec': 'chara_card_v2',
+      'spec_version': '2.0',
+      'data': <String, dynamic>{
+        'name': field('name').isEmpty ? item.name : field('name'),
+        'description': field('personality'),
+        'personality': '',
+        'scenario': field('scenario'),
+        'first_mes': field('firstMessage'),
+        'mes_example': field('exampleDialogs'),
+        'creator_notes': stripHtml(field('description')),
+        'creator': page.creator ??
+            (field('creatorUsername').isNotEmpty
+                ? field('creatorUsername')
+                : field('creatorId')),
+        'tags': tags.isEmpty ? item.tags : tags,
+        'character_version': '1.0',
+      },
+    };
+  }
+
+  Future<DiscoverPayload> _fromDownloadApi(DiscoverItem item) async {
     SourcePayload payload;
     try {
       payload = await UrlSource.fetchJannyCard(
@@ -237,7 +370,17 @@ class JannySource extends DiscoverSource {
     } on CharacterParseException catch (error) {
       throw DiscoverException(error.message);
     }
-    // The feed knows things the card file does not bother to carry.
+    await _dressUp(character, item);
+    return DiscoverPayload(character: character);
+  }
+
+  /// Fills in what the feed knows and the card file does not, and brings the
+  /// picture along as bytes so a saved character keeps its face.
+  Future<void> _dressUp(
+    Character character,
+    DiscoverItem item, {
+    String? imageUrl,
+  }) async {
     if (character.tags.isEmpty && item.tags.isNotEmpty) {
       character.tags = List<String>.of(item.tags);
     }
@@ -245,10 +388,35 @@ class JannySource extends DiscoverSource {
     if (character.creatorNotes.trim().isEmpty) {
       character.creatorNotes = item.description;
     }
-    final thumbnail = item.thumbnailUrl;
-    if (character.avatar.trim().isEmpty && thumbnail != null) {
-      character.avatar = thumbnail;
+    final link = (imageUrl != null && imageUrl.startsWith('http'))
+        ? imageUrl
+        : item.thumbnailUrl;
+    if (link == null) return;
+    final bytes = await _tryImage(link);
+    if (bytes != null) {
+      character.avatar = base64Encode(bytes);
+    } else if (character.avatar.trim().isEmpty) {
+      character.avatar = link;
     }
-    return DiscoverPayload(character: character);
   }
+
+  /// Fetches an image, returning null rather than failing the whole download.
+  Future<List<int>?> _tryImage(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    try {
+      final response = await _http.getBytes(
+        uri,
+        headers: const <String, String>{'Accept': 'image/*,*/*'},
+      );
+      return response.bodyBytes.isEmpty ? null : response.bodyBytes;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// Internal marker: a bot check was served. Never escapes [JannySource].
+class _JannyChallenge implements Exception {
+  const _JannyChallenge();
 }

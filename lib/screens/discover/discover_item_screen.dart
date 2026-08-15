@@ -9,6 +9,7 @@ import '../../state/app_state.dart';
 import '../character_detail_screen.dart';
 import '../library/lorebooks_screen.dart';
 import '../presets/presets_screen.dart';
+import 'discover_browser_sheet.dart';
 import 'discover_card.dart';
 
 /// A catalogue entry's page. Reads like a character's own page in MaiChat —
@@ -40,6 +41,9 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
   bool _loading = true;
   bool _saving = false;
 
+  /// Set when the site answered with a bot check, which a browser view can pass.
+  DiscoverChallengeException? _challenge;
+
   /// The local id of what was saved, so the button can turn into "Open".
   String? _savedCharacterId;
   bool _saved = false;
@@ -54,12 +58,20 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _challenge = null;
     });
     try {
       final payload = await widget.source.fetch(widget.item);
       if (!mounted) return;
       setState(() {
         _payload = payload;
+        _loading = false;
+      });
+    } on DiscoverChallengeException catch (challenge) {
+      if (!mounted) return;
+      setState(() {
+        _challenge = challenge;
+        _error = challenge.message;
         _loading = false;
       });
     } on DiscoverException catch (error) {
@@ -88,7 +100,23 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
         setState(() {
           _payload = payload;
           _error = null;
+          _challenge = null;
         });
+      } on DiscoverChallengeException catch (challenge) {
+        if (!mounted) return;
+        setState(() {
+          _saving = false;
+          _challenge = challenge;
+          _error = challenge.message;
+        });
+        // The user asked for this download, so go straight to the one thing
+        // that can complete it rather than making them find a second button.
+        if (webViewSupported) {
+          await _passCheck(thenSave: true);
+        } else {
+          _say(challenge.message);
+        }
+        return;
       } on DiscoverException catch (error) {
         if (!mounted) return;
         setState(() {
@@ -99,7 +127,49 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
         return;
       }
     }
+    await _save(payload);
+  }
 
+  /// Opens the site in a browser view, lets it pass the check, then finishes the
+  /// download from the page it was holding.
+  Future<void> _passCheck({bool thenSave = false}) async {
+    final challenge = _challenge;
+    if (challenge == null) return;
+    final html = await solveInBrowserView(
+      context,
+      url: challenge.pageUrl,
+      siteLabel: widget.source.label,
+    );
+    if (!mounted) return;
+    if (html == null) {
+      _say('Cancelled — the check was not completed.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final payload = await widget.source.fetchFromHtml(widget.item, html);
+      if (!mounted) return;
+      setState(() {
+        _payload = payload;
+        _error = null;
+        _challenge = null;
+        _saving = false;
+      });
+      if (thenSave) await _save(payload);
+    } on DiscoverException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.message;
+      });
+      _say(error.message);
+    }
+  }
+
+  /// Files a fetched payload in the user's own library.
+  Future<void> _save(DiscoverPayload payload) async {
+    if (!mounted) return;
+    setState(() => _saving = true);
     final state = context.read<AppState>();
     String message;
     VoidCallback? open;
@@ -179,7 +249,15 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
           _Header(item: item),
           _FactsCard(item: item, source: widget.source, payload: _payload),
           if (_loading) const _LoadingNote(),
-          if (_error != null) _ErrorNote(message: _error!, onRetry: _load),
+          if (_error != null)
+            _ErrorNote(
+              message: _error!,
+              onRetry: _load,
+              // A bot check has a real way through it; offer that instead of a
+              // retry that will be refused the same way.
+              onPassCheck:
+                  _challenge != null && webViewSupported ? _passCheck : null,
+            ),
           ..._details(character),
         ],
       ),
@@ -460,14 +538,22 @@ class _LoadingNote extends StatelessWidget {
 }
 
 class _ErrorNote extends StatelessWidget {
-  const _ErrorNote({required this.message, required this.onRetry});
+  const _ErrorNote({
+    required this.message,
+    required this.onRetry,
+    this.onPassCheck,
+  });
 
   final String message;
   final VoidCallback onRetry;
 
+  /// Set when a browser view could get past what stopped us.
+  final Future<void> Function()? onPassCheck;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final blocked = onPassCheck != null;
     return Padding(
       padding: const EdgeInsets.only(top: 20),
       child: Card(
@@ -480,13 +566,22 @@ class _ErrorNote extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.warning_amber_outlined,
-                      size: 18, color: scheme.onErrorContainer),
+                  Icon(
+                    blocked
+                        ? Icons.shield_outlined
+                        : Icons.warning_amber_outlined,
+                    size: 18,
+                    color: scheme.onErrorContainer,
+                  ),
                   const SizedBox(width: 8),
-                  Text(
-                    'Could not read the definition',
-                    style: Theme.of(context).textTheme.titleSmall
-                        ?.copyWith(color: scheme.onErrorContainer),
+                  Expanded(
+                    child: Text(
+                      blocked
+                          ? 'The site wants to check the browser'
+                          : 'Could not read the definition',
+                      style: Theme.of(context).textTheme.titleSmall
+                          ?.copyWith(color: scheme.onErrorContainer),
+                    ),
                   ),
                 ],
               ),
@@ -500,9 +595,19 @@ class _ErrorNote extends StatelessWidget {
               ),
               Align(
                 alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: onRetry,
-                  child: const Text('Retry'),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: onRetry,
+                      child: const Text('Retry'),
+                    ),
+                    if (blocked)
+                      FilledButton.tonal(
+                        onPressed: () => onPassCheck!(),
+                        child: const Text('Pass the check'),
+                      ),
+                  ],
                 ),
               ),
             ],

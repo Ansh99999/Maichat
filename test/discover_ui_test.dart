@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/discover.dart';
 import 'package:maichat/models/lorebook.dart';
+import 'package:maichat/screens/discover/discover_browser_sheet.dart';
 import 'package:maichat/screens/discover/discover_screen.dart';
 import 'package:maichat/services/discover/discover_source.dart';
 import 'package:maichat/state/app_state.dart';
@@ -178,6 +179,66 @@ void main() {
     expect(source.queries.last.nsfw, isTrue);
     expect(state.discoverPrefs.nsfw, isTrue);
   });
+
+  group('a site that wants to check the browser', () {
+    final wasSupported = webViewSupported;
+    tearDown(() => webViewSupported = wasSupported);
+
+    testWidgets('offers the browser view when one is available',
+        (tester) async {
+      webViewSupported = true;
+      final state = await ready();
+      final source = _FakeSource(
+        challenge: const DiscoverChallengeException(
+          'JannyAI served a Cloudflare check instead of the card.',
+          'https://example.invalid/characters/uuid-1',
+        ),
+      );
+      await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
+      await load(tester);
+      await tester.tap(find.text('Aria'));
+      await load(tester);
+
+      // A check is not the same failure as a broken card, and does not read as
+      // one — there is a way through it.
+      expect(find.text('The site wants to check the browser'), findsOneWidget);
+      expect(find.text('Pass the check'), findsOneWidget);
+      expect(find.text('Could not read the definition'), findsNothing);
+    });
+
+    testWidgets('says only what is true when there is no browser view',
+        (tester) async {
+      webViewSupported = false;
+      final state = await ready();
+      final source = _FakeSource(
+        challenge: const DiscoverChallengeException(
+          'JannyAI served a Cloudflare check instead of the card.',
+          'https://example.invalid/characters/uuid-1',
+        ),
+      );
+      await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
+      await load(tester);
+      await tester.tap(find.text('Aria'));
+      await load(tester);
+
+      expect(find.text('Pass the check'), findsNothing);
+      expect(find.text('Could not read the definition'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+    });
+
+    testWidgets('an ordinary failure never offers it', (tester) async {
+      webViewSupported = true;
+      final state = await ready();
+      final source = _FakeSource(fetchError: 'That card was taken down.');
+      await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
+      await load(tester);
+      await tester.tap(find.text('Aria'));
+      await load(tester);
+
+      expect(find.text('Pass the check'), findsNothing);
+      expect(find.text('That card was taken down.'), findsOneWidget);
+    });
+  });
 }
 
 /// A catalogue that answers from memory, so the screens can be driven without a
@@ -188,6 +249,8 @@ class _FakeSource extends DiscoverSource {
     this.label = 'Fake',
     this.characters = const ['Aria', 'Bram'],
     this.failWith,
+    this.challenge,
+    this.fetchError,
   });
 
   @override
@@ -199,6 +262,12 @@ class _FakeSource extends DiscoverSource {
 
   /// When set, every search fails with this message.
   String? failWith;
+
+  /// When set, every download raises this instead of returning a payload.
+  final DiscoverChallengeException? challenge;
+
+  /// When set, every download fails with this ordinary message.
+  final String? fetchError;
 
   final List<DiscoverQuery> queries = <DiscoverQuery>[];
 
@@ -251,6 +320,10 @@ class _FakeSource extends DiscoverSource {
 
   @override
   Future<DiscoverPayload> fetch(DiscoverItem item) async {
+    final blocked = challenge;
+    if (blocked != null) throw blocked;
+    final failure = fetchError;
+    if (failure != null) throw DiscoverException(failure);
     if (item.kind == DiscoverKind.lorebook) {
       return DiscoverPayload(
         lorebook: Lorebook(

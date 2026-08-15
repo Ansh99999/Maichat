@@ -14,6 +14,19 @@ class DiscoverException implements Exception {
   String toString() => message;
 }
 
+/// Raised when a site will only answer a real browsing context — it served a
+/// bot check rather than the page.
+///
+/// [pageUrl] is the page a browser view should open. Once the check clears, hand
+/// the resulting HTML to [DiscoverSource.fetchFromHtml] to finish the download.
+/// Kept a distinct type so the UI can offer that route instead of only
+/// apologising.
+class DiscoverChallengeException extends DiscoverException {
+  const DiscoverChallengeException(super.message, this.pageUrl);
+
+  final String pageUrl;
+}
+
 /// A remote catalogue MaiChat can browse: a feed of characters (and, where the
 /// site has them, lorebooks or presets) plus the download that turns one result
 /// into something the app owns.
@@ -61,8 +74,16 @@ abstract class DiscoverSource {
   Future<DiscoverPage> search(DiscoverQuery query);
 
   /// Downloads [item] in full: a character's definition, a lorebook's entries.
-  /// Throws [DiscoverException] when the catalogue will not hand it over.
+  /// Throws [DiscoverException] when the catalogue will not hand it over, or
+  /// [DiscoverChallengeException] when it will only answer a real browser.
   Future<DiscoverPayload> fetch(DiscoverItem item);
+
+  /// Finishes a download from a page a browser view fetched, after
+  /// [DiscoverChallengeException]. Only sources that raise that implement this.
+  Future<DiscoverPayload> fetchFromHtml(DiscoverItem item, String html) =>
+      throw const DiscoverException(
+        'This catalogue does not read downloads from a page.',
+      );
 
   /// Releases the underlying HTTP client.
   void close() {}
@@ -99,6 +120,14 @@ class DiscoverHttp {
   Future<http.Response> getBytes(Uri uri, {Map<String, String>? headers}) =>
       _send(http.Request('GET', uri), headers: headers);
 
+  /// A GET that hands back whatever came, status and all.
+  ///
+  /// A bot check answers 403 with a body worth reading — it is the difference
+  /// between "blocked, try a browser" and "gone" — so this one does not treat a
+  /// status as fatal. Transport failures still throw.
+  Future<http.Response> getRaw(Uri uri, {Map<String, String>? headers}) =>
+      _send(http.Request('GET', uri), headers: headers, allowAnyStatus: true);
+
   /// A GET whose body is decoded as JSON.
   Future<Object?> getJson(Uri uri, {Map<String, String>? headers}) async {
     final response = await _send(
@@ -131,6 +160,7 @@ class DiscoverHttp {
   Future<http.Response> _send(
     http.Request request, {
     Map<String, String>? headers,
+    bool allowAnyStatus = false,
   }) async {
     request.headers.addAll(<String, String>{
       ...discoverHeaders,
@@ -148,7 +178,7 @@ class DiscoverHttp {
       throw DiscoverException('Could not reach ${request.url.host}.');
     }
     final response = await http.Response.fromStream(streamed);
-    if (response.statusCode == 200) return response;
+    if (allowAnyStatus || response.statusCode == 200) return response;
     throw DiscoverException(describeStatus(request.url, response.statusCode));
   }
 

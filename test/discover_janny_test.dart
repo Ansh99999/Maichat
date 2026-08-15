@@ -203,70 +203,236 @@ void main() {
       expect(page.hasMore, isFalse);
     });
 
-    test('a download resolves the card link, then fetches the card', () async {
-      final card = jsonEncode({
-        'spec': 'chara_card_v2',
-        'spec_version': '2.0',
-        'data': {
-          'name': 'Ann',
-          'description': 'A librarian.',
-          'first_mes': 'Shh.',
-        },
+    // Downloading is covered in "the download ladder" below, which drives all
+    // three of its tiers rather than only the card API.
+  });
+
+  group('the download ladder', () {
+    late HttpServer server;
+    late JannySource source;
+    late String base;
+    final paths = <String>[];
+
+    final png = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAABzenr0AAAADUlEQVR42mP8'
+      '/5+BAQAI/AL+6nWJPwAAAABJRU5ErkJggg==',
+    );
+
+    const item = DiscoverItem(
+      sourceId: 'janny',
+      kind: DiscoverKind.character,
+      id: 'uuid-1',
+      name: 'Ann',
+      creator: 'someone',
+      description: 'The site blurb.',
+      tags: ['Female'],
+    );
+
+    /// A page shaped like JannyAI's: the definition inside an Astro island's
+    /// HTML-escaped, `[type, data]`-wrapped props.
+    String characterPage(String imageUrl) {
+      final props = <String, Object?>{
+        'character': <Object?>[
+          0,
+          <String, Object?>{
+            'name': <Object?>[0, 'Ann'],
+            'personality': <Object?>[0, 'A librarian who guards the stacks.'],
+            'scenario': <Object?>[0, 'The reading room, after hours.'],
+            'firstMessage': <Object?>[0, 'Shh.'],
+            'exampleDialogs': <Object?>[0, '<START>\nAnn: Quiet, please.'],
+            'description': <Object?>[0, '<p>A gentle bot.</p>'],
+            'tagIds': <Object?>[
+              1,
+              <Object?>[
+                <Object?>[0, 2],
+              ],
+            ],
+          },
+        ],
+        'imageUrl': <Object?>[0, imageUrl],
+      };
+      final escaped =
+          jsonEncode(props).replaceAll('&', '&amp;').replaceAll('"', '&quot;');
+      return '<!doctype html><html><body>'
+          '<div>Creator: <a href="/c/someone">@someone</a></div>'
+          '<astro-island component-export="CharacterButtons" '
+          'props="$escaped" ssr></astro-island>'
+          '${'<p>filler</p>' * 100}</body></html>';
+    }
+
+    const challengePage = '<!DOCTYPE html><html><head>'
+        '<title>Just a moment...</title></head><body>'
+        '<div id="challenge-platform"></div>'
+        '</body></html>';
+
+    Future<void> serve(
+      Future<void> Function(HttpRequest request, String base) handler,
+    ) async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      base = 'http://${server.address.host}:${server.port}';
+      source = JannySource(
+        searchBase: base,
+        downloadBase: base,
+        imageBase: '$base/bot-avatars',
+        siteBase: base,
+      );
+      server.listen((request) async {
+        paths.add(request.uri.path);
+        await handler(request, base);
       });
+    }
+
+    void writePage(HttpRequest request, String body) {
+      request.response.headers.contentType = ContentType.html;
+      request.response.write(body);
+    }
+
+    setUp(paths.clear);
+    tearDown(() async {
+      source.close();
+      await server.close(force: true);
+    });
+
+    test('the character page is read first, and is enough on its own',
+        () async {
       await serve((request, base) async {
-        if (request.uri.path == '/api/v1/download') {
-          request.response.headers.contentType = ContentType.json;
-          request.response.write(
-            jsonEncode({'status': 'ok', 'downloadUrl': '$base/card.json'}),
-          );
+        if (request.uri.path.startsWith('/characters/')) {
+          writePage(request, characterPage('$base/a.png'));
+        } else if (request.uri.path == '/a.png') {
+          request.response.headers.contentType = ContentType('image', 'png');
+          request.response.add(png);
         } else {
-          request.response.headers.contentType = ContentType.json;
-          request.response.write(card);
+          request.response.statusCode = 500;
         }
         await request.response.close();
       });
 
-      final payload = await source.fetch(const DiscoverItem(
-        sourceId: 'janny',
-        kind: DiscoverKind.character,
-        id: 'uuid-1',
-        name: 'Ann',
-        creator: 'someone',
-        description: 'The site blurb.',
-        tags: ['Female'],
-        thumbnailUrl: 'https://img.example/a.webp',
-      ));
-
-      final character = payload.character!;
+      final character = (await source.fetch(item)).character!;
       expect(character.name, 'Ann');
-      expect(character.description, 'A librarian.');
+      // JannyAI's `personality` is the definition body …
+      expect(character.description, 'A librarian who guards the stacks.');
+      expect(character.personality, isEmpty);
+      // … and its `description` is the blurb, stripped of its markup.
+      expect(character.creatorNotes, 'A gentle bot.');
+      expect(character.scenario, 'The reading room, after hours.');
       expect(character.firstMes, 'Shh.');
-      // The card file carries none of these; the listing does.
+      expect(character.mesExample, '<START>\nAnn: Quiet, please.');
       expect(character.tags, ['Female']);
       expect(character.creator, 'someone');
-      expect(character.creatorNotes, 'The site blurb.');
-      expect(character.avatar, 'https://img.example/a.webp');
-      // The request asked for the character by id.
-      expect(bodies.first, contains('uuid-1'));
+      expect(character.avatar, base64Encode(png));
+      // The older card API was never asked: the page had everything.
+      expect(paths, isNot(contains('/api/v1/download')));
+      expect(paths.first, '/characters/uuid-1_character-ann');
     });
 
-    test('a Cloudflare-blocked download explains the way round it', () async {
+    test('a checked page falls through to the older card API', () async {
+      final card = jsonEncode({
+        'spec': 'chara_card_v2',
+        'spec_version': '2.0',
+        'data': {'name': 'Ann', 'description': 'From the card API.'},
+      });
+      await serve((request, base) async {
+        switch (request.uri.path) {
+          case '/api/v1/download':
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(
+              jsonEncode({'status': 'ok', 'downloadUrl': '$base/card.json'}),
+            );
+          case '/card.json':
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(card);
+          default:
+            // Cloudflare answers the page with a check, 403 and all.
+            request.response.statusCode = 403;
+            writePage(request, challengePage);
+        }
+        await request.response.close();
+      });
+
+      final character = (await source.fetch(item)).character!;
+      expect(character.description, 'From the card API.');
+      expect(paths, contains('/api/v1/download'));
+    });
+
+    test('both routes blocked raises a challenge, naming the page to open',
+        () async {
       await serve((request, _) async {
         request.response.statusCode = 403;
+        writePage(request, challengePage);
         await request.response.close();
       });
 
       await expectLater(
-        source.fetch(const DiscoverItem(
-          sourceId: 'janny',
-          kind: DiscoverKind.character,
-          id: 'uuid-1',
-          name: 'Ann',
-        )),
+        source.fetch(item),
+        throwsA(isA<DiscoverChallengeException>()
+            .having((e) => e.pageUrl, 'pageUrl',
+                '$base/characters/uuid-1_character-ann')
+            .having((e) => e.message, 'message', contains('browser view'))),
+      );
+    });
+
+    test('a page fetched by a browser view finishes the download', () async {
+      await serve((request, base) async {
+        // Everything over HTTP is refused; the HTML comes from the browser view.
+        if (request.uri.path == '/a.png') {
+          request.response.headers.contentType = ContentType('image', 'png');
+          request.response.add(png);
+        } else {
+          request.response.statusCode = 403;
+          writePage(request, challengePage);
+        }
+        await request.response.close();
+      });
+
+      final character = (await source.fetchFromHtml(
+        item,
+        characterPage('$base/a.png'),
+      )).character!;
+      expect(character.description, 'A librarian who guards the stacks.');
+      expect(character.avatar, base64Encode(png));
+    });
+
+    test('a page whose definition the creator hid says exactly that', () async {
+      final hidden = characterPage('https://img.invalid/a.png')
+          .replaceAll('A librarian who guards the stacks.', '')
+          .replaceAll('Shh.', '');
+      await serve((request, _) async {
+        request.response.statusCode = 404;
+        await request.response.close();
+      });
+
+      await expectLater(
+        source.fetchFromHtml(item, hidden),
         throwsA(isA<DiscoverException>().having(
           (e) => e.message,
           'message',
-          allOf(contains('From file'), contains('browser')),
+          contains('carries no definition'),
+        )),
+      );
+    });
+
+    test('a page that no longer holds the character is reported, not guessed',
+        () async {
+      await serve((request, _) async {
+        if (request.uri.path.startsWith('/characters/')) {
+          writePage(
+            request,
+            '<!doctype html><html><body><astro-island '
+            'props="{&quot;other&quot;:[0,1]}"></astro-island>'
+            '${'<p>filler</p>' * 100}</body></html>',
+          );
+        } else {
+          request.response.statusCode = 404;
+        }
+        await request.response.close();
+      });
+
+      await expectLater(
+        source.fetch(item),
+        throwsA(isA<DiscoverException>().having(
+          (e) => e.message,
+          'message',
+          contains('no longer carries the character'),
         )),
       );
     });

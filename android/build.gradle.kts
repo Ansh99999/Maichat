@@ -23,11 +23,13 @@ subprojects {
 // built-in Kotlin — but its library module never gets it, so its Kotlin
 // sources (FilePickerPlugin) don't compile. Supply the plugin ourselves. The
 // same applies to other Kotlin-based plugins pulled in transitively
-// (url_launcher_android, path_provider_android via google_fonts).
+// (url_launcher_android, path_provider_android via google_fonts,
+// webview_flutter_android via Discover's Cloudflare fallback).
 subprojects {
     if (name == "file_picker" ||
         name == "url_launcher_android" ||
-        name == "path_provider_android") {
+        name == "path_provider_android" ||
+        name == "webview_flutter_android") {
         plugins.apply("org.jetbrains.kotlin.android")
     }
 }
