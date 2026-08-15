@@ -1,10 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/text_wrap.dart';
+
 /// Colours + base size for the HTML renderer, mirroring the ChatInterface text
-/// options so an HTML message matches a plain one.
+/// options so an HTML message matches a plain one. [wraps] carries the user's
+/// own symbol pairs, applied to the message source before it becomes HTML.
 class HtmlMessageStyle {
   const HtmlMessageStyle({
     required this.base,
@@ -14,6 +18,7 @@ class HtmlMessageStyle {
     required this.codeForeground,
     required this.link,
     required this.fontSize,
+    this.wraps = const [],
   });
 
   final Color base;
@@ -23,6 +28,7 @@ class HtmlMessageStyle {
   final Color codeForeground;
   final Color link;
   final double fontSize;
+  final List<TextWrapRule> wraps;
 
   @override
   bool operator ==(Object other) =>
@@ -33,7 +39,8 @@ class HtmlMessageStyle {
       other.codeBackground == codeBackground &&
       other.codeForeground == codeForeground &&
       other.link == link &&
-      other.fontSize == fontSize;
+      other.fontSize == fontSize &&
+      listEquals(other.wraps, wraps);
 
   @override
   int get hashCode => Object.hash(
@@ -44,6 +51,7 @@ class HtmlMessageStyle {
         codeForeground,
         link,
         fontSize,
+        Object.hashAll(wraps),
       );
 }
 
@@ -56,12 +64,17 @@ final _curlyQuotes = RegExp(r'[“”„‟]');
 // A tag, a fenced/inline code run, or a "double-quoted" span (captured).
 final _quoteSpan = RegExp(r'<[\s\S]*?>|```[\s\S]*?```|`[^`]*`|("[^"]+")');
 
-/// Converts a message (markdown, possibly with inline/block HTML) to HTML, then
-/// wraps straight-double-quoted spans in <q> so they can be tinted — mirroring
+/// Converts a message (markdown, possibly with inline/block HTML) to HTML,
+/// applying the user's [wraps] to the source first, then wrapping
+/// straight-double-quoted spans in <q> so they can be tinted — mirroring
 /// Agnaistic's showdown + quote-wrap pipeline.
-String messageToHtml(String text) {
+///
+/// The quote marks stay inside the `<q>`: a browser draws them itself from
+/// `q::before`/`::after`, but flutter_html has no generated content, so dropping
+/// them here made every quoted run lose its quotes.
+String messageToHtml(String text, {List<TextWrapRule> wraps = const []}) {
   final html = md.markdownToHtml(
-    text,
+    applyWrapRules(text, wraps),
     extensionSet: md.ExtensionSet.gitHubWeb,
   );
   final normalized =
@@ -69,11 +82,92 @@ String messageToHtml(String text) {
   final quoted = normalized.replaceAllMapped(_quoteSpan, (m) {
     final quoted = m.group(1);
     if (quoted == null) return m.group(0)!;
-    // Drop the surrounding quotes; <q> re-adds a single pair when rendered.
-    return '<q>${quoted.substring(1, quoted.length - 1)}</q>';
+    return '<q>$quoted</q>';
   });
   return resolveFontFamilies(quoted);
 }
+
+// --- text wrapping ----------------------------------------------------------
+
+/// Code runs, masked before wrap rules are applied so a rule can't restyle text
+/// that is meant to be shown verbatim.
+final _codeRun = RegExp(r'```[\s\S]*?```|`[^`\n]*`');
+
+/// Nesting cap for wrapped runs — deep enough for any real message, shallow
+/// enough that pathological input can't recurse without bound.
+const int _maxWrapDepth = 8;
+
+/// Rewrites each run matched by a [TextWrapRule] in the *source* [text] as a
+/// coloured `<span>`, dropping or keeping the markers per rule.
+///
+/// This runs before markdown → HTML rather than after, because a rule's markers
+/// are written as typed: by the time the source is HTML, a `<`/`>` pair has
+/// become `&lt;`/`&gt;` (or been read as a tag) and no longer matches.
+String applyWrapRules(String text, List<TextWrapRule> rules) {
+  final active = activeWrapRules(rules);
+  if (active.isEmpty) return text;
+
+  // Mask code first, restore after, so `<x>` inside backticks stays literal.
+  final codes = <String>[];
+  final masked = text.replaceAllMapped(_codeRun, (m) {
+    codes.add(m.group(0)!);
+    return '${codes.length - 1}';
+  });
+
+  var out = _wrapSource(masked, active, 0);
+  if (codes.isNotEmpty) {
+    out = out.replaceAllMapped(
+      RegExp('(\\d+)'),
+      (m) => codes[int.parse(m.group(1)!)],
+    );
+  }
+  return out;
+}
+
+String _wrapSource(String s, List<TextWrapRule> rules, int depth) {
+  if (depth > _maxWrapDepth) return s;
+  final out = StringBuffer();
+  var i = 0;
+  scan:
+  while (i < s.length) {
+    for (final rule in rules) {
+      if (!s.startsWith(rule.start, i)) continue;
+      final from = i + rule.start.length;
+      final end = s.indexOf(rule.end, from);
+      if (end < from + 1) continue;
+      final inner = s.substring(from, end);
+      // A run that crosses a blank line would straddle two block elements and
+      // leave the span unbalanced, so leave it alone.
+      if (inner.contains('\n\n')) continue;
+      final body = rule.hideMarkers
+          ? _wrapSource(inner, rules, depth + 1)
+          : '${_escape(rule.start)}'
+              '${_wrapSource(inner, rules, depth + 1)}'
+              '${_escape(rule.end)}';
+      // Single-quoted attribute on purpose: the quote-wrapping pass below scans
+      // for double-quoted runs, and a double-quoted attribute here would look
+      // like one.
+      out.write(rule.color == null
+          ? body
+          : "<span style='color: ${_cssColor(rule.color!)}'>$body</span>");
+      i = end + rule.end.length;
+      continue scan;
+    }
+    out.write(s[i]);
+    i++;
+  }
+  return out.toString();
+}
+
+/// Markers are shown as typed, so `<` and `&` have to be escaped on the way
+/// into the HTML.
+String _escape(String s) => s
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+
+String _cssColor(int argb) =>
+    '#${(argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
 // --- font-family ------------------------------------------------------------
 
@@ -210,7 +304,7 @@ class _MessageHtmlState extends State<MessageHtml> {
 
 Widget _html(String text, HtmlMessageStyle s) {
   return Html(
-    data: messageToHtml(text),
+    data: messageToHtml(text, wraps: s.wraps),
     onLinkTap: (url, _, _) => _open(url),
     style: {
       'body': Style(

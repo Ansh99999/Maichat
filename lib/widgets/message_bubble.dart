@@ -683,6 +683,7 @@ class MessageBubble extends StatelessWidget {
             codeForeground: scheme.onSurface,
             link: scheme.primary,
             fontSize: ui.fontSize,
+            wraps: ui.activeTextWrapRules,
           ),
         ),
       );
@@ -710,6 +711,7 @@ class MessageBubble extends StatelessWidget {
           codeBackground: scheme.surfaceContainerLowest,
           codeForeground: scheme.onSurface,
           link: scheme.primary,
+          wraps: ui.activeTextWrapRules,
         ),
       );
     } else {

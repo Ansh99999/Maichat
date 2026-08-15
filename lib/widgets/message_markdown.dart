@@ -1,11 +1,15 @@
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import '../models/text_wrap.dart';
 
 /// Colours and base text style used when turning a message's markdown/HTML into
 /// [InlineSpan]s. [emphasis] tints *italic*/**bold** runs; [quote] tints text
-/// inside "quotes"; code runs use [codeBackground]/[codeForeground]; [link]
-/// tints `<a>`/link text.
+/// inside "quotes" (marks included); code runs use
+/// [codeBackground]/[codeForeground]; [link] tints `<a>`/link text. [wraps]
+/// carries the user's own symbol pairs, tried before any built-in style.
 class MarkdownStyles {
   const MarkdownStyles({
     required this.base,
@@ -14,6 +18,7 @@ class MarkdownStyles {
     required this.codeBackground,
     required this.codeForeground,
     required this.link,
+    this.wraps = const [],
   });
 
   final TextStyle base;
@@ -22,6 +27,7 @@ class MarkdownStyles {
   final Color codeBackground;
   final Color codeForeground;
   final Color link;
+  final List<TextWrapRule> wraps;
 
   @override
   bool operator ==(Object other) =>
@@ -31,7 +37,8 @@ class MarkdownStyles {
       other.quote == quote &&
       other.codeBackground == codeBackground &&
       other.codeForeground == codeForeground &&
-      other.link == link;
+      other.link == link &&
+      listEquals(other.wraps, wraps);
 
   @override
   int get hashCode => Object.hash(
@@ -41,6 +48,7 @@ class MarkdownStyles {
         codeBackground,
         codeForeground,
         link,
+        Object.hashAll(wraps),
       );
 }
 
@@ -157,6 +165,15 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg,
   while (i < s.length) {
     final c = s[i];
 
+    // A user's own wrapping rule. Tried first so a rule that reuses a markdown
+    // marker (`_x_`, `*x*`) wins, rather than being shadowed by the built-in
+    // meaning of that character.
+    final consumedWrap = _wrap(s, i, style, cfg, spans, flush, depth);
+    if (consumedWrap != -1) {
+      i = consumedWrap;
+      continue;
+    }
+
     // Inline HTML tag (<b>, <i>, <code>, <a>, <q>, <mark>, …).
     if (c == '<') {
       final consumed = _htmlInline(s, i, style, cfg, spans, flush, depth);
@@ -249,6 +266,42 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg,
   }
   flush();
   return spans;
+}
+
+/// Applies the first [MarkdownStyles.wraps] rule whose opening marker sits at
+/// [i] and whose closing marker appears later in [s]. Returns the index just
+/// past the consumed run, or -1 when no rule matches (so the character falls
+/// through to the built-in handling).
+///
+/// A rule with no colour still counts as a match: hiding its markers is a use
+/// of its own.
+int _wrap(
+  String s,
+  int i,
+  TextStyle style,
+  MarkdownStyles cfg,
+  List<InlineSpan> spans,
+  void Function() flush,
+  int depth,
+) {
+  for (final rule in cfg.wraps) {
+    // isActive also rules out an empty marker, which would match here forever
+    // without advancing.
+    if (!rule.isActive || !s.startsWith(rule.start, i)) continue;
+    final from = i + rule.start.length;
+    final end = s.indexOf(rule.end, from);
+    // Require something between the markers, so a bare "<>" stays literal.
+    if (end < from + 1) continue;
+    flush();
+    final inner = rule.color == null
+        ? style
+        : style.copyWith(color: Color(rule.color!));
+    if (!rule.hideMarkers) spans.add(TextSpan(text: rule.start, style: inner));
+    spans.addAll(_inline(s.substring(from, end), inner, cfg, depth + 1));
+    if (!rule.hideMarkers) spans.add(TextSpan(text: rule.end, style: inner));
+    return end + rule.end.length;
+  }
+  return -1;
 }
 
 /// Finds the start of a closing run of [marker] for an opener [run] long, not

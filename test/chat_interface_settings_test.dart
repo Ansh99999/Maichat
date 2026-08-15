@@ -176,4 +176,82 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('sits under the message'), findsNothing);
   });
+
+  group('text wrapping', () {
+    /// The section sits at the bottom of a long page; a tall viewport puts the
+    /// whole of it on screen so the taps don't depend on scroll arithmetic.
+    Future<void> pumpTall(WidgetTester tester, AppState state) async {
+      tester.view.physicalSize = const Size(1000, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(host(state));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a rule can be added through the sheet', (tester) async {
+      final state = AppState();
+      await pumpTall(tester, state);
+
+      await tester.tap(find.text('Add wrapping rule'));
+      await tester.pumpAndSettle();
+
+      // Nothing to save until both symbols are given.
+      final save = find.widgetWithText(FilledButton, 'Save');
+      expect(tester.widget<FilledButton>(save).onPressed, isNull);
+
+      await tester.enterText(find.widgetWithText(TextField, 'Start symbol'), '<');
+      await tester.enterText(find.widgetWithText(TextField, 'End symbol'), '>');
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+
+      expect(state.chatInterface.textWrapRules, hasLength(1));
+      final rule = state.chatInterface.textWrapRules.single;
+      expect(rule.start, '<');
+      expect(rule.end, '>');
+      // Hiding the symbols is the default, matching how asterisks behave.
+      expect(rule.hideMarkers, isTrue);
+    });
+
+    testWidgets('a rule can be switched off and removed', (tester) async {
+      final state = AppState();
+      state.updateChatInterface(const ChatInterface(textWrapRules: [
+        TextWrapRule(start: '<', end: '>', color: 0xFFFFCC00),
+      ]));
+      await pumpTall(tester, state);
+
+      // Scope every finder to the rule's own card: the page has other switches,
+      // and the message-actions list has its own delete icon.
+      final card = find.ancestor(
+        of: find.textContaining('symbols hidden'),
+        matching: find.byType(Card),
+      );
+      await tester.tap(find.descendant(of: card, matching: find.byType(Switch)));
+      await tester.pumpAndSettle();
+      expect(state.chatInterface.textWrapRules.single.enabled, isFalse);
+      expect(state.chatInterface.activeTextWrapRules, isEmpty);
+
+      await tester.tap(find.descendant(
+          of: card, matching: find.byIcon(Icons.delete_outline)));
+      await tester.pumpAndSettle();
+      expect(state.chatInterface.textWrapRules, isEmpty);
+    });
+
+    testWidgets('says so when markdown is off', (tester) async {
+      final state = AppState();
+      state.updateChatInterface(const ChatInterface(
+        markdown: false,
+        textWrapRules: [TextWrapRule(start: '<', end: '>')],
+      ));
+      await pumpTall(tester, state);
+      expect(find.textContaining('Markdown is off'), findsOneWidget);
+
+      state.updateChatInterface(
+          state.chatInterface.copyWith(markdown: true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Markdown is off'), findsNothing);
+    });
+  });
 }

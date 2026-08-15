@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maichat/models/text_wrap.dart';
 import 'package:maichat/widgets/message_markdown.dart';
 
 const _emphasis = Color(0xFFFF0000);
@@ -213,5 +214,85 @@ void main() {
     final deep = '${'<b>' * 200}x${'</b>' * 200}';
     final spans = buildMessageSpans(deep, _styles);
     expect(_plain(spans).contains('x'), isTrue);
+  });
+
+  group('text wrapping rules', () {
+    const yellow = Color(0xFFFFCC00);
+    const angle = TextWrapRule(start: '<', end: '>', color: 0xFFFFCC00);
+    MarkdownStyles withRules(List<TextWrapRule> rules) =>
+        MarkdownStyles(
+          base: _styles.base,
+          emphasis: _emphasis,
+          quote: _quote,
+          codeBackground: _codeBg,
+          codeForeground: const Color(0xFF000000),
+          link: _link,
+          wraps: rules,
+        );
+
+    test('a hidden-marker rule colours its run and swallows the markers', () {
+      final spans =
+          buildMessageSpans('he was <furious> then', withRules(const [angle]));
+      expect(_spanWith(spans, 'furious').style?.color, yellow);
+      expect(_plain(spans), 'he was furious then');
+    });
+
+    test('a shown-marker rule keeps the markers, coloured too', () {
+      final spans = buildMessageSpans(
+          'he was <furious> then',
+          withRules([angle.copyWith(hideMarkers: false)]));
+      expect(_plain(spans), 'he was <furious> then');
+      expect(_spanWith(spans, '<').style?.color, yellow);
+      expect(_spanWith(spans, '>').style?.color, yellow);
+    });
+
+    test('a colourless rule only hides its markers', () {
+      final spans = buildMessageSpans(
+          'a (parenthetical) b',
+          withRules(const [TextWrapRule(start: '(', end: ')')]));
+      expect(_plain(spans), 'a parenthetical b');
+      expect(_spanWith(spans, 'parenthetical').style?.color,
+          _styles.base.color);
+    });
+
+    test('markdown inside a wrapped run still parses', () {
+      final spans =
+          buildMessageSpans('<a *very* bad idea>', withRules(const [angle]));
+      expect(_spanWith(spans, 'very').style?.fontStyle, FontStyle.italic);
+    });
+
+    test('a rule beats the built-in meaning of the same marker', () {
+      final spans = buildMessageSpans(
+          'an *aside* here',
+          withRules(const [TextWrapRule(start: '*', end: '*', color: 0xFFFFCC00)]));
+      expect(_spanWith(spans, 'aside').style?.color, yellow);
+      // The rule tints; it does not italicise the way markdown would.
+      expect(_spanWith(spans, 'aside').style?.fontStyle, isNot(FontStyle.italic));
+    });
+
+    test('an unmatched opener stays literal', () {
+      final spans = buildMessageSpans('5 < 7 always', withRules(const [angle]));
+      expect(_plain(spans), '5 < 7 always');
+    });
+
+    test('an empty marker cannot match (it would never advance)', () {
+      final spans = buildMessageSpans(
+          'still fine', withRules(const [TextWrapRule(start: '', end: '>')]));
+      expect(_plain(spans), 'still fine');
+    });
+
+    test('a disabled rule does nothing', () {
+      final spans = buildMessageSpans(
+          'he was <furious>', withRules([angle.copyWith(enabled: false)]));
+      expect(_plain(spans), 'he was <furious>');
+    });
+
+    test('rules are part of the cache key', () {
+      clearMessageSpanCache();
+      final plain = buildMessageSpans('a <b c> d', _styles);
+      final ruled = buildMessageSpans('a <b c> d', withRules(const [angle]));
+      expect(_plain(plain), 'a <b c> d');
+      expect(_plain(ruled), 'a b c d');
+    });
   });
 }

@@ -28,12 +28,74 @@ void main() {
     test('passes raw HTML through', () {
       expect(messageToHtml('<b>x</b>'), contains('<b>'));
     });
-    test('wraps "quoted" spans in <q>', () {
-      expect(messageToHtml('she said "hello" now'), contains('<q>hello</q>'));
+    test('wraps "quoted" spans in <q>, marks kept', () {
+      // flutter_html has no q::before/::after, so the marks have to be in the
+      // element or they vanish from the message.
+      expect(messageToHtml('she said "hello" now'), contains('<q>"hello"</q>'));
     });
     test('builds tables from markdown', () {
       final html = messageToHtml('| a | b |\n|---|---|\n| 1 | 2 |');
       expect(html, contains('<table>'));
+    });
+  });
+
+  group('text wrapping rules', () {
+    const yellow = TextWrapRule(start: '<', end: '>', color: 0xFFFFCC00);
+
+    test('a hidden-marker rule becomes a coloured span, markers dropped', () {
+      final html = messageToHtml('he was <furious> then', wraps: [yellow]);
+      expect(html, contains("<span style='color: #ffcc00'>furious</span>"));
+      expect(html, isNot(contains('&lt;furious&gt;')));
+    });
+
+    test('a shown-marker rule keeps its markers, escaped', () {
+      final html = messageToHtml('he was <furious> then',
+          wraps: [yellow.copyWith(hideMarkers: false)]);
+      expect(html, contains('&lt;furious&gt;'));
+    });
+
+    test('markdown inside a wrapped run still renders', () {
+      final html = messageToHtml('<a *very* bad idea>', wraps: [yellow]);
+      expect(html, contains('<em>very</em>'));
+    });
+
+    test('rules do not touch code runs', () {
+      final html = messageToHtml('use `<div>` here', wraps: [yellow]);
+      expect(html, contains('&lt;div&gt;'));
+      expect(html, isNot(contains("color: #ffcc00")));
+    });
+
+    test('a rule with no colour just hides its markers', () {
+      final html = messageToHtml('a <b c> d',
+          wraps: [const TextWrapRule(start: '<', end: '>')]);
+      expect(html, contains('a b c d'));
+      expect(html, isNot(contains('<span')));
+    });
+
+    test('an unmatched opener is left as typed', () {
+      expect(messageToHtml('5 < 7 always', wraps: [yellow]),
+          isNot(contains('<span')));
+    });
+
+    test('an invalid rule is ignored', () {
+      const empty = TextWrapRule(start: '', end: '>');
+      expect(empty.isValid, isFalse);
+      expect(applyWrapRules('anything at all', const [empty]),
+          'anything at all');
+    });
+
+    test('nested rules both apply', () {
+      final html = messageToHtml('<outer (inner) done>', wraps: [
+        yellow,
+        const TextWrapRule(start: '(', end: ')', color: 0xFF00FF00),
+      ]);
+      expect(html, contains('#ffcc00'));
+      expect(html, contains('#00ff00'));
+    });
+
+    test('a run crossing a blank line is left alone', () {
+      final html = messageToHtml('<one\n\ntwo>', wraps: [yellow]);
+      expect(html, isNot(contains('#ffcc00')));
     });
   });
 

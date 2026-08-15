@@ -423,4 +423,59 @@ void main() {
       expect(ContentWidth.wide.maxWidthFor(360), 360 - 24);
     });
   });
+
+  group('text wrapping rules', () {
+    const angle = TextWrapRule(start: '<', end: '>', color: 0xFFFFCC00);
+
+    test('none by default, and none written to JSON', () {
+      expect(const ChatInterface().textWrapRules, isEmpty);
+      expect(const ChatInterface().toJson().containsKey('textWrapRules'),
+          isFalse);
+    });
+
+    test('rules round trip, in order', () {
+      final custom = const ChatInterface().copyWith(textWrapRules: const [
+        angle,
+        TextWrapRule(start: '((', end: '))', hideMarkers: false),
+      ]);
+      final restored = ChatInterface.fromJson(custom.toJson());
+      expect(restored, custom);
+      expect(restored.textWrapRules.first.start, '<');
+      expect(restored.textWrapRules.last.hideMarkers, isFalse);
+    });
+
+    test('a rule differing only in colour is a different config', () {
+      final a = const ChatInterface().copyWith(textWrapRules: const [angle]);
+      final b = const ChatInterface()
+          .copyWith(textWrapRules: [angle.copyWith(color: 0xFF00FF00)]);
+      expect(a, isNot(b));
+      expect(a.hashCode, isNot(b.hashCode));
+    });
+
+    test('a stored rule with a missing marker is dropped, not fatal', () {
+      final json = const ChatInterface().toJson()
+        ..['textWrapRules'] = [
+          {'start': '', 'end': '>'},
+          {'start': '[', 'end': ']'},
+        ];
+      final restored = ChatInterface.fromJson(json);
+      expect(restored.textWrapRules, hasLength(1));
+      expect(restored.textWrapRules.single.start, '[');
+    });
+
+    test('activeTextWrapRules drops the disabled ones', () {
+      final ui = const ChatInterface().copyWith(textWrapRules: [
+        angle,
+        angle.copyWith(start: '~', end: '~', enabled: false),
+      ]);
+      expect(ui.textWrapRules, hasLength(2));
+      expect(ui.activeTextWrapRules, hasLength(1));
+    });
+
+    test('a colour clears back to "follows the text"', () {
+      expect(angle.copyWith(color: null).color, isNull);
+      // …and a copyWith that says nothing about the colour keeps it.
+      expect(angle.copyWith(hideMarkers: false).color, 0xFFFFCC00);
+    });
+  });
 }

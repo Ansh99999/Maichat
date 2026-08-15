@@ -1,6 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'text_wrap.dart';
+
+export 'text_wrap.dart';
+
 /// Bounds the avatar-size slider (and the drag-to-resize handle) honour, in
 /// logical pixels. For [AvatarFit.free] this is the longest side of the frame.
 ///
@@ -614,6 +618,7 @@ class ChatInterface {
     this.backgroundColor,
     this.emphasisColor,
     this.quoteColor,
+    this.textWrapRules = const [],
     this.messageActionsEnabled = true,
     this.messageActions = kDefaultMessageActions,
     this.actionBarPlacement = ActionBarPlacement.belowMessage,
@@ -677,6 +682,15 @@ class ChatInterface {
   /// Colour for text inside "quotes"; null follows the text.
   final int? quoteColor;
 
+  /// User-defined symbol pairs that tint what they wrap — the general case of
+  /// what `*` and `"` do, with the markers hidden or kept per rule. Applied in
+  /// order, ahead of the built-in markdown styles, so a rule wins any collision
+  /// with them.
+  final List<TextWrapRule> textWrapRules;
+
+  /// The wrap rules a renderer should actually apply.
+  List<TextWrapRule> get activeTextWrapRules => activeWrapRules(textWrapRules);
+
   /// Whether the inline per-message action bar is shown at all. When off, only
   /// the long-press action sheet remains.
   final bool messageActionsEnabled;
@@ -728,6 +742,7 @@ class ChatInterface {
     Object? backgroundColor = _unset,
     Object? emphasisColor = _unset,
     Object? quoteColor = _unset,
+    List<TextWrapRule>? textWrapRules,
     bool? messageActionsEnabled,
     List<MessageActionPref>? messageActions,
     ActionBarPlacement? actionBarPlacement,
@@ -755,6 +770,7 @@ class ChatInterface {
         backgroundColor: _pick(backgroundColor, this.backgroundColor),
         emphasisColor: _pick(emphasisColor, this.emphasisColor),
         quoteColor: _pick(quoteColor, this.quoteColor),
+        textWrapRules: textWrapRules ?? this.textWrapRules,
         messageActionsEnabled:
             messageActionsEnabled ?? this.messageActionsEnabled,
         messageActions: messageActions ?? this.messageActions,
@@ -814,6 +830,8 @@ class ChatInterface {
         if (backgroundColor != null) 'backgroundColor': backgroundColor,
         if (emphasisColor != null) 'emphasisColor': emphasisColor,
         if (quoteColor != null) 'quoteColor': quoteColor,
+        if (textWrapRules.isNotEmpty)
+          'textWrapRules': textWrapRules.map((r) => r.toJson()).toList(),
         'messageActionsEnabled': messageActionsEnabled,
         'messageActions': messageActions.map((p) => p.toJson()).toList(),
         'actionBarPlacement': actionBarPlacement.name,
@@ -871,6 +889,7 @@ class ChatInterface {
       backgroundColor: (json['backgroundColor'] as num?)?.toInt(),
       emphasisColor: (json['emphasisColor'] as num?)?.toInt(),
       quoteColor: (json['quoteColor'] as num?)?.toInt(),
+      textWrapRules: textWrapRulesFromJson(json['textWrapRules']),
       messageActionsEnabled: json['messageActionsEnabled'] as bool? ?? true,
       messageActions: _messageActionsFromJson(json['messageActions']),
       actionBarPlacement:
@@ -941,6 +960,7 @@ class ChatInterface {
       other.backgroundColor == backgroundColor &&
       other.emphasisColor == emphasisColor &&
       other.quoteColor == quoteColor &&
+      listEquals(other.textWrapRules, textWrapRules) &&
       other.messageActionsEnabled == messageActionsEnabled &&
       listEquals(other.messageActions, messageActions) &&
       other.actionBarPlacement == actionBarPlacement;
@@ -964,7 +984,9 @@ class ChatInterface {
         botBubbleColor,
         backgroundColor,
         emphasisColor,
-        quoteColor,
+        // Folded together because Object.hash takes at most 20 arguments and
+        // this list is already at that ceiling.
+        Object.hash(quoteColor, Object.hashAll(textWrapRules)),
         Object.hash(messageActionsEnabled, actionBarPlacement),
         Object.hashAll(messageActions),
       );
