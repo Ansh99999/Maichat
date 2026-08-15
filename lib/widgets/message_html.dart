@@ -131,10 +131,9 @@ String _wrapSource(String s, List<TextWrapRule> rules, int depth) {
   scan:
   while (i < s.length) {
     for (final rule in rules) {
-      if (!s.startsWith(rule.start, i)) continue;
-      final from = i + rule.start.length;
-      final end = s.indexOf(rule.end, from);
-      if (end < from + 1) continue;
+      final match = matchWrap(s, i, rule);
+      if (match == null) continue;
+      final (from, end, resume) = match;
       final inner = s.substring(from, end);
       // A run that crosses a blank line would straddle two block elements and
       // leave the span unbalanced, so leave it alone.
@@ -150,7 +149,7 @@ String _wrapSource(String s, List<TextWrapRule> rules, int depth) {
       out.write(rule.color == null
           ? body
           : "<span style='color: ${_cssColor(rule.color!)}'>$body</span>");
-      i = end + rule.end.length;
+      i = resume;
       continue scan;
     }
     out.write(s[i]);

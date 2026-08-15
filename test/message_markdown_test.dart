@@ -294,5 +294,29 @@ void main() {
       expect(_plain(plain), 'a <b c> d');
       expect(_plain(ruled), 'a b c d');
     });
+
+    test("a single-quote rule leaves contractions, and quotes, alone", () {
+      // Deliberately not _quote: the point is that nothing takes the *rule's*
+      // colour here.
+      const ruleColour = Color(0xFF123456);
+      const single = TextWrapRule(start: "'", end: "'", color: 0xFF123456);
+      final spans = buildMessageSpans(
+        'She said "hello there" and it\'s fine, isn\'t it?',
+        withRules(const [single]),
+      );
+      // Nothing is recoloured but the quoted run, which keeps the quote colour.
+      expect(_plain(spans), 'She said "hello there" and it\'s fine, isn\'t it?');
+      expect(_spanWith(spans, 'hello there').style?.color, _quote);
+      expect(_leaves(spans).any((s) => s.style?.color == ruleColour), isFalse);
+    });
+
+    test('a single-quoted phrase does take the rule', () {
+      const single = TextWrapRule(start: "'", end: "'", color: 0xFF123456);
+      final spans = buildMessageSpans(
+          "she thought 'not again' and left", withRules(const [single]));
+      expect(_spanWith(spans, 'not again').style?.color,
+          const Color(0xFF123456));
+      expect(_plain(spans), 'she thought not again and left');
+    });
   });
 }

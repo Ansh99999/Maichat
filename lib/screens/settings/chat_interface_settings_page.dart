@@ -1377,6 +1377,17 @@ class _WrapRuleSheetState extends State<_WrapRuleSheet> {
                   'Off keeps them in the message, the way quotes do'),
             ),
             _colourRow(scheme),
+            if (rule.isValid && rule.start == rule.end)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'The same symbol both ends, so it only pairs at the edges of '
+                  'a word — a contraction like "don\'t" is left alone.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
             const SizedBox(height: 12),
             _preview(rule),
             const SizedBox(height: 16),

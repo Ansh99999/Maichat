@@ -268,10 +268,9 @@ List<InlineSpan> _inline(String s, TextStyle style, MarkdownStyles cfg,
   return spans;
 }
 
-/// Applies the first [MarkdownStyles.wraps] rule whose opening marker sits at
-/// [i] and whose closing marker appears later in [s]. Returns the index just
-/// past the consumed run, or -1 when no rule matches (so the character falls
-/// through to the built-in handling).
+/// Applies the first [MarkdownStyles.wraps] rule that [matchWrap] finds at [i].
+/// Returns the index just past the consumed run, or -1 when no rule matches (so
+/// the character falls through to the built-in handling).
 ///
 /// A rule with no colour still counts as a match: hiding its markers is a use
 /// of its own.
@@ -285,13 +284,9 @@ int _wrap(
   int depth,
 ) {
   for (final rule in cfg.wraps) {
-    // isActive also rules out an empty marker, which would match here forever
-    // without advancing.
-    if (!rule.isActive || !s.startsWith(rule.start, i)) continue;
-    final from = i + rule.start.length;
-    final end = s.indexOf(rule.end, from);
-    // Require something between the markers, so a bare "<>" stays literal.
-    if (end < from + 1) continue;
+    final match = matchWrap(s, i, rule);
+    if (match == null) continue;
+    final (from, end, resume) = match;
     flush();
     final inner = rule.color == null
         ? style
@@ -299,7 +294,7 @@ int _wrap(
     if (!rule.hideMarkers) spans.add(TextSpan(text: rule.start, style: inner));
     spans.addAll(_inline(s.substring(from, end), inner, cfg, depth + 1));
     if (!rule.hideMarkers) spans.add(TextSpan(text: rule.end, style: inner));
-    return end + rule.end.length;
+    return resume;
   }
   return -1;
 }

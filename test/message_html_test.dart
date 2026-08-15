@@ -97,6 +97,24 @@ void main() {
       final html = messageToHtml('<one\n\ntwo>', wraps: [yellow]);
       expect(html, isNot(contains('#ffcc00')));
     });
+
+    test('a single-quote rule does not repaint ordinary prose', () {
+      const single = TextWrapRule(start: "'", end: "'", color: 0xFF0000FF);
+      final html = messageToHtml(
+        'She said "hello there" and it\'s fine, isn\'t it?',
+        wraps: const [single],
+      );
+      // The contractions are punctuation, not delimiters…
+      expect(html, isNot(contains('<span')));
+      // …and the quoted run is still the quoted run.
+      expect(html, contains('<q>"hello there"</q>'));
+    });
+
+    test('a single-quoted phrase is still wrapped', () {
+      const single = TextWrapRule(start: "'", end: "'", color: 0xFF0000FF);
+      expect(messageToHtml("she thought 'not again' then", wraps: const [single]),
+          contains("<span style='color: #0000ff'>not again</span>"));
+    });
   });
 
   group('MessageBubble routing', () {

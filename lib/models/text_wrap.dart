@@ -112,6 +112,45 @@ class TextWrapRule {
 List<TextWrapRule> activeWrapRules(List<TextWrapRule> rules) =>
     [for (final r in rules) if (r.isActive) r];
 
+/// Letters and digits, in any script — the "inside a word" test the matcher
+/// leans on.
+final _wordChar = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+bool _isWordChar(String ch) => _wordChar.hasMatch(ch);
+
+/// Where [rule] matches in [s] starting at [i], as
+/// `(contentStart, contentEnd, resumeAt)`, or null when it does not apply there
+/// — including when the rule is switched off or unusable.
+///
+/// A symmetric pair (`'…'`, `|…|`) is ambiguous in ordinary prose: an apostrophe
+/// belongs to "isn't" far more often than it opens a quotation. So a symmetric
+/// marker only opens where it isn't hanging off the end of a word, only closes
+/// where it isn't hanging off the start of one, and never spans a line break;
+/// a closer that fails those tests is skipped rather than ending the search, so
+/// `'he isn't here'` still wraps the whole phrase. An asymmetric pair like `<…>`
+/// says what it means and gets none of this treatment.
+(int, int, int)? matchWrap(String s, int i, TextWrapRule rule) {
+  if (!rule.isActive || !s.startsWith(rule.start, i)) return null;
+  final symmetric = rule.start == rule.end;
+  if (symmetric && i > 0 && _isWordChar(s[i - 1])) return null;
+  final from = i + rule.start.length;
+  var search = from;
+  while (true) {
+    final end = s.indexOf(rule.end, search);
+    // Nothing left to close with, or nothing between the markers.
+    if (end < from + 1) return null;
+    final resume = end + rule.end.length;
+    if (symmetric) {
+      if (s.substring(from, end).contains('\n')) return null;
+      if (resume < s.length && _isWordChar(s[resume])) {
+        search = resume; // Closes a word, so it isn't a closer. Keep looking.
+        continue;
+      }
+    }
+    return (from, end, resume);
+  }
+}
+
 /// Reads a stored rule list, skipping entries that aren't usable and honouring
 /// [kMaxTextWrapRules].
 List<TextWrapRule> textWrapRulesFromJson(Object? value) {
