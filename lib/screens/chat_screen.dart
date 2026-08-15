@@ -15,6 +15,7 @@ import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
 import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
+import 'chat_memory_panel.dart';
 import 'chats_screen.dart';
 import 'prompt_view_screen.dart';
 import 'presets/chat_preset_panel.dart';
@@ -237,7 +238,6 @@ class _ChatScreenState extends State<ChatScreen> {
         onParticipants: () => _openSection('Participants', Icons.group_outlined),
         onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),
         onEditChat: () => _editChat(state),
-        onMemory: () => _openSection('Memory', Icons.book_outlined),
         onUi: _openAppearance,
         onChatGraph: () =>
             _openSection('Chat Graph', Icons.account_tree_outlined),
@@ -699,11 +699,15 @@ class _TranslucentMenuButton extends StatelessWidget {
   }
 }
 
+/// Which face the chat sidebar is showing: its menu, or one of the panels that
+/// live *inside* the drawer. They replace the menu rather than being pushed as
+/// routes, so backing out of one returns to the menu with the drawer still open.
+enum _DrawerPanel { menu, presets, memory }
+
 /// The chat sidebar. Mirrors agnai's chat menu: an editable chat title on top,
 /// jumps to the other sections, provider/model, and a utility row of chat
 /// actions (settings, image gen, export, restart, delete, notifications).
-/// "Preset" opens an in-drawer panel (list + compact editor) rather than
-/// navigating away.
+/// "Preset" and "Memory" open in-drawer panels rather than navigating away.
 class _ChatDrawer extends StatefulWidget {
   const _ChatDrawer({
     required this.onProfile,
@@ -712,7 +716,6 @@ class _ChatDrawer extends StatefulWidget {
     required this.onParticipants,
     required this.onGallery,
     required this.onEditChat,
-    required this.onMemory,
     required this.onUi,
     required this.onChatGraph,
     required this.onProviderModel,
@@ -730,7 +733,6 @@ class _ChatDrawer extends StatefulWidget {
   final VoidCallback onParticipants;
   final VoidCallback onGallery;
   final VoidCallback onEditChat;
-  final VoidCallback onMemory;
   final VoidCallback onUi;
   final VoidCallback onChatGraph;
   final VoidCallback onProviderModel;
@@ -746,7 +748,7 @@ class _ChatDrawer extends StatefulWidget {
 }
 
 class _ChatDrawerState extends State<_ChatDrawer> {
-  bool _showPresets = false;
+  _DrawerPanel _panel = _DrawerPanel.menu;
 
   /// Runs [action] after the drawer has closed, so the drawer does not sit
   /// open behind whatever the action pushes or shows.
@@ -755,16 +757,29 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     action();
   }
 
+  void _show(_DrawerPanel panel) => setState(() => _panel = panel);
+
   @override
   Widget build(BuildContext context) {
-    if (_showPresets) {
-      return Drawer(
-        child: SafeArea(
-          child: ChatPresetPanel(
-            onBack: () => setState(() => _showPresets = false),
+    switch (_panel) {
+      case _DrawerPanel.presets:
+        return Drawer(
+          child: SafeArea(
+            child: ChatPresetPanel(
+              onBack: () => _show(_DrawerPanel.menu),
+            ),
           ),
-        ),
-      );
+        );
+      case _DrawerPanel.memory:
+        return Drawer(
+          child: SafeArea(
+            child: ChatMemoryPanel(
+              onBack: () => _show(_DrawerPanel.menu),
+            ),
+          ),
+        );
+      case _DrawerPanel.menu:
+        break;
     }
 
     final state = context.watch<AppState>();
@@ -776,6 +791,12 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         ? 'No provider yet'
         : '${active.displayName}${model.isEmpty ? '' : ' · $model'}';
     final presetName = state.presetFor(conversation)?.displayName ?? 'Default';
+    // How much memory this chat is carrying, so the user can see it without
+    // opening the panel. Resolved through AppState so a deleted book is not
+    // counted.
+    final memoryCount = state.lorebooksFor(conversation).length;
+    final memorySubtitle =
+        memoryCount == 0 ? 'None' : '$memoryCount active';
 
     return Drawer(
       child: SafeArea(
@@ -858,12 +879,13 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                     icon: Icons.tune_outlined,
                     label: 'Preset',
                     subtitle: presetName,
-                    onTap: () => setState(() => _showPresets = true),
+                    onTap: () => _show(_DrawerPanel.presets),
                   ),
                   _ChatNavItem(
                     icon: Icons.book_outlined,
                     label: 'Memory',
-                    onTap: () => _close(context, widget.onMemory),
+                    subtitle: memorySubtitle,
+                    onTap: () => _show(_DrawerPanel.memory),
                   ),
                   _ChatNavItem(
                     icon: Icons.palette_outlined,
