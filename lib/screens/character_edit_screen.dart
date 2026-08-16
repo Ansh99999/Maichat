@@ -11,10 +11,20 @@ import '../widgets/avatar_image.dart';
 /// Create or edit a character. Passed a [character] it edits in place;
 /// otherwise it builds a fresh one. Fields are grouped into calm sections
 /// (Identity, Persona, Conversation, Advanced) rather than one long wall.
+///
+/// With [persist] false it edits a *draft*: Save pops the edited copy without
+/// touching the roster or the store, leaving the caller to decide where it
+/// lands. That is how the Chat settings screen collects a change before asking
+/// whether to keep it for one chat or everywhere.
 class CharacterEditScreen extends StatefulWidget {
-  const CharacterEditScreen({super.key, this.character});
+  const CharacterEditScreen({
+    super.key,
+    this.character,
+    this.persist = true,
+  });
 
   final Character? character;
+  final bool persist;
 
   @override
   State<CharacterEditScreen> createState() => _CharacterEditScreenState();
@@ -132,7 +142,12 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final avatar = _effectiveAvatar();
 
-    final character = widget.character ?? Character.empty();
+    // A draft edit must not touch the object the roster is holding, so it is
+    // written onto a copy; an in-place edit keeps mutating the live card as
+    // before, which is what [AppState.saveCharacter] expects.
+    final character = widget.persist
+        ? (widget.character ?? Character.empty())
+        : (widget.character?.clone() ?? Character.empty());
     character
       ..name = _name.text.trim()
       ..avatar = avatar
@@ -155,7 +170,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
           .where((t) => t.isNotEmpty)
           .toList();
 
-    await context.read<AppState>().saveCharacter(character);
+    if (widget.persist) await context.read<AppState>().saveCharacter(character);
     if (mounted) Navigator.of(context).pop(character);
   }
 

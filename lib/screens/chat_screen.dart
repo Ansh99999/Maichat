@@ -10,6 +10,7 @@ import '../models/chat_interface.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../state/app_state.dart';
+import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
@@ -17,6 +18,7 @@ import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
 import 'chat_export.dart';
 import 'chat_memory_panel.dart';
+import 'chat_settings_screen.dart';
 import 'chats_screen.dart';
 import 'prompt_view_screen.dart';
 import 'presets/chat_preset_panel.dart';
@@ -112,38 +114,14 @@ class _ChatScreenState extends State<ChatScreen> {
         }),
       );
 
-  Future<void> _editChat(AppState state) async {
-    final conversation = state.active;
-    final controller = TextEditingController(
-      text: conversation.isEmpty ? '' : conversation.title,
-    );
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename chat'),
-        content: TextField(
-          controller: controller,
-          autofocus: false,
-          decoration: const InputDecoration(labelText: 'Title'),
-          onSubmitted: (v) => Navigator.of(context).pop(v),
+  /// Opens the chat's own settings: title, background, a style of its own, and
+  /// the characters taking part. Replaces the old rename-only dialog — renaming
+  /// is now the first field on that screen.
+  void _editChat(AppState state) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatSettingsScreen(conversationId: state.active.id),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (name != null && name.trim().isNotEmpty) {
-      await state.renameConversation(conversation.id, name);
-    }
-  }
+      );
 
   /// Hands the thread to the export flow, which offers the shapes and then the
   /// file / clipboard chooser.
@@ -223,7 +201,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
     final topInset = MediaQuery.paddingOf(context).top;
-    final ui = state.chatInterface;
+    // A chat can carry chat-style settings of its own; otherwise the app-wide
+    // ones apply.
+    final ui = state.interfaceFor(conversation);
     final bg = ui.backgroundColor != null ? Color(ui.backgroundColor!) : null;
 
     return Scaffold(
@@ -232,7 +212,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onProfile: _goHome,
         onCharacters: _openCharacters,
         onChats: _goChats,
-        onParticipants: () => _openSection('Participants', Icons.group_outlined),
+        onParticipants: () => _editChat(state),
         onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),
         onEditChat: () => _editChat(state),
         onUi: _openAppearance,
@@ -250,6 +230,14 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Stack(
         children: [
+          // This chat's own picture, behind everything and behind nothing else's.
+          if (conversation.backgroundImage != null)
+            Positioned.fill(
+              child: _ChatBackground(
+                image: conversation.backgroundImage!,
+                opacity: conversation.backgroundOpacity,
+              ),
+            ),
           SafeArea(
             child: Column(
               children: [
@@ -282,8 +270,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _messageList(Conversation conversation, AppState state, double top) {
-    final ui = state.chatInterface;
-    final character = state.characterById(conversation.characterId);
+    final ui = state.interfaceFor(conversation);
+    final character = state.characterFor(conversation, conversation.characterId);
     final persona = state.impersonationFor(conversation);
     return ListView.builder(
       controller: _scroll,
@@ -588,8 +576,41 @@ class _ChatScreenState extends State<ChatScreen> {
 /// Edits a message in place, right where it sits in the thread — no dialog. A
 /// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
 /// there is room to type.
-class _InlineMessageEditor extends StatefulWidget {
-  const _InlineMessageEditor({
+/// The picture behind one chat, drawn edge to edge under the thread.
+///
+/// [opacity] is the point of the whole thing: a photograph at full strength
+/// behind running text is unreadable, so the picture is faded towards whatever
+/// the chat's background colour is. A reference that no longer resolves (the
+/// file was swept, the URL went away) draws nothing rather than an error box.
+class _ChatBackground extends StatelessWidget {
+  const _ChatBackground({required this.image, required this.opacity});
+
+  final String image;
+  final double opacity;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final provider = avatarImage(
+      image,
+      displaySize: size.longestSide,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
+    if (provider == null) return const SizedBox.shrink();
+    return IgnorePointer(
+      child: Opacity(
+        opacity: opacity.clamp(0.0, 1.0),
+        child: Image(
+          image: provider,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineMessageEditor extends StatefulWidget {  const _InlineMessageEditor({
     super.key,
     required this.initial,
     required this.onSave,

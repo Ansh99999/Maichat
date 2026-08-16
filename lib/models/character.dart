@@ -257,6 +257,12 @@ class Character {
         updatedAt: DateTime.now(),
       );
 
+  /// A deep copy, identity and timestamps included — the starting point for an
+  /// edit that must not touch the stored card until (and unless) it is saved.
+  /// A [Character] is mutable, so handing the live object to an editor would
+  /// otherwise commit every keystroke to the roster.
+  Character clone() => copyWith()..updatedAt = updatedAt;
+
   /// Our own persistence shape (a superset of every import format), so nothing
   /// is lost across app restarts.
   Map<String, dynamic> toJson() => {

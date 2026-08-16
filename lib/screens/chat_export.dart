@@ -54,7 +54,7 @@ Future<void> exportChat(BuildContext context, Conversation conversation) async {
   // an impersonated identity is what the user's turns are signed with — both
   // ecosystems put a display name on every single turn.
   final state = context.read<AppState>();
-  final character = state.characterById(conversation.characterId);
+  final character = state.characterFor(conversation, conversation.characterId);
   final safe = safeFileName(conversation.title);
   await offerExport(
     context,

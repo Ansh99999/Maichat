@@ -496,10 +496,208 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  /// The thread with [id], or null when there is none. Public so a screen can
+  /// hold an id rather than a [Conversation] object and always read the live one.
+  Conversation? conversationById(String id) => _conversationById(id);
+
   /// The character the user is impersonating in [conversation], or null when
   /// they are speaking as themselves.
   Character? impersonationFor(Conversation conversation) =>
-      characterById(conversation.impersonateId);
+      characterFor(conversation, conversation.impersonateId);
+
+  // --- Per-chat settings ---------------------------------------------------
+
+  /// The chat-style settings that apply to [conversation]: its own copy when it
+  /// has one, otherwise the app-wide settings.
+  ChatInterface interfaceFor(Conversation? conversation) =>
+      conversation?.interfaceOverride ?? _chatInterface;
+
+  /// Whether [conversation] is styled by its own copy rather than the app-wide
+  /// settings.
+  bool hasInterfaceOverride(Conversation conversation) =>
+      conversation.interfaceOverride != null;
+
+  /// The character [id] resolves to *inside* [conversation]: the chat's own
+  /// definition when one is stored and overriding is on, otherwise the roster's.
+  ///
+  /// Everything that reads a character for a thread — the prompt, the bubbles,
+  /// the inspectors — goes through here, so an override is impossible to apply
+  /// in one place and forget in another.
+  Character? characterFor(Conversation? conversation, String? id) {
+    if (id == null) return null;
+    if (conversation != null && conversation.overrideDefinitions) {
+      final override = conversation.characterOverrides[id];
+      if (override != null) return override;
+    }
+    return characterById(id);
+  }
+
+  /// Applies [change] to the thread with [conversationId] and persists.
+  Future<void> _editConversation(
+    String conversationId,
+    void Function(Conversation) change,
+  ) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    change(conversation);
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Sets (or clears, with a null [image]) the picture drawn behind this thread.
+  /// [image] is a `local:` reference into the pictures directory or an http(s)
+  /// URL; [opacity] fades it so text stays readable.
+  Future<void> setChatBackground(
+    String conversationId,
+    String? image, {
+    double? opacity,
+  }) async {
+    await _editConversation(conversationId, (c) {
+      final trimmed = image?.trim();
+      c.backgroundImage =
+          (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+      if (opacity != null) c.backgroundOpacity = opacity.clamp(0, 1).toDouble();
+    });
+    // A background that is no longer referenced is a file nobody will ever look
+    // at again.
+    await _sweepAvatars();
+  }
+
+  /// Writes [bytes] into the pictures directory and returns the `local:`
+  /// reference to persist, or null when there is nowhere to write it.
+  ///
+  /// Kept separate from [setChatBackground] because a picture is chosen while a
+  /// screen is still editing a draft: the file is written straight away, the
+  /// reference is held by the caller, and a file the caller never commits is
+  /// collected by the next sweep.
+  Future<String?> storePicture(Uint8List bytes) async {
+    final store = _avatars;
+    if (store == null || bytes.isEmpty) return null;
+    try {
+      return await store.write(bytes);
+    } catch (error) {
+      debugPrint('MaiChat: could not store a picture ($error)');
+      return null;
+    }
+  }
+
+  /// Gives this thread its own copy of the chat-style settings.
+  Future<void> saveChatInterfaceOverride(
+    String conversationId,
+    ChatInterface ui,
+  ) =>
+      _editConversation(conversationId, (c) {
+        c.interfaceOverride = ChatInterface.fromJson(ui.toJson());
+      });
+
+  /// Drops a thread's own chat-style copy so it follows the app-wide settings
+  /// again — the counterpart of [saveChatInterfaceOverride], for the same reason
+  /// [clearChatPresetOverride] exists.
+  Future<void> clearChatInterfaceOverride(String conversationId) =>
+      _editConversation(conversationId, (c) => c.interfaceOverride = null);
+
+  /// Turns per-chat character definitions on or off for this thread. The stored
+  /// overrides are kept either way, so switching back on restores them.
+  Future<void> setOverrideDefinitions(
+    String conversationId,
+    bool enabled,
+  ) =>
+      _editConversation(
+          conversationId, (c) => c.overrideDefinitions = enabled);
+
+  /// Stores [character] as this thread's own definition of it, leaving the
+  /// roster untouched. Switches overriding on, since an override nobody honours
+  /// is indistinguishable from a lost edit.
+  Future<void> saveChatCharacterOverride(
+    String conversationId,
+    Character character,
+  ) async {
+    await _editConversation(conversationId, (c) {
+      c.characterOverrides[character.id] = character.clone();
+      c.overrideDefinitions = true;
+    });
+    await _storeOverrideAvatar(conversationId, character.id);
+  }
+
+  /// Drops one per-chat definition, so the thread sees the roster's card again.
+  Future<void> clearChatCharacterOverride(
+    String conversationId,
+    String characterId,
+  ) async {
+    await _editConversation(
+        conversationId, (c) => c.characterOverrides.remove(characterId));
+    await _sweepAvatars();
+  }
+
+  /// Moves a per-chat override's picture into the pictures directory, the same
+  /// way [_storeAvatar] does for the roster — an override can carry a freshly
+  /// picked photo, and base64 in the preferences store is what [AvatarStore]
+  /// exists to prevent.
+  Future<void> _storeOverrideAvatar(
+      String conversationId, String characterId) async {
+    final store = _avatars;
+    if (store == null) return;
+    final conversation = _conversationById(conversationId);
+    final override = conversation?.characterOverrides[characterId];
+    if (override == null) return;
+    final stored = await store.adopt(override.avatar);
+    if (stored == override.avatar) return;
+    override.avatar = stored;
+    await _saveConversations();
+  }
+
+  /// Links [character] to an existing thread that had none — the "+" in the
+  /// chat's Characters involved list. Seeds the stored persona snapshot so the
+  /// definition survives the character later being deleted, and drops in the
+  /// greeting when the thread is still empty.
+  Future<void> attachCharacter(
+    String conversationId,
+    Character character,
+  ) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    conversation.characterId = character.id;
+    conversation.characterName = character.displayName;
+    conversation.systemPrompt =
+        _mergedPrompt(character, conversation.systemPrompt);
+    if (conversation.messages.isEmpty) {
+      final swipes = _greetingSwipes(character);
+      if (swipes.isNotEmpty) {
+        conversation.messages.add(
+          ChatMessage(role: 'assistant', swipes: swipes),
+        );
+      }
+    }
+    if (conversation.title.trim().isEmpty ||
+        conversation.title == 'New chat') {
+      conversation.title = character.displayName;
+    }
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Unlinks the thread's character (or its impersonated identity, when
+  /// [impersonation] is set) — "Remove" in the Characters involved list. The
+  /// messages stay; only the definition behind them goes.
+  Future<void> detachCharacter(
+    String conversationId, {
+    bool impersonation = false,
+  }) async {
+    await _editConversation(conversationId, (c) {
+      if (impersonation) {
+        c.impersonateId = null;
+        c.impersonateName = null;
+      } else {
+        final removed = c.characterId;
+        c.characterId = null;
+        c.characterName = null;
+        if (removed != null) c.characterOverrides.remove(removed);
+      }
+    });
+    await _sweepAvatars();
+  }
 
   /// Sets (or clears, when [character] is null) the impersonated identity on the
   /// active thread — the send-bar "impersonate" action. The chosen persona is
@@ -596,13 +794,20 @@ class AppState extends ChangeNotifier {
     await _sweepAvatars();
   }
 
-  /// Deletes picture files no character refers to any more.
+  /// Deletes picture files nothing refers to any more. The keep-list has to name
+  /// every place a picture can be referenced from — a chat's background and a
+  /// per-chat character override both live outside the roster, and a sweep that
+  /// forgot them would delete a picture still on screen.
   Future<void> _sweepAvatars() async {
     final store = _avatars;
     if (store == null || !_writable) return;
     await store.sweep([
       ..._characters.map((c) => c.avatar),
       ..._lorebooks.map((b) => b.thumbnail),
+      for (final c in _conversations) ...[
+        c.backgroundImage ?? '',
+        ...c.characterOverrides.values.map((o) => o.avatar),
+      ],
     ]);
   }
 
@@ -842,7 +1047,7 @@ class AppState extends ChangeNotifier {
     // A character thread keeps its identity and re-seeds the greetings; a plain
     // thread resets to an untitled one.
     if (conversation.hasCharacter) {
-      final character = characterById(conversation.characterId);
+      final character = characterFor(conversation, conversation.characterId);
       if (character != null) {
         final greetings = _greetingSwipes(character);
         if (greetings.isNotEmpty) {
@@ -911,20 +1116,8 @@ class AppState extends ChangeNotifier {
 
   /// A copy under an unused id, for the rare case where an imported thread
   /// claims an id the list already holds.
-  Conversation _renumber(Conversation source) => Conversation(
+  Conversation _renumber(Conversation source) => source.copyAs(
         id: '${DateTime.now().microsecondsSinceEpoch}-${_conversations.length}',
-        title: source.title,
-        messages: source.messages.toList(),
-        updatedAt: source.updatedAt,
-        characterId: source.characterId,
-        characterName: source.characterName,
-        systemPrompt: source.systemPrompt,
-        impersonateId: source.impersonateId,
-        impersonateName: source.impersonateName,
-        presetId: source.presetId,
-        presetOverride: source.presetOverride,
-        variables: Map<String, String>.of(source.variables),
-        lorebookIds: source.lorebookIds.toList(),
       );
 
   /// Sends [text] and streams the reply into a placeholder turn.
@@ -1127,22 +1320,11 @@ class AppState extends ChangeNotifier {
       for (var i = 0; i <= end; i++)
         ChatMessage.fromJson(source.messages[i].toJson()),
     ];
-    final fork = Conversation(
+    final fork = source.copyAs(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       title: '${source.title} (fork)',
       messages: copied,
       updatedAt: DateTime.now(),
-      characterId: source.characterId,
-      characterName: source.characterName,
-      systemPrompt: source.systemPrompt,
-      impersonateId: source.impersonateId,
-      impersonateName: source.impersonateName,
-      presetId: source.presetId,
-      presetOverride: source.presetOverride == null
-          ? null
-          : Preset.fromJson(source.presetOverride!.toJson()),
-      variables: Map<String, String>.from(source.variables),
-      lorebookIds: List<String>.from(source.lorebookIds),
     );
     _conversations.insert(0, fork);
     _activeId = fork.id;
@@ -1336,7 +1518,7 @@ class AppState extends ChangeNotifier {
     // When the user impersonates a character, their identity is injected so the
     // model treats their turns as that persona (mirrors Agnai's user-persona).
     final impersonation = impersonationFor(conversation);
-    final character = characterById(conversation.characterId);
+    final character = characterFor(conversation, conversation.characterId);
     final userName = impersonation?.displayName ?? 'User';
     final persona = impersonation == null
         ? ''

@@ -6,15 +6,19 @@ import '../../models/chat_interface.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../widgets/message_bubble.dart';
+import 'chat_ui_scope.dart';
 
 /// A live mock chat that reflects the current Chat Interface settings and lets
 /// them be tuned by hand. Both avatars are independent: drag either framed
 /// avatar to move it, pull its corner handle to resize it. With names on, each
 /// name label is draggable too — that is how a name is pulled down close to the
 /// message body it labels. Every change writes straight back to the saved
-/// settings (respecting the sync toggles).
+/// settings (respecting the sync toggles), or to [scope]'s draft when one is
+/// given.
 class ChatInterfacePreviewPage extends StatelessWidget {
-  const ChatInterfacePreviewPage({super.key});
+  const ChatInterfacePreviewPage({super.key, this.scope});
+
+  final ChatUiScope? scope;
 
   // A stand-in character so the reply avatar shows a real monogram.
   static final Character _character = Character.empty()..name = 'Aria';
@@ -41,20 +45,35 @@ class ChatInterfacePreviewPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final ui = state.chatInterface;
+    final scope = this.scope;
+    if (scope == null) return _body(context);
+    return ValueListenableBuilder<ChatInterface>(
+      valueListenable: scope.draft,
+      builder: (context, _, _) => _body(context),
+    );
+  }
+
+  Widget _body(BuildContext context) {
+    final scope = this.scope;
+    final ui = scope?.draft.value ?? context.watch<AppState>().chatInterface;
     final bg = ui.backgroundColor != null
         ? Color(ui.backgroundColor!)
         : Theme.of(context).colorScheme.surface;
 
-    void update(ChatInterface next) =>
+    void update(ChatInterface next) {
+      if (scope != null) {
+        scope.draft.value = next;
+      } else {
         context.read<AppState>().updateChatInterface(next);
+      }
+    }
 
     // Every nudge reads the *live* settings rather than this build's snapshot: a
     // finger produces several move events per frame, and against a stale
     // snapshot each one would overwrite the last instead of adding to it — which
     // is most of why dragging felt like it did nothing.
-    ChatInterface live() => context.read<AppState>().chatInterface;
+    ChatInterface live() =>
+        scope?.draft.value ?? context.read<AppState>().chatInterface;
 
     // Nudge/resize the given role's own avatar (sync is honoured by withAvatar).
     void drag(bool isUser, Offset d) {

@@ -1,3 +1,5 @@
+import 'character.dart';
+import 'chat_interface.dart';
 import 'message.dart';
 import 'preset.dart';
 
@@ -15,9 +17,16 @@ class Conversation {
     this.impersonateName,
     this.presetId,
     this.presetOverride,
+    this.backgroundImage,
+    this.backgroundOpacity = 1,
+    this.interfaceOverride,
+    this.overrideDefinitions = false,
+    Map<String, Character>? characterOverrides,
     Map<String, String>? variables,
     List<String>? lorebookIds,
-  })  : variables = variables ?? <String, String>{},
+  })  : characterOverrides =
+            characterOverrides ?? <String, Character>{},
+        variables = variables ?? <String, String>{},
         lorebookIds = lorebookIds ?? <String>[];
 
   final String id;
@@ -51,6 +60,27 @@ class Conversation {
   /// "save for this chat only" case from the in-chat preset editor.
   Preset? presetOverride;
 
+  /// A picture drawn behind this thread only, as an [avatarRef]-style
+  /// `local:<file>` reference (or an `http(s)` URL). [backgroundOpacity] fades
+  /// it towards the chat's background colour, because a full-strength photo
+  /// behind running text is unreadable.
+  String? backgroundImage;
+  double backgroundOpacity;
+
+  /// Chat-style settings for this thread only. Absent (the normal case) means
+  /// the app-wide `ChatInterface` applies; once set it is a full standalone
+  /// copy, so later app-wide changes deliberately do not reach this chat.
+  ChatInterface? interfaceOverride;
+
+  /// Whether [characterOverrides] are honoured. Kept as its own flag so a set of
+  /// per-chat edits can be switched off and back on without losing them.
+  bool overrideDefinitions;
+
+  /// Per-chat character definitions, by [Character.id] — the "save for this
+  /// chat" half of the chat-settings editor. Only consulted while
+  /// [overrideDefinitions] is on.
+  final Map<String, Character> characterOverrides;
+
   /// Per-chat macro variables ({{setvar}}/{{getvar}}), SillyTavern's local scope.
   final Map<String, String> variables;
 
@@ -68,6 +98,48 @@ class Conversation {
       );
 
   bool get isEmpty => messages.isEmpty;
+
+  /// A copy under a new [id], carrying every per-chat setting across — used for
+  /// forking a thread and for renumbering an imported one. Everything mutable is
+  /// copied rather than shared, so the two threads can diverge; [messages]
+  /// defaults to the same turn objects, so a caller that needs those deep-copied
+  /// too passes its own list.
+  ///
+  /// Deliberately field-blind: it round-trips the per-chat overrides through
+  /// JSON, so a setting added to this class is carried by both callers without
+  /// either being touched.
+  Conversation copyAs({
+    required String id,
+    String? title,
+    List<ChatMessage>? messages,
+    DateTime? updatedAt,
+  }) =>
+      Conversation(
+        id: id,
+        title: title ?? this.title,
+        messages: messages ?? this.messages.toList(),
+        updatedAt: updatedAt ?? this.updatedAt,
+        characterId: characterId,
+        characterName: characterName,
+        systemPrompt: systemPrompt,
+        impersonateId: impersonateId,
+        impersonateName: impersonateName,
+        presetId: presetId,
+        presetOverride: presetOverride == null
+            ? null
+            : Preset.fromJson(presetOverride!.toJson()),
+        backgroundImage: backgroundImage,
+        backgroundOpacity: backgroundOpacity,
+        interfaceOverride: interfaceOverride == null
+            ? null
+            : ChatInterface.fromJson(interfaceOverride!.toJson()),
+        overrideDefinitions: overrideDefinitions,
+        characterOverrides: characterOverrides.map(
+          (charId, character) => MapEntry(charId, character.clone()),
+        ),
+        variables: Map<String, String>.of(variables),
+        lorebookIds: lorebookIds.toList(),
+      );
 
   /// Whether this thread is bound to a saved character.
   bool get hasCharacter => characterId != null;
@@ -90,6 +162,16 @@ class Conversation {
         if (impersonateName != null) 'impersonateName': impersonateName,
         if (presetId != null) 'presetId': presetId,
         if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
+        if (backgroundImage != null && backgroundImage!.isNotEmpty)
+          'backgroundImage': backgroundImage,
+        if (backgroundOpacity != 1) 'backgroundOpacity': backgroundOpacity,
+        if (interfaceOverride != null)
+          'interfaceOverride': interfaceOverride!.toJson(),
+        if (overrideDefinitions) 'overrideDefinitions': true,
+        if (characterOverrides.isNotEmpty)
+          'characterOverrides': characterOverrides.map(
+            (id, character) => MapEntry(id, character.toJson()),
+          ),
         if (variables.isNotEmpty) 'variables': variables,
         if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
         'messages': messages.map((m) => m.toJson()).toList(),
@@ -111,6 +193,17 @@ class Conversation {
         presetOverride: json['presetOverride'] is Map<String, dynamic>
             ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)
             : null,
+        backgroundImage: (json['backgroundImage'] as String?)?.trim(),
+        backgroundOpacity:
+            ((json['backgroundOpacity'] as num?)?.toDouble() ?? 1)
+                .clamp(0, 1)
+                .toDouble(),
+        interfaceOverride: json['interfaceOverride'] is Map<String, dynamic>
+            ? ChatInterface.fromJson(
+                json['interfaceOverride'] as Map<String, dynamic>)
+            : null,
+        overrideDefinitions: json['overrideDefinitions'] as bool? ?? false,
+        characterOverrides: _characterMap(json['characterOverrides']),
         variables: (json['variables'] as Map?)?.map(
           (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
         ),
@@ -123,4 +216,19 @@ class Conversation {
             .map(ChatMessage.fromJson)
             .toList(),
       );
+
+  /// Reads the per-chat character definitions, skipping anything that is not a
+  /// card. Null (rather than an empty map) when there are none, so the
+  /// constructor's own default applies.
+  static Map<String, Character>? _characterMap(Object? value) {
+    if (value is! Map) return null;
+    final overrides = <String, Character>{};
+    for (final entry in value.entries) {
+      final card = entry.value;
+      if (card is Map<String, dynamic>) {
+        overrides[entry.key.toString()] = Character.fromJson(card);
+      }
+    }
+    return overrides;
+  }
 }

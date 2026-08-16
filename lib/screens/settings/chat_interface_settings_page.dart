@@ -7,6 +7,7 @@ import '../../widgets/color_picker.dart';
 import '../../widgets/font_picker_row.dart';
 import '../../widgets/message_markdown.dart';
 import 'chat_interface_preview.dart';
+import 'chat_ui_scope.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
 
@@ -14,16 +15,35 @@ import 'setting_highlight.dart';
 /// placement), a separate avatar editor for the character and for you (with an
 /// optional sync), and colour overrides. The eye button opens a live mock chat
 /// where the same options can be tuned by dragging each avatar.
+///
+/// Given a [scope] it edits that draft instead of the app-wide settings — the
+/// same page, serving the per-chat copy from the Chat settings screen.
 class ChatInterfaceSettingsPage extends StatelessWidget {
-  const ChatInterfaceSettingsPage({super.key, this.highlight});
+  const ChatInterfaceSettingsPage({super.key, this.highlight, this.scope});
 
   final SettingAnchor? highlight;
+  final ChatUiScope? scope;
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final ui = state.chatInterface;
-    void update(ChatInterface next) => state.updateChatInterface(next);
+    final scope = this.scope;
+    if (scope == null) {
+      final state = context.watch<AppState>();
+      return _body(context, state.chatInterface, state.updateChatInterface);
+    }
+    return ValueListenableBuilder<ChatInterface>(
+      valueListenable: scope.draft,
+      builder: (context, ui, _) =>
+          _body(context, ui, (next) => scope.draft.value = next),
+    );
+  }
+
+  Widget _body(
+    BuildContext context,
+    ChatInterface ui,
+    void Function(ChatInterface) update,
+  ) {
+    final scope = this.scope;
 
     // Subtle, non-blocking confirmation that a change was applied. Replaces any
     // still-showing note so rapid tweaks don't stack up.
@@ -41,14 +61,14 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chat Interface'),
+        title: Text(scope?.title ?? 'Chat Interface'),
         actions: [
           IconButton(
             tooltip: 'Preview',
             icon: const Icon(Icons.visibility_outlined),
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => const ChatInterfacePreviewPage(),
+                builder: (_) => ChatInterfacePreviewPage(scope: scope),
               ),
             ),
           ),
@@ -62,6 +82,7 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
           16 + MediaQuery.paddingOf(context).bottom,
         ),
         children: [
+          if (scope?.note != null) _ScopeNote(text: scope!.note!),
           _header(context, 'Chat style'),
           SettingHighlight(
             active: highlight == SettingAnchor.textPlacement,
@@ -301,6 +322,41 @@ Widget _header(BuildContext context, String text) => Padding(      padding: cons
             ),
       ),
     );
+
+/// Says whose settings the page is editing, when it is not the app-wide ones.
+class _ScopeNote extends StatelessWidget {
+  const _ScopeNote({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      color: scheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline,
+                size: 18, color: scheme.onSecondaryContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                text,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSecondaryContainer,
+                    ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// Why a "below" name will not land under the avatar in the current layout, or
 /// null when it will. Said out loud in the settings card, because a silent
