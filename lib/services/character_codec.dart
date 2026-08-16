@@ -78,6 +78,29 @@ class CharacterCodec {
     return parseJson(text);
   }
 
+  /// The raw card document inside [bytes], in whatever wrapper it arrived: a
+  /// PNG `chara`/`ccv3` text chunk, a CharX `card.json`, or plain JSON text.
+  /// Returns null when there is no card in there.
+  ///
+  /// [parseBytes] deliberately drops everything [Character] does not hold, and
+  /// `character_book` is the field that matters — a card's own lorebook. A
+  /// caller that wants it needs the document, not the model.
+  static String? cardJsonOf(Uint8List bytes) {
+    if (bytes.isEmpty) return null;
+    if (_looksLikePng(bytes)) {
+      final embedded = _extractPngCard(bytes);
+      if (embedded != null) return embedded;
+    }
+    final charX = _extractCharX(bytes);
+    if (charX != null) return charX.cardJson;
+    if (_looksLikeImage(bytes)) return null;
+    try {
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Parses raw bytes into one or more cards: a PNG holds a single card, while
   /// JSON may be a single card object or an array of them (a bulk export).
   static List<Character> parseCards(Uint8List bytes, {String? filename}) {

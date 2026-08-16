@@ -41,14 +41,32 @@ void main() {
 
     test('tags ride in the same search box as the words', () {
       // The site has no separate tag parameter; its own tag links pass the tag
-      // name as `q`.
+      // name as `q`, and a leading `-` subtracts one.
       final q = source
           .searchUri(const DiscoverQuery(
             search: 'ranger',
             includeTags: ['anime', 'fantasy'],
+            excludeTags: ['gore'],
           ))
           .queryParameters;
-      expect(q['q'], 'ranger anime fantasy');
+      expect(q['q'], 'ranger anime fantasy -gore');
+    });
+
+    test('a popularity order carries its window as its own parameter', () {
+      final week = source
+          .searchUri(const DiscoverQuery(sort: 'favorites:week'))
+          .queryParameters;
+      expect(week['sort'], 'favorites');
+      expect(week['time_window'], 'week');
+
+      final allTime =
+          source.searchUri(const DiscoverQuery(sort: 'favorites')).queryParameters;
+      expect(allTime['sort'], 'favorites');
+      expect(allTime.containsKey('time_window'), isFalse);
+
+      expect(BotbooruSource.splitSort('views:day'), ('views', 'day'));
+      expect(BotbooruSource.splitSort('latest'), ('latest', null));
+      expect(BotbooruSource.splitSort(''), ('latest', null));
     });
 
     test('the adult switch is a positive SFW filter, and only when asked', () {
@@ -124,6 +142,22 @@ void main() {
     test('a post with no file has no thumbnail rather than a broken one', () {
       final item = source.itemFrom(<String, dynamic>{'id': 4, 'filename': ''})!;
       expect(item.thumbnailUrl, isNull);
+    });
+
+    test('the writer tag is the credit, not the uploader', () {
+      // An upload's account is whoever posted it here, which is often not who
+      // wrote the card; the booru credits the writer through a tag.
+      final item = source.itemFrom(<String, dynamic>{
+        'id': 9,
+        'character_name': 'Konata',
+        'filename': 'a.png',
+        'tags': [
+          {'name': 'anime'},
+          {'name': 'writer:kagami', 'category': 'Auto'},
+        ],
+      })!;
+      expect(item.creator, 'kagami');
+      expect(BotbooruSource.writerFrom(const ['anime']), '');
     });
   });
 

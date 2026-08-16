@@ -196,8 +196,10 @@ class DiscoverPage {
   final bool hasMore;
 }
 
-/// What a download produced. Exactly one field is set — which one follows the
-/// item's [DiscoverKind] — so the screen knows where to file it.
+/// What a download produced. Which field is set follows the item's
+/// [DiscoverKind] — except that a character may arrive **with** the lorebook its
+/// card carries, since cards embed their world info in `character_book` and
+/// filing the character without it would leave half a character behind.
 class DiscoverPayload {
   const DiscoverPayload({this.character, this.lorebook, this.preset});
 
@@ -206,6 +208,9 @@ class DiscoverPayload {
   final Preset? preset;
 
   bool get isEmpty => character == null && lorebook == null && preset == null;
+
+  /// Whether this is a character that brought its own lorebook along.
+  bool get hasBoth => character != null && lorebook != null;
 }
 
 /// The few Discover choices worth remembering between sessions: which

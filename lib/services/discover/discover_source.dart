@@ -1,9 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import '../../models/discover.dart';
+import '../../models/lorebook.dart';
+import '../character_codec.dart';
+import '../lorebook_codec.dart';
 
 /// A user-facing failure while browsing or downloading from a catalogue. The
 /// message is written to be shown as-is.
@@ -278,6 +282,40 @@ DateTime? asDate(Object? value) {
     return DateTime.fromMillisecondsSinceEpoch(ms.round());
   }
   return null;
+}
+
+/// The lorebook a card carries in its own `character_book`, or null when it has
+/// none.
+///
+/// Cards on every catalogue we speak to embed their world info this way, and the
+/// character model does not hold it — so without this a download quietly threw
+/// away the half of a character that makes it work. Failure is never fatal: a
+/// book that cannot be read loses the book, not the character.
+Lorebook? embeddedLorebook(Uint8List bytes, {String? name}) {
+  final json = CharacterCodec.cardJsonOf(bytes);
+  if (json == null || json.trim().isEmpty) return null;
+  return lorebookFromCardJson(json, name: name);
+}
+
+/// [embeddedLorebook] for a card that is already a JSON document — the shape a
+/// source builds itself out of a listing.
+Lorebook? lorebookFromCardJson(String json, {String? name}) {
+  List<Lorebook> books;
+  try {
+    books = LorebookCodec.parse(json);
+  } catch (_) {
+    return null;
+  }
+  if (books.isEmpty) return null;
+  final book = books.first;
+  if (book.entries.isEmpty) return null;
+  // A card's book is usually nameless; naming it after the character is what
+  // makes it findable in the Library.
+  final label = name?.trim() ?? '';
+  if (label.isNotEmpty && book.name.trim().isEmpty) {
+    book.name = '$label lorebook';
+  }
+  return book;
 }
 
 /// Strips the HTML these catalogues put in their public blurbs, so a card shows

@@ -63,7 +63,8 @@ void main() {
       expect(q['page'], '2');
       expect(q['limit'], '24');
       expect(q['tags'], 'fantasy,female');
-      expect(q['exclude_tags'], 'gore');
+      // The adult tag joins the exclusions unless adult results were asked for.
+      expect(q['exclude_tags'], 'gore,nsfw');
     });
 
     test('an empty search and sort are absent, not empty', () {
@@ -71,6 +72,26 @@ void main() {
       expect(q.containsKey('query'), isFalse);
       expect(q.containsKey('sort'), isFalse);
       expect(q.containsKey('tags'), isFalse);
+    });
+
+    test('with adult results off, nsfw is excluded server-side', () {
+      // The site has no adult parameter; excluding the tag is how it does it,
+      // and doing it server-side is what keeps a page full.
+      final off = source.searchUri(const DiscoverQuery()).queryParameters;
+      expect(off['exclude_tags'], 'nsfw');
+
+      final on = source.searchUri(const DiscoverQuery(nsfw: true)).queryParameters;
+      expect(on.containsKey('exclude_tags'), isFalse);
+
+      final both = source
+          .searchUri(const DiscoverQuery(excludeTags: ['gore']))
+          .queryParameters;
+      expect(both['exclude_tags'], 'gore,nsfw');
+
+      final already = source
+          .searchUri(const DiscoverQuery(excludeTags: ['nsfw']))
+          .queryParameters;
+      expect(already['exclude_tags'], 'nsfw');
     });
 
     test('the card URL is the image URL plus action=download', () {
@@ -273,6 +294,46 @@ void main() {
       expect(character.name, 'Clean');
       expect(character.creator, 'a');
       expect(character.tags, ['fantasy']);
+    });
+
+    test('a card that ships a lorebook brings it along', () async {
+      // These downloads are v3 cards with `character_book` inside. Filing the
+      // character and dropping the book was the bug this pins.
+      routes['/api/search/cards'] = feed();
+      routes['action=download'] = _pngWithChara(base64Encode(utf8.encode(
+        jsonEncode({
+          'spec': 'chara_card_v3',
+          'spec_version': '3.0',
+          'data': {
+            'name': 'Clean',
+            'description': 'body',
+            'character_book': {
+              'name': '',
+              'entries': [
+                {'keys': ['garona'], 'content': 'a continent', 'enabled': true},
+                {'keys': ['elves'], 'content': 'tall folk', 'enabled': true},
+              ],
+            },
+          },
+        }),
+      )));
+      final page = await source.search(const DiscoverQuery());
+      final payload = await source.fetch(page.items.first);
+
+      expect(payload.hasBoth, isTrue);
+      expect(payload.lorebook?.entries.length, 2);
+      expect(payload.lorebook?.entries.first.content, 'a continent');
+      expect(payload.lorebook?.name, contains('Clean'));
+    });
+
+    test('a card with no lorebook produces no empty book', () async {
+      routes['/api/search/cards'] = feed();
+      routes['action=download'] = _pngWithChara(_card('Clean'));
+      final page = await source.search(const DiscoverQuery());
+      final payload = await source.fetch(page.items.first);
+      expect(payload.character, isNotNull);
+      expect(payload.lorebook, isNull);
+      expect(payload.hasBoth, isFalse);
     });
   });
 }

@@ -193,6 +193,14 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
       _savedCharacterId = character.id;
       message = '${character.displayName} added to Characters';
       open = () => _push(CharacterDetailScreen(characterId: character.id));
+      // A card's own `character_book` rides along with it. Filing the character
+      // and dropping its world info would look like a working download and
+      // behave like a broken character.
+      if (lorebook != null) {
+        await state.addLorebook(lorebook);
+        message = '${character.displayName} and its lorebook '
+            '(${lorebook.entries.length} entries) added';
+      }
     } else if (lorebook != null) {
       await state.addLorebook(lorebook);
       message = '${lorebook.name} added to Lorebooks';

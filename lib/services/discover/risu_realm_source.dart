@@ -270,7 +270,12 @@ class RisuRealmSource extends DiscoverSource {
       await _fillAvatar(character, item);
       if (character.name.trim().isEmpty) character.name = item.name;
       if (character.creator.trim().isEmpty) character.creator = item.creator;
-      return DiscoverPayload(character: character);
+      // Realm's v3 cards carry their world info inline, which is most of why
+      // `json-v3` is worth preferring.
+      return DiscoverPayload(
+        character: character,
+        lorebook: embeddedLorebook(bytes, name: character.name),
+      );
     }
     throw DiscoverException(
       refusal ??

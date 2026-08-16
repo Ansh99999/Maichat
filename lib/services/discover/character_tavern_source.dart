@@ -69,6 +69,12 @@ class CharacterTavernSource extends DiscoverSource {
   /// The site passes its own address bar straight through to this endpoint, so
   /// the parameter names are the ones visible while browsing: `query`, `sort`,
   /// `tags`, `exclude_tags`, `page`, `limit`.
+  ///
+  /// There is no adult switch. The site expresses "no adult results" by adding
+  /// `nsfw` to `exclude_tags`, which is a server-side filter and therefore
+  /// returns full pages; the Character Library extension does the same. Note
+  /// that adult cards are only visible to a signed-in session anyway, so with no
+  /// account this is belt as well as braces.
   Uri searchUri(DiscoverQuery query) {
     final params = <String, String>{
       'limit': '${query.pageSize}',
@@ -81,12 +87,18 @@ class CharacterTavernSource extends DiscoverSource {
     if (query.includeTags.isNotEmpty) {
       params['tags'] = query.includeTags.join(',');
     }
-    if (query.excludeTags.isNotEmpty) {
-      params['exclude_tags'] = query.excludeTags.join(',');
-    }
+    final excluded = <String>[
+      for (final tag in query.excludeTags)
+        if (tag.trim().isNotEmpty) tag.trim(),
+    ];
+    if (!query.nsfw && !excluded.contains(adultTag)) excluded.add(adultTag);
+    if (excluded.isNotEmpty) params['exclude_tags'] = excluded.join(',');
     return Uri.parse('$apiBase/api/search/cards')
         .replace(queryParameters: params);
   }
+
+  /// The tag the site uses to mark adult cards.
+  static const String adultTag = 'nsfw';
 
   @override
   Future<DiscoverPage> search(DiscoverQuery query) async {
@@ -103,9 +115,8 @@ class CharacterTavernSource extends DiscoverSource {
       for (final hit in hits.whereType<Map<String, dynamic>>()) {
         final item = itemFrom(hit);
         if (item == null) continue;
-        // The API has no adult switch of its own — every hit carries `isNSFW`
-        // and the website filters on it. Do the same rather than showing adult
-        // cards to someone who asked not to see them.
+        // The exclude_tags filter does the work; this only catches a card marked
+        // adult by its flag but not by its tags.
         if (!query.nsfw && item.nsfw) continue;
         items.add(item);
       }
@@ -181,7 +192,12 @@ class CharacterTavernSource extends DiscoverSource {
     if (character.tags.isEmpty && item.tags.isNotEmpty) {
       character.tags = List<String>.of(item.tags);
     }
-    return DiscoverPayload(character: character);
+    // These cards carry their world info in `character_book` — the site says as
+    // much ("the open SillyTavern card and lorebook formats").
+    return DiscoverPayload(
+      character: character,
+      lorebook: embeddedLorebook(response.bodyBytes, name: character.name),
+    );
   }
 
   // --- Tags ----------------------------------------------------------------

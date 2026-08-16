@@ -53,15 +53,33 @@ class BotbooruSource extends DiscoverSource {
   @override
   Set<DiscoverKind> get kinds => const <DiscoverKind>{DiscoverKind.character};
 
+  /// Its search box subtracts a tag with a leading `-`, so exclusion is real.
+  @override
+  bool get supportsTagExclusion => true;
+
   @override
   List<DiscoverSort> sortsFor(DiscoverKind kind) => const <DiscoverSort>[
         DiscoverSort('curated', 'Curated'),
         DiscoverSort('latest', 'Latest'),
-        DiscoverSort('downloads', 'Most downloaded'),
         DiscoverSort('favorites', 'Most favourited'),
+        DiscoverSort('favorites:week', 'Most favourited (week)'),
+        DiscoverSort('favorites:day', 'Most favourited (day)'),
+        DiscoverSort('downloads', 'Most downloaded'),
+        DiscoverSort('downloads:week', 'Most downloaded (week)'),
         DiscoverSort('views', 'Most viewed'),
+        DiscoverSort('views:week', 'Most viewed (week)'),
         DiscoverSort('random', 'Random'),
       ];
+
+  /// The site's popularity orders take their window as a separate `time_window`
+  /// parameter (`day`, `week`, `month`; absent means all time). Ours are spelled
+  /// `sort:window` in one value, because a feed has room for one ordering
+  /// control rather than two.
+  static (String, String?) splitSort(String sort) {
+    final at = sort.indexOf(':');
+    if (at < 0) return (sort.isEmpty ? 'latest' : sort, null);
+    return (sort.substring(0, at), sort.substring(at + 1));
+  }
 
   @override
   void close() => _http.close();
@@ -70,22 +88,28 @@ class BotbooruSource extends DiscoverSource {
 
   /// The feed URL for [query]. Paging is `offset`/`limit`, so a page number has
   /// to be turned into an offset.
+  ///
+  /// Note what the adult switch can and cannot do: anonymous browsing is
+  /// SFW-only server-side whatever the client asks for, so turning it on widens
+  /// nothing without an account. It is still sent honestly.
   Uri searchUri(DiscoverQuery query) {
     final terms = <String>[
       if (query.search.trim().isNotEmpty) query.search.trim(),
       // A tag is just a search term here — the gallery's own tag links pass the
-      // tag name as `q`.
+      // tag name as `q` — and a leading `-` subtracts one.
       for (final tag in query.includeTags)
         if (tag.trim().isNotEmpty) tag.trim(),
+      for (final tag in query.excludeTags)
+        if (tag.trim().isNotEmpty) '-${tag.trim()}',
     ];
+    final (sort, window) = splitSort(query.sort);
     final params = <String, String>{
-      'sort': query.sort.isEmpty ? 'latest' : query.sort,
+      'sort': sort,
       'limit': '${query.pageSize}',
       'offset': '${(query.page - 1) * query.pageSize}',
     };
+    if (window != null) params['time_window'] = window;
     if (terms.isNotEmpty) params['q'] = terms.join(' ');
-    // Adult uploads are the default; the site's switch is a positive SFW filter
-    // rather than an NSFW one. (Its NSFL tier stays server-side regardless.)
     if (!query.nsfw) params['sfw_only'] = 'true';
     return Uri.parse('$siteBase/posts/').replace(queryParameters: params);
   }
@@ -127,19 +151,20 @@ class BotbooruSource extends DiscoverSource {
     // site.
     final metaName = asString(pick(post, ['meta_name'])).trim();
     final cardName = asString(pick(post, ['character_name'])).trim();
+    final tags = tagNames(post['tags']);
     return DiscoverItem(
       sourceId: id,
       kind: DiscoverKind.character,
       id: postId,
       name: metaName.isNotEmpty ? metaName : cardName,
-      // Uploads carry an uploader id, not a name; the definition's own creator
-      // arrives with the card at download time.
-      creator: '',
+      // The booru credits the card's writer through a `writer:` tag, since an
+      // upload's own account is the uploader, who is often someone else.
+      creator: writerFrom(tags),
       tagline: stripHtml(asString(pick(post, ['tagline']))),
       description: stripHtml(asString(
         pick(post, ['description_excerpt', 'creator_notes_excerpt']),
       )),
-      tags: tagNames(post['tags']),
+      tags: tags,
       thumbnailUrl: previewUrl(filename, previewSize, revision),
       imageUrl: previewUrl(filename, avatarSize, revision),
       pageUrl: '$siteBase/character/$postId',
@@ -165,6 +190,19 @@ class BotbooruSource extends DiscoverSource {
       if (trimmed.isNotEmpty) names.add(trimmed);
     }
     return names;
+  }
+
+  /// The card's writer, read off the `writer:` tag the booru uses to credit
+  /// whoever wrote the card — as distinct from whoever uploaded it here.
+  static String writerFrom(List<String> tags) {
+    for (final tag in tags) {
+      final lower = tag.toLowerCase();
+      if (lower.startsWith('writer:')) {
+        final name = tag.substring('writer:'.length).trim();
+        if (name.isNotEmpty) return name;
+      }
+    }
+    return '';
   }
 
   /// A resized thumbnail. [revision] busts the CDN after an image is replaced in
@@ -203,8 +241,14 @@ class BotbooruSource extends DiscoverSource {
     if (character.tags.isEmpty && item.tags.isNotEmpty) {
       character.tags = List<String>.of(item.tags);
     }
+    if (character.creator.trim().isEmpty && item.creator.isNotEmpty) {
+      character.creator = item.creator;
+    }
     await _fillAvatar(character, item);
-    return DiscoverPayload(character: character);
+    return DiscoverPayload(
+      character: character,
+      lorebook: embeddedLorebook(response.bodyBytes, name: character.name),
+    );
   }
 
   /// The JSON card has no picture of its own — only a link to the booru's
