@@ -1,12 +1,19 @@
 import '../../models/discover.dart';
+import 'botbooru_source.dart';
+import 'character_tavern_source.dart';
 import 'chub_source.dart';
 import 'discover_source.dart';
 import 'janny_source.dart';
+import 'risu_realm_source.dart';
 
+export 'botbooru_source.dart';
 export 'browser_clearance.dart';
+export 'character_tavern_source.dart';
 export 'chub_source.dart';
 export 'discover_source.dart';
 export 'janny_source.dart';
+export 'risu_realm_source.dart';
+export 'sveltekit_data.dart';
 
 /// The catalogues Discover can browse, in the order their chips appear.
 ///
@@ -15,6 +22,9 @@ export 'janny_source.dart';
 /// for as long as the Discover screen does.
 List<DiscoverSource> buildDiscoverSources() => <DiscoverSource>[
       ChubSource(),
+      CharacterTavernSource(),
+      RisuRealmSource(),
+      BotbooruSource(),
       JannySource(),
     ];
 

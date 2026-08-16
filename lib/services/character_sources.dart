@@ -314,7 +314,21 @@ class UrlSource extends CharacterSource {
     throw CharacterParseException(JannyAiSource.guidance);
   }
 
-  /// RisuAI realm: `/character/<uuid>` → the `png-v3` card download.
+  /// RisuAI realm: `/character/<uuid>` → the documented card download.
+  ///
+  /// One format is not enough, which is why this used to fail on perfectly good
+  /// links. A card built with assets — RisuAI's own CharX — refuses `png-v3`
+  /// with 403 "This card is not allowed to be downloaded in this format", and
+  /// three of six cards sampled off Realm's own front page were that kind. So
+  /// the documented formats are tried cheapest first, and when every one is
+  /// refused it is Realm's own wording that gets shown, since "the link returned
+  /// HTTP 403" explains nothing.
+  static const List<String> risuFormats = <String>[
+    'json-v3',
+    'png-v3',
+    'charx-v3',
+  ];
+
   static Future<SourcePayload> _fetchRisu(Uri uri) async {
     final last = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
     final uuid = RegExp(r'[a-f0-9-]{16,}').firstMatch(last)?.group(0);
@@ -323,12 +337,70 @@ class UrlSource extends CharacterSource {
         'Could not find a RisuAI character id in that link.',
       );
     }
-    final response = await _get(
-      Uri.parse(
-        'https://realm.risuai.net/api/v1/download/png-v3/$uuid?non_commercial=true',
-      ),
+    return fetchRisuCard(uuid);
+  }
+
+  /// Walks [risuFormats] for [uuid]. [apiBase] exists so tests can point this at
+  /// a loopback server.
+  static Future<SourcePayload> fetchRisuCard(
+    String uuid, {
+    String apiBase = 'https://realm.risuai.net',
+  }) async {
+    String? refusal;
+    var reached = false;
+    for (final format in risuFormats) {
+      final target = Uri.parse(
+        '$apiBase/api/v1/download/$format/$uuid?non_commercial=true',
+      );
+      http.Response response;
+      try {
+        response = await http.get(target, headers: {
+          ..._browserHeaders,
+          'Referer': '$apiBase/character/$uuid',
+        }).timeout(const Duration(seconds: 60));
+      } catch (_) {
+        continue;
+      }
+      reached = true;
+      // Realm reports a refused format in the body, sometimes under a 200, so
+      // the body is what decides.
+      final complaint = _risuRefusal(response.bodyBytes);
+      if (complaint != null) {
+        refusal ??= complaint;
+        continue;
+      }
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) continue;
+      final extension = format.startsWith('charx')
+          ? 'charx'
+          : (format.startsWith('png') ? 'png' : 'json');
+      return SourcePayload(response.bodyBytes, filename: '$uuid.$extension');
+    }
+    if (!reached) {
+      throw CharacterParseException('Could not reach realm.risuai.net.');
+    }
+    throw CharacterParseException(
+      refusal ??
+          'RisuAI would not hand over that card in any format the app can '
+              'read.',
     );
-    return SourcePayload(response.bodyBytes, filename: '$uuid.png');
+  }
+
+  /// Realm's complaint about a download, or null when the bytes are a card.
+  ///
+  /// Only a JSON body can be an error — and a `json-v3` card is JSON too, so it
+  /// takes reading the keys, not the shape.
+  static String? _risuRefusal(Uint8List bytes) {
+    if (bytes.isEmpty || bytes.first != 0x7b) return null; // not '{'
+    Object? decoded;
+    try {
+      decoded = jsonDecode(utf8.decode(bytes));
+    } catch (_) {
+      return null;
+    }
+    if (decoded is! Map) return null;
+    final message = decoded['message'] ?? decoded['error'];
+    if (message is! String || message.trim().isEmpty) return null;
+    return 'RisuAI declined that download: ${message.trim()}';
   }
 }
 
