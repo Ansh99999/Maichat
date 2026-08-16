@@ -93,11 +93,57 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   }
 
   void _open(DiscoverItem item) {
-    final source = _controller.source;
+    // The section may be borrowing another catalogue's shelf, and the download
+    // has to go to whoever actually answered.
+    final source = _controller.effectiveSource;
     if (source == null) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => DiscoverItemScreen(item: item, source: source),
+      ),
+    );
+  }
+
+  /// Explains, on request, where this section's results come from and what a
+  /// download brings with it. The two facts worth knowing are both invisible
+  /// otherwise: that a catalogue without lorebooks of its own shows Chub's, and
+  /// that a character stitched to a lorebook arrives with it.
+  void _explainSection() {
+    final chosen = _controller.source?.label ?? 'This catalogue';
+    final borrowed = _controller.borrowedFrom;
+    final section = _controller.kind.label.toLowerCase();
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.info_outline),
+        title: Text('About $section here'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (borrowed != null)
+              Text(
+                '$chosen does not publish $section of its own, so these are '
+                '${borrowed.label}\'s. Downloading one files it in your Library '
+                'exactly the same way.',
+              )
+            else
+              Text('These $section come from $chosen.'),
+            const SizedBox(height: 14),
+            const Text(
+              'A character with a lorebook stitched into its card brings that '
+              'lorebook with it: download the character and the book is filed '
+              'under Lorebooks in your Library at the same time. You do not '
+              'need to find it here.',
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Got it'),
+          ),
+        ],
       ),
     );
   }
@@ -149,8 +195,18 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
                 SliverAppBar.large(
-                  title: Text(_controller.source?.label ?? 'Discover'),
+                  title: _title(),
                   actions: [
+                    IconButton(
+                      tooltip: 'Where these come from',
+                      // Tinted when the shelf is not this catalogue's own, so
+                      // the explanation advertises itself.
+                      color: _controller.borrowedFrom == null
+                          ? null
+                          : Theme.of(context).colorScheme.primary,
+                      icon: const Icon(Icons.info_outline),
+                      onPressed: _explainSection,
+                    ),
                     IconButton(
                       tooltip: 'Filters',
                       isSelected: activeFilters > 0,
@@ -175,11 +231,32 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     );
   }
 
+  /// The catalogue being browsed, with a line underneath when this section's
+  /// results are somebody else's.
+  Widget _title() {
+    final label = _controller.source?.label ?? 'Discover';
+    final borrowed = _controller.borrowedFrom;
+    if (borrowed == null) return Text(label);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label),
+        Text(
+          '${_controller.kind.label} from ${borrowed.label}',
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+      ],
+    );
+  }
+
   Widget _searchField() => Padding(
         padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
         child: SearchBar(
           controller: _search,
-          hintText: 'Search ${_controller.source?.label ?? 'catalogues'}',
+          hintText: 'Search ${_controller.effectiveSource?.label ?? 'catalogues'}',
           leading: const Icon(Icons.search),
           trailing: [
             if (_search.text.isNotEmpty)
@@ -219,29 +296,6 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     'presets yet. Import one from a file in Presets, or paste '
                     'a SillyTavern preset there.'
                 : 'None of the sites MaiChat can browse publish these yet.',
-          ),
-        ),
-      ];
-    }
-
-    // The catalogue is a choice that holds across sections, so a section it does
-    // not publish says so rather than silently serving another site's results.
-    if (!_controller.sectionSupported) {
-      final label = _controller.source?.label ?? 'This catalogue';
-      final section = _controller.kind.label.toLowerCase();
-      final elsewhere = _controller.available;
-      return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: _Message(
-            icon: Icons.menu_book_outlined,
-            title: '$label has no $section',
-            body: elsewhere.isEmpty
-                ? '$label publishes characters only.'
-                : '$label publishes characters only. '
-                    '${elsewhere.map((s) => s.label).join(', ')} '
-                    '${elsewhere.length == 1 ? 'does' : 'do'} have $section — '
-                    'pick one from the menu.',
           ),
         ),
       ];

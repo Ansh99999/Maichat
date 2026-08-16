@@ -2,7 +2,9 @@ import 'dart:convert';
 
 import '../../models/character.dart';
 import '../../models/discover.dart';
+import '../../models/lorebook.dart';
 import '../character_codec.dart';
+import '../lorebook_codec.dart';
 import 'discover_source.dart';
 
 /// Botbooru (botbooru.com) — a booru for character cards: tagged uploads, many
@@ -51,25 +53,36 @@ class BotbooruSource extends DiscoverSource {
   String get homeUrl => siteBase;
 
   @override
-  Set<DiscoverKind> get kinds => const <DiscoverKind>{DiscoverKind.character};
+  Set<DiscoverKind> get kinds =>
+      const <DiscoverKind>{DiscoverKind.character, DiscoverKind.lorebook};
 
   /// Its search box subtracts a tag with a leading `-`, so exclusion is real.
   @override
   bool get supportsTagExclusion => true;
 
   @override
-  List<DiscoverSort> sortsFor(DiscoverKind kind) => const <DiscoverSort>[
-        DiscoverSort('curated', 'Curated'),
-        DiscoverSort('latest', 'Latest'),
-        DiscoverSort('favorites', 'Most favourited'),
-        DiscoverSort('favorites:week', 'Most favourited (week)'),
-        DiscoverSort('favorites:day', 'Most favourited (day)'),
-        DiscoverSort('downloads', 'Most downloaded'),
-        DiscoverSort('downloads:week', 'Most downloaded (week)'),
-        DiscoverSort('views', 'Most viewed'),
-        DiscoverSort('views:week', 'Most viewed (week)'),
-        DiscoverSort('random', 'Random'),
-      ];
+  List<DiscoverSort> sortsFor(DiscoverKind kind) =>
+      kind == DiscoverKind.lorebook
+          ? const <DiscoverSort>[
+              // The lorebook gallery takes a much shorter list than the card
+              // gallery, and quietly falls back to `latest` for anything else —
+              // `entries` and `tokens` look plausible and are not honoured.
+              DiscoverSort('latest', 'Latest'),
+              DiscoverSort('downloads', 'Most downloaded'),
+              DiscoverSort('favorites', 'Most favourited'),
+            ]
+          : const <DiscoverSort>[
+              DiscoverSort('curated', 'Curated'),
+              DiscoverSort('latest', 'Latest'),
+              DiscoverSort('favorites', 'Most favourited'),
+              DiscoverSort('favorites:week', 'Most favourited (week)'),
+              DiscoverSort('favorites:day', 'Most favourited (day)'),
+              DiscoverSort('downloads', 'Most downloaded'),
+              DiscoverSort('downloads:week', 'Most downloaded (week)'),
+              DiscoverSort('views', 'Most viewed'),
+              DiscoverSort('views:week', 'Most viewed (week)'),
+              DiscoverSort('random', 'Random'),
+            ];
 
   /// The site's popularity orders take their window as a separate `time_window`
   /// parameter (`day`, `week`, `month`; absent means all time). Ours are spelled
@@ -93,6 +106,7 @@ class BotbooruSource extends DiscoverSource {
   /// SFW-only server-side whatever the client asks for, so turning it on widens
   /// nothing without an account. It is still sent honestly.
   Uri searchUri(DiscoverQuery query) {
+    if (query.kind == DiscoverKind.lorebook) return lorebookSearchUri(query);
     final terms = <String>[
       if (query.search.trim().isNotEmpty) query.search.trim(),
       // A tag is just a search term here — the gallery's own tag links pass the
@@ -120,6 +134,24 @@ class BotbooruSource extends DiscoverSource {
     if (decoded is! Map<String, dynamic>) {
       throw const DiscoverException(
         'Botbooru answered its gallery in a shape the app could not read.',
+      );
+    }
+    if (query.kind == DiscoverKind.lorebook) {
+      final list = decoded['items'];
+      final items = <DiscoverItem>[];
+      if (list is List) {
+        for (final book in list.whereType<Map<String, dynamic>>()) {
+          final item = lorebookFrom(book);
+          if (item != null) items.add(item);
+        }
+      }
+      final total = asInt(decoded['total']);
+      final seen = (query.page - 1) * query.pageSize + items.length;
+      return DiscoverPage(
+        items: items,
+        hasMore: total == null
+            ? items.length >= query.pageSize
+            : seen < total && items.isNotEmpty,
       );
     }
     final posts = decoded['posts'];
@@ -214,12 +246,96 @@ class BotbooruSource extends DiscoverSource {
     return '$siteBase/images/preview/$maxEdge/$encoded$bust';
   }
 
+  // --- Lorebooks -----------------------------------------------------------
+
+  /// Botbooru publishes standalone lorebooks as well as cards, on their own
+  /// gallery: `/api/lorebooks`. Note the prefix — the character feed above
+  /// deliberately uses `/posts/`, which their `robots.txt` leaves alone, while
+  /// this one is under the `/api/` it disallows. It is here because it was asked
+  /// for; it is one page per scroll, not a crawl.
+  Uri lorebookSearchUri(DiscoverQuery query) {
+    final params = <String, String>{
+      'sort': query.sort.isEmpty ? 'latest' : query.sort,
+      'limit': '${query.pageSize}',
+      'offset': '${(query.page - 1) * query.pageSize}',
+    };
+    final search = query.search.trim();
+    if (search.isNotEmpty) params['q'] = search;
+    if (!query.nsfw) params['sfw_only'] = 'true';
+    return Uri.parse('$siteBase/api/lorebooks')
+        .replace(queryParameters: params);
+  }
+
+  /// Maps one lorebook listing entry.
+  ///
+  /// The id to keep is **`number`**, not `id`: the download and the page are
+  /// both addressed by the number, and `id` belongs to the upload behind it.
+  DiscoverItem? lorebookFrom(Map<String, dynamic> book) {
+    final number = asString(pick(book, ['number'])).trim();
+    if (number.isEmpty) return null;
+    final cover = asString(pick(book, ['cover_image_filename'])).trim();
+    final rating = asString(pick(book, ['content_rating'])).toLowerCase();
+    return DiscoverItem(
+      sourceId: id,
+      kind: DiscoverKind.lorebook,
+      id: number,
+      name: asString(pick(book, ['title'])).trim(),
+      creator: asString(pick(book, ['uploader_username'])).trim(),
+      tagline: stripHtml(asString(pick(book, ['tagline']))),
+      description: stripHtml(asString(pick(book, ['first_entry_snippet']))),
+      tags: asStringList(pick(book, ['top_keys'])),
+      thumbnailUrl: cover.isEmpty
+          ? null
+          : '$siteBase/images/${Uri.encodeComponent(cover)}',
+      pageUrl: '$siteBase/lorebook/$number',
+      nsfw: rating.isNotEmpty && rating != 'sfw',
+      tokens: asInt(pick(book, ['token_estimate'])),
+      downloads: asInt(pick(book, ['downloads'])),
+      favourites: asInt(pick(book, ['favorite_count'])),
+      entryCount: asInt(pick(book, ['entry_count'])),
+      createdAt: asDate(pick(book, ['created_at'])),
+    );
+  }
+
+  Uri lorebookDownloadUri(String number) =>
+      Uri.parse('$siteBase/api/lorebooks/$number/download.json');
+
+  Future<Lorebook> _fetchLorebook(DiscoverItem item) async {
+    final response = await _http.getBytes(
+      lorebookDownloadUri(item.id),
+      headers: const <String, String>{'Accept': 'application/json,*/*'},
+    );
+    List<Lorebook> books;
+    try {
+      // What comes back is SillyTavern world info — `entries` keyed by index —
+      // which the codec already reads.
+      books = LorebookCodec.parse(utf8.decode(response.bodyBytes));
+    } on FormatException catch (error) {
+      throw DiscoverException(
+        'Botbooru returned this lorebook in a shape the app could not read '
+        '(${error.message}).',
+      );
+    }
+    if (books.isEmpty || books.first.entries.isEmpty) {
+      throw const DiscoverException('That lorebook came back empty.');
+    }
+    final book = books.first;
+    if (item.name.trim().isNotEmpty) book.name = item.name.trim();
+    if (book.description.trim().isEmpty && item.tagline.isNotEmpty) {
+      book.description = item.tagline;
+    }
+    return book;
+  }
+
   // --- Download ------------------------------------------------------------
 
   Uri cardUri(String postId) => Uri.parse('$siteBase/download/json/$postId');
 
   @override
   Future<DiscoverPayload> fetch(DiscoverItem item) async {
+    if (item.kind == DiscoverKind.lorebook) {
+      return DiscoverPayload(lorebook: await _fetchLorebook(item));
+    }
     final response = await _http.getBytes(
       cardUri(item.id),
       headers: const <String, String>{'Accept': 'application/json,*/*'},

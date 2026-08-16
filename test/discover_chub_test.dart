@@ -309,6 +309,109 @@ void main() {
       expect(card.avatar, base64Encode(png));
     });
 
+    /// Chub attaches world info two ways and calls neither of them
+    /// `character_book`, which is how a character's lorebook came to be read and
+    /// then thrown away.
+    group('a character brings its lorebook', () {
+      const item = DiscoverItem(
+        sourceId: 'chub',
+        kind: DiscoverKind.character,
+        id: 'anon/aria',
+        name: 'Aria',
+        creator: 'anon',
+      );
+
+      String detail({
+        Object? embedded,
+        List<Object>? related,
+      }) =>
+          jsonEncode({
+            'node': {
+              'id': 7,
+              'name': 'Aria',
+              'fullPath': 'anon/aria',
+              'related_lorebooks': ?related,
+              'definition': {
+                'name': 'Aria',
+                'personality': 'A ranger.',
+                'first_message': 'Hello.',
+                'embedded_lorebook': ?embedded,
+              },
+            },
+          });
+
+      test('an embedded book is Chub\'s `embedded_lorebook`', () async {
+        await serve({
+          '/api/characters/anon/aria': (_) => detail(embedded: {
+                'name': '',
+                'entries': [
+                  {'keys': ['wood'], 'content': 'The northern wood.',
+                    'enabled': true},
+                ],
+              }),
+        });
+
+        final payload = await source.fetch(item);
+        expect(payload.character?.description, 'A ranger.');
+        expect(payload.hasBoth, isTrue);
+        expect(payload.lorebook?.entries.single.content, 'The northern wood.');
+        expect(payload.lorebook?.name, contains('Aria'));
+        // Nothing needed fetching from the git API for an embedded book.
+        expect(requests.where((r) => r.contains('repository')), isEmpty);
+      });
+
+      test('a linked book comes from the exported card at the latest commit',
+          () async {
+        await serve({
+          '/api/characters/anon/aria': (_) => detail(related: [
+                {'fullPath': 'lorebooks/anon/wood'},
+              ]),
+          '/repository/commits': (_) => jsonEncode([
+                {'id': 'abc123'},
+                {'id': 'older'},
+              ]),
+          'raw%252Fcard.json': (_) => jsonEncode({
+                'data': {
+                  'name': 'Aria',
+                  'character_book': {
+                    'entries': [
+                      {'keys': ['wood'], 'content': 'Linked lore.',
+                        'enabled': true},
+                    ],
+                  },
+                },
+              }),
+        });
+
+        final payload = await source.fetch(item);
+        expect(payload.hasBoth, isTrue);
+        expect(payload.lorebook?.entries.single.content, 'Linked lore.');
+        // The newest commit is the ref; `main` is not one for every project.
+        expect(requests.any((r) => r.contains('ref=abc123')), isTrue);
+      });
+
+      test('a linked book that will not come loses the book, not the character',
+          () async {
+        await serve({
+          '/api/characters/anon/aria': (_) => detail(related: [
+                {'fullPath': 'lorebooks/anon/wood'},
+              ]),
+          // No commits route: the git API answers 404.
+        });
+
+        final payload = await source.fetch(item);
+        expect(payload.character?.name, 'Aria');
+        expect(payload.lorebook, isNull);
+      });
+
+      test('a character with no lore asks the git API nothing', () async {
+        await serve({'/api/characters/anon/aria': (_) => detail()});
+        final payload = await source.fetch(item);
+        expect(payload.lorebook, isNull);
+        expect(requests.where((r) => r.contains('repository')), isEmpty);
+      });
+    });
+
     test('a definition Chub will not hand over says so', () async {
       await serve({
         '/api/characters/anon/aria': (_) => jsonEncode({

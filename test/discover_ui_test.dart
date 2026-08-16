@@ -168,11 +168,11 @@ void main() {
     expect(find.text('Cass'), findsNothing);
   });
 
-  testWidgets('a catalogue with no lorebooks says so instead of switching',
+  testWidgets('a catalogue with no lorebooks borrows the first one that has them',
       (tester) async {
     final state = await ready();
-    // Only the second publishes lorebooks; the first must not be swapped out
-    // from under the user when the section changes.
+    // Only the second publishes lorebooks. The selected catalogue must not be
+    // swapped out from under the user — the shelf is borrowed and owned up to.
     final first = _FakeSource(kinds: const {DiscoverKind.character});
     final second = _FakeSource(
       id: 'other',
@@ -187,8 +187,37 @@ void main() {
     await tester.tap(find.text('Lorebooks'));
     await load(tester);
 
-    expect(find.text('Fake has no lorebooks'), findsOneWidget);
-    expect(find.textContaining('Other'), findsWidgets);
+    // Borrowed results, with the title saying whose they are. (A large app bar
+    // draws its title twice, collapsed and expanded.)
+    expect(find.text('Kingdom'), findsOneWidget);
+    expect(find.text('Lorebooks from Other'), findsWidgets);
+    expect(second.queries.last.kind, DiscoverKind.lorebook);
+    // The catalogue itself is still the one that was chosen.
+    expect(find.text('Fake'), findsWidgets);
+
+    // And the info button explains it.
+    await tester.tap(find.byTooltip('Where these come from'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('does not publish lorebooks of its own'),
+        findsOneWidget);
+    expect(find.textContaining('stitched into its card'), findsOneWidget);
+  });
+
+  testWidgets('a catalogue with its own lorebooks borrows nothing',
+      (tester) async {
+    final state = await ready();
+    final source = _FakeSource();
+    await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
+    await load(tester);
+    await tester.tap(find.text('Lorebooks'));
+    await load(tester);
+
+    expect(find.textContaining('from'), findsNothing);
+    await tester.tap(find.byTooltip('Where these come from'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('come from Fake'), findsOneWidget);
+    // The stitched-lorebook note is worth saying everywhere.
+    expect(find.textContaining('stitched into its card'), findsOneWidget);
   });
 
   testWidgets('a feed that fails offers a retry rather than a blank page',

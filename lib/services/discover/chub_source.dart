@@ -210,13 +210,10 @@ class ChubSource extends DiscoverSource {
     if (item.kind == DiscoverKind.lorebook) {
       return DiscoverPayload(lorebook: await _fetchLorebook(item));
     }
-    return DiscoverPayload(character: await _fetchCharacter(item));
+    return _fetchCharacterPayload(item);
   }
 
-  Uri detailUri(String fullPath) =>
-      Uri.parse('$apiBase/api/characters/$fullPath?full=true');
-
-  Future<Character> _fetchCharacter(DiscoverItem item) async {
+  Future<DiscoverPayload> _fetchCharacterPayload(DiscoverItem item) async {
     final decoded = await _http.getJson(detailUri(item.id));
     final node = decoded is Map ? decoded['node'] : null;
     if (node is! Map<String, dynamic>) {
@@ -231,7 +228,21 @@ class ChubSource extends DiscoverSource {
         'Venus-only, or hidden by its creator.',
       );
     }
+    final character = await _characterFrom(node, definition, item);
+    return DiscoverPayload(
+      character: character,
+      lorebook: await _fetchCharacterLorebook(node, definition, character),
+    );
+  }
 
+  Uri detailUri(String fullPath) =>
+      Uri.parse('$apiBase/api/characters/$fullPath?full=true');
+
+  Future<Character> _characterFrom(
+    Map<String, dynamic> node,
+    Map<String, dynamic> definition,
+    DiscoverItem item,
+  ) async {
     final card = _cardFromDefinition(node, definition, item);
     final character = CharacterCodec.parseJson(jsonEncode(card));
 
@@ -250,6 +261,87 @@ class ChubSource extends DiscoverSource {
       character.avatar = imageUrl;
     }
     return character;
+  }
+
+  /// The lorebook a character brings with it, or null when it has none.
+  ///
+  /// Chub attaches world info two different ways and neither is the spec's:
+  ///
+  /// - **Embedded**, as `definition.embedded_lorebook` — the V2 spec's
+  ///   `character_book` under another name, which [_cardFromDefinition] now maps
+  ///   across so the card carries it.
+  /// - **Linked**, as a book living in its own project, which the API only
+  ///   reports as `related_lorebooks` on the node. The resolved copy exists in
+  ///   the character's *exported* card, in its git repository — so that is where
+  ///   this looks, at the latest commit, exactly as the Character Library
+  ///   extension does.
+  ///
+  /// Either way a failure loses the book, never the character.
+  Future<Lorebook?> _fetchCharacterLorebook(
+    Map<String, dynamic> node,
+    Map<String, dynamic> definition,
+    Character character,
+  ) async {
+    final embedded = pick(definition, ['embedded_lorebook', 'character_book']);
+    if (embedded is Map && embedded.isNotEmpty) {
+      final book = lorebookFromCardJson(
+        // The character's name rides along so the codec can name the book after
+        // it, the way it does for a card imported from a file.
+        jsonEncode(<String, dynamic>{
+          'data': <String, dynamic>{
+            'name': character.name,
+            'character_book': embedded,
+          },
+        }),
+        name: character.name,
+      );
+      if (book != null) return book;
+    }
+
+    final related = pick(node, ['related_lorebooks', 'relatedLorebooks']);
+    final linked = related is List && related.isNotEmpty;
+    if (!linked && !asBool(pick(node, ['has_lore', 'hasLore']))) return null;
+    final projectId = asInt(pick(node, ['id', 'project_id']));
+    if (projectId == null) return null;
+    try {
+      final ref = await _latestCommit(projectId);
+      if (ref == null) return null;
+      final response = await _http.getBytes(
+        cardFileUri(projectId, ref),
+        headers: const <String, String>{'Accept': '*/*'},
+      );
+      return lorebookFromCardJson(
+        utf8.decode(response.bodyBytes),
+        name: character.name,
+      );
+    } catch (_) {
+      // A linked book that will not come is not worth failing the download for.
+      return null;
+    }
+  }
+
+  Uri commitsUri(int projectId) =>
+      Uri.parse('$apiBase/api/v4/projects/$projectId/repository/commits');
+
+  /// The character's exported card inside its git project. Same doubled escape
+  /// as [lorebookFilePath], different file: `raw/card.json` is the resolved card,
+  /// lorebook and all.
+  static const String cardFilePath = 'raw%252Fcard.json';
+
+  Uri cardFileUri(int projectId, String ref) => Uri.parse(
+        '$apiBase/api/v4/projects/$projectId/repository/files/'
+        '$cardFilePath/raw?ref=$ref',
+      );
+
+  /// The newest commit in a project. The card file is only served against a real
+  /// ref here, and `main` is not one for every project.
+  Future<String?> _latestCommit(int projectId) async {
+    final decoded = await _http.getJson(commitsUri(projectId));
+    if (decoded is! List || decoded.isEmpty) return null;
+    final first = decoded.first;
+    if (first is! Map) return null;
+    final id = asString(pick(first.cast<String, dynamic>(), ['id', 'sha']));
+    return id.trim().isEmpty ? null : id.trim();
   }
 
   /// The one place Chub's field names are translated into the V2 card spec.
@@ -279,6 +371,9 @@ class ChubSource extends DiscoverSource {
         'tags': asStringList(pick(node, ['topics'])),
         'creator': item.creator,
         'character_version': def(['character_version']),
+        // Chub's name for the V2 spec's `character_book`. Without this line a
+        // character's own world info was read, ignored and thrown away.
+        'character_book': ?pick(definition, ['embedded_lorebook']),
       },
     };
   }

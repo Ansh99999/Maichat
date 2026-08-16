@@ -309,11 +309,13 @@ Lorebook? lorebookFromCardJson(String json, {String? name}) {
   if (books.isEmpty) return null;
   final book = books.first;
   if (book.entries.isEmpty) return null;
-  // A card's book is usually nameless; naming it after the character is what
-  // makes it findable in the Library.
+  // A card's book is usually nameless, and the codec falls back to a generic
+  // label; naming it after the character is what makes it findable in the
+  // Library.
   final label = name?.trim() ?? '';
-  if (label.isNotEmpty && book.name.trim().isEmpty) {
-    book.name = '$label lorebook';
+  final current = book.name.trim();
+  if (label.isNotEmpty && (current.isEmpty || current == 'Imported lorebook')) {
+    book.name = "$label's lorebook";
   }
   return book;
 }

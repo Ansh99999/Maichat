@@ -84,6 +84,78 @@ void main() {
     });
   });
 
+  group('lorebooks', () {
+    final source = BotbooruSource(siteBase: 'https://booru.example');
+
+    test('the lorebook gallery is its own endpoint', () {
+      final uri = source.searchUri(const DiscoverQuery(
+        kind: DiscoverKind.lorebook,
+        search: 'rpg',
+        sort: 'downloads',
+        page: 2,
+        pageSize: 20,
+      ));
+      expect(uri.path, '/api/lorebooks');
+      expect(uri.queryParameters['sort'], 'downloads');
+      expect(uri.queryParameters['limit'], '20');
+      expect(uri.queryParameters['offset'], '20');
+      expect(uri.queryParameters['q'], 'rpg');
+      expect(uri.queryParameters['sfw_only'], 'true');
+    });
+
+    test('a book is addressed by its number, not its id', () {
+      final item = source.lorebookFrom(<String, dynamic>{
+        'kind': 'lorebook',
+        'id': 73713,
+        'number': 564,
+        'title': 'The Little Bird and Her Million Colors',
+        'content_rating': 'sfw',
+        'tagline': 'Lorebook for Stella.',
+        'first_entry_snippet': '<timeline>Late 2032s',
+        'top_keys': ['history', 'story'],
+        'entry_count': 1,
+        'token_estimate': 1256,
+        'downloads': 7,
+        'favorite_count': 2,
+        'uploader_username': 'someone',
+        'cover_image_filename': 'lb_714d84.png',
+        'created_at': '2026-08-15T03:57:32.984171',
+      })!;
+
+      // The download and the page are both keyed by the number; `id` belongs to
+      // the upload behind it.
+      expect(item.id, '564');
+      expect(item.kind, DiscoverKind.lorebook);
+      expect(item.name, 'The Little Bird and Her Million Colors');
+      expect(item.creator, 'someone');
+      expect(item.entryCount, 1);
+      expect(item.tokens, 1256);
+      expect(item.downloads, 7);
+      expect(item.favourites, 2);
+      expect(item.tags, ['history', 'story']);
+      expect(item.nsfw, isFalse);
+      expect(item.pageUrl, 'https://booru.example/lorebook/564');
+      expect(item.thumbnailUrl, 'https://booru.example/images/lb_714d84.png');
+      expect(
+        source.lorebookDownloadUri('564').toString(),
+        'https://booru.example/api/lorebooks/564/download.json',
+      );
+    });
+
+    test('anything but an sfw rating is adult', () {
+      final item = source.lorebookFrom(<String, dynamic>{
+        'number': 1,
+        'title': 'x',
+        'content_rating': 'nsfl',
+      })!;
+      expect(item.nsfw, isTrue);
+    });
+
+    test('a book with no number is skipped', () {
+      expect(source.lorebookFrom(<String, dynamic>{'title': 'x'}), isNull);
+    });
+  });
+
   group('reading a post', () {
     final source = BotbooruSource(siteBase: 'https://booru.example');
 
@@ -303,6 +375,67 @@ void main() {
       expect(character.name, 'One');
       // The link is kept rather than the picture being lost silently.
       expect(character.avatar, contains('/images/preview/'));
+    });
+
+    test('a lorebook downloads as SillyTavern world info', () async {
+      routes['/api/lorebooks?'] = jsonEncode({
+        'total': 118,
+        'items': [
+          {
+            'number': 564,
+            'id': 73713,
+            'title': 'Stella',
+            'entry_count': 1,
+            'content_rating': 'sfw',
+            'tagline': 'Lorebook for Stella.',
+          },
+        ],
+      });
+      routes['/api/lorebooks/564/download.json'] = jsonEncode({
+        'entries': {
+          '0': {
+            'uid': 0,
+            'key': ['timeline', 'history'],
+            'keysecondary': const <String>[],
+            'comment': 'Timeline',
+            'content': 'Late 2032s: Dr. Gibsen creates Stella.',
+            'disable': false,
+          },
+        },
+      });
+
+      final page = await source.search(
+        const DiscoverQuery(kind: DiscoverKind.lorebook, pageSize: 1),
+      );
+      expect(page.items.single.entryCount, 1);
+      expect(page.hasMore, isTrue);
+
+      final payload = await source.fetch(page.items.single);
+      expect(payload.character, isNull);
+      final book = payload.lorebook!;
+      // The listing's title wins: the exported file carries no book name.
+      expect(book.name, 'Stella');
+      expect(book.description, 'Lorebook for Stella.');
+      expect(book.entries.single.keys, ['timeline', 'history']);
+      expect(book.entries.single.content,
+          'Late 2032s: Dr. Gibsen creates Stella.');
+    });
+
+    test('an empty lorebook is refused rather than filed blank', () async {
+      routes['/api/lorebooks?'] = jsonEncode({
+        'total': 1,
+        'items': [
+          {'number': 9, 'title': 'Hollow'},
+        ],
+      });
+      routes['/api/lorebooks/9/download.json'] = jsonEncode({'entries': {}});
+      final page = await source.search(
+        const DiscoverQuery(kind: DiscoverKind.lorebook, pageSize: 1),
+      );
+      await expectLater(
+        source.fetch(page.items.single),
+        throwsA(isA<DiscoverException>()),
+      );
     });
   });
 }

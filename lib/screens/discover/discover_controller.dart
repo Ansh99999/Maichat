@@ -68,11 +68,28 @@ class DiscoverController extends ChangeNotifier {
   bool get sectionUnavailable => available.isEmpty;
 
   /// Whether the chosen catalogue publishes the section that is open.
-  ///
-  /// Choosing a catalogue is a choice about *where* you are browsing, and it
-  /// holds across all three sections — so when Character Tavern has no
-  /// lorebooks, the answer is to say so, not to quietly serve somebody else's.
   bool get sectionSupported => source?.supports(_kind) ?? false;
+
+  /// The catalogue actually being asked, which is the chosen one unless it does
+  /// not publish this section.
+  ///
+  /// Only Chub and Botbooru publish lorebooks as things of their own. Rather
+  /// than show seven catalogues an empty shelf, the section borrows the first one
+  /// that does have books — and [borrowedFrom] is how the screen owns up to it.
+  DiscoverSource? get effectiveSource {
+    final chosen = source;
+    if (chosen != null && chosen.supports(_kind)) return chosen;
+    final candidates = available;
+    return candidates.isEmpty ? null : candidates.first;
+  }
+
+  /// The catalogue standing in for the chosen one, or null when none is.
+  DiscoverSource? get borrowedFrom {
+    final chosen = source;
+    final active = effectiveSource;
+    if (active == null || chosen == null) return null;
+    return active.id == chosen.id ? null : active;
+  }
 
   /// The chosen catalogue. Deliberately not filtered by section: the selection
   /// survives switching to a section this site does not publish.
@@ -83,11 +100,12 @@ class DiscoverController extends ChangeNotifier {
     return _sources.isEmpty ? null : _sources.first;
   }
 
-  List<DiscoverSort> get sortOptions => source?.sortsFor(_kind) ?? const [];
+  List<DiscoverSort> get sortOptions =>
+      effectiveSource?.sortsFor(_kind) ?? const [];
 
   /// Tag suggestions for the filter sheet — best-effort, may be empty.
   Future<List<String>> tagSuggestions() async =>
-      source?.tags(_kind) ?? Future.value(const <String>[]);
+      effectiveSource?.tags(_kind) ?? Future.value(const <String>[]);
 
   String _resolveSourceId(String wanted, DiscoverKind kind) {
     for (final s in _sources) {
@@ -97,8 +115,8 @@ class DiscoverController extends ChangeNotifier {
   }
 
   String _initialSort() {
-    final active = source;
-    if (active == null || !active.supports(_kind)) return '';
+    final active = effectiveSource;
+    if (active == null) return '';
     final stored = _prefs.sortFor(_kind);
     if (stored != null &&
         active.sortsFor(_kind).any((s) => s.value == stored)) {
@@ -198,7 +216,7 @@ class DiscoverController extends ChangeNotifier {
 
   /// Loads page one, replacing whatever is on screen.
   Future<void> refresh() async {
-    final active = source;
+    final active = effectiveSource;
     final generation = ++_generation;
     _page = 1;
     _items.clear();
@@ -206,7 +224,7 @@ class DiscoverController extends ChangeNotifier {
     _error = null;
     _hasMore = false;
     _loadingMore = false;
-    if (active == null || !active.supports(_kind)) {
+    if (active == null) {
       _loading = false;
       notifyListeners();
       return;
@@ -233,7 +251,7 @@ class DiscoverController extends ChangeNotifier {
 
   /// Appends the next page. Safe to call repeatedly while scrolling.
   Future<void> loadMore() async {
-    final active = source;
+    final active = effectiveSource;
     if (active == null || _loading || _loadingMore || !_hasMore) return;
     final generation = _generation;
     _loadingMore = true;
