@@ -45,7 +45,9 @@ void main() {
     await tester.pumpWidget(host(state, DiscoverScreen(sources: [source])));
     await load(tester);
 
-    expect(find.text('Discover'), findsWidgets);
+    // The large title names the catalogue being browsed, now that the picker
+    // lives in the drawer.
+    expect(find.text('Fake'), findsWidgets);
     expect(find.text('Aria'), findsOneWidget);
     expect(find.text('Bram'), findsOneWidget);
     expect(find.text('by anon'), findsWidgets);
@@ -117,7 +119,7 @@ void main() {
     expect(find.textContaining('generation presets'), findsOneWidget);
   });
 
-  testWidgets('the source chips switch catalogue and reload', (tester) async {
+  testWidgets('the drawer switches catalogue and reloads', (tester) async {
     final state = await ready();
     final first = _FakeSource();
     final second = _FakeSource(
@@ -131,14 +133,62 @@ void main() {
     await load(tester);
 
     expect(find.text('Aria'), findsOneWidget);
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Other'));
+
+    // The catalogue picker is the navigation drawer now, not a row of chips.
+    tester.state<ScaffoldState>(find.byType(Scaffold).first).openDrawer();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'Home'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ListTile, 'Other'));
+    await tester.pumpAndSettle();
     await load(tester);
 
     expect(find.text('Cass'), findsOneWidget);
     expect(find.text('Aria'), findsNothing);
     expect(second.queries, hasLength(1));
-    // The choice sticks, so the next visit opens where this one left off.
     expect(state.discoverPrefs.sourceId, 'other');
+  });
+
+  testWidgets('Discover opens on the first catalogue, whatever was last used',
+      (tester) async {
+    final state = await ready();
+    // A stored choice from a previous visit.
+    state.updateDiscoverPrefs(state.discoverPrefs.copyWith(sourceId: 'other'));
+    final first = _FakeSource();
+    final second = _FakeSource(
+      id: 'other',
+      label: 'Other',
+      characters: const ['Cass'],
+    );
+    await tester.pumpWidget(
+      host(state, DiscoverScreen(sources: [first, second])),
+    );
+    await load(tester);
+
+    expect(find.text('Aria'), findsOneWidget);
+    expect(find.text('Cass'), findsNothing);
+  });
+
+  testWidgets('a catalogue with no lorebooks says so instead of switching',
+      (tester) async {
+    final state = await ready();
+    // Only the second publishes lorebooks; the first must not be swapped out
+    // from under the user when the section changes.
+    final first = _FakeSource(kinds: const {DiscoverKind.character});
+    final second = _FakeSource(
+      id: 'other',
+      label: 'Other',
+      kinds: const {DiscoverKind.character, DiscoverKind.lorebook},
+    );
+    await tester.pumpWidget(
+      host(state, DiscoverScreen(sources: [first, second])),
+    );
+    await load(tester);
+
+    await tester.tap(find.text('Lorebooks'));
+    await load(tester);
+
+    expect(find.text('Fake has no lorebooks'), findsOneWidget);
+    expect(find.textContaining('Other'), findsWidgets);
   });
 
   testWidgets('a feed that fails offers a retry rather than a blank page',
@@ -311,6 +361,10 @@ class _FakeSource extends DiscoverSource {
     this.failWith,
     this.challenge,
     this.fetchError,
+    this.kinds = const <DiscoverKind>{
+      DiscoverKind.character,
+      DiscoverKind.lorebook,
+    },
   });
 
   @override
@@ -344,8 +398,7 @@ class _FakeSource extends DiscoverSource {
   String get homeUrl => 'https://example.invalid';
 
   @override
-  Set<DiscoverKind> get kinds =>
-      const <DiscoverKind>{DiscoverKind.character, DiscoverKind.lorebook};
+  final Set<DiscoverKind> kinds;
 
   @override
   List<DiscoverSort> sortsFor(DiscoverKind kind) =>

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/appearance.dart';
+import '../services/discover/discover_sources.dart';
 import '../services/update_service.dart';
 import '../state/app_state.dart';
 import '../screens/characters_screen.dart';
@@ -25,11 +26,33 @@ enum DrawerSection { home, chats, characters, discover, library, presets }
 /// row pinned to the bottom (settings, theme, notifications) with the app
 /// version tucked beside it. Home is the landing section; the others push
 /// their own detail screen.
+///
+/// Inside Discover the body changes job: instead of the app's sections it lists
+/// the catalogues being browsed — Home to leave, then Chub, JannyAI, Character
+/// Tavern and the rest. Pass [catalogues] to get that shape. The list outgrew
+/// the row of chips it used to live in, and a catalogue behaves like a place you
+/// go rather than a filter you apply.
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key, this.selected = DrawerSection.home});
+  const AppDrawer({
+    super.key,
+    this.selected = DrawerSection.home,
+    this.catalogues,
+    this.selectedCatalogueId,
+    this.onCatalogue,
+  });
 
   /// The destination the host screen represents, drawn selected.
   final DrawerSection selected;
+
+  /// The catalogues to list instead of the app's sections. Null everywhere but
+  /// Discover.
+  final List<DiscoverSource>? catalogues;
+
+  /// Which catalogue is being browsed, drawn selected.
+  final String? selectedCatalogueId;
+
+  /// Called with a catalogue's id when one is picked.
+  final void Function(String id)? onCatalogue;
 
   /// Closes the drawer, then pushes [screen] on top.
   void _go(BuildContext context, Widget screen) {
@@ -92,6 +115,7 @@ class AppDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final sites = catalogues;
     return Drawer(
       child: SafeArea(
         child: Column(
@@ -101,7 +125,7 @@ class AppDrawer extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'MaiChat',
+                  sites == null ? 'MaiChat' : 'Discover',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         color: scheme.onSurface,
                         fontWeight: FontWeight.w600,
@@ -110,55 +134,9 @@ class AppDrawer extends StatelessWidget {
               ),
             ),
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  _NavItem(
-                    icon: Icons.home_outlined,
-                    label: 'Home',
-                    selected: selected == DrawerSection.home,
-                    onTap: () => _goHome(context),
-                  ),
-                  _NavItem(
-                    icon: Icons.people_alt_outlined,
-                    label: 'Characters',
-                    selected: selected == DrawerSection.characters,
-                    onTap: () => _goCharacters(context),
-                  ),
-                  _NavItem(
-                    icon: Icons.public_outlined,
-                    label: 'Discover',
-                    selected: selected == DrawerSection.discover,
-                    onTap: () => _goDiscover(context),
-                  ),
-                  _NavItem(
-                    icon: Icons.chat_bubble_outline,
-                    label: 'Chats',
-                    selected: selected == DrawerSection.chats,
-                    onTap: () => _goChats(context),
-                  ),
-                  _NavItem(
-                    icon: Icons.local_library_outlined,
-                    label: 'Library',
-                    selected: selected == DrawerSection.library,
-                    onTap: () => _goLibrary(context),
-                  ),
-                  _NavItem(
-                    icon: Icons.photo_library_outlined,
-                    label: 'Gallery',
-                    onTap: () => _go(
-                        context,
-                        const SectionScreen(
-                            title: 'Gallery', icon: Icons.photo_library_outlined)),
-                  ),
-                  _NavItem(
-                    icon: Icons.tune_outlined,
-                    label: 'Presets',
-                    selected: selected == DrawerSection.presets,
-                    onTap: () => _goPresets(context),
-                  ),
-                ],
-              ),
+              child: sites == null
+                  ? _sections(context)
+                  : _catalogueList(context, sites),
             ),
             const Divider(height: 1),
             _DrawerFooter(onNavigate: _go),
@@ -167,6 +145,82 @@ class AppDrawer extends StatelessWidget {
       ),
     );
   }
+
+  /// The catalogue picker: Home to leave Discover, then one entry per site.
+  Widget _catalogueList(BuildContext context, List<DiscoverSource> sites) {
+    final current = selectedCatalogueId;
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      children: [
+        _NavItem(
+          icon: Icons.home_outlined,
+          label: 'Home',
+          onTap: () => _goHome(context),
+        ),
+        const Divider(height: 12, indent: 16, endIndent: 16),
+        for (final site in sites)
+          _NavItem(
+            icon: site.id == current ? Icons.public : Icons.public_outlined,
+            label: site.label,
+            selected: site.id == current,
+            onTap: () {
+              Navigator.of(context).pop();
+              onCatalogue?.call(site.id);
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _sections(BuildContext context) => ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          _NavItem(
+            icon: Icons.home_outlined,
+            label: 'Home',
+            selected: selected == DrawerSection.home,
+            onTap: () => _goHome(context),
+          ),
+          _NavItem(
+            icon: Icons.people_alt_outlined,
+            label: 'Characters',
+            selected: selected == DrawerSection.characters,
+            onTap: () => _goCharacters(context),
+          ),
+          _NavItem(
+            icon: Icons.public_outlined,
+            label: 'Discover',
+            selected: selected == DrawerSection.discover,
+            onTap: () => _goDiscover(context),
+          ),
+          _NavItem(
+            icon: Icons.chat_bubble_outline,
+            label: 'Chats',
+            selected: selected == DrawerSection.chats,
+            onTap: () => _goChats(context),
+          ),
+          _NavItem(
+            icon: Icons.local_library_outlined,
+            label: 'Library',
+            selected: selected == DrawerSection.library,
+            onTap: () => _goLibrary(context),
+          ),
+          _NavItem(
+            icon: Icons.photo_library_outlined,
+            label: 'Gallery',
+            onTap: () => _go(
+                context,
+                const SectionScreen(
+                    title: 'Gallery', icon: Icons.photo_library_outlined)),
+          ),
+          _NavItem(
+            icon: Icons.tune_outlined,
+            label: 'Presets',
+            selected: selected == DrawerSection.presets,
+            onTap: () => _goPresets(context),
+          ),
+        ],
+      );
 }
 
 /// A single rounded, pill-shaped destination in the drawer body.

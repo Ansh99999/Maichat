@@ -67,12 +67,20 @@ class DiscoverController extends ChangeNotifier {
   /// rather than showing an empty feed that looks broken.
   bool get sectionUnavailable => available.isEmpty;
 
-  /// The selected source, or null when the section has none.
+  /// Whether the chosen catalogue publishes the section that is open.
+  ///
+  /// Choosing a catalogue is a choice about *where* you are browsing, and it
+  /// holds across all three sections — so when Character Tavern has no
+  /// lorebooks, the answer is to say so, not to quietly serve somebody else's.
+  bool get sectionSupported => source?.supports(_kind) ?? false;
+
+  /// The chosen catalogue. Deliberately not filtered by section: the selection
+  /// survives switching to a section this site does not publish.
   DiscoverSource? get source {
-    for (final s in available) {
+    for (final s in _sources) {
       if (s.id == _sourceId) return s;
     }
-    return available.isEmpty ? null : available.first;
+    return _sources.isEmpty ? null : _sources.first;
   }
 
   List<DiscoverSort> get sortOptions => source?.sortsFor(_kind) ?? const [];
@@ -82,16 +90,15 @@ class DiscoverController extends ChangeNotifier {
       source?.tags(_kind) ?? Future.value(const <String>[]);
 
   String _resolveSourceId(String wanted, DiscoverKind kind) {
-    final candidates = sourcesFor(_sources, kind);
-    for (final s in candidates) {
+    for (final s in _sources) {
       if (s.id == wanted) return s.id;
     }
-    return candidates.isEmpty ? '' : candidates.first.id;
+    return _sources.isEmpty ? '' : _sources.first.id;
   }
 
   String _initialSort() {
     final active = source;
-    if (active == null) return '';
+    if (active == null || !active.supports(_kind)) return '';
     final stored = _prefs.sortFor(_kind);
     if (stored != null &&
         active.sortsFor(_kind).any((s) => s.value == stored)) {
@@ -116,7 +123,8 @@ class DiscoverController extends ChangeNotifier {
   void setKind(DiscoverKind kind) {
     if (kind == _kind) return;
     _kind = kind;
-    _sourceId = _resolveSourceId(_sourceId, kind);
+    // The catalogue does not change with the section — that is the point of
+    // choosing one.
     _sort = _initialSort();
     refresh();
   }
@@ -198,7 +206,7 @@ class DiscoverController extends ChangeNotifier {
     _error = null;
     _hasMore = false;
     _loadingMore = false;
-    if (active == null) {
+    if (active == null || !active.supports(_kind)) {
       _loading = false;
       notifyListeners();
       return;

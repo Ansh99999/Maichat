@@ -17,9 +17,15 @@ import 'discover_item_screen.dart';
 ///
 /// The shape is deliberately the one Android users already know from a store
 /// app — a large title that gets out of the way as you scroll, one search
-/// field, a row of chips choosing *where* you are looking, and a bottom bar
-/// choosing *what* you are looking for. Tapping anything opens a page that reads
-/// exactly like a character's own page here, except the button says Download.
+/// field, and a bottom bar choosing *what* you are looking for. Tapping anything
+/// opens a page that reads exactly like a character's own page here, except the
+/// button says Download.
+///
+/// *Where* you are looking lives in the navigation drawer, one entry per site,
+/// because the list outgrew a row of chips and because a catalogue is a place
+/// rather than a filter. The choice holds across all three sections: pick
+/// Character Tavern and its characters, lorebooks and presets are what the
+/// bottom bar switches between.
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({super.key, this.sources});
 
@@ -45,7 +51,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     final state = context.read<AppState>();
     _controller = DiscoverController(
       sources: widget.sources ?? buildDiscoverSources(),
-      prefs: state.discoverPrefs,
+      // Discover always opens on the first catalogue — Chub — rather than
+      // wherever you happened to stop last time, so the drawer's first entry is
+      // always what you are looking at. The rest of the preferences (adult
+      // results, per-section ordering) do persist.
+      prefs: state.discoverPrefs.copyWith(sourceId: ''),
       onPrefsChanged: state.updateDiscoverPrefs,
     );
     _scroll.addListener(_onScroll);
@@ -101,7 +111,14 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             _controller.excludeTags.length +
             (_controller.nsfw ? 1 : 0);
         return Scaffold(
-          drawer: const AppDrawer(selected: DrawerSection.discover),
+          drawer: AppDrawer(
+            selected: DrawerSection.discover,
+            // In Discover the drawer *is* the catalogue picker: Home to leave,
+            // then one entry per site.
+            catalogues: _controller.sources,
+            selectedCatalogueId: _controller.source?.id,
+            onCatalogue: _controller.setSource,
+          ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _controller.kind.index,
             onDestinationSelected: (index) =>
@@ -132,7 +149,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
                 SliverAppBar.large(
-                  title: const Text('Discover'),
+                  title: Text(_controller.source?.label ?? 'Discover'),
                   actions: [
                     IconButton(
                       tooltip: 'Filters',
@@ -148,7 +165,6 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   ],
                 ),
                 SliverToBoxAdapter(child: _searchField()),
-                SliverToBoxAdapter(child: _sourceChips()),
                 ..._feed(),
                 SliverToBoxAdapter(child: _footer()),
               ],
@@ -188,34 +204,6 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         ),
       );
 
-  /// Which catalogue is being browsed. One at a time on purpose: each site has
-  /// its own orderings and its own tag vocabulary, and a merged feed would have
-  /// to throw both away.
-  Widget _sourceChips() {
-    final available = _controller.available;
-    if (available.length < 2) return const SizedBox(height: 4);
-    final selected = _controller.source?.id;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          children: [
-            for (final source in available) ...[
-              ChoiceChip(
-                label: Text(source.label),
-                selected: source.id == selected,
-                onSelected: (_) => _controller.setSource(source.id),
-              ),
-              const SizedBox(width: 8),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
   List<Widget> _feed() {
     if (_controller.sectionUnavailable) {
       return [
@@ -231,6 +219,29 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     'presets yet. Import one from a file in Presets, or paste '
                     'a SillyTavern preset there.'
                 : 'None of the sites MaiChat can browse publish these yet.',
+          ),
+        ),
+      ];
+    }
+
+    // The catalogue is a choice that holds across sections, so a section it does
+    // not publish says so rather than silently serving another site's results.
+    if (!_controller.sectionSupported) {
+      final label = _controller.source?.label ?? 'This catalogue';
+      final section = _controller.kind.label.toLowerCase();
+      final elsewhere = _controller.available;
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: _Message(
+            icon: Icons.menu_book_outlined,
+            title: '$label has no $section',
+            body: elsewhere.isEmpty
+                ? '$label publishes characters only.'
+                : '$label publishes characters only. '
+                    '${elsewhere.map((s) => s.label).join(', ')} '
+                    '${elsewhere.length == 1 ? 'does' : 'do'} have $section — '
+                    'pick one from the menu.',
           ),
         ),
       ];
