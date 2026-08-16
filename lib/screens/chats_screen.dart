@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
+import 'chat_export.dart';
+import 'chat_import.dart';
 import 'chat_screen.dart';
 
 /// The full list of recent conversations. Reached from the drawer's "Chats"
@@ -56,7 +58,23 @@ class ChatsScreen extends StatelessWidget {
       ),
       body: CustomScrollView(
         slivers: [
-          SliverAppBar.large(title: Text(title)),
+          SliverAppBar.large(
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text(title, overflow: TextOverflow.ellipsis),
+                ),
+                _HeadlineAction(
+                  tooltip: 'Import chat',
+                  icon: Icons.upload_file_outlined,
+                  onPressed: () => importChats(
+                    context,
+                    preselectCharacterId: characterId,
+                  ),
+                ),
+              ],
+            ),
+          ),
           if (chats.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
@@ -106,9 +124,42 @@ class ChatsScreen extends StatelessWidget {
 }
 // APPEND-MARKER
 
+/// A button parked at the far end of a large app bar's headline — beside the
+/// title, not in the corner above it.
+///
+/// [SliverAppBar.large] renders its title widget twice: once as the big headline
+/// under the toolbar, and once inside the toolbar itself, faded in as you scroll.
+/// A trailing button would therefore also sit in the top-right corner — and stay
+/// tappable there while invisible, which is worse than merely looking wrong. Only
+/// the headline copy lives outside the toolbar's [NavigationToolbar], so that is
+/// how the two are told apart.
+class _HeadlineAction extends StatelessWidget {
+  const _HeadlineAction({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final inToolbar =
+        context.findAncestorWidgetOfExactType<NavigationToolbar>() != null;
+    if (inToolbar) return const SizedBox.shrink();
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon),
+      onPressed: onPressed,
+    );
+  }
+}
+
 /// One conversation in the recent list: title, a preview of the last turn, how
-/// long ago it was touched, and an overflow menu to delete it. Shared by the
-/// Chats list and the Home dashboard preview.
+/// long ago it was touched, and an overflow menu to export or delete it. Shared
+/// by the Chats list and the Home dashboard preview.
 class ChatCard extends StatelessWidget {
   const ChatCard({
     super.key,
@@ -172,8 +223,17 @@ class ChatCard extends StatelessWidget {
           icon: const Icon(Icons.more_vert),
           onSelected: (value) {
             if (value == 'delete') onDelete();
+            if (value == 'export') exportChat(context, conversation);
           },
           itemBuilder: (context) => const [
+            PopupMenuItem<String>(
+              value: 'export',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.save_alt_outlined),
+                title: Text('Export'),
+              ),
+            ),
             PopupMenuItem<String>(
               value: 'delete',
               child: ListTile(

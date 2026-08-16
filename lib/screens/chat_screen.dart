@@ -15,6 +15,7 @@ import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
 import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
+import 'chat_export.dart';
 import 'chat_memory_panel.dart';
 import 'chats_screen.dart';
 import 'prompt_view_screen.dart';
@@ -144,19 +145,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Hands the thread to the export flow, which offers the shapes and then the
+  /// file / clipboard chooser.
   Future<void> _exportChat(AppState state) async {
     final conversation = state.active;
     if (conversation.isEmpty) {
       _toast('Nothing to export yet.');
       return;
     }
-    final buffer = StringBuffer('# ${conversation.title}\n\n');
-    for (final m in conversation.messages) {
-      final who = m.role == 'user' ? 'You' : 'Assistant';
-      buffer.writeln('$who:\n${m.content}\n');
-    }
-    await Clipboard.setData(ClipboardData(text: buffer.toString().trim()));
-    _toast('Chat copied to clipboard.');
+    await exportChat(context, conversation);
   }
 
   Future<void> _restartChat(AppState state) async {

@@ -866,6 +866,67 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  /// Files imported threads at the top of the list, newest first, persisting
+  /// once.
+  ///
+  /// When [bind] is given, every imported thread is attached to that character —
+  /// which is what makes an imported chat continuable, since the persona a reply
+  /// needs lives on the character and not in the file. Any system prompt the file
+  /// carried (Agnai's scenario, a log's leading system turn) is kept underneath
+  /// the persona rather than thrown away.
+  Future<void> importConversations(
+    List<Conversation> imported, {
+    Character? bind,
+  }) async {
+    if (imported.isEmpty) return;
+    final taken = _conversations.map((c) => c.id).toSet();
+    final fresh = <Conversation>[];
+    for (final conversation in imported) {
+      final target = taken.contains(conversation.id)
+          ? _renumber(conversation)
+          : conversation;
+      taken.add(target.id);
+      if (bind != null) {
+        target
+          ..characterId = bind.id
+          ..characterName = bind.displayName
+          ..systemPrompt = _mergedPrompt(bind, target.systemPrompt);
+      }
+      fresh.add(target);
+    }
+    _conversations.insertAll(0, fresh);
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// The character's composed persona, with anything the imported file already
+  /// carried appended so neither is lost.
+  String _mergedPrompt(Character character, String existing) {
+    final persona = character.composedSystemPrompt();
+    final extra = existing.trim();
+    if (extra.isEmpty) return persona;
+    if (persona.trim().isEmpty) return extra;
+    return '$persona\n\n$extra';
+  }
+
+  /// A copy under an unused id, for the rare case where an imported thread
+  /// claims an id the list already holds.
+  Conversation _renumber(Conversation source) => Conversation(
+        id: '${DateTime.now().microsecondsSinceEpoch}-${_conversations.length}',
+        title: source.title,
+        messages: source.messages.toList(),
+        updatedAt: source.updatedAt,
+        characterId: source.characterId,
+        characterName: source.characterName,
+        systemPrompt: source.systemPrompt,
+        impersonateId: source.impersonateId,
+        impersonateName: source.impersonateName,
+        presetId: source.presetId,
+        presetOverride: source.presetOverride,
+        variables: Map<String, String>.of(source.variables),
+        lorebookIds: source.lorebookIds.toList(),
+      );
+
   /// Sends [text] and streams the reply into a placeholder turn.
   Future<void> send(String text) async {
     final prompt = text.trim();

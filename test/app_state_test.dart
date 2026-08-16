@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/services/chat_client.dart';
@@ -441,5 +442,56 @@ void main() {
     await reloaded.init();
     expect(reloaded.tokenizerConfig.kind, TokenizerKind.custom);
     expect(reloaded.tokenizerConfig.customEncoding, BpeEncoding.cl100k);
+  });
+
+  test('imported chats land on top, bound, and survive a reload', () async {
+    final state = await _state(FakeClient(deltas: ['x']));
+    final persona = Character.empty()
+      ..name = 'Mai'
+      ..description = 'A calm librarian.';
+    await state.addCharacter(persona);
+
+    // Two imports, the second deliberately claiming an id already in the list,
+    // which is what re-importing the same native file twice looks like.
+    await state.send('an existing thread');
+    final taken = state.conversations.first.id;
+    await state.importConversations(
+      [
+        Conversation(
+          id: 'fresh',
+          title: 'From a file',
+          messages: [ChatMessage(role: 'assistant', content: 'Hello.')],
+          updatedAt: DateTime.now(),
+          systemPrompt: 'A quiet library.',
+        ),
+        Conversation(
+          id: taken,
+          title: 'Collides',
+          messages: [ChatMessage(role: 'user', content: 'Hi.')],
+          // Older, so the list's newest-first order is unambiguous here and
+          // after the reload below, which sorts by this field.
+          updatedAt: DateTime.now().subtract(const Duration(hours: 1)),
+        ),
+      ],
+      bind: persona,
+    );
+
+    expect(state.conversations.first.title, 'From a file');
+    expect(state.conversations[1].title, 'Collides');
+    // The colliding id was moved aside rather than shadowing the existing thread.
+    expect(state.conversations.where((c) => c.id == taken), hasLength(1));
+    expect(state.conversations.where((c) => c.title == 'Collides').single.id,
+        isNot(taken));
+    // Bound, with the file's own prompt kept underneath the persona.
+    final imported = state.conversations.first;
+    expect(imported.characterId, persona.id);
+    expect(imported.characterName, 'Mai');
+    expect(imported.systemPrompt, contains('A calm librarian.'));
+    expect(imported.systemPrompt, contains('A quiet library.'));
+
+    final reloaded = AppState(client: FakeClient());
+    await reloaded.init();
+    expect(reloaded.conversations.first.title, 'From a file');
+    expect(reloaded.conversations.first.characterId, persona.id);
   });
 }
