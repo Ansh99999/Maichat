@@ -15,12 +15,26 @@ import 'chat_screen.dart';
 /// When [characterId] is set the list is scoped to that character's chats (the
 /// "Chat List" action on a character), and the drawer is dropped for a back
 /// arrow so it reads as a detail view.
-class ChatsScreen extends StatelessWidget {
+class ChatsScreen extends StatefulWidget {
   const ChatsScreen({super.key, this.characterId, this.characterName});
 
   /// When non-null, only conversations bound to this character are shown.
   final String? characterId;
   final String? characterName;
+
+  @override
+  State<ChatsScreen> createState() => _ChatsScreenState();
+}
+
+class _ChatsScreenState extends State<ChatsScreen> {
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
   void _openChat(BuildContext context, AppState state, String id) {
     state.selectConversation(id);
@@ -36,18 +50,31 @@ class ChatsScreen extends StatelessWidget {
         MaterialPageRoute<void>(builder: (_) => const ChatScreen()),
       );
 
+  /// Whether [c] answers the current query. A chat is looked for by what was
+  /// said in it as much as by what it is called, so the turns are searched too —
+  /// stopping at the first hit.
+  bool _matches(Conversation c, String query) {
+    if (query.isEmpty) return true;
+    if (c.title.toLowerCase().contains(query)) return true;
+    if ((c.characterName ?? '').toLowerCase().contains(query)) return true;
+    return c.messages.any((m) => m.content.toLowerCase().contains(query));
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final filtered = characterId == null;
+    final filtered = widget.characterId == null;
+    final query = _query.trim().toLowerCase();
     // Brand-new, never-sent threads have nothing to show, so they stay out of
     // the list until they hold a message.
-    final chats = state.conversations
+    final all = state.conversations
         .where((c) => !c.isEmpty)
-        .where((c) => filtered ? true : c.characterId == characterId)
+        .where((c) => filtered ? true : c.characterId == widget.characterId)
         .toList();
+    final chats = all.where((c) => _matches(c, query)).toList();
     final bottom = MediaQuery.paddingOf(context).bottom;
-    final title = filtered ? 'Chats' : '${characterName ?? 'Character'} chats';
+    final title =
+        filtered ? 'Chats' : '${widget.characterName ?? 'Character'} chats';
 
     return Scaffold(
       drawer: filtered ? const AppDrawer(selected: DrawerSection.chats) : null,
@@ -69,16 +96,24 @@ class ChatsScreen extends StatelessWidget {
                   icon: Icons.upload_file_outlined,
                   onPressed: () => importChats(
                     context,
-                    preselectCharacterId: characterId,
+                    preselectCharacterId: widget.characterId,
                   ),
                 ),
               ],
             ),
           ),
-          if (chats.isEmpty)
+          // The search bar rides at the top of the scroll view rather than being
+          // pinned, matching the Characters section.
+          if (all.isNotEmpty) SliverToBoxAdapter(child: _searchBar()),
+          if (all.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
               child: _EmptyChats(),
+            )
+          else if (chats.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: _NoChatMatches(),
             )
           else
             SliverPadding(
@@ -96,6 +131,29 @@ class ChatsScreen extends StatelessWidget {
       ),
     );
   }
+
+  Widget _searchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+        child: SearchBar(
+          controller: _search,
+          hintText: 'Search chats',
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 14),
+          ),
+          leading: const Icon(Icons.search),
+          trailing: [
+            if (_query.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () {
+                  _search.clear();
+                  setState(() => _query = '');
+                },
+              ),
+          ],
+          onChanged: (v) => setState(() => _query = v),
+        ),
+      );
 
   Future<void> _confirmDelete(
     BuildContext context,
@@ -122,7 +180,35 @@ class ChatsScreen extends StatelessWidget {
     if (confirmed ?? false) await state.deleteConversation(c.id);
   }
 }
-// APPEND-MARKER
+
+/// Shown when a search matches no chat.
+class _NoChatMatches extends StatelessWidget {
+  const _NoChatMatches();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(32, 0, 32, 96),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.search_off_outlined, size: 48, color: scheme.outline),
+            const SizedBox(height: 12),
+            Text(
+              'No chats match your search.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// A button parked at the far end of a large app bar's headline — beside the
 /// title, not in the corner above it.
