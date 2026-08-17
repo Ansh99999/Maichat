@@ -325,23 +325,34 @@ class _ChatScreenState extends State<ChatScreen> {
                           ],
                         ),
                 ),
-                if (_showGroupBar && conversation.isGroup)
-                  _GroupBar(
-                    conversation: conversation,
-                    participants: state.participantsOf(conversation),
-                    user: state.impersonationFor(conversation),
-                    ui: ui,
-                    onChip: (id) {
-                      state.speakAs(id);
-                      _scrollToEnd();
-                    },
-                    onUser: () => _openImpersonatePicker(state),
-                    onRemove: (id) =>
-                        state.removeParticipant(conversation.id, id),
-                    onAdd: () => showGroupAddSheet(context,
-                        conversationId: conversation.id),
-                    onClose: () => setState(() => _showGroupBar = false),
-                  ),
+                // The participant bar slides up from the composer when opened
+                // and collapses back into it when hidden. Anchored to the
+                // bottom so the growth reads as rising out of the send bar, the
+                // Android way; at rest it settles to the bar's full height so
+                // every chip keeps its hit region.
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.bottomCenter,
+                  child: (_showGroupBar && conversation.isGroup)
+                      ? _GroupBar(
+                          conversation: conversation,
+                          participants: state.participantsOf(conversation),
+                          user: state.impersonationFor(conversation),
+                          ui: ui,
+                          onChip: (id) {
+                            state.speakAs(id);
+                            _scrollToEnd();
+                          },
+                          onUser: () => _openImpersonatePicker(state),
+                          onRemove: (id) =>
+                              state.removeParticipant(conversation.id, id),
+                          onAdd: () => showGroupAddSheet(context,
+                              conversationId: conversation.id),
+                          onClose: () => setState(() => _showGroupBar = false),
+                        )
+                      : const SizedBox(width: double.infinity),
+                ),
                 _composer(state),
               ],
             ),
@@ -585,42 +596,53 @@ class _ChatScreenState extends State<ChatScreen> {
           // The operations strip: a row of symbols opened by the composer's ⋯
           // button. Group chat is the first operation, shown when the feature is
           // switched on; a muted note stands in when there is nothing to show
-          // yet, so the strip never opens to an empty, broken-looking gap. Kept
-          // as a plain conditional (not an AnimatedSize) so every symbol stays
-          // reliably tappable — an animated wrapper clipped the hit region.
-          if (_showOps)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 6, left: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (groupEnabled)
-                      IconButton(
-                        tooltip: conversation.isGroup
-                            ? 'Group participants'
-                            : 'Start a group chat',
-                        isSelected: _showGroupBar,
-                        onPressed: () => _toggleGroupBar(state),
-                        icon: const Icon(Icons.groups_outlined),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 10),
-                        child: Text(
-                          'More actions coming soon',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                        ),
+          // yet, so the strip never opens to an empty, broken-looking gap.
+          //
+          // AnimatedSize expands it open/closed. It is anchored top-left so the
+          // strip grows straight down from under the button and its content sits
+          // inside the clip the whole way — the earlier animated attempt used the
+          // default centre alignment, which clipped the group symbol mid-grow and
+          // left it untappable. At rest the size settles to the strip's natural
+          // size, so the symbol keeps its full hit region.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topLeft,
+            child: !_showOps
+                ? const SizedBox(width: double.infinity)
+                : Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6, left: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (groupEnabled)
+                            IconButton(
+                              tooltip: conversation.isGroup
+                                  ? 'Group participants'
+                                  : 'Start a group chat',
+                              isSelected: _showGroupBar,
+                              onPressed: () => _toggleGroupBar(state),
+                              icon: const Icon(Icons.groups_outlined),
+                            )
+                          else
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 10),
+                              child: Text(
+                                'More actions coming soon',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                            ),
+                        ],
                       ),
-                  ],
-                ),
-              ),
-            ),
+                    ),
+                  ),
+          ),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [

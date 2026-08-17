@@ -42,12 +42,14 @@ void main() {
     // The operations button is present because group chats are enabled.
     expect(find.byKey(const Key('composer-ops-button')), findsOneWidget);
     await tester.tap(find.byKey(const Key('composer-ops-button')));
-    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
 
-    // The group operation symbol appears; tapping it reveals the bar.
+    // The group operation symbol appears; tapping it (after the reveal has
+    // settled, proving the animated strip does not clip its hit region) shows
+    // the bar.
     expect(find.byIcon(Icons.groups_outlined), findsOneWidget);
     await tester.tap(find.byIcon(Icons.groups_outlined));
-    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
 
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Bob'), findsOneWidget);
@@ -55,7 +57,7 @@ void main() {
 
     // The ✕ hides the bar again.
     await tester.tap(find.byIcon(Icons.close));
-    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
     expect(find.text('Bob'), findsNothing);
   });
 
@@ -70,7 +72,7 @@ void main() {
     // with the group feature off — but it offers no group operation.
     expect(find.byKey(const Key('composer-ops-button')), findsOneWidget);
     await tester.tap(find.byKey(const Key('composer-ops-button')));
-    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
     expect(find.byIcon(Icons.groups_outlined), findsNothing);
     expect(find.text('More actions coming soon'), findsOneWidget);
   });
