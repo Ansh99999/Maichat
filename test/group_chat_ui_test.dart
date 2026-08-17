@@ -59,12 +59,19 @@ void main() {
     expect(find.text('Bob'), findsNothing);
   });
 
-  testWidgets('no operations button when group chats are switched off',
+  testWidgets('the operations button stays when group chats are switched off',
       (tester) async {
     final state = await groupChat(enabled: false);
     await tester.pumpWidget(host(state));
     await tester.pump();
     await tester.pump();
-    expect(find.byKey(const Key('composer-ops-button')), findsNothing);
+
+    // The button is a permanent home for per-chat actions, so it is here even
+    // with the group feature off — but it offers no group operation.
+    expect(find.byKey(const Key('composer-ops-button')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('composer-ops-button')));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byIcon(Icons.groups_outlined), findsNothing);
+    expect(find.text('More actions coming soon'), findsOneWidget);
   });
 }

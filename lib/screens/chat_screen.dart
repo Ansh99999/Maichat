@@ -582,11 +582,12 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // The operations strip: a row of symbols opened by the composer's ⋮
-          // button. Group chat is the first (and, for now, only) operation,
-          // shown only when the feature is switched on. Kept as a plain
-          // conditional (not an AnimatedSize) so every symbol stays reliably
-          // tappable — an animated wrapper clipped the hit region.
+          // The operations strip: a row of symbols opened by the composer's ⋯
+          // button. Group chat is the first operation, shown when the feature is
+          // switched on; a muted note stands in when there is nothing to show
+          // yet, so the strip never opens to an empty, broken-looking gap. Kept
+          // as a plain conditional (not an AnimatedSize) so every symbol stays
+          // reliably tappable — an animated wrapper clipped the hit region.
           if (_showOps)
             Align(
               alignment: Alignment.centerLeft,
@@ -603,6 +604,18 @@ class _ChatScreenState extends State<ChatScreen> {
                         isSelected: _showGroupBar,
                         onPressed: () => _toggleGroupBar(state),
                         icon: const Icon(Icons.groups_outlined),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 10),
+                        child: Text(
+                          'More actions coming soon',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                        ),
                       ),
                   ],
                 ),
@@ -614,17 +627,18 @@ class _ChatScreenState extends State<ChatScreen> {
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // The operations button only earns its place when there is an
-                  // operation to show; group chat is the only one so far.
-                  if (groupEnabled)
-                    IconButton(
-                      key: const Key('composer-ops-button'),
-                      tooltip: 'More',
-                      visualDensity: VisualDensity.compact,
-                      isSelected: _showOps,
-                      onPressed: () => setState(() => _showOps = !_showOps),
-                      icon: const Icon(Icons.more_vert),
-                    ),
+                  // The operations button is a permanent home for per-chat
+                  // actions, sitting above the impersonate avatar. Group chat is
+                  // the first, and it stays put for the ones to come, so it shows
+                  // whether or not group chats are switched on.
+                  IconButton(
+                    key: const Key('composer-ops-button'),
+                    tooltip: 'More',
+                    visualDensity: VisualDensity.compact,
+                    isSelected: _showOps,
+                    onPressed: () => setState(() => _showOps = !_showOps),
+                    icon: const Icon(Icons.more_horiz),
+                  ),
                   _ImpersonateButton(
                     persona: persona,
                     onTap: () => _openImpersonatePicker(state),

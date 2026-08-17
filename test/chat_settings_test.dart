@@ -152,6 +152,52 @@ void main() {
       expect(find.text('You'), findsOneWidget);
     });
 
+    testWidgets('a group chat lists every member', (tester) async {
+      final state = await boot();
+      await state
+          .updateChatInterface(const ChatInterface(groupChatsEnabled: true));
+      final alice = Character(id: 'a', name: 'Alice');
+      final bob = Character(id: 'b', name: 'Bob');
+      await state.addCharacter(alice);
+      await state.addCharacter(bob);
+      final chatId = state.startChatWithCharacter(alice);
+      await state.addParticipant(chatId, bob);
+
+      await tester.pumpWidget(host(state, chatId));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Alice'), findsWidgets); // title field + its row
+      expect(find.text('Bob'), findsOneWidget);
+      expect(find.text('You'), findsOneWidget);
+    });
+
+    testWidgets('with group chats on, Add opens the sheet, not a refusal',
+        (tester) async {
+      final state = await boot();
+      await state
+          .updateChatInterface(const ChatInterface(groupChatsEnabled: true));
+      final alice = Character(id: 'a', name: 'Alice');
+      final bob = Character(id: 'b', name: 'Bob');
+      await state.addCharacter(alice);
+      await state.addCharacter(bob);
+      final chatId = state.startChatWithCharacter(alice);
+
+      await tester.pumpWidget(host(state, chatId));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Add a character'));
+      await tester.pumpAndSettle();
+
+      // The add/remove sheet, not the old "one character per chat" refusal.
+      expect(find.text('Add characters'), findsOneWidget);
+      expect(find.textContaining('One character per chat'), findsNothing);
+
+      // Adding Bob from the sheet turns the thread into a group.
+      await tester.tap(find.text('Bob'));
+      await tester.pumpAndSettle();
+      expect(state.conversationById(chatId)!.isGroup, isTrue);
+    });
+
     testWidgets('editing a character needs the overriding toggle on',
         (tester) async {
       final state = await boot();

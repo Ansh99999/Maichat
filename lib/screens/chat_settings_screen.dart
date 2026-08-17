@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import 'character_edit_screen.dart';
+import 'group_add_sheet.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/chat_ui_scope.dart';
 
@@ -47,12 +48,17 @@ class _Participant {
   const _Participant({
     required this.role,
     required this.character,
+    this.id,
     this.placeholder,
     this.removable = false,
   });
 
   /// 'Character' or 'You' — what this row is, not who.
   final String role;
+
+  /// The character id this row stands for, kept even when the card has been
+  /// deleted from the roster so the row can still be removed. Null for the user.
+  final String? id;
 
   /// Null for the plain user, and for a character whose card has been deleted.
   final Character? character;
@@ -112,31 +118,35 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       _appearance != conversation.interfaceOverride ||
       _overrideDefinitions != conversation.overrideDefinitions;
 
-  /// Who is taking part: the bound character, then the user's identity. A group
-  /// chat would add more rows here, which is what the list is shaped for.
+  /// Who is taking part: every AI character in the thread, then the user's
+  /// identity. A one-to-one chat lists its single character; a group lists all
+  /// its members, in speaking order.
   List<_Participant> _participants(AppState state, Conversation conversation) {
-    final bot = _resolved(state, conversation, conversation.characterId);
-    final me = _resolved(state, conversation, conversation.impersonateId);
-    return [
+    final rows = <_Participant>[];
+    for (final id in conversation.memberIds) {
       // A thread outlives the card it was started from, so a character that has
       // been deleted from the roster still gets a row — otherwise the chat looks
       // like nobody is in it and there is no way to unlink the ghost.
-      if (bot != null || conversation.characterId != null)
-        _Participant(
-          role: 'Character',
-          character: bot,
-          placeholder: bot == null
-              ? '${conversation.characterName ?? 'Character'} (deleted)'
-              : null,
-          removable: true,
-        ),
-      _Participant(
-        role: 'You',
-        character: me,
-        placeholder: me == null ? 'You' : null,
-        removable: me != null,
-      ),
-    ];
+      final bot = _resolved(state, conversation, id);
+      final ghostName = id == conversation.characterId
+          ? (conversation.characterName ?? 'Character')
+          : 'Character';
+      rows.add(_Participant(
+        role: 'Character',
+        id: id,
+        character: bot,
+        placeholder: bot == null ? '$ghostName (deleted)' : null,
+        removable: true,
+      ));
+    }
+    final me = _resolved(state, conversation, conversation.impersonateId);
+    rows.add(_Participant(
+      role: 'You',
+      character: me,
+      placeholder: me == null ? 'You' : null,
+      removable: me != null,
+    ));
+    return rows;
   }
 
   /// The definition this screen should show for [id]: a pending edit first, then
@@ -184,25 +194,41 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
     );
     if (!ok || !mounted) return;
     final state = context.read<AppState>();
-    await state.detachCharacter(
-      widget.conversationId,
-      impersonation: participant.isUser,
-    );
-    final id = participant.character?.id;
-    if (id != null) setState(() => _edits.remove(id));
-  }
-
-  /// The "+" beside Characters involved. A chat holds one character today, so
-  /// this attaches one when there is none and says why it cannot do more when
-  /// there is.
-  Future<void> _addParticipant(Conversation conversation) async {
-    if (conversation.characterId != null) {
-      _toast('One character per chat for now — group chats are coming.');
+    if (participant.isUser) {
+      await state.detachCharacter(widget.conversationId, impersonation: true);
       return;
     }
+    // A character member — group-aware removal that collapses a two-member
+    // thread back to one-to-one and unlinks the last member entirely.
+    final id = participant.id ?? participant.character?.id;
+    if (id == null) return;
+    await state.removeParticipant(widget.conversationId, id);
+    if (mounted) setState(() => _edits.remove(id));
+  }
+
+  /// The "+" beside Characters involved. With group chats on, this opens the
+  /// add/remove sheet so the chat can hold several characters; with the feature
+  /// off, a chat holds one, so it attaches one when there is none and says why
+  /// it cannot do more when there is.
+  Future<void> _addParticipant(Conversation conversation) async {
     final state = context.read<AppState>();
     if (state.characters.isEmpty) {
       _toast('No characters yet — import or create one first.');
+      return;
+    }
+    if (state.groupChatsEnabled) {
+      await showGroupAddSheet(context, conversationId: widget.conversationId);
+      if (!mounted) return;
+      // The title may have been taken from the first character attached.
+      final fresh = state.conversationById(widget.conversationId);
+      if (fresh != null && _title.text.trim().isEmpty) {
+        _title.text = fresh.title;
+      }
+      return;
+    }
+    if (conversation.characterId != null) {
+      _toast('One character per chat — turn on group chats in Chat Interface '
+          'settings to add more.');
       return;
     }
     final picked = await showModalBottomSheet<Character>(
