@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -300,6 +301,56 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             onChanged: (c) => update(ui.copyWith(quoteColor: c)),
           ),
           const Divider(height: 24),
+          _header(context, 'Group chat'),
+          if (scope == null)
+            SettingHighlight(
+              active: highlight == SettingAnchor.groupChats,
+              child: SwitchListTile(
+                dense: true,
+                value: ui.groupChatsEnabled,
+                onChanged: (v) {
+                  update(ui.copyWith(groupChatsEnabled: v));
+                  notify(v ? 'Group chats on' : 'Group chats off');
+                },
+                secondary: const Icon(Icons.groups_outlined),
+                title: const Text('Enable group chats'),
+                subtitle: const Text(
+                    'Add several characters to a chat and let each take a turn'),
+              ),
+            ),
+          _SliderRow(
+            icon: Icons.height_outlined,
+            label: 'Participant bar height',
+            value: ui.groupBarHeight
+                .clamp(kMinGroupBarHeight, kMaxGroupBarHeight),
+            min: kMinGroupBarHeight,
+            max: kMaxGroupBarHeight,
+            suffix: '${ui.groupBarHeight.round()} px',
+            onChanged: (v) => update(ui.copyWith(groupBarHeight: v)),
+          ),
+          _ColorRow(
+            label: 'Participant bar',
+            value: ui.groupBarColor,
+            fallback: Theme.of(context).colorScheme.surfaceContainerHigh,
+            onChanged: (c) => update(ui.copyWith(groupBarColor: c)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.image_outlined),
+            title: const Text('Participant bar picture'),
+            subtitle: Text(ui.groupBarImage == null
+                ? 'None'
+                : 'A picture is set'),
+            trailing: ui.groupBarImage == null
+                ? const Icon(Icons.add_photo_alternate_outlined)
+                : IconButton(
+                    tooltip: 'Remove',
+                    icon: const Icon(Icons.close),
+                    onPressed: () =>
+                        update(ui.copyWith(groupBarImage: null)),
+                  ),
+            onTap: () => _pickGroupBarImage(context, ui, update),
+          ),
+          const Divider(height: 24),
           _header(context, 'Text wrapping'),
           _TextWrapSection(
             rules: ui.textWrapRules,
@@ -322,6 +373,27 @@ Widget _header(BuildContext context, String text) => Padding(      padding: cons
             ),
       ),
     );
+
+/// Picks a device image for the group bar's background, stores it in the avatar
+/// directory (so it round-trips like every other picture) and writes the
+/// resulting `local:` reference back onto the interface being edited.
+Future<void> _pickGroupBarImage(
+  BuildContext context,
+  ChatInterface ui,
+  void Function(ChatInterface) update,
+) async {
+  final state = context.read<AppState>();
+  final result = await FilePicker.pickFiles(
+    type: FileType.image,
+    withData: true,
+  );
+  final bytes = (result != null && result.files.isNotEmpty)
+      ? result.files.first.bytes
+      : null;
+  if (bytes == null) return;
+  final ref = await state.storePicture(bytes);
+  if (ref != null) update(ui.copyWith(groupBarImage: ref));
+}
 
 /// Says whose settings the page is editing, when it is not the app-wide ones.
 class _ScopeNote extends StatelessWidget {

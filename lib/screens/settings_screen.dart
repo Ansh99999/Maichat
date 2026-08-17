@@ -264,6 +264,14 @@ const List<_SearchEntry> _searchIndex = [
     builder: _chatColoursPage,
   ),
   _SearchEntry(
+    title: 'Group chat',
+    section: 'Chat Interface',
+    icon: Icons.groups_outlined,
+    keywords: 'group chat multi character participants members bar height '
+        'background picture colour color enable roleplay scene',
+    builder: _groupChatsPage,
+  ),
+  _SearchEntry(
     title: 'Storage',
     section: 'About',
     icon: Icons.sd_storage_outlined,
@@ -301,6 +309,8 @@ Widget _messageActionsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.messageActions);
 Widget _chatColoursPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
+Widget _groupChatsPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.groupChats);
 Widget _storagePage() =>
     const AboutSettingsPage(highlight: SettingAnchor.storage);
 Widget _versionPage() =>

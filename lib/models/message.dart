@@ -79,6 +79,8 @@ class ChatMessage {
     int? thinkingMs,
     List<MessageVariant>? swipes,
     int swipeIndex = 0,
+    this.speakerId,
+    this.speakerName,
   })  : swipes = List<MessageVariant>.unmodifiable(
           swipes == null || swipes.isEmpty
               ? <MessageVariant>[
@@ -97,6 +99,14 @@ class ChatMessage {
 
   /// Either `user` or `assistant`.
   final String role;
+
+  /// In a group chat, which participant *said* this turn — its [Character.id]
+  /// and a denormalised display name (kept so a turn still labels right if the
+  /// character is later edited or deleted). Null in an ordinary one-to-one chat,
+  /// where the thread's single character (or the impersonated user) is implied,
+  /// so nothing about the pre-group JSON shape changes.
+  final String? speakerId;
+  final String? speakerName;
 
   /// Every alternative this turn holds, oldest first. Never empty.
   final List<MessageVariant> swipes;
@@ -129,6 +139,8 @@ class ChatMessage {
     bool? error,
     String? reasoning,
     int? thinkingMs,
+    Object? speakerId = _unset,
+    Object? speakerName = _unset,
   }) {
     final next = active.copyWith(
       content: content,
@@ -140,8 +152,17 @@ class ChatMessage {
       role: role,
       swipes: <MessageVariant>[...swipes]..[swipeIndex] = next,
       swipeIndex: swipeIndex,
+      speakerId: identical(speakerId, _unset)
+          ? this.speakerId
+          : speakerId as String?,
+      speakerName: identical(speakerName, _unset)
+          ? this.speakerName
+          : speakerName as String?,
     );
   }
+
+  // Sentinel so copyWith can tell "leave the speaker" from "clear it to null".
+  static const Object _unset = Object();
 
   /// Selects the variant at [index] — the ‹ › control. Out-of-range indices and
   /// the current one are no-ops.
@@ -152,6 +173,8 @@ class ChatMessage {
               role: role,
               swipes: swipes.toList(),
               swipeIndex: index,
+              speakerId: speakerId,
+              speakerName: speakerName,
             );
 
   /// Appends [variant] and selects it — the regenerate path, which keeps the
@@ -160,6 +183,8 @@ class ChatMessage {
         role: role,
         swipes: <MessageVariant>[...swipes, variant],
         swipeIndex: swipes.length,
+        speakerId: speakerId,
+        speakerName: speakerName,
       );
 
   /// Drops the variant at [index], selecting the one before it. A turn always
@@ -175,6 +200,8 @@ class ChatMessage {
       role: role,
       swipes: rest,
       swipeIndex: selected.clamp(0, rest.length - 1),
+      speakerId: speakerId,
+      speakerName: speakerName,
     );
   }
 
@@ -187,6 +214,8 @@ class ChatMessage {
         if (error) 'error': true,
         if (reasoning.isNotEmpty) 'reasoning': reasoning,
         if (thinkingMs != null) 'thinkingMs': thinkingMs,
+        if (speakerId != null) 'speakerId': speakerId,
+        if (speakerName != null) 'speakerName': speakerName,
         if (hasSwipes) 'swipes': swipes.map((s) => s.toJson()).toList(),
         if (hasSwipes) 'swipeIndex': swipeIndex,
       };
@@ -205,6 +234,12 @@ class ChatMessage {
       error: json['error'] as bool? ?? false,
       reasoning: json['reasoning'] as String? ?? '',
       thinkingMs: (json['thinkingMs'] as num?)?.toInt(),
+      speakerId: (json['speakerId'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : (json['speakerId'] as String).trim(),
+      speakerName: (json['speakerName'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : (json['speakerName'] as String).trim(),
       swipes: swipes.isEmpty ? null : swipes,
       swipeIndex: (json['swipeIndex'] as num?)?.toInt() ?? 0,
     );

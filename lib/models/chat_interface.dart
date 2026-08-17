@@ -37,6 +37,12 @@ const double kDefaultMessageSpacing = 14;
 /// pixels — the bound both the preview's drag and the settings sliders honour.
 const double kMaxNameOffset = 100;
 
+/// Bounds for the group-chat participant bar's height, in logical pixels. The
+/// default is one comfortable row of avatar chips; the ceiling allows two rows.
+const double kMinGroupBarHeight = 44;
+const double kMaxGroupBarHeight = 160;
+const double kDefaultGroupBarHeight = 64;
+
 /// Where a sender's name label sits across the message row. The label spans the
 /// whole row, so this aligns it against the *screen*, not against the message it
 /// belongs to: "Right" really means the right edge of the chat.
@@ -622,6 +628,10 @@ class ChatInterface {
     this.messageActionsEnabled = true,
     this.messageActions = kDefaultMessageActions,
     this.actionBarPlacement = ActionBarPlacement.belowMessage,
+    this.groupChatsEnabled = false,
+    this.groupBarHeight = kDefaultGroupBarHeight,
+    this.groupBarColor,
+    this.groupBarImage,
   });
 
   final AvatarStyle botAvatar;
@@ -702,6 +712,22 @@ class ChatInterface {
   /// Where the action bar sits relative to a message.
   final ActionBarPlacement actionBarPlacement;
 
+  /// Whether the group-chat feature is offered at all. When off, the composer's
+  /// group toggle is hidden and every thread behaves one-to-one. Read from the
+  /// app-wide interface (a per-chat copy just inherits whatever it was frozen
+  /// at), so it acts as a global feature flag.
+  final bool groupChatsEnabled;
+
+  /// The height of the group participant bar, in logical pixels.
+  final double groupBarHeight;
+
+  /// ARGB fill behind the group bar; null follows the theme's surface.
+  final int? groupBarColor;
+
+  /// A picture drawn behind the group bar, as an [avatarRef]-style
+  /// `local:<file>` reference (or an `http(s)` URL); null draws none.
+  final String? groupBarImage;
+
   /// The inline actions, in order.
   List<MessageAction> get inlineActions => [
         for (final p in messageActions)
@@ -746,6 +772,10 @@ class ChatInterface {
     bool? messageActionsEnabled,
     List<MessageActionPref>? messageActions,
     ActionBarPlacement? actionBarPlacement,
+    bool? groupChatsEnabled,
+    double? groupBarHeight,
+    Object? groupBarColor = _unset,
+    Object? groupBarImage = _unset,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -775,6 +805,12 @@ class ChatInterface {
             messageActionsEnabled ?? this.messageActionsEnabled,
         messageActions: messageActions ?? this.messageActions,
         actionBarPlacement: actionBarPlacement ?? this.actionBarPlacement,
+        groupChatsEnabled: groupChatsEnabled ?? this.groupChatsEnabled,
+        groupBarHeight: groupBarHeight ?? this.groupBarHeight,
+        groupBarColor: _pick(groupBarColor, this.groupBarColor),
+        groupBarImage: identical(groupBarImage, _unset)
+            ? this.groupBarImage
+            : groupBarImage as String?,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -835,6 +871,11 @@ class ChatInterface {
         'messageActionsEnabled': messageActionsEnabled,
         'messageActions': messageActions.map((p) => p.toJson()).toList(),
         'actionBarPlacement': actionBarPlacement.name,
+        'groupChatsEnabled': groupChatsEnabled,
+        'groupBarHeight': groupBarHeight,
+        if (groupBarColor != null) 'groupBarColor': groupBarColor,
+        if (groupBarImage != null && groupBarImage!.isNotEmpty)
+          'groupBarImage': groupBarImage,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -894,6 +935,13 @@ class ChatInterface {
       messageActions: _messageActionsFromJson(json['messageActions']),
       actionBarPlacement:
           ActionBarPlacement.byName(json['actionBarPlacement'] as String?),
+      groupChatsEnabled: json['groupChatsEnabled'] as bool? ?? false,
+      groupBarHeight: (json['groupBarHeight'] as num?)?.toDouble() ??
+          kDefaultGroupBarHeight,
+      groupBarColor: (json['groupBarColor'] as num?)?.toInt(),
+      groupBarImage: (json['groupBarImage'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : (json['groupBarImage'] as String).trim(),
     );
   }
 
@@ -963,7 +1011,11 @@ class ChatInterface {
       listEquals(other.textWrapRules, textWrapRules) &&
       other.messageActionsEnabled == messageActionsEnabled &&
       listEquals(other.messageActions, messageActions) &&
-      other.actionBarPlacement == actionBarPlacement;
+      other.actionBarPlacement == actionBarPlacement &&
+      other.groupChatsEnabled == groupChatsEnabled &&
+      other.groupBarHeight == groupBarHeight &&
+      other.groupBarColor == groupBarColor &&
+      other.groupBarImage == groupBarImage;
 
   @override
   int get hashCode => Object.hash(
@@ -988,7 +1040,10 @@ class ChatInterface {
         // this list is already at that ceiling.
         Object.hash(quoteColor, Object.hashAll(textWrapRules)),
         Object.hash(messageActionsEnabled, actionBarPlacement),
-        Object.hashAll(messageActions),
+        // Folded together because Object.hash caps at 20 arguments: the message
+        // action list plus the group-bar settings share this final slot.
+        Object.hash(Object.hashAll(messageActions), groupChatsEnabled,
+            groupBarHeight, groupBarColor, groupBarImage),
       );
 }
 

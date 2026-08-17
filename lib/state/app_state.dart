@@ -712,6 +712,121 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  // --- Group chat ----------------------------------------------------------
+
+  /// Whether the group-chat feature is switched on app-wide. Read from the
+  /// global interface so a per-chat style copy can't silently disable it.
+  bool get groupChatsEnabled => _chatInterface.groupChatsEnabled;
+
+  /// The AI characters taking part in [conversation], in speaking order,
+  /// resolved against the roster (and per-chat overrides). Characters that no
+  /// longer resolve are dropped, so a deleted member never crashes a send.
+  List<Character> participantsOf(Conversation conversation) => [
+        for (final id in conversation.memberIds)
+          if (characterFor(conversation, id) != null)
+            characterFor(conversation, id)!,
+      ];
+
+  /// Adds [character] to [conversationId] as a group member. The first add to a
+  /// one-to-one thread seeds the roster with the existing character first, so
+  /// the original speaker keeps its place; the thread becomes a group once a
+  /// second member is present. Idempotent — re-adding a member is a no-op.
+  Future<void> addParticipant(
+    String conversationId,
+    Character character,
+  ) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    final members = conversation.participantIds.isNotEmpty
+        ? conversation.participantIds.toList()
+        : (conversation.characterId == null
+            ? <String>[]
+            : <String>[conversation.characterId!]);
+    if (members.contains(character.id)) return;
+    members.add(character.id);
+    conversation.participantIds
+      ..clear()
+      ..addAll(members);
+    // Keep the primary pointer valid: an empty thread's first member becomes the
+    // bound character (and names the thread), matching a one-to-one start.
+    conversation.characterId ??= members.first;
+    conversation.characterName ??= character.displayName;
+    if (conversation.messages.isEmpty &&
+        (conversation.title.trim().isEmpty ||
+            conversation.title == 'New chat')) {
+      conversation.title = character.displayName;
+    }
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Removes a member from a group chat. Dropping back to a single member turns
+  /// the thread one-to-one again (the lone survivor becomes the bound
+  /// character); the transcript and each turn's speaker tag are left untouched.
+  Future<void> removeParticipant(
+    String conversationId,
+    String characterId,
+  ) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    final members = conversation.participantIds.toList()..remove(characterId);
+    if (members.length <= 1) {
+      // No longer a group: collapse to the plain one-to-one shape.
+      conversation.participantIds.clear();
+      final sole = members.isNotEmpty
+          ? members.first
+          : (conversation.characterId == characterId
+              ? null
+              : conversation.characterId);
+      conversation.characterId = sole;
+      conversation.characterName =
+          characterFor(conversation, sole)?.displayName;
+    } else {
+      conversation.participantIds
+        ..clear()
+        ..addAll(members);
+      if (conversation.characterId == characterId) {
+        conversation.characterId = members.first;
+        conversation.characterName =
+            characterFor(conversation, members.first)?.displayName;
+      }
+    }
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+    await _sweepAvatars();
+  }
+
+  /// The character whose turn it is to reply next in [conversation] — round
+  /// robin over the participant order, picking the member after whoever spoke
+  /// last. Falls back to the first member when no member has spoken yet, and to
+  /// the single character in a one-to-one thread. Null when nothing resolves.
+  Character? nextSpeaker(Conversation conversation) {
+    final members = participantsOf(conversation);
+    if (members.isEmpty) return null;
+    if (members.length == 1) return members.first;
+    // The most recent assistant turn attributed to a current member sets the
+    // anchor; the reply goes to the next member in order.
+    for (final message in conversation.messages.reversed) {
+      if (message.role != 'assistant' || message.speakerId == null) continue;
+      final at = members.indexWhere((c) => c.id == message.speakerId);
+      if (at >= 0) return members[(at + 1) % members.length];
+    }
+    return members.first;
+  }
+
+  /// Makes a specific member of the active group chat reply now — the group
+  /// bar's "tap a chip to let them speak" action. No user turn is added; the
+  /// character responds to the conversation as it stands.
+  Future<void> speakAs(String characterId) async {
+    if (_streaming) return;
+    final conversation = active;
+    final character = characterFor(conversation, characterId);
+    if (character == null) return;
+    await _generate(conversation, responder: character);
+  }
+
   // --- Characters ----------------------------------------------------------
 
   Future<void> _persistCharacters() async {
@@ -1136,7 +1251,16 @@ class AppState extends ChangeNotifier {
     final conversation = active;
 
     if (conversation.isEmpty) conversation.retitleFrom(prompt);
-    conversation.messages.add(ChatMessage(role: 'user', content: prompt));
+    // In a group chat the user's turn is tagged with whoever they are speaking
+    // as, so the transcript and the wire can label it (mirrors how each member's
+    // replies carry their speaker).
+    final speaking = conversation.isGroup ? impersonationFor(conversation) : null;
+    conversation.messages.add(ChatMessage(
+      role: 'user',
+      content: prompt,
+      speakerId: speaking?.id,
+      speakerName: speaking?.displayName,
+    ));
 
     await _generate(conversation);
   }
@@ -1155,12 +1279,19 @@ class AppState extends ChangeNotifier {
   /// the provider returns in its own field, and what the model writes inline
   /// between the preset's thinking tags. Either way the reply text stays clean
   /// and the thinking is timed, so the chat can show "Thought for X seconds".
-  Future<void> _generate(Conversation conversation, {int? swipeInto}) async {
+  Future<void> _generate(Conversation conversation,
+      {int? swipeInto, Character? responder}) async {
     final preset = presetFor(conversation);
     final base = _resolveProvider(preset);
     if (base == null) return;
 
-    final assembled = _assemble(conversation, historyEnd: swipeInto);
+    // In a group chat every reply is spoken by one member. When the caller did
+    // not name one (a plain send), round-robin picks who is up next.
+    final speaker = conversation.isGroup
+        ? (responder ?? nextSpeaker(conversation))
+        : responder;
+
+    final assembled = _assemble(conversation, historyEnd: swipeInto, responder: speaker);
     final history = assembled.messages;
     final params = assembled.params;
     final tags = ReasoningTags(
@@ -1172,7 +1303,12 @@ class AppState extends ChangeNotifier {
     // was live before it, so an aborted attempt can be rolled back cleanly.
     final int target;
     if (swipeInto == null) {
-      conversation.messages.add(ChatMessage(role: 'assistant', content: ''));
+      conversation.messages.add(ChatMessage(
+        role: 'assistant',
+        content: '',
+        speakerId: conversation.isGroup ? speaker?.id : null,
+        speakerName: conversation.isGroup ? speaker?.displayName : null,
+      ));
       target = conversation.messages.length - 1;
     } else {
       target = swipeInto;
@@ -1346,7 +1482,12 @@ class AppState extends ChangeNotifier {
     if (index < 0 || index >= conversation.messages.length) return;
     if (conversation.messages[index].isUser) return;
     conversation.messages.removeRange(index + 1, conversation.messages.length);
-    await _generate(conversation, swipeInto: index);
+    // A group turn is re-spoken by the same member, so the swipe keeps the same
+    // voice and the round-robin anchor is unchanged.
+    final responder = conversation.isGroup
+        ? characterFor(conversation, conversation.messages[index].speakerId)
+        : null;
+    await _generate(conversation, swipeInto: index, responder: responder);
   }
 
   /// Selects the swipe at [swipeIndex] on the message at [index] — the ‹ 1/2 ›
@@ -1495,7 +1636,8 @@ class AppState extends ChangeNotifier {
   /// what the user inspects is what the model receives. [historyEnd], when set,
   /// caps the messages considered (exclusive), letting a caller rebuild the
   /// prompt as it stood at an earlier turn.
-  AssembledPrompt _assemble(Conversation conversation, {int? historyEnd}) {
+  AssembledPrompt _assemble(Conversation conversation,
+      {int? historyEnd, Character? responder}) {
     final preset = presetFor(conversation);
     final model = _resolveProvider(preset)?.model ?? '';
 
@@ -1518,7 +1660,15 @@ class AppState extends ChangeNotifier {
     // When the user impersonates a character, their identity is injected so the
     // model treats their turns as that persona (mirrors Agnai's user-persona).
     final impersonation = impersonationFor(conversation);
-    final character = characterFor(conversation, conversation.characterId);
+    // Whose card fills the definition markers. In a one-to-one thread that is the
+    // bound character; in a group it is the member who is about to speak — the
+    // "whoever is invoked, their definition is sent" policy (matching Agnai, and
+    // SillyTavern's default SWAP mode). Everyone else is summarised in a compact
+    // roster block below, so the responder knows who is in the room without
+    // paying for every card on every turn.
+    final character = conversation.isGroup
+        ? (responder ?? nextSpeaker(conversation))
+        : characterFor(conversation, conversation.characterId);
     final userName = impersonation?.displayName ?? 'User';
     final persona = impersonation == null
         ? ''
@@ -1550,6 +1700,33 @@ class AppState extends ChangeNotifier {
         label: label, role: 'system', tokens: _cost(m), messageCount: 1));
     }
 
+    // Group chats speak in one thread of many voices, so every turn is labelled
+    // with its speaker ("Name: …") — the shape SillyTavern uses for groups — and
+    // the responder is told who else is present and asked to reply only as
+    // itself. A one-to-one thread is untouched (no labels, no roster).
+    final history = conversation.isGroup
+        ? [
+            for (final m in priorTurns)
+              m.copyWith(
+                content: _groupTurnLabel(m, userName).isEmpty
+                    ? m.content
+                    : '${_groupTurnLabel(m, userName)}: ${m.content}',
+              ),
+          ]
+        : priorTurns;
+    if (conversation.isGroup && character != null) {
+      addPrefix(
+        'Group',
+        _groupBriefing(
+          responder: character,
+          others: participantsOf(conversation)
+              .where((c) => c.id != character.id)
+              .toList(),
+          userName: userName,
+        ),
+      );
+    }
+
     List<ChatMessage> messages;
     var params = const GenParams();
 
@@ -1557,7 +1734,7 @@ class AppState extends ChangeNotifier {
       final built = _prompts.build(
         preset: preset,
         character: character,
-        history: priorTurns,
+        history: history,
         model: model,
         maxContext: maxContext,
         userName: userName,
@@ -1613,8 +1790,16 @@ class AppState extends ChangeNotifier {
       params = _paramsFor(preset);
     } else {
       // No preset: the original flat behaviour — stored persona then history,
-      // plus the impersonated user persona (when set).
-      addPrefix('Character (stored)', conversation.systemPrompt);
+      // plus the impersonated user persona (when set). In a group the stored
+      // prompt belongs to the primary character, so the responder's own composed
+      // persona is used instead — otherwise a non-primary speaker would be sent
+      // the wrong definition.
+      addPrefix(
+        'Character (stored)',
+        conversation.isGroup && character != null
+            ? character.composedSystemPrompt(userName: userName)
+            : conversation.systemPrompt,
+      );
       if (persona.isNotEmpty) addPrefix('User persona', persona);
       // With no preset there are no slots to place lore in, so everything that
       // activated is prefixed as one block. Depth-injected entries lose their
@@ -1630,13 +1815,13 @@ class AppState extends ChangeNotifier {
           ...lore.injections.map((i) => i.text),
         ].where((s) => s.isNotEmpty).join('\n'),
       );
-      messages = <ChatMessage>[...prefix, ...priorTurns];
-      if (priorTurns.isNotEmpty) {
+      messages = <ChatMessage>[...prefix, ...history];
+      if (history.isNotEmpty) {
         sections.add(PromptSection(
           label: 'Chat history',
           role: 'mixed',
-          tokens: priorTurns.fold<int>(0, (s, m) => s + _cost(m)),
-          messageCount: priorTurns.length,
+          tokens: history.fold<int>(0, (s, m) => s + _cost(m)),
+          messageCount: history.length,
         ));
       }
     }
@@ -1663,7 +1848,58 @@ class AppState extends ChangeNotifier {
     final isUser = safe < conversation.messages.length &&
         conversation.messages[safe].isUser;
     final end = isUser ? safe + 1 : safe;
-    return _assemble(conversation, historyEnd: end);
+    // For a group, an assistant turn was produced by a specific member, so its
+    // prompt is rebuilt from that member's seat rather than the round-robin
+    // guess; a user turn shows what the next speaker would receive.
+    final responder = conversation.isGroup && !isUser && safe < conversation.messages.length
+        ? characterFor(conversation, conversation.messages[safe].speakerId)
+        : null;
+    return _assemble(conversation, historyEnd: end, responder: responder);
+  }
+
+  /// The speaker label a group turn is prefixed with on the wire ("Name: …").
+  /// A user turn is labelled with whoever they are speaking as (the impersonated
+  /// identity, or the plain user name); an assistant turn with its stored
+  /// speaker. Empty means "leave this turn unlabelled" (a pre-group turn).
+  static String _groupTurnLabel(ChatMessage m, String userName) {
+    if (m.isUser) return (m.speakerName ?? userName).trim();
+    return (m.speakerName ?? '').trim();
+  }
+
+  /// A compact system briefing for a group reply: who is speaking, who else is
+  /// present (one line each), and the instruction to answer only as the
+  /// responder. This is the "others summarised" half of the group prompt policy
+  /// — the responder's full card is emitted by the preset markers as usual.
+  static String _groupBriefing({
+    required Character responder,
+    required List<Character> others,
+    required String userName,
+  }) {
+    final buffer = StringBuffer()
+      ..writeln('This is a group roleplay with several characters. '
+          'Write the next reply as ${responder.displayName} only.');
+    if (others.isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln('# Other characters present');
+      for (final c in others) {
+        final brief = c.blurb;
+        final line = brief.isEmpty
+            ? c.displayName
+            : '${c.displayName}: ${brief.length > 240 ? '${brief.substring(0, 240)}…' : brief}';
+        buffer.writeln('- $line');
+      }
+    }
+    buffer
+      ..writeln()
+      ..writeln('$userName is the user. Stay in character as '
+          '${responder.displayName}; do not speak, act, or narrate for the '
+          'other characters or for $userName.');
+    return Character.resolveMacros(
+      buffer.toString().trim(),
+      charName: responder.displayName,
+      userName: userName,
+    );
   }
 
   /// Whether [preset] already surfaces the user persona through an enabled

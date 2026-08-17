@@ -24,10 +24,12 @@ class Conversation {
     Map<String, Character>? characterOverrides,
     Map<String, String>? variables,
     List<String>? lorebookIds,
+    List<String>? participantIds,
   })  : characterOverrides =
             characterOverrides ?? <String, Character>{},
         variables = variables ?? <String, String>{},
-        lorebookIds = lorebookIds ?? <String>[];
+        lorebookIds = lorebookIds ?? <String>[],
+        participantIds = participantIds ?? <String>[];
 
   final String id;
   String title;
@@ -90,6 +92,25 @@ class Conversation {
   /// tiebreaker between two entries of equal weight.
   final List<String> lorebookIds;
 
+  /// The AI characters taking part in a **group chat**, by [Character.id], in
+  /// speaking order — the chips shown in the group bar. Empty (the normal case)
+  /// means a one-to-one thread, where [characterId] alone is the character; a
+  /// group is any thread with two or more here. [characterId] stays the primary
+  /// (first) member so single-character code paths and older readers keep
+  /// working. The impersonated user ([impersonateId]) is deliberately *not* a
+  /// participant — it is the human's seat, not a responder.
+  final List<String> participantIds;
+
+  /// Whether this thread is a group chat (two or more characters take part).
+  bool get isGroup => participantIds.length >= 2;
+
+  /// Every AI character in the thread, in order — the group roster when it is a
+  /// group, otherwise the single bound character (or nothing).
+  List<String> get memberIds {
+    if (participantIds.isNotEmpty) return participantIds;
+    return characterId == null ? const <String>[] : <String>[characterId!];
+  }
+
   factory Conversation.empty() => Conversation(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         title: 'New chat',
@@ -139,6 +160,7 @@ class Conversation {
         ),
         variables: Map<String, String>.of(variables),
         lorebookIds: lorebookIds.toList(),
+        participantIds: participantIds.toList(),
       );
 
   /// Whether this thread is bound to a saved character.
@@ -174,6 +196,7 @@ class Conversation {
           ),
         if (variables.isNotEmpty) 'variables': variables,
         if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
+        if (participantIds.isNotEmpty) 'participantIds': participantIds,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -208,6 +231,10 @@ class Conversation {
           (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
         ),
         lorebookIds: (json['lorebookIds'] as List?)
+            ?.map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList(),
+        participantIds: (json['participantIds'] as List?)
             ?.map((e) => e.toString())
             .where((s) => s.isNotEmpty)
             .toList(),

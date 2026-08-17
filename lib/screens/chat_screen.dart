@@ -21,11 +21,11 @@ import 'chat_export.dart';
 import 'chat_memory_panel.dart';
 import 'chat_settings_screen.dart';
 import 'chats_screen.dart';
+import 'group_add_sheet.dart';
 import 'prompt_view_screen.dart';
 import 'presets/chat_preset_panel.dart';
 import 'presets/preset_pickers.dart';
 import 'section_screen.dart';
-import 'settings/appearance_settings_page.dart';
 import 'settings_screen.dart';
 
 /// A single conversation: the thread and a composer. The chat is deliberately
@@ -63,6 +63,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// The follow-up jump used when opening a chat (see [_jumpToEndOnOpen]). Held
   /// so it can be cancelled if the screen is torn down before it fires.
   Timer? _openJumpTimer;
+
+  /// Whether the composer's operations strip (the three-dot symbols) is open.
+  bool _showOps = false;
+
+  /// Whether the group participant bar is shown above the composer. Opened from
+  /// the operations strip's group symbol, dismissed by its own ✕.
+  bool _showGroupBar = false;
 
   @override
   void initState() {
@@ -109,10 +116,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _openSettings() => Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
-      );
-
-  void _openAppearance() => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const AppearanceSettingsPage()),
       );
 
   void _openSection(String title, IconData icon) => Navigator.of(context).push(
@@ -273,10 +276,8 @@ class _ChatScreenState extends State<ChatScreen> {
         onProfile: _goHome,
         onCharacters: _openCharacters,
         onChats: _goChats,
-        onParticipants: () => _editChat(state),
         onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),
         onEditChat: () => _editChat(state),
-        onUi: _openAppearance,
         onChatGraph: () =>
             _openSection('Chat Graph', Icons.account_tree_outlined),
         onProviderModel: _openQuickSettings,
@@ -324,6 +325,23 @@ class _ChatScreenState extends State<ChatScreen> {
                           ],
                         ),
                 ),
+                if (_showGroupBar && conversation.isGroup)
+                  _GroupBar(
+                    conversation: conversation,
+                    participants: state.participantsOf(conversation),
+                    user: state.impersonationFor(conversation),
+                    ui: ui,
+                    onChip: (id) {
+                      state.speakAs(id);
+                      _scrollToEnd();
+                    },
+                    onUser: () => _openImpersonatePicker(state),
+                    onRemove: (id) =>
+                        state.removeParticipant(conversation.id, id),
+                    onAdd: () => showGroupAddSheet(context,
+                        conversationId: conversation.id),
+                    onClose: () => setState(() => _showGroupBar = false),
+                  ),
                 _composer(state),
               ],
             ),
@@ -370,8 +388,12 @@ class _ChatScreenState extends State<ChatScreen> {
         return MessageBubble(
           message: message,
           ui: ui,
-          character: character,
-          userPersona: persona,
+          character: conversation.isGroup && message.speakerId != null
+              ? (state.characterFor(conversation, message.speakerId) ?? character)
+              : character,
+          userPersona: conversation.isGroup && message.isUser && message.speakerId != null
+              ? (state.characterFor(conversation, message.speakerId) ?? persona)
+              : persona,
           pending: isLast && state.streaming,
           streaming: state.streaming,
           onAction: (action) =>
@@ -549,41 +571,102 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _composer(AppState state) {
     final scheme = Theme.of(context).colorScheme;
     final persona = state.impersonationFor(state.active);
+    final conversation = state.active;
+    final groupEnabled = state.groupChatsEnabled;
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 8, 12, 12),
       decoration: BoxDecoration(
         color: scheme.surface,
         border: Border(top: BorderSide(color: scheme.outlineVariant)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _ImpersonateButton(
-            persona: persona,
-            onTap: () => _openImpersonatePicker(state),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: _input,
-              minLines: 1,
-              maxLines: 5,
-              textInputAction: TextInputAction.newline,
-              keyboardType: TextInputType.multiline,
-              decoration: InputDecoration(
-                hintText:
-                    persona == null ? 'Message' : 'Message as ${persona.displayName}',
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 12),
+          // The operations strip: a row of symbols opened by the composer's ⋮
+          // button. Group chat is the first (and, for now, only) operation,
+          // shown only when the feature is switched on. Kept as a plain
+          // conditional (not an AnimatedSize) so every symbol stays reliably
+          // tappable — an animated wrapper clipped the hit region.
+          if (_showOps)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 6, left: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (groupEnabled)
+                      IconButton(
+                        tooltip: conversation.isGroup
+                            ? 'Group participants'
+                            : 'Start a group chat',
+                        isSelected: _showGroupBar,
+                        onPressed: () => _toggleGroupBar(state),
+                        icon: const Icon(Icons.groups_outlined),
+                      ),
+                  ],
+                ),
               ),
             ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // The operations button only earns its place when there is an
+                  // operation to show; group chat is the only one so far.
+                  if (groupEnabled)
+                    IconButton(
+                      key: const Key('composer-ops-button'),
+                      tooltip: 'More',
+                      visualDensity: VisualDensity.compact,
+                      isSelected: _showOps,
+                      onPressed: () => setState(() => _showOps = !_showOps),
+                      icon: const Icon(Icons.more_vert),
+                    ),
+                  _ImpersonateButton(
+                    persona: persona,
+                    onTap: () => _openImpersonatePicker(state),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  minLines: 1,
+                  maxLines: 5,
+                  textInputAction: TextInputAction.newline,
+                  keyboardType: TextInputType.multiline,
+                  decoration: InputDecoration(
+                    hintText:
+                        persona == null ? 'Message' : 'Message as ${persona.displayName}',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _sendButton(state),
+            ],
           ),
-          const SizedBox(width: 8),
-          _sendButton(state),
         ],
       ),
     );
+  }
+
+  /// Toggles the group bar from the operations strip. When the thread is not yet
+  /// a group, this opens the add sheet instead so there is something to show.
+  void _toggleGroupBar(AppState state) {
+    final conversation = state.active;
+    if (!conversation.isGroup) {
+      showGroupAddSheet(context, conversationId: conversation.id);
+      setState(() => _showGroupBar = true);
+      return;
+    }
+    setState(() => _showGroupBar = !_showGroupBar);
   }
 
   /// Opens the impersonation picker (search + character list) and, on a pick,
@@ -679,6 +762,146 @@ class _ChatBackground extends StatelessWidget {
           image: provider,
           fit: BoxFit.cover,
           errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+}
+
+/// The group participant bar shown above the composer: a fixed-height strip of
+/// tappable character chips (tap to let that character speak, long-press to
+/// remove), the impersonated "you" chip, an add (+) chip, and a persistent ✕ to
+/// hide it. Its height and background come from the chat's [ChatInterface], so
+/// both are tunable app-wide and per chat.
+class _GroupBar extends StatelessWidget {
+  const _GroupBar({
+    required this.conversation,
+    required this.participants,
+    required this.user,
+    required this.ui,
+    required this.onChip,
+    required this.onUser,
+    required this.onRemove,
+    required this.onAdd,
+    required this.onClose,
+  });
+
+  final Conversation conversation;
+  final List<Character> participants;
+  final Character? user;
+  final ChatInterface ui;
+  final ValueChanged<String> onChip;
+  final VoidCallback onUser;
+  final ValueChanged<String> onRemove;
+  final VoidCallback onAdd;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final bg = ui.groupBarColor != null
+        ? Color(ui.groupBarColor!)
+        : scheme.surfaceContainerHigh;
+    final image = ui.groupBarImage == null
+        ? null
+        : avatarImage(ui.groupBarImage!, displaySize: 600, devicePixelRatio: 1);
+    return Container(
+      height: ui.groupBarHeight.clamp(kMinGroupBarHeight, kMaxGroupBarHeight),
+      decoration: BoxDecoration(
+        color: bg,
+        image: image == null
+            ? null
+            : DecorationImage(image: image, fit: BoxFit.cover),
+        border: Border(top: BorderSide(color: scheme.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _GroupChip(
+                    label: 'Add',
+                    icon: Icons.add,
+                    onTap: onAdd,
+                  ),
+                  if (user != null)
+                    _GroupChip(
+                      label: user!.displayName,
+                      character: user,
+                      highlight: true,
+                      onTap: onUser,
+                    ),
+                  for (final c in participants)
+                    _GroupChip(
+                      label: c.displayName,
+                      character: c,
+                      onTap: () => onChip(c.id),
+                      onLongPress: () => onRemove(c.id),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Hide participants',
+            onPressed: onClose,
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One chip in the [_GroupBar] — an avatar (or leading icon) with a name.
+class _GroupChip extends StatelessWidget {
+  const _GroupChip({
+    required this.label,
+    this.character,
+    this.icon,
+    this.highlight = false,
+    required this.onTap,
+    this.onLongPress,
+  });
+
+  final String label;
+  final Character? character;
+  final IconData? icon;
+  final bool highlight;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Widget leading = character != null
+        ? CharacterAvatar(character: character!, radius: 12)
+        : Icon(icon ?? Icons.person, size: 18, color: scheme.onSecondaryContainer);
+    return Material(
+      color: highlight
+          ? scheme.primaryContainer
+          : scheme.secondaryContainer,
+      borderRadius: BorderRadius.circular(20),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(6, 4, 12, 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              leading,
+              const SizedBox(width: 6),
+              Text(label,
+                  style: Theme.of(context).textTheme.labelLarge),
+            ],
+          ),
         ),
       ),
     );
@@ -842,10 +1065,8 @@ class _ChatDrawer extends StatefulWidget {
     required this.onProfile,
     required this.onCharacters,
     required this.onChats,
-    required this.onParticipants,
     required this.onGallery,
     required this.onEditChat,
-    required this.onUi,
     required this.onChatGraph,
     required this.onProviderModel,
     required this.onSettings,
@@ -859,10 +1080,8 @@ class _ChatDrawer extends StatefulWidget {
   final VoidCallback onProfile;
   final VoidCallback onCharacters;
   final VoidCallback onChats;
-  final VoidCallback onParticipants;
   final VoidCallback onGallery;
   final VoidCallback onEditChat;
-  final VoidCallback onUi;
   final VoidCallback onChatGraph;
   final VoidCallback onProviderModel;
   final VoidCallback onSettings;
@@ -990,11 +1209,6 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                     ),
                   ),
                   _ChatNavItem(
-                    icon: Icons.group_outlined,
-                    label: 'Participants',
-                    onTap: () => _close(context, widget.onParticipants),
-                  ),
-                  _ChatNavItem(
                     icon: Icons.photo_library_outlined,
                     label: 'Gallery',
                     onTap: () => _close(context, widget.onGallery),
@@ -1015,11 +1229,6 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                     label: 'Memory',
                     subtitle: memorySubtitle,
                     onTap: () => _show(_DrawerPanel.memory),
-                  ),
-                  _ChatNavItem(
-                    icon: Icons.palette_outlined,
-                    label: 'UI',
-                    onTap: () => _close(context, widget.onUi),
                   ),
                   _ChatNavItem(
                     icon: Icons.account_tree_outlined,

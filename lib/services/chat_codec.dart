@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../models/character.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 
@@ -280,27 +281,21 @@ class ChatCodec {
   }
 
   /// A fresh copy of [source] under a new id, so importing the same file twice
-  /// gives two threads rather than two entries claiming to be one.
+  /// gives two threads rather than two entries claiming to be one. Uses
+  /// [Conversation.copyAs] so every per-chat field (participants, overrides,
+  /// background, …) rides along — enumerating them here once dropped a new field
+  /// on native re-import.
   static Conversation _reseat(Conversation source, {String? fileName}) {
     final title = source.title.trim();
-    return Conversation(
+    final newTitle = title.isEmpty || title == 'New chat'
+        ? (fileName?.trim().isNotEmpty == true
+            ? fileName!.trim()
+            : 'Imported chat')
+        : title;
+    return source.copyAs(
       id: _freshId(),
-      title: title.isEmpty || title == 'New chat'
-          ? (fileName?.trim().isNotEmpty == true
-              ? fileName!.trim()
-              : 'Imported chat')
-          : title,
+      title: newTitle,
       messages: source.messages.toList(),
-      updatedAt: source.updatedAt,
-      characterId: source.characterId,
-      characterName: source.characterName,
-      systemPrompt: source.systemPrompt,
-      impersonateId: source.impersonateId,
-      impersonateName: source.impersonateName,
-      presetId: source.presetId,
-      presetOverride: source.presetOverride,
-      variables: Map<String, String>.of(source.variables),
-      lorebookIds: source.lorebookIds.toList(),
     );
   }
   /// The thread's name as the file gives it, falling back to the file's own name.
@@ -395,7 +390,7 @@ class ChatCodec {
     required String user,
     required DateTime at,
   }) {
-    final name = m.isUser ? user : char;
+    final name = _turnSpeaker(m, char: char, user: user);
     final json = m.toJson()
       ..['msg'] = m.content
       ..['name'] = name
@@ -404,7 +399,7 @@ class ChatCodec {
     if (m.isUser) {
       json['userId'] = 'anon';
     } else {
-      json['characterId'] = 'imported';
+      json['characterId'] = _speakerCharId(m, primary: char);
     }
     final others = _retries(m);
     if (others.isNotEmpty) json['retries'] = others;
@@ -459,7 +454,7 @@ class ChatCodec {
     // somehow holds alternatives is written as its live text alone.
     final swipes = m.hasSwipes && !m.isUser;
     return {
-      'name': m.isUser ? user : char,
+      'name': _turnSpeaker(m, char: char, user: user),
       'is_user': m.isUser,
       'is_system': false,
       'send_date': stamp,
@@ -514,14 +509,14 @@ class ChatCodec {
     required String user,
     required DateTime at,
   }) {
-    final name = m.isUser ? user : char;
+    final name = _turnSpeaker(m, char: char, user: user);
     final others = _retries(m);
     return {
       'msg': m.content,
       'name': name,
       'handle': name,
       'createdAt': at.toIso8601String(),
-      if (m.isUser) 'userId': 'anon' else 'characterId': 'imported',
+      if (m.isUser) 'userId': 'anon' else 'characterId': _speakerCharId(m, primary: char),
       if (others.isNotEmpty) 'retries': others,
     };
   }
@@ -584,6 +579,36 @@ class ChatCodec {
     }
     return 'Assistant';
   }
+
+  /// The name a turn is attributed to on the wire. In a group chat each turn
+  /// carries its own speaker, so that wins; otherwise it is the thread's single
+  /// character (or the user). Keeps every export attributable turn-by-turn, the
+  /// way SillyTavern's group `.jsonl` and Agnai's multi-character export do.
+  static String _turnSpeaker(
+    ChatMessage m, {
+    required String char,
+    required String user,
+  }) {
+    final speaker = (m.speakerName ?? '').trim();
+    if (speaker.isNotEmpty) return speaker;
+    return m.isUser ? user : char;
+  }
+
+  /// The `characterId` a member's turn is tagged with for Agnai / native import.
+  /// The primary character keeps the `imported` marker both ecosystems swap for
+  /// the bound character; every other group member gets a stable per-name id, so
+  /// a reader that groups by `characterId` sees the distinct participants.
+  static String _speakerCharId(ChatMessage m, {required String primary}) {
+    final speaker = (m.speakerName ?? '').trim();
+    if (speaker.isEmpty || speaker == primary) return 'imported';
+    return 'char-${_slug(speaker)}';
+  }
+
+  /// A filesystem/id-safe slug of a display name.
+  static String _slug(String s) => s
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
 
   static String _userName(Conversation c, String? override) {
     for (final name in [override, c.impersonateName]) {
@@ -660,13 +685,17 @@ class _ChatBuilder {
     DateTime? at,
   }) {
     if (text.trim().isEmpty && (swipes == null || swipes.isEmpty)) return;
+    final trimmed = name?.trim() ?? '';
     _messages.add(ChatMessage(
       role: isUser ? 'user' : 'assistant',
       content: text,
       swipes: swipes,
       swipeIndex: swipeIndex,
+      // The turn's own attributed name is kept so a group log stays
+      // attributable turn-by-turn (and re-exports the same way); it is promoted
+      // to a real participant in [build] when several speakers appear.
+      speakerName: trimmed.isEmpty ? null : trimmed,
     ));
-    final trimmed = name?.trim() ?? '';
     if (!isUser && trimmed.isNotEmpty) characterName ??= trimmed;
     if (isUser && trimmed.isNotEmpty) userName ??= trimmed;
     if (at != null && (_touched == null || at.isAfter(_touched!))) {
@@ -791,15 +820,52 @@ class _ChatBuilder {
     if (_messages.isEmpty) {
       throw const FormatException('That file has no messages in it.');
     }
+    // Group reconstruction: when the transcript names two or more distinct AI
+    // speakers (a SillyTavern group `.jsonl`, an Agnai multi-character export),
+    // rebuild them as per-chat members so the thread opens as a real group.
+    // Such logs carry names but not cards, so each member holds a name and
+    // nothing else until the user swaps in a full character.
+    final speakerOrder = <String>[];
+    for (final m in _messages) {
+      if (m.isUser) continue;
+      final n = (m.speakerName ?? '').trim();
+      if (n.isNotEmpty && !speakerOrder.contains(n)) speakerOrder.add(n);
+    }
+    final isGroup = speakerOrder.length >= 2;
+
+    var messages = _messages;
+    List<String>? participants;
+    Map<String, Character>? overrides;
+    if (isGroup) {
+      final idByName = <String, String>{};
+      overrides = <String, Character>{};
+      for (final name in speakerOrder) {
+        final id = 'import-${ChatCodec._slug(name)}';
+        idByName[name] = id;
+        overrides[id] = Character(id: id, name: name);
+      }
+      participants = [for (final n in speakerOrder) idByName[n]!];
+      messages = [
+        for (final m in _messages)
+          (!m.isUser && (m.speakerName ?? '').trim().isNotEmpty)
+              ? m.copyWith(speakerId: idByName[m.speakerName!.trim()])
+              : m,
+      ];
+    }
+
     return ImportedChat(
       conversation: Conversation(
         id: ChatCodec._freshId(),
         title: _name(fileName),
-        messages: _messages,
+        messages: messages,
         updatedAt: _touched ?? DateTime.now(),
-        characterName: characterName,
+        characterId: isGroup ? participants!.first : null,
+        characterName: isGroup ? speakerOrder.first : characterName,
         systemPrompt: _system.trim(),
         variables: variables,
+        participantIds: participants,
+        characterOverrides: overrides,
+        overrideDefinitions: isGroup,
       ),
       format: format ??
           (_sawAgnaiKeys
