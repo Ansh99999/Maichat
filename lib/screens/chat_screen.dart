@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -46,9 +47,27 @@ class _ChatScreenState extends State<ChatScreen> {
   /// The index of the message currently being edited in place, or null.
   int? _editingIndex;
 
+  /// A chat opens pinned to its newest message, not its first — this flips true
+  /// after that initial jump so it happens exactly once per screen.
+  bool _didInitialScroll = false;
+
+  /// Whether the "jump to latest" affordance is showing. It appears once the
+  /// thread is scrolled a screenful or so above the bottom, so a long scroll
+  /// back doesn't have to be undone by hand.
+  bool _showJumpToEnd = false;
+
+  /// How far, in logical pixels, the thread must sit above its bottom before
+  /// the jump-to-latest button appears.
+  static const double _jumpButtonThreshold = 320;
+
+  /// The follow-up jump used when opening a chat (see [_jumpToEndOnOpen]). Held
+  /// so it can be cancelled if the screen is torn down before it fires.
+  Timer? _openJumpTimer;
+
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     // Never pop the soft keyboard just because the chat opened — drop any focus
     // carried in from the previous screen once the first frame is laid out.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -58,9 +77,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _openJumpTimer?.cancel();
+    _scroll.removeListener(_onScroll);
     _input.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// Shows or hides the jump-to-latest button as the thread is scrolled.
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final position = _scroll.position;
+    final show = position.maxScrollExtent - position.pixels > _jumpButtonThreshold;
+    if (show != _showJumpToEnd && mounted) {
+      setState(() => _showJumpToEnd = show);
+    }
   }
 
   Future<void> _send(AppState state) async {
@@ -185,11 +216,34 @@ class _ChatScreenState extends State<ChatScreen> {
   void _toast(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
 
-  /// Sticks to the newest message after the frame that added it.
-  void _scrollToEnd() {
+  /// Sticks to the newest message after the frame that added it. [animated]
+  /// glides there (used by the jump-to-latest button); otherwise it snaps,
+  /// which is what streaming and sending want.
+  void _scrollToEnd({bool animated = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      final target = _scroll.position.maxScrollExtent;
+      if (animated) {
+        _scroll.animateTo(
+          target,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _scroll.jumpTo(target);
+      }
+    });
+  }
+
+  /// The one-time jump that opens a chat at its last message rather than its
+  /// first. It snaps once after layout, then again a beat later: avatars and a
+  /// background image decode asynchronously and grow the extent after the first
+  /// frame, so a single jump can land short of the true bottom.
+  void _jumpToEndOnOpen() {
+    _scrollToEnd();
+    _openJumpTimer?.cancel();
+    _openJumpTimer = Timer(const Duration(milliseconds: 160), () {
+      if (mounted) _scrollToEnd();
     });
   }
 // APPEND-MARKER-1
@@ -200,6 +254,13 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!state.ready) return const StartupScreen();
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
+    // Open on the newest message, not the oldest. Deferred to here (rather than
+    // initState) so it also fires when the startup gate lifts a frame or two
+    // after the screen is first built.
+    if (!_didInitialScroll && !conversation.isEmpty) {
+      _didInitialScroll = true;
+      _jumpToEndOnOpen();
+    }
     final topInset = MediaQuery.paddingOf(context).top;
     // A chat can carry chat-style settings of its own; otherwise the app-wide
     // ones apply.
@@ -247,7 +308,21 @@ class _ChatScreenState extends State<ChatScreen> {
                           configured: state.isConfigured,
                           onSettings: _openSettings,
                         )
-                      : _messageList(conversation, state, topInset),
+                      : Stack(
+                          children: [
+                            _messageList(conversation, state, topInset),
+                            // Sits at the bottom-right of the thread, just above
+                            // the composer, and only while scrolled well up.
+                            Positioned(
+                              right: 12,
+                              bottom: 12,
+                              child: _JumpToLatestButton(
+                                visible: _showJumpToEnd,
+                                onTap: () => _scrollToEnd(animated: true),
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
                 _composer(state),
               ],
@@ -717,11 +792,47 @@ class _TranslucentMenuButton extends StatelessWidget {
   }
 }
 
+/// A small floating "jump to latest" affordance for the bottom-right of the
+/// thread. It fades and scales in only when the conversation is scrolled well
+/// above its newest message, so a deep scroll back doesn't have to be undone by
+/// dragging. Tapping it glides straight to the last message.
+class _JumpToLatestButton extends StatelessWidget {
+  const _JumpToLatestButton({required this.visible, required this.onTap});
+
+  final bool visible;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedScale(
+        scale: visible ? 1 : 0.6,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 160),
+          child: FloatingActionButton.small(
+            heroTag: null,
+            tooltip: 'Jump to latest',
+            elevation: 2,
+            backgroundColor: scheme.secondaryContainer,
+            foregroundColor: scheme.onSecondaryContainer,
+            onPressed: onTap,
+            child: const Icon(Icons.arrow_downward),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Which face the chat sidebar is showing: its menu, or one of the panels that
 /// live *inside* the drawer. They replace the menu rather than being pushed as
 /// routes, so backing out of one returns to the menu with the drawer still open.
 enum _DrawerPanel { menu, presets, memory }
-
 /// The chat sidebar. Mirrors agnai's chat menu: an editable chat title on top,
 /// jumps to the other sections, provider/model, and a utility row of chat
 /// actions (settings, image gen, export, restart, delete, notifications).
