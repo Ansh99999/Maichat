@@ -1,0 +1,148 @@
+# MaiChat — project guide for Claude Code
+
+MaiChat is a from-scratch Flutter mobile AI chat client (package
+`me.maitavern.maichat`). Scope grew from one chat screen into a full
+SillyTavern/Agnai-class frontend: multi-provider chat, characters, presets with
+a macro engine, lorebooks, an in-app catalogue browser ("Discover"), chat
+import/export, and deep per-chat customisation. Primary target is **Android**
+(sideloaded APK). There is **no iOS build** and the Linux desktop build exists
+only for headless smoke-testing.
+
+This file is the durable context; it is not a changelog. The commit history and
+the code are the source of truth — verify file:line claims before relying on them.
+
+## Build & verify (works in a fresh container/Codespace)
+
+- `flutter pub get`, then `flutter analyze` must be **clean** and `flutter test`
+  must be **fully green** before anything is considered done. The suite is large
+  (800+ tests) and is the real safety net — there is usually **no physical device
+  or emulator available**, so tests + a Linux build are the only end-to-end check.
+- Linux smoke test runs headless under `xvfb-run` (e.g. build `--release` for
+  linux and launch briefly). Use it to eyeball UI changes.
+- Android release APK: `flutter build apk --release` (or
+  `--split-per-abi` + a universal build, as CI does).
+
+### Build gotchas that have each cost a failed build
+
+- **Gradle heap:** the low-RAM dev host needed `android/gradle.properties`
+  `org.gradle.jvmargs=-Xmx1536m` + `org.gradle.daemon=false` (the template's
+  `-Xmx8G` got OOM-killed → exit 144, empty log). A Codespace has more RAM, so
+  this is less likely to bite, but that's why the value looks small.
+- **INTERNET permission:** Flutter only injects it into the *debug* manifest.
+  It is added explicitly in `android/app/src/main/AndroidManifest.xml` for
+  release, or every network request fails on device. Leave it in.
+- **AGP-9 Kotlin-plugin workaround:** under this project's AGP, several native
+  plugins don't get the Kotlin plugin applied and fail with "cannot find symbol
+  <Plugin>". `android/build.gradle.kts` has a `subprojects { ... }` hook that
+  applies `org.jetbrains.kotlin.android` to the affected modules. When you add a
+  plugin that ships native Android code (file_picker, url_launcher_android,
+  path_provider_android, webview_flutter_android are already listed), **add it to
+  that hook** or the release APK won't build. Prefer pure-Dart deps to avoid this.
+- Dependencies are **pinned exactly (no `^`)** on purpose.
+
+## Release & version discipline
+
+- CI (`.github/workflows/build-apk.yml`): on push/PR to `main`, on `v*` tags, and
+  on manual dispatch — runs analyze + test, then builds APKs. On a `v*` tag it
+  cuts a GitHub Release with **keystore-signed** APKs (signing decodes
+  `KEYSTORE_BASE64` etc. from repo secrets into `android/key.properties`; the
+  build falls back to debug-signing when absent).
+- `kAppVersion` in `lib/app_info.dart` **must track `pubspec.yaml`**. Drift here
+  caused an "update available" prompt that never went away (the updater compares
+  the latest GitHub tag to `kAppVersion`). `test/app_version_test.dart` fails on
+  drift — keep it that way.
+- Debug-signed installs (early versions) must be uninstalled before installing a
+  real-key release; the signatures don't match for in-place upgrade.
+
+## How the user wants me to work
+
+- **Small, self-contained UI fixes:** commit (with the standard Co-Authored-By
+  trailer) and `git push origin main` **without asking**. Still confirm before
+  larger/riskier changes, version bumps, release tags, or anything destructive.
+- **Layout-conditional code:** write the full **matrix** of tests (e.g.
+  TextPlacement × NamePosition × avatar-shown × ActionBarPlacement) and confirm
+  it *fails before* the fix. Silent fallbacks and testing one configuration have
+  caused the same "fixed it" to ship broken several times.
+- **Prompt/wire behaviour:** never reason about assembly alone — assert against
+  the **actual outgoing request**. `test/wire_payload_test.dart` boots the real
+  `AppState` + `ChatClient` against a loopback `HttpServer`; the app also has a
+  "copy raw request" button in View prompt.
+- **Verification honesty:** with no device here, gesture/hardware behaviour has
+  shipped wrong twice despite green widget tests. Say plainly what was verified
+  (analyze, tests, Linux/xvfb) and what needs the user's phone.
+
+## Critical invariants — do not regress these
+
+- **Exactly one leading `system` message on the wire.** The request must contain
+  a single `system` message at position 0; any preset block that lands after the
+  conversation starts (depth/absolute injections, trailing `<task>`/`<output_format>`)
+  goes out as a `user` turn. Enforced in `PromptBuilder._oneSystemBlock` +
+  `mergeSameRole`. Reason: some OpenAI→other gateways map `role:system` into a
+  single `system_instruction` and the **last** system message overwrites earlier
+  ones — multiple system messages silently drop the character sheet, and the model
+  then claims it has no character definition.
+- **Pictures are files, never base64 in SharedPreferences.** Avatars/backgrounds
+  live in the `AvatarStore` directory; `Character.avatar` holds an `http(s)` URL,
+  a `local:<file>` ref, or legacy base64 only until the startup migration moves
+  it. Base64 blobs inside prefs previously grew the store until Android's native
+  prefs parser OOM'd *before Dart ran* — an unopenable app. `lib/services/prefs_repair.dart`
+  is the escape hatch. There is **no avatar size cap** by design.
+- **Per-chat overrides resolve in exactly one place each.** Read a thread's style
+  via `AppState.interfaceFor(conversation)` and a character *inside a thread* via
+  `AppState.characterFor(conversation, id)` — assembly, restart, impersonation,
+  the message list and the exporter all go through them. `Conversation.copyAs`
+  keeps fork/renumber from dropping a new per-chat field.
+- **`AppState.init()` must always finish** (timeout + catch, surfaces `loadError`,
+  goes read-only on failure). A throw here = permanent startup spinner.
+
+## Architecture map (where things live)
+
+- **State/persistence:** `AppState` (provider `ChangeNotifier`) + `Storage`
+  (`shared_preferences`, keyed blobs: `providers`, `presets`, `characters`,
+  `discover`, `macroGlobals`, `tokenizer`, …). Note the app's own `Provider`
+  model clashes with the `provider` package — UI files do
+  `import 'package:provider/provider.dart' hide Provider;`.
+- **Providers & networking:** `models/provider.dart` (`ProviderKind`
+  openai/anthropic/gemini; multi-key with `keyStrategy` rotation), `ChatClient`
+  (`streamChat` yields `ChatDelta{text,reasoning}`; branches per kind for SSE,
+  headers, thinking/reasoning wire, non-streaming).
+- **Generation pipeline:** `models/preset.dart` + `models/prompt_block.dart`
+  (SillyTavern-style blocks/order), `services/macro_engine.dart` (full ST macro
+  superset), `services/prompt_builder.dart` (assembles blocks→messages, budgeting,
+  absolute-depth injection), `services/tokenizer.dart` (real BPE via
+  `tiktoken_tokenizer_gpt4o_o1`), `services/model_context.dart`. `AppState._assemble`
+  is the single path real sends and the prompt inspectors share.
+- **Characters:** `models/character.dart` (ST v1/v2/v3 + Agnai superset, macro
+  resolution), `services/character_codec.dart` (parses flat/spec cards, PNG
+  `chara`/`ccv3` chunks, `.charx` ZIP carving), `services/character_sources.dart`
+  (import plugins), screens under `lib/screens/` + `widgets/character_avatar.dart`.
+- **Lorebooks:** `models/lorebook.dart`, `services/lorebook_codec.dart` (ST world
+  info / card `character_book` / Agnai memory books — one export file all read),
+  `services/world_info.dart` (activation scan). `lib/screens/library/`.
+- **Discover (in-app catalogue browser):** `models/discover.dart`,
+  `services/discover/*` (per-site sources: Chub, JannyAI, CharacterTavern, Risu
+  realm, Botbooru, Pygmalion, Wyvern, DataCat — each with its own API quirks),
+  `screens/discover/*`. A feed is a live remote view held by
+  `discover_controller.dart`, deliberately *not* in `AppState`.
+- **Chat portability:** `services/chat_codec.dart` (imports ST `.jsonl`, Agnai,
+  ooba, CAI, Risu, Kobold, plain logs; native export is one file ST+Agnai+MaiChat
+  all read). `test/chat_codec_test.dart` has a "what the other apps accept" group.
+- **Chat UI:** `screens/chat_screen.dart`, `widgets/message_bubble.dart`
+  (swipes/variants, per-message action bar, name placement), `widgets/thinking_block.dart`,
+  per-chat settings screen, `screens/prompt_view_screen.dart` (View prompt inspector).
+
+## Can't be verified from a headless host
+
+- **On-device gestures/touch** — verify drag/nudge on the user's phone.
+- **Chub** (`api.chub.ai` etc.) geo-blocks datacentre IPs; **JannyAI** is
+  Cloudflare-challenged from a datacentre. Those Discover paths are written from
+  agreeing sources + loopback tests and confirmed on the user's phone, not here.
+  If Chub 403s on device it's geo-blocking, not a client bug.
+
+## Note for a cloud environment
+
+The host-specific verification aids from the original dev machine (a local
+AIClient2API proxy, an APK-staging file server, seeded prefs stores) are **not**
+present in a Codespace. The portable equivalents — loopback-server wire tests,
+`flutter analyze`/`flutter test`, and the `xvfb` Linux smoke build — are what to
+lean on here.
