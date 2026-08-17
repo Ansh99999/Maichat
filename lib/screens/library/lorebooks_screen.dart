@@ -230,8 +230,10 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     try {
       result = await FilePicker.pickFiles(
         dialogTitle: 'Import lorebook',
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
+        // FileType.any, not custom: Android greys out a .json whose provider
+        // MIME isn't application/json (browser-saved files land as octet-stream
+        // /text-plain). The parser reads contents, so filter in code instead.
+        type: FileType.any,
         allowMultiple: true,
         withData: true,
       );

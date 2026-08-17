@@ -43,8 +43,12 @@ class _PresetsScreenState extends State<PresetsScreen> {
     try {
       result = await FilePicker.pickFiles(
         dialogTitle: 'Import preset',
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
+        // Not FileType.custom: Android's SAF greys a file out when its
+        // provider-reported MIME type isn't application/json, which is common
+        // for a .json saved by a browser/download-manager (it lands as
+        // octet-stream or text/plain). Accept anything and let the parse below
+        // reject non-presets.
+        type: FileType.any,
         withData: true,
       );
     } catch (_) {

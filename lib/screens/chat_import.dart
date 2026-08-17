@@ -76,10 +76,10 @@ Future<void> _fromFiles(BuildContext context, String? preselect) async {
   try {
     result = await FilePicker.pickFiles(
       dialogTitle: 'Import chat',
-      type: FileType.custom,
-      // A .jsonl chat log is sometimes handed out named .txt, and the parser
-      // reads the contents rather than the name, so both are worth accepting.
-      allowedExtensions: const ['jsonl', 'json', 'txt'],
+      // FileType.any, not custom: a .jsonl/.json log is often handed out named
+      // .txt or with a non-matching MIME, and Android's SAF greys those out
+      // under a custom filter. The parser reads the contents, not the name.
+      type: FileType.any,
       allowMultiple: true,
       withData: true,
     );
