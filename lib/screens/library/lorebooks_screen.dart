@@ -10,6 +10,7 @@ import '../../services/lorebook_codec.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/library_drawer.dart';
+import '../../widgets/tag_filter_sheet.dart';
 import 'lorebook_edit_screen.dart';
 
 /// How the shelf is ordered.
@@ -421,61 +422,11 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
       _say('No tags on any lorebook yet.');
       return;
     }
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('Filter by tag',
-                          style: Theme.of(context).textTheme.titleMedium),
-                    ),
-                    if (_tagFilter.isNotEmpty)
-                      TextButton(
-                        onPressed: () {
-                          setSheetState(() => _tagFilter.clear());
-                          setState(() {});
-                        },
-                        child: const Text('Clear'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    for (final tag in tags)
-                      FilterChip(
-                        label: Text(tag),
-                        selected: _tagFilter.contains(tag),
-                        onSelected: (on) {
-                          setSheetState(() {
-                            if (on) {
-                              _tagFilter.add(tag);
-                            } else {
-                              _tagFilter.remove(tag);
-                            }
-                          });
-                          setState(() {});
-                        },
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    showTagFilterSheet(
+      context,
+      tags: tags,
+      selected: _tagFilter,
+      onChanged: () => setState(() {}),
     );
   }
 
