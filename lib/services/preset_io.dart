@@ -136,19 +136,53 @@ Preset _importSillyTavern(Map<String, dynamic> json) {
       .whereType<Map<String, dynamic>>()
       .map(PromptBlock.fromJson)
       .toList();
+  final promptIds = {for (final b in prompts) b.identifier};
+  final builtinIds = {for (final b in defaultPromptLibrary()) b.identifier};
 
-  // Prefer the global record (character_id 100000); otherwise the first.
+  // Pick the prompt-order record that actually drives this preset. SillyTavern
+  // keys the global/default order under a dummy character id, but the value has
+  // changed across builds: newer ones use 100000, older ones used 100001, and a
+  // preset can ship BOTH — a vanilla built-ins-only record next to the real,
+  // customised one. Blindly preferring 100000 then imports only the default
+  // blocks and silently drops everything the preset defines ("230 blocks but
+  // nothing inside" — the Writer's Block bug).
+  //
+  // A record earns its keep by referencing the preset's *custom* (non-built-in)
+  // blocks, so score records by how many custom blocks they wire up and take the
+  // richest. When no record touches custom blocks (e.g. the vanilla default,
+  // which only reorders built-ins), fall back to ST's modern dummy id 100000,
+  // then the first record.
   final orderRecords = (json['prompt_order'] as List)
       .whereType<Map<String, dynamic>>()
       .toList();
+
+  int customRefs(Map<String, dynamic> r) {
+    final order = r['order'];
+    if (order is! List) return 0;
+    return order.whereType<Map<String, dynamic>>().where((e) {
+      final id = e['identifier'];
+      return promptIds.contains(id) && !builtinIds.contains(id);
+    }).length;
+  }
+
   Map<String, dynamic>? chosen;
+  var bestCustom = 0;
   for (final r in orderRecords) {
-    if ((r['character_id'] as num?)?.toInt() == 100000) {
+    final c = customRefs(r);
+    if (c > bestCustom) {
+      bestCustom = c;
       chosen = r;
-      break;
     }
   }
-  chosen ??= orderRecords.isNotEmpty ? orderRecords.first : null;
+  if (chosen == null) {
+    for (final r in orderRecords) {
+      if ((r['character_id'] as num?)?.toInt() == 100000) {
+        chosen = r;
+        break;
+      }
+    }
+    chosen ??= orderRecords.isNotEmpty ? orderRecords.first : null;
+  }
   final promptOrder = <PromptOrderEntry>[
     if (chosen != null && chosen['order'] is List)
       ...(chosen['order'] as List)

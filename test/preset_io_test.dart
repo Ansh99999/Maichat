@@ -80,6 +80,55 @@ void main() {
       expect(p.raw.containsKey('impersonation_prompt'), isTrue);
     });
 
+    test('picks the customised order when a vanilla 100000 record shadows it',
+        () {
+      // Presets exported from older SillyTavern builds carry the real order
+      // under the historical dummy id 100001, while a vanilla 11-entry 100000
+      // record sits alongside it. Preferring 100000 silently imports only the
+      // default blocks — the "230 blocks but nothing inside" bug (Writer's
+      // Block). We must import the record that actually references the prompts.
+      final custom = <Map<String, dynamic>>[
+        for (var i = 0; i < 40; i++)
+          {
+            'identifier': 'uuid-$i',
+            'name': 'Custom $i',
+            'role': 'system',
+            'content': 'Body $i',
+          },
+      ];
+      final json = <String, dynamic>{
+        'prompts': custom,
+        'prompt_order': [
+          {
+            // Vanilla default record: references built-ins this preset doesn't
+            // even define, so none of them resolve.
+            'character_id': 100000,
+            'order': [
+              {'identifier': 'main', 'enabled': true},
+              {'identifier': 'chatHistory', 'enabled': true},
+            ],
+          },
+          {
+            // The real order, under the legacy dummy id.
+            'character_id': 100001,
+            'order': [
+              for (final b in custom)
+                {'identifier': b['identifier'], 'enabled': true},
+            ],
+          },
+        ],
+      };
+
+      final p = importPreset(json);
+      expect(p.prompts.length, 40);
+      // The 40-entry customised order wins over the 2-entry vanilla one.
+      expect(p.promptOrder.length, 40);
+      expect(p.promptOrder.first.identifier, 'uuid-0');
+      // Every order entry resolves to an imported block.
+      final ids = {for (final b in p.prompts) b.identifier};
+      expect(p.promptOrder.every((e) => ids.contains(e.identifier)), isTrue);
+    });
+
     test('round-trips through export/import', () {
       final original = importPreset(_loadStDefault());
       final exported = exportSillyTavern(original);
