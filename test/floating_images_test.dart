@@ -228,4 +228,120 @@ void main() {
     expect(find.byIcon(Icons.close), findsOneWidget);
     expect(state.active.floatingImages.single.imageId, 'img0');
   });
+
+  group('the gesture must not write to state', () {
+    // This is the bug that made floats unusable on a real phone in v1.14.0: both
+    // the raise-to-front at gesture start and the position at every pointer-move
+    // went through `_editConversation`, which notifies every listener and
+    // re-encodes the whole conversation store. On a device that stalls the frames
+    // the drag needs, so the picture cannot be moved at all. A widget test cannot
+    // feel jank — so it counts the writes instead.
+
+    testWidgets('a one-finger drag notifies exactly once, at the end',
+        (tester) async {
+      final state = await chatWithFloats();
+      await pumpChat(tester, state);
+
+      var notifications = 0;
+      state.addListener(() => notifications++);
+
+      final grip = tester.getCenter(find.byIcon(Icons.close)) +
+          const Offset(0, 40);
+      final gesture = await tester.startGesture(grip);
+      for (var i = 0; i < 12; i++) {
+        await gesture.moveBy(const Offset(6, 5));
+        await tester.pump();
+      }
+      // Twelve pointer-moves in, nothing has been written: the live transform is
+      // local to the layer.
+      expect(notifications, 0,
+          reason: 'a pointer-move must not rewrite the chat store');
+
+      await gesture.up();
+      await tester.pump();
+      await tester.pump();
+
+      expect(notifications, 1, reason: 'exactly one write, when it settles');
+      expect(state.active.floatingImages.single.x, greaterThan(0.08));
+    });
+
+    testWidgets('a pinch notifies per finger change, never per move',
+        (tester) async {
+      // A two-finger manipulation cannot cost exactly one write: adding or
+      // lifting a finger makes the recogniser end this gesture and start another
+      // for the pointers still down, and each of those ends settles. What matters
+      // is that it is a couple of writes for the whole pinch rather than one for
+      // every pointer-move, which is what stalled the frames on a device.
+      final state = await chatWithFloats();
+      await pumpChat(tester, state);
+
+      var notifications = 0;
+      state.addListener(() => notifications++);
+
+      final centre =
+          tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
+      final left = await tester.startGesture(centre - const Offset(40, 0));
+      // The second finger arriving reconfigures the gesture: one settle.
+      final right = await tester.startGesture(centre + const Offset(40, 0));
+      final afterSecondFinger = notifications;
+      expect(afterSecondFinger, lessThanOrEqualTo(1));
+
+      for (var i = 0; i < 20; i++) {
+        await left.moveBy(const Offset(-4, -2));
+        await right.moveBy(const Offset(4, 2));
+        await tester.pump();
+      }
+      expect(notifications, afterSecondFinger,
+          reason: 'twenty pointer-moves must not write anything');
+
+      await left.up();
+      await right.up();
+      await tester.pump();
+      await tester.pump();
+
+      // Bounded by finger changes (three), not by the twenty moves.
+      expect(notifications, lessThanOrEqualTo(3));
+      expect(state.active.floatingImages.single.width, greaterThan(180));
+    });
+
+    testWidgets('the message list does not rebuild while a float is dragged',
+        (tester) async {
+      // The other half of the cost: every AppState notification rebuilt the whole
+      // thread, because ChatScreen watches it. If a drag notifies nothing, the
+      // bubbles are not touched either.
+      final state = await chatWithFloats();
+      await pumpChat(tester, state);
+
+      final bubbleBefore = tester.element(find.text('Hello.'));
+      final grip = tester.getCenter(find.byIcon(Icons.close)) +
+          const Offset(0, 40);
+      final gesture = await tester.startGesture(grip);
+      for (var i = 0; i < 8; i++) {
+        await gesture.moveBy(const Offset(5, 5));
+        await tester.pump();
+      }
+      // The same element, never rebuilt out from under the drag.
+      expect(tester.element(find.text('Hello.')), same(bubbleBefore));
+      await gesture.up();
+      await tester.pump();
+      await tester.pump();
+    });
+
+    testWidgets('a streaming reply does not rebuild the floats', (tester) async {
+      // The inverse: the layer subscribes narrowly, so a reply arriving does not
+      // rebuild pictures that have not changed.
+      final state = await chatWithFloats();
+      await pumpChat(tester, state);
+      final frameBefore = tester.element(find.byIcon(Icons.close));
+
+      // Something that notifies AppState without touching the floats.
+      await state.saveGalleryImage(
+        state.galleryImageById('img0')!.copyWith(title: 'Renamed'),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(tester.element(find.byIcon(Icons.close)), same(frameBefore));
+    });
+  });
 }

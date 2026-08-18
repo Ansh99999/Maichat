@@ -3,69 +3,135 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../models/floating_image.dart';
-import '../models/gallery_image.dart';
 import '../state/app_state.dart';
 import 'avatar_image.dart';
 
 /// The pictures pinned over a chat.
 ///
-/// Each one can be dragged with one finger, and resized and turned with two. They
-/// are decoration: nothing here is part of the conversation, so nothing here
-/// reaches the model or an export — the chat carries only where each picture sits.
+/// One finger drags, two resize and turn. All three come from a single
+/// [ScaleGestureRecognizer], which is what makes it feel like handling a
+/// photograph rather than operating three modes.
 ///
-/// The layer itself is transparent and lets every touch it does not use fall
-/// through to the thread underneath, so a chat with floats on it still scrolls.
-class FloatingImagesLayer extends StatelessWidget {
+/// **Everything here is built for the gesture loop**, because the first version
+/// was unusable on a real phone:
+///
+/// * A picture's geometry lives in a [ValueNotifier] while a gesture runs, and
+///   only the [Transform] listens to it. A `setState` per pointer-move rebuilt the
+///   whole float — image, shadow, ✕ — sixty times a second.
+/// * Nothing writes to [AppState] during a gesture. Both the raise-to-front and
+///   the final position used to go through `_editConversation`, which calls
+///   `notifyListeners()` and re-encodes *every* conversation to JSON. At the start
+///   of a drag that stalls the frame the drag is trying to start in, and every
+///   listener of AppState — the whole message list included — rebuilt with it.
+/// * The bitmap is decoded for a *bucket*, not for the live width, so pinching
+///   does not ask the decoder for a new size on every frame.
+/// * Each float is its own [RepaintBoundary], so moving one does not repaint the
+///   conversation behind it.
+class FloatingImagesLayer extends StatefulWidget {
   const FloatingImagesLayer({super.key, required this.conversationId});
 
   final String conversationId;
 
   @override
+  State<FloatingImagesLayer> createState() => _FloatingImagesLayerState();
+}
+
+class _FloatingImagesLayerState extends State<FloatingImagesLayer> {
+  /// The float last touched, drawn in front of the others until the stored order
+  /// catches up when its gesture ends.
+  String? _front;
+
+  void _raise(String key) {
+    if (_front == key) return;
+    setState(() => _front = key);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final conversation = state.conversationById(conversationId);
-    final floats = state.floatingImagesFor(conversation);
+    // Rebuilt only when the set of floats changes — not on every AppState
+    // notification, which includes each streaming delta of a reply.
+    final floats = context.select<AppState, List<FloatedPicture>>(
+      (state) =>
+          state.floatingImagesFor(state.conversationById(widget.conversationId)),
+    );
     if (floats.isEmpty) return const SizedBox.shrink();
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // The area a float's fractional position is measured against. Taking it
-        // from the layout rather than the window means the sums are the same
-        // whether the keyboard is up, the bar is showing, or the phone is turned.
-        final area = Size(constraints.maxWidth, constraints.maxHeight);
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            for (final (float, image) in floats)
-              _FloatingPicture(
-                // Keyed by picture so raising one (which reorders the list) moves
-                // the existing state rather than rebuilding it from scratch and
-                // dropping an in-flight gesture.
-                key: ValueKey('float-${float.imageId}'),
-                conversationId: conversationId,
-                float: float,
-                image: image,
-                area: area,
-              ),
-          ],
-        );
-      },
+    // Stored order is z-order; the float under the finger is pulled to the end so
+    // it is on top the instant it is touched, without writing anything.
+    final ordered = _front == null
+        ? floats
+        : [
+            ...floats.where((f) => f.float.key != _front),
+            ...floats.where((f) => f.float.key == _front),
+          ];
+
+    return _RaiseScope(
+      raise: _raise,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // The area a float's fractional position is measured against. Taken
+          // from the layout rather than the window, so the sums hold whether the
+          // keyboard is up, a bar is showing, or the phone has been turned.
+          final area = Size(constraints.maxWidth, constraints.maxHeight);
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (final floated in ordered)
+                _FloatingPicture(
+                  // Keyed by picture, so raising one (which reorders the list)
+                  // moves its existing state instead of rebuilding it and
+                  // dropping an in-flight gesture.
+                  key: ValueKey('float-${floated.float.key}'),
+                  conversationId: widget.conversationId,
+                  floated: floated,
+                  area: area,
+                ),
+            ],
+          );
+        },
+      ),
     );
   }
+}
+
+/// The live geometry of one float, as something only the transform listens to.
+class _Geometry {
+  const _Geometry({
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.rotation,
+  });
+
+  final double x;
+  final double y;
+  final double width;
+  final double rotation;
+
+  _Geometry copyWith({
+    double? x,
+    double? y,
+    double? width,
+    double? rotation,
+  }) =>
+      _Geometry(
+        x: x ?? this.x,
+        y: y ?? this.y,
+        width: width ?? this.width,
+        rotation: rotation ?? this.rotation,
+      );
 }
 
 class _FloatingPicture extends StatefulWidget {
   const _FloatingPicture({
     super.key,
     required this.conversationId,
-    required this.float,
-    required this.image,
+    required this.floated,
     required this.area,
   });
 
   final String conversationId;
-  final FloatingImage float;
-  final GalleryImage image;
+  final FloatedPicture floated;
   final Size area;
 
   @override
@@ -73,160 +139,247 @@ class _FloatingPicture extends StatefulWidget {
 }
 
 class _FloatingPictureState extends State<_FloatingPicture> {
-  /// The live transform while a gesture runs. Held here, not in the store: a
-  /// gesture produces several updates per frame, and writing the conversation on
-  /// each one would rewrite the whole store dozens of times a second.
-  double? _x;
-  double? _y;
-  double? _width;
-  double? _rotation;
+  late final ValueNotifier<_Geometry> _live;
 
   /// Where the two-finger part of the gesture began. Scale and rotation are
   /// measured from here rather than accumulated, so the picture tracks the fingers
-  /// exactly instead of drifting over a long manipulation. Position *is*
-  /// accumulated, because a drag reports movement since the last update.
-  late double _startWidth;
-  late double _startRotation;
+  /// exactly instead of drifting over a long manipulation.
+  double _startWidth = 0;
+  double _startRotation = 0;
 
-  double get _liveX => _x ?? widget.float.x;
-  double get _liveY => _y ?? widget.float.y;
-  double get _liveWidth => _width ?? widget.float.width;
-  double get _liveRotation => _rotation ?? widget.float.rotation;
+  /// The decode size the bitmap was asked for. Held across a pinch and only
+  /// stepped when the picture has grown well past it, so resizing never asks the
+  /// image decoder for a new bitmap mid-gesture.
+  late double _decodeWidth;
+
+  @override
+  void initState() {
+    super.initState();
+    final float = widget.floated.float;
+    _live = ValueNotifier(_Geometry(
+      x: float.x,
+      y: float.y,
+      width: float.width,
+      rotation: float.rotation,
+    ));
+    _decodeWidth = float.width;
+  }
+
+  @override
+  void didUpdateWidget(_FloatingPicture old) {
+    super.didUpdateWidget(old);
+    // Only adopt stored geometry when it actually differs — a rebuild in the
+    // middle of a gesture must not yank the picture back to where it started.
+    final float = widget.floated.float;
+    final live = _live.value;
+    if (float.x != old.floated.float.x ||
+        float.y != old.floated.float.y ||
+        float.width != old.floated.float.width ||
+        float.rotation != old.floated.float.rotation) {
+      _live.value = _Geometry(
+        x: float.x,
+        y: float.y,
+        width: float.width,
+        rotation: float.rotation,
+      );
+    } else if (live.width != float.width) {
+      // Stored width is authoritative between gestures.
+      _live.value = live.copyWith(width: float.width);
+    }
+  }
+
+  @override
+  void dispose() {
+    _live.dispose();
+    super.dispose();
+  }
 
   void _onStart(ScaleStartDetails details) {
-    _startWidth = _liveWidth;
-    _startRotation = _liveRotation;
-    // Touching a float brings it forward, so the one being handled is the one on
-    // top — and z-order stays something the user controls by touching things.
-    context.read<AppState>().raiseFloatingImage(
-          widget.conversationId,
-          widget.image.id,
-        );
+    _startWidth = _live.value.width;
+    _startRotation = _live.value.rotation;
+    // Raising is a local concern until the gesture ends: reordering the stored
+    // list here would notify every listener and re-encode the whole chat store,
+    // in the very frame the drag is trying to begin.
+    _RaiseScope.of(context)?.raise(widget.floated.float.key);
   }
 
   void _onUpdate(ScaleUpdateDetails details) {
     final width = widget.area.width <= 0 ? 1.0 : widget.area.width;
     final height = widget.area.height <= 0 ? 1.0 : widget.area.height;
-    setState(() {
-      // One finger drags. `focalPointDelta` is the movement since the last
-      // update, which is why the position accumulates rather than being derived
-      // from the start point.
-      _x = FloatingImage.clampFraction(
-          _liveX + details.focalPointDelta.dx / width);
-      _y = FloatingImage.clampFraction(
-          _liveY + details.focalPointDelta.dy / height);
-      if (details.pointerCount >= 2) {
-        // Two fingers scale and turn, both measured from where the gesture began
-        // so the picture tracks the fingers exactly.
-        _width = (_startWidth * details.scale)
+    final live = _live.value;
+
+    // One finger drags. `focalPointDelta` is movement since the last update, so
+    // position accumulates rather than being derived from the start point.
+    var next = live.copyWith(
+      x: FloatingImage.clampFraction(
+          live.x + details.focalPointDelta.dx / width),
+      y: FloatingImage.clampFraction(
+          live.y + details.focalPointDelta.dy / height),
+    );
+    if (details.pointerCount >= 2) {
+      next = next.copyWith(
+        width: (_startWidth * details.scale)
             .clamp(kFloatingImageMinWidth, kFloatingImageMaxWidth)
-            .toDouble();
-        _rotation = _startRotation + details.rotation;
-      }
-    });
+            .toDouble(),
+        rotation: _startRotation + details.rotation,
+      );
+    }
+    // No setState: the notifier drives a single AnimatedBuilder around the
+    // transform, so a pointer-move repaints one picture and rebuilds nothing else.
+    _live.value = next;
   }
 
   Future<void> _onEnd(ScaleEndDetails details) async {
+    final geometry = _live.value;
+    // The write, once the fingers have stopped. Note a two-finger manipulation
+    // can end more than once: lifting one finger makes the recogniser end this
+    // gesture and start another for the finger still down
+    // (`ScaleGestureRecognizer._reconfigure`), so a pinch settles once per finger
+    // lifted. That is a couple of writes per manipulation rather than one per
+    // pointer-move, which is the cost that mattered.
+    //
+    // Raising is committed here too, so the z-order the user set by touching
+    // things outlives the screen.
     final state = context.read<AppState>();
-    await state.moveFloatingImage(
+    await state.settleFloatingImage(
       widget.conversationId,
-      widget.image.id,
-      x: _liveX,
-      y: _liveY,
-      width: _liveWidth,
-      rotation: _liveRotation,
+      widget.floated.float,
+      x: geometry.x,
+      y: geometry.y,
+      width: geometry.width,
+      rotation: geometry.rotation,
+      raise: true,
     );
     if (!mounted) return;
-    // Hand control back to the stored values now they agree with the screen.
-    setState(() {
-      _x = null;
-      _y = null;
-      _width = null;
-      _rotation = null;
-    });
+    // A picture much larger than the bitmap it was decoded for is worth one
+    // re-decode, now the gesture is over rather than during it.
+    if (geometry.width > _decodeWidth * 1.6 ||
+        geometry.width < _decodeWidth / 2) {
+      setState(() => _decodeWidth = geometry.width);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final state = context.read<AppState>();
     final media = MediaQuery.of(context);
+    // Decoded once for a size that holds across a pinch, not for the live width.
     final provider = avatarImage(
-      widget.image.image,
-      // Asked for at the size it is drawn, so a photo straight off the camera
-      // does not sit in memory at full resolution while it floats.
-      displaySize: _liveWidth,
+      widget.floated.ref,
+      displaySize: _decodeWidth,
       devicePixelRatio: media.devicePixelRatio,
     );
 
-    return Positioned(
-      left: _liveX * widget.area.width,
-      top: _liveY * widget.area.height,
-      child: Transform.rotate(
-        angle: _liveRotation,
-        child: RawGestureDetector(
-          gestures: <Type, GestureRecognizerFactory>{
-            // One recogniser for all three gestures: a pan and a pinch are the
-            // same thing to `ScaleGestureRecognizer`, which is what makes drag,
-            // resize and rotate feel like one continuous manipulation instead of
-            // three modes.
-            ScaleGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<ScaleGestureRecognizer>(
-              () => ScaleGestureRecognizer(debugOwner: this),
-              (instance) => instance
-                ..onStart = _onStart
-                ..onUpdate = _onUpdate
-                ..onEnd = _onEnd,
-            ),
-          },
-          child: SizedBox(
-            width: _liveWidth,
-            // The ✕ hangs over the corner, so the frame needs room for it or half
-            // the control would be outside its own hit region.
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 10, right: 10),
-                  child: Material(
-                    elevation: 6,
-                    borderRadius: BorderRadius.circular(12),
-                    clipBehavior: Clip.antiAlias,
-                    child: provider == null
-                        ? SizedBox(
-                            height: _liveWidth * 0.75,
-                            child: const Center(
-                              child: Icon(Icons.broken_image_outlined),
-                            ),
-                          )
-                        : Image(
-                            image: provider,
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, _, _) => SizedBox(
-                              height: _liveWidth * 0.75,
-                              child: const Center(
-                                child: Icon(Icons.broken_image_outlined),
-                              ),
-                            ),
-                          ),
+    // Built once and reused by every frame of a gesture: the picture, its frame
+    // and the ✕ do not change while it is being moved.
+    final picture = _Frame(
+      provider: provider,
+      onDismiss: () => context.read<AppState>().unfloatImage(
+            widget.conversationId,
+            widget.floated.float,
+          ),
+    );
+
+    return AnimatedBuilder(
+      animation: _live,
+      builder: (context, _) {
+        final geometry = _live.value;
+        return Positioned(
+          left: geometry.x * widget.area.width,
+          top: geometry.y * widget.area.height,
+          child: Transform.rotate(
+            angle: geometry.rotation,
+            child: SizedBox(
+              width: geometry.width,
+              child: RawGestureDetector(
+                gestures: <Type, GestureRecognizerFactory>{
+                  ScaleGestureRecognizer:
+                      GestureRecognizerFactoryWithHandlers<
+                          ScaleGestureRecognizer>(
+                    () => ScaleGestureRecognizer(debugOwner: this),
+                    (instance) => instance
+                      ..onStart = _onStart
+                      ..onUpdate = _onUpdate
+                      ..onEnd = _onEnd
+                      // Report movement from the first pointer-move rather than
+                      // after the slop is crossed, so a drag starts under the
+                      // finger instead of jumping once it is recognised.
+                      ..dragStartBehavior = DragStartBehavior.down,
                   ),
-                ),
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: _DismissButton(
-                    // Turned back the other way, so the ✕ stays upright however
-                    // far the picture has been rotated.
-                    counterRotation: -_liveRotation,
-                    onTap: () => state.unfloatImage(
-                      widget.conversationId,
-                      widget.image.id,
-                    ),
-                  ),
-                ),
-              ],
+                },
+                child: picture,
+              ),
             ),
           ),
-        ),
+        );
+      },
+    );
+  }
+}
+
+/// The drawn float: the picture, a rounded frame, and the ✕.
+///
+/// Deliberately const-friendly and free of geometry, so one instance survives a
+/// whole gesture and only its ancestor transform changes.
+class _Frame extends StatelessWidget {
+  const _Frame({required this.provider, required this.onDismiss});
+
+  final ImageProvider? provider;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return RepaintBoundary(
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Padding(
+            // Room for the ✕ hanging over the corner, or half of it would sit
+            // outside its own hit region.
+            padding: const EdgeInsets.only(top: 10, right: 10),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: scheme.surfaceContainerHighest,
+                // A plain shadow rather than a Material elevation: an elevation
+                // is an implicitly-animated, separately-composited layer, and
+                // that is not what a picture being dragged needs.
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.32),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: provider == null
+                    ? const AspectRatio(
+                        aspectRatio: 4 / 3,
+                        child: Center(child: Icon(Icons.broken_image_outlined)),
+                      )
+                    : Image(
+                        image: provider!,
+                        fit: BoxFit.contain,
+                        // No fade-in: a float that is being dragged should not
+                        // animate its own opacity underneath the finger.
+                        gaplessPlayback: true,
+                        errorBuilder: (_, _, _) => const AspectRatio(
+                          aspectRatio: 4 / 3,
+                          child:
+                              Center(child: Icon(Icons.broken_image_outlined)),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 0,
+            right: 0,
+            child: _DismissButton(onTap: onDismiss),
+          ),
+        ],
       ),
     );
   }
@@ -234,30 +387,42 @@ class _FloatingPictureState extends State<_FloatingPicture> {
 
 /// The ✕ that takes a picture back off the chat.
 class _DismissButton extends StatelessWidget {
-  const _DismissButton({required this.counterRotation, required this.onTap});
+  const _DismissButton({required this.onTap});
 
-  final double counterRotation;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Transform.rotate(
-      angle: counterRotation,
-      child: Material(
-        color: scheme.surface.withValues(alpha: 0.92),
-        shape: const CircleBorder(),
-        elevation: 3,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: Icon(Icons.close, size: 16, color: scheme.onSurface),
-          ),
+    return Material(
+      color: scheme.surface.withValues(alpha: 0.92),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(5),
+          child: Icon(Icons.close, size: 16, color: scheme.onSurface),
         ),
       ),
     );
   }
 }
 
+/// Carries the "bring this float forward" callback down to each picture without
+/// making it a write to persisted state.
+///
+/// Z-order is the list's order, and the list is only rewritten when a gesture
+/// ends. In between, this moves the float within the layer's own children so the
+/// one under the finger is the one on top, immediately.
+class _RaiseScope extends InheritedWidget {
+  const _RaiseScope({required this.raise, required super.child});
+
+  final void Function(String key) raise;
+
+  static _RaiseScope? of(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<_RaiseScope>();
+
+  @override
+  bool updateShouldNotify(_RaiseScope old) => false;
+}

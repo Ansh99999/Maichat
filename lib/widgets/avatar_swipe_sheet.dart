@@ -80,17 +80,10 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
   }
 
   Future<void> _float(AppState state, String ref) async {
-    // Floats are gallery pictures, so this only works for a picture the gallery
-    // still knows about — an avatar that came in on a card was never in it.
-    final image = state.gallery.where((i) => i.image == ref).firstOrNull;
-    if (image == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Only pictures kept in the gallery can float.'),
-        behavior: SnackBarBehavior.floating,
-      ));
-      return;
-    }
-    await state.floatImage(widget.conversationId, image.id);
+    // Any picture the app can draw can float — a gallery entry is not a
+    // prerequisite, so an avatar that arrived on an imported card works too.
+    // `floatPictureRef` ties it to the gallery record when there is one.
+    await state.floatPictureRef(widget.conversationId, ref);
     if (!mounted) return;
     Navigator.of(context).pop();
   }

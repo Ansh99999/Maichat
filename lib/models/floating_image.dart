@@ -1,27 +1,37 @@
 import 'dart:math' as math;
 
-/// One picture floating over a chat: where it sits, how big it is, and how far it
-/// has been turned.
+/// One picture floating over a chat: which picture, where it sits, how big it is,
+/// and how far it has been turned.
 ///
-/// [x] and [y] are **fractions of the chat area** (0..1 measured from its top
-/// left), not logical pixels. A phone rotated, a tablet, or a different text
-/// scale all change the area's size, and a float stored in pixels would drift off
-/// screen or bunch into a corner; a fraction lands in the same visual place
-/// everywhere. [width] is in logical pixels because a picture should not grow
-/// just because the window did.
+/// A float names its picture one of two ways. [imageId] points at a gallery
+/// record, so editing or re-pointing that record is reflected and deleting it
+/// takes the float with it. [imageRef] carries a picture reference directly, for
+/// something that was never a gallery entry — an avatar that arrived on an
+/// imported card, say. Exactly one of the two is set.
+///
+/// [x] and [y] are **fractions of the chat area** (0..1 from its top left), not
+/// logical pixels. A phone rotated, a tablet, or a different text scale all change
+/// the area's size, and a float stored in pixels would drift off screen or bunch
+/// into a corner; a fraction lands in the same visual place everywhere. [width] is
+/// in logical pixels, because a picture should not grow just because the window
+/// did.
 class FloatingImage {
   FloatingImage({
-    required this.imageId,
+    this.imageId = '',
+    this.imageRef = '',
     this.x = 0.08,
     this.y = 0.12,
     this.width = kFloatingImageDefaultWidth,
     this.rotation = 0,
   });
 
-  /// The [GalleryImage.id] being shown. The picture reference itself is not
-  /// copied here, so editing or re-pointing the gallery entry is reflected, and a
-  /// deleted picture simply stops resolving (the layer skips it).
+  /// The [GalleryImage.id] being shown, or empty when this float carries its own
+  /// [imageRef].
   final String imageId;
+
+  /// A picture reference (`local:<file>` or an http(s) URL) for a float that is
+  /// not backed by a gallery record.
+  final String imageRef;
 
   /// Position of the float's top-left corner, as a fraction of the chat area.
   double x;
@@ -34,6 +44,13 @@ class FloatingImage {
   /// Rotation in radians, clockwise.
   double rotation;
 
+  /// What identifies this float within a chat — a gallery id or a picture
+  /// reference, tagged so the two can never collide.
+  String get key => imageId.isNotEmpty ? 'g:$imageId' : 'r:$imageRef';
+
+  /// Whether this float names something at all.
+  bool get isEmpty => imageId.isEmpty && imageRef.isEmpty;
+
   FloatingImage copyWith({
     double? x,
     double? y,
@@ -42,6 +59,7 @@ class FloatingImage {
   }) =>
       FloatingImage(
         imageId: imageId,
+        imageRef: imageRef,
         x: x ?? this.x,
         y: y ?? this.y,
         width: width ?? this.width,
@@ -49,7 +67,8 @@ class FloatingImage {
       );
 
   Map<String, dynamic> toJson() => {
-        'imageId': imageId,
+        if (imageId.isNotEmpty) 'imageId': imageId,
+        if (imageRef.isNotEmpty) 'imageRef': imageRef,
         'x': x,
         'y': y,
         'width': width,
@@ -57,7 +76,8 @@ class FloatingImage {
       };
 
   factory FloatingImage.fromJson(Map<String, dynamic> json) => FloatingImage(
-        imageId: json['imageId'] as String? ?? '',
+        imageId: (json['imageId'] as String?)?.trim() ?? '',
+        imageRef: (json['imageRef'] as String?)?.trim() ?? '',
         // Clamped on the way in as well as on the way out: a stored value can
         // come from an older build, a hand-edited store, or a screen that has
         // since changed shape, and a float nobody can reach is a float nobody can
@@ -92,6 +112,23 @@ class FloatingImage {
     if (r <= -math.pi) r += twoPi;
     return r;
   }
+}
+
+/// A float paired with the picture it draws — what the layer actually needs.
+class FloatedPicture {
+  const FloatedPicture({
+    required this.float,
+    required this.ref,
+    required this.title,
+  });
+
+  final FloatingImage float;
+
+  /// The picture reference to draw.
+  final String ref;
+
+  /// What to call it, when there is anything to call it.
+  final String title;
 }
 
 /// How wide a picture arrives on the chat, in logical pixels — big enough to see,

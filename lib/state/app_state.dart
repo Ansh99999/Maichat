@@ -962,6 +962,9 @@ class AppState extends ChangeNotifier {
         ...c.characterOverrides.values.map((o) => o.avatar),
         ...c.characterOverrides.values.expand((o) => o.avatars),
         ...c.avatarOverrides.values,
+        // A float can carry a picture the gallery never held (an avatar off an
+        // imported card), and it is on screen right now.
+        ...c.floatingImages.map((f) => f.imageRef),
       ],
     ]);
   }
@@ -1269,8 +1272,9 @@ class AppState extends ChangeNotifier {
       }
       // A float showing a deleted picture has nothing left to draw.
       final before = conversation.floatingImages.length;
-      conversation.floatingImages
-          .removeWhere((f) => wanted.contains(f.imageId));
+      conversation.floatingImages.removeWhere(
+        (f) => wanted.contains(f.imageId) || refs.contains(f.imageRef),
+      );
       if (conversation.floatingImages.length != before) touchedChats = true;
     }
 
@@ -1408,78 +1412,106 @@ class AppState extends ChangeNotifier {
   Future<void> floatImage(String conversationId, String imageId) async {
     final image = galleryImageById(imageId);
     if (image == null) return;
-    await _editConversation(conversationId, (c) {
-      final existing =
-          c.floatingImages.indexWhere((f) => f.imageId == imageId);
-      if (existing != -1) {
-        c.floatingImages.add(c.floatingImages.removeAt(existing));
-        return;
-      }
-      // Each new float is offset a little from the last so a run of them fans
-      // out instead of hiding one another exactly.
-      final step = c.floatingImages.length % 4;
-      c.floatingImages.add(FloatingImage(
-        imageId: imageId,
-        x: FloatingImage.clampFraction(0.08 + step * 0.05),
-        y: FloatingImage.clampFraction(0.12 + step * 0.06),
-      ));
-    });
+    await _addFloat(conversationId, FloatingImage(imageId: imageId));
     await touchGalleryImage(imageId);
   }
 
-  Future<void> unfloatImage(String conversationId, String imageId) =>
+  /// Pins a picture that is not a gallery record — an avatar that arrived on an
+  /// imported card, say. Floating is about looking at a picture, so anything the
+  /// app can draw can float; a gallery entry is not a prerequisite.
+  ///
+  /// When [ref] *is* a gallery picture this defers to [floatImage], so the float
+  /// stays tied to the record and follows its edits and deletion.
+  Future<void> floatPictureRef(String conversationId, String ref) async {
+    final trimmed = ref.trim();
+    if (trimmed.isEmpty) return;
+    final known = _gallery.where((i) => i.image == trimmed).firstOrNull;
+    if (known != null) {
+      await floatImage(conversationId, known.id);
+      return;
+    }
+    await _addFloat(conversationId, FloatingImage(imageRef: trimmed));
+  }
+
+  /// Adds [float] to a chat, or raises the matching one when it is already there.
+  Future<void> _addFloat(String conversationId, FloatingImage float) =>
+      _editConversation(conversationId, (c) {
+        final existing =
+            c.floatingImages.indexWhere((f) => f.key == float.key);
+        if (existing != -1) {
+          c.floatingImages.add(c.floatingImages.removeAt(existing));
+          return;
+        }
+        // Each new float is offset a little from the last so a run of them fans
+        // out instead of hiding one another exactly.
+        final step = c.floatingImages.length % 4;
+        float
+          ..x = FloatingImage.clampFraction(0.08 + step * 0.05)
+          ..y = FloatingImage.clampFraction(0.12 + step * 0.06);
+        c.floatingImages.add(float);
+      });
+
+  /// Takes [float] back off the chat.
+  Future<void> unfloatImage(String conversationId, FloatingImage float) =>
       _editConversation(conversationId,
-          (c) => c.floatingImages.removeWhere((f) => f.imageId == imageId));
+          (c) => c.floatingImages.removeWhere((f) => f.key == float.key));
 
   Future<void> clearFloatingImages(String conversationId) =>
       _editConversation(conversationId, (c) => c.floatingImages.clear());
 
-  /// Commits where a float ended up. Called when a gesture *finishes*, not while
-  /// it runs: the layer tracks the live transform itself, because persisting the
-  /// conversation on every pointer move would rewrite the whole store many times
-  /// a second.
-  Future<void> moveFloatingImage(
+  /// Commits where a float ended up, and optionally brings it to the front.
+  ///
+  /// Called when a gesture *finishes* — never while one runs. The layer tracks the
+  /// live transform itself, because this writes the whole conversation store and
+  /// notifies every listener; doing that per pointer-move is what made floats
+  /// unusable in v1.14.0.
+  Future<void> settleFloatingImage(
     String conversationId,
-    String imageId, {
+    FloatingImage float, {
     double? x,
     double? y,
     double? width,
     double? rotation,
+    bool raise = false,
   }) =>
       _editConversation(conversationId, (c) {
-        final index = c.floatingImages.indexWhere((f) => f.imageId == imageId);
+        final index = c.floatingImages.indexWhere((f) => f.key == float.key);
         if (index == -1) return;
-        final float = c.floatingImages[index];
-        if (x != null) float.x = FloatingImage.clampFraction(x);
-        if (y != null) float.y = FloatingImage.clampFraction(y);
+        final stored = c.floatingImages[index];
+        if (x != null) stored.x = FloatingImage.clampFraction(x);
+        if (y != null) stored.y = FloatingImage.clampFraction(y);
         if (width != null) {
-          float.width = width
+          stored.width = width
               .clamp(kFloatingImageMinWidth, kFloatingImageMaxWidth)
               .toDouble();
         }
         if (rotation != null) {
-          float.rotation = FloatingImage.normaliseRotation(rotation);
+          stored.rotation = FloatingImage.normaliseRotation(rotation);
+        }
+        // The list's order *is* z-order, so the last one is on top.
+        if (raise && index != c.floatingImages.length - 1) {
+          c.floatingImages.add(c.floatingImages.removeAt(index));
         }
       });
 
-  /// Brings a float to the front — the list's order *is* its z-order.
-  Future<void> raiseFloatingImage(String conversationId, String imageId) =>
-      _editConversation(conversationId, (c) {
-        final index = c.floatingImages.indexWhere((f) => f.imageId == imageId);
-        if (index == -1 || index == c.floatingImages.length - 1) return;
-        c.floatingImages.add(c.floatingImages.removeAt(index));
-      });
-
-  /// The floats of [conversation] paired with the picture each one shows, in
-  /// z-order. A float whose picture has gone is skipped rather than drawn as a
-  /// blank frame.
-  List<(FloatingImage, GalleryImage)> floatingImagesFor(
-      Conversation? conversation) {
-    if (conversation == null) return const <(FloatingImage, GalleryImage)>[];
-    final out = <(FloatingImage, GalleryImage)>[];
+  /// The floats of [conversation] paired with the picture each one draws, in
+  /// z-order. A float whose gallery record has gone is skipped rather than drawn
+  /// as a blank frame.
+  List<FloatedPicture> floatingImagesFor(Conversation? conversation) {
+    if (conversation == null) return const <FloatedPicture>[];
+    final out = <FloatedPicture>[];
     for (final float in conversation.floatingImages) {
-      final image = galleryImageById(float.imageId);
-      if (image != null) out.add((float, image));
+      if (float.imageId.isNotEmpty) {
+        final image = galleryImageById(float.imageId);
+        if (image == null) continue;
+        out.add(FloatedPicture(
+          float: float,
+          ref: image.image,
+          title: image.displayTitle,
+        ));
+      } else if (float.imageRef.isNotEmpty) {
+        out.add(FloatedPicture(float: float, ref: float.imageRef, title: ''));
+      }
     }
     return out;
   }

@@ -76,6 +76,15 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   /// point of opening a photo is the photo.
   bool _chrome = true;
 
+  /// Whether the picture on screen is zoomed in.
+  ///
+  /// This is what stops the pinch feeling "funky": at rest, paging owns
+  /// horizontal drags and the picture ignores them; once zoomed, the picture owns
+  /// them so it can be panned around, and paging is switched off. Without that
+  /// split the two fight over every drag, and a pinch that starts with the
+  /// slightest sideways movement gets stolen by the page view.
+  bool _zoomed = false;
+
   @override
   void dispose() {
     _pages.dispose();
@@ -124,25 +133,40 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     _pages.jumpToPage(_index);
   }
 
+  /// Adds the picture to its owner's avatars, or takes it back out.
+  ///
+  /// Says what happened, every time. The control flipping label was the only
+  /// feedback before, which read as nothing happening at all — and when the
+  /// character had no picture yet, the pool ended up holding exactly one, so
+  /// there was nothing to swipe between either. Both of those are now stated
+  /// outright.
   Future<void> _toggleAvatar(AppState state, GalleryImage image) async {
     final characterId = image.characterId;
     if (characterId == null) {
-      _say('Give this picture an owner first — then it can be their avatar.');
+      _say('This picture belongs to nobody yet. Use Edit to say who, then it '
+          'can be their avatar.');
       return;
     }
     final character = state.characterById(characterId);
     if (character == null) {
-      _say('That character is gone, so this cannot be their avatar.');
+      _say('That character has been deleted, so this cannot be their avatar.');
       return;
     }
-    // Nothing is said on success on purpose: a snackbar here would sit directly
-    // over the strip the user is still using, and the control has already
-    // answered by flipping to its opposite.
+
     if (state.isAvatarOf(character, image.image)) {
       await state.removeAvatarFromPool(characterId, image.image);
-    } else {
-      await state.addAvatarToPool(characterId, image.image);
+      _say('Removed from ${character.displayName}\'s avatars.');
+      return;
     }
+
+    await state.addAvatarToPool(characterId, image.image);
+    if (!mounted) return;
+    final pool = state.avatarPoolFor(state.characterById(characterId)!);
+    _say(pool.length > 1
+        ? 'Added to ${character.displayName}\'s avatars — tap their picture in a '
+            'chat to swipe between ${pool.length}.'
+        : '${character.displayName} now wears this. Add another to swipe '
+            'between them in a chat.');
   }
 
   Future<void> _sendToChat(AppState state, GalleryImage image) async {
@@ -157,9 +181,15 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
   void _say(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
-    );
+    final messenger = ScaffoldMessenger.of(context)..clearSnackBars();
+    messenger.showSnackBar(SnackBar(
+      content: Text(message),
+      behavior: SnackBarBehavior.floating,
+      // Clear of the action strip, so the confirmation does not cover the
+      // control that produced it.
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+      duration: const Duration(seconds: 3),
+    ));
   }
 
   @override
@@ -198,6 +228,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         children: [
           PageView.builder(
             controller: _pages,
+            // Paging is off while a picture is zoomed in, so dragging moves the
+            // picture instead of half-turning the page.
+            physics: _zoomed
+                ? const NeverScrollableScrollPhysics()
+                : const PageScrollPhysics(),
             itemCount: _ids.length,
             onPageChanged: (i) => setState(() => _index = i),
             itemBuilder: (context, i) {
@@ -209,8 +244,14 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 );
               }
               return _ZoomablePicture(
+                // Per picture, so zooming one and paging away leaves the next at
+                // rest rather than inheriting a transform.
+                key: ValueKey('zoom-${image.id}'),
                 image: image,
                 onTap: () => setState(() => _chrome = !_chrome),
+                onZoomChanged: (zoomed) {
+                  if (_zoomed != zoomed) setState(() => _zoomed = zoomed);
+                },
               );
             },
           ),
@@ -222,6 +263,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
               child: _ActionBar(
                 image: current,
                 isAvatar: _isAvatar(state, current),
+                canBeAvatar: current.characterId != null,
                 extra: widget.extra,
                 onExport: () => exportGalleryImage(context, current),
                 onEdit: () async {
@@ -246,42 +288,86 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
 /// One page: the picture, pinch-zoomable, centred on black.
 class _ZoomablePicture extends StatefulWidget {
-  const _ZoomablePicture({required this.image, required this.onTap});
+  const _ZoomablePicture({
+    super.key,
+    required this.image,
+    required this.onTap,
+    required this.onZoomChanged,
+  });
 
   final GalleryImage image;
   final VoidCallback onTap;
+
+  /// Reports whether this picture is zoomed in, so the pager can get out of the
+  /// way.
+  final ValueChanged<bool> onZoomChanged;
 
   @override
   State<_ZoomablePicture> createState() => _ZoomablePictureState();
 }
 
-class _ZoomablePictureState extends State<_ZoomablePicture> {
+class _ZoomablePictureState extends State<_ZoomablePicture>
+    with SingleTickerProviderStateMixin {
   final TransformationController _transform = TransformationController();
+
+  /// Drives the double-tap zoom, so it eases in and out rather than snapping.
+  AnimationController? _animation;
+
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _transform.addListener(_onTransform);
+  }
 
   @override
   void dispose() {
+    _transform.removeListener(_onTransform);
+    _animation?.dispose();
     _transform.dispose();
     super.dispose();
+  }
+
+  void _onTransform() {
+    final zoomed = _transform.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed == _zoomed) return;
+    _zoomed = zoomed;
+    widget.onZoomChanged(zoomed);
+  }
+
+  /// Animates the transform to [target].
+  void _animateTo(Matrix4 target) {
+    _animation?.dispose();
+    final controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    final tween = Matrix4Tween(begin: _transform.value, end: target).animate(
+      CurvedAnimation(parent: controller, curve: Curves.easeOutCubic),
+    );
+    tween.addListener(() => _transform.value = tween.value);
+    _animation = controller;
+    controller.forward();
   }
 
   /// A double tap zooms to 2.5× on the spot touched, and back out again — the
   /// gesture every photo viewer has.
   void _doubleTap(TapDownDetails details) {
-    final zoomed = _transform.value.getMaxScaleOnAxis() > 1.01;
-    if (zoomed) {
-      _transform.value = Matrix4.identity();
+    if (_transform.value.getMaxScaleOnAxis() > 1.01) {
+      _animateTo(Matrix4.identity());
       return;
     }
     const scale = 2.5;
     final point = details.localPosition;
-    _transform.value = Matrix4.identity()
+    _animateTo(Matrix4.identity()
       ..translateByDouble(
         -point.dx * (scale - 1),
         -point.dy * (scale - 1),
         0,
         1,
       )
-      ..scaleByDouble(scale, scale, scale, 1);
+      ..scaleByDouble(scale, scale, scale, 1));
   }
 
   @override
@@ -305,6 +391,14 @@ class _ZoomablePictureState extends State<_ZoomablePicture> {
         transformationController: _transform,
         minScale: 1,
         maxScale: 6,
+        // Panning only once zoomed in. At rest the page view owns horizontal
+        // drags, so a swipe pages cleanly instead of being fought over — that
+        // fight is what made pinching feel jumpy.
+        panEnabled: _zoomed,
+        // Keeps a zoomed picture from being dragged off into empty space, which
+        // is the other half of "funky": you could lose the photo entirely.
+        boundaryMargin: EdgeInsets.zero,
+        clipBehavior: Clip.none,
         child: Center(
           child: provider == null
               ? const Icon(Icons.broken_image_outlined,
@@ -312,6 +406,7 @@ class _ZoomablePictureState extends State<_ZoomablePicture> {
               : Image(
                   image: provider,
                   fit: BoxFit.contain,
+                  gaplessPlayback: true,
                   errorBuilder: (_, _, _) => const Icon(
                       Icons.broken_image_outlined,
                       color: Colors.white38,
@@ -322,13 +417,13 @@ class _ZoomablePictureState extends State<_ZoomablePicture> {
     );
   }
 }
-
 /// The strip along the bottom: everything that can be done to the picture on
 /// screen, where a thumb can reach it.
 class _ActionBar extends StatelessWidget {
   const _ActionBar({
     required this.image,
     required this.isAvatar,
+    required this.canBeAvatar,
     required this.extra,
     required this.onExport,
     required this.onEdit,
@@ -340,6 +435,10 @@ class _ActionBar extends StatelessWidget {
 
   final GalleryImage image;
   final bool isAvatar;
+
+  /// Whether this picture has an owner to be an avatar *for*.
+  final bool canBeAvatar;
+
   final ViewerExtra extra;
   final VoidCallback onExport;
   final VoidCallback onEdit;
@@ -422,11 +521,15 @@ class _ActionBar extends StatelessWidget {
                 tint: image.starred ? Colors.amber : null,
                 onTap: onStar,
               ),
-              // Offered even for a picture that belongs to nobody: it explains
-              // why it cannot be an avatar rather than quietly doing nothing.
+              // Reads as a state, not a command: "Avatar" with a filled glyph
+              // means it already is one. Still tappable when the picture has no
+              // owner — it then says what to do about that, rather than the
+              // control quietly doing nothing.
               _ViewerAction(
-                icon: isAvatar ? Icons.face_retouching_off : Icons.face,
-                label: isAvatar ? 'Not avatar' : 'Avatar',
+                icon: isAvatar ? Icons.account_circle : Icons.face_outlined,
+                label: isAvatar ? 'Avatar' : 'Not avatar',
+                tint: isAvatar ? Colors.lightBlueAccent : null,
+                dim: !canBeAvatar,
                 onTap: onAvatar,
               ),
               _ViewerAction(
@@ -448,6 +551,7 @@ class _ViewerAction extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.tint,
+    this.dim = false,
   });
 
   final IconData icon;
@@ -455,30 +559,34 @@ class _ViewerAction extends StatelessWidget {
   final VoidCallback onTap;
   final Color? tint;
 
+  /// Drawn faded, for an action that will explain itself rather than act.
+  final bool dim;
+
   @override
-  Widget build(BuildContext context) => Expanded(
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, color: tint ?? Colors.white, size: 22),
-                const SizedBox(height: 4),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: tint ?? Colors.white,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
+  Widget build(BuildContext context) {
+    final colour = tint ??
+        (dim ? Colors.white.withValues(alpha: 0.45) : Colors.white);
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: colour, size: 22),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: colour, fontSize: 11),
+              ),
+            ],
           ),
         ),
-      );
+      ),
+    );
+  }
 }

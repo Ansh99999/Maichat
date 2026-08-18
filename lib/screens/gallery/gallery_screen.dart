@@ -60,6 +60,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
   GallerySort _sort = GallerySort.newest;
   final Set<String> _tagFilter = <String>{};
 
+  /// Whether only starred pictures are shown.
+  bool _starredOnly = false;
+
   /// The character filter, in the whole-app gallery only.
   String? _ownerFilter;
   bool _filterUnowned = false;
@@ -102,11 +105,12 @@ class _GalleryScreenState extends State<GalleryScreen> {
     return tags.toList()..sort();
   }
 
-  /// Applies the search text, the tag filter and (in the whole-app gallery) the
-  /// character filter, then the chosen order.
+  /// Applies the search text, the tag filter, the starred filter and (in the
+  /// whole-app gallery) the character filter, then the chosen order.
   List<GalleryImage> _visible(AppState state, List<GalleryImage> pool) {
     final q = _query.trim().toLowerCase();
     final filtered = pool.where((image) {
+      if (_starredOnly && !image.starred) return false;
       if (!_isAlbum) {
         if (_filterUnowned && image.characterId != null) return false;
         if (!_filterUnowned &&
@@ -428,12 +432,21 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   onTap: _pickSort,
                 ),
                 const SizedBox(width: 8),
+                // Starring is only useful if the stars can be pulled up on their
+                // own, so the filter sits beside the others rather than in a menu.
+                // Icon-only: with four controls, a fourth word does not fit on a
+                // phone, and a star needs no caption.
+                _ControlChip(
+                  key: const Key('gallery-starred-chip'),
+                  icon: _starredOnly ? Icons.star : Icons.star_border,
+                  tooltip: _starredOnly ? 'Showing starred' : 'Starred only',
+                  selected: _starredOnly,
+                  onTap: () => setState(() => _starredOnly = !_starredOnly),
+                ),
+                const SizedBox(width: 8),
                 _ControlChip(
                   icon: Icons.label_outline,
-                  label: _tagFilter.isEmpty
-                      ? 'Tags'
-                      : '${_tagFilter.length} tag'
-                          '${_tagFilter.length == 1 ? '' : 's'}',
+                  label: _tagFilter.isEmpty ? 'Tags' : '${_tagFilter.length}',
                   selected: _tagFilter.isNotEmpty,
                   onTap: () => _showTagFilter(tags),
                 ),
@@ -510,12 +523,12 @@ class _GalleryScreenState extends State<GalleryScreen> {
         itemCount: images.length,
         itemBuilder: (context, i) {
           final image = images[i];
+          final owner = state.characterById(image.characterId);
           return _ImageTile(
             image: image,
             columns: _zoom.columns,
-            ownerName: _isAlbum
-                ? null
-                : state.characterById(image.characterId)?.displayName,
+            ownerName: _isAlbum ? null : owner?.displayName,
+            isAvatar: owner != null && state.isAvatarOf(owner, image.image),
             selecting: _selecting,
             selected: _selection.contains(image.id),
             onTap: () => _selecting
@@ -531,6 +544,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 }
+
 /// One picture in the grid.
 ///
 /// The tile knows how many columns it is in so it can ask for a bitmap the size
@@ -541,6 +555,7 @@ class _ImageTile extends StatelessWidget {
     required this.image,
     required this.columns,
     required this.ownerName,
+    required this.isAvatar,
     required this.selecting,
     required this.selected,
     required this.onTap,
@@ -550,6 +565,11 @@ class _ImageTile extends StatelessWidget {
   final GalleryImage image;
   final int columns;
   final String? ownerName;
+
+  /// Whether this picture is one of its owner's avatars — marked on the tile so
+  /// the state is visible without opening it.
+  final bool isAvatar;
+
   final bool selecting;
   final bool selected;
   final VoidCallback onTap;
@@ -574,9 +594,14 @@ class _ImageTile extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(columns >= 4 ? 8 : 14),
+        // A starred picture wears a gold edge as well as its glyph, so the shelf
+        // shows at a glance which ones were picked out — a small icon on a busy
+        // photograph is not a distinction.
         side: selected
             ? BorderSide(color: scheme.primary, width: 3)
-            : BorderSide.none,
+            : image.starred
+                ? const BorderSide(color: Color(0xFFFFC107), width: 2)
+                : BorderSide.none,
       ),
       child: InkWell(
         onTap: onTap,
@@ -603,6 +628,17 @@ class _ImageTile extends StatelessWidget {
                 top: 4,
                 left: 4,
                 child: _TileGlyph(icon: Icons.star, tint: Colors.amber),
+              ),
+            // Marked where the picture already is somebody's avatar, so the
+            // gallery says so without being opened.
+            if (isAvatar && !selecting)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: _TileGlyph(
+                  icon: Icons.account_circle,
+                  tint: Colors.lightBlueAccent.shade100,
+                ),
               ),
             if (selecting)
               Positioned(
@@ -689,29 +725,47 @@ class _TileGlyph extends StatelessWidget {
 }
 
 /// The pill buttons under the search bar, matching the character roster's.
+///
+/// Without a [label] it is a round icon-only chip, for a control whose glyph says
+/// everything (the star) — four captioned pills do not fit across a phone.
 class _ControlChip extends StatelessWidget {
   const _ControlChip({
+    super.key,
     required this.icon,
-    required this.label,
     required this.onTap,
+    this.label,
+    this.tooltip,
     this.selected = false,
   });
 
   final IconData icon;
-  final String label;
+  final String? label;
+  final String? tooltip;
   final VoidCallback onTap;
   final bool selected;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final tint =
+        selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant;
+    if (label == null) {
+      return Tooltip(
+        message: tooltip ?? '',
+        child: RawChip(
+          label: Icon(icon, size: 18, color: tint),
+          labelPadding: EdgeInsets.zero,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          backgroundColor: selected ? scheme.secondaryContainer : null,
+          side: selected ? BorderSide.none : null,
+          onPressed: onTap,
+        ),
+      );
+    }
     return ActionChip(
-      avatar: Icon(
-        icon,
-        size: 18,
-        color: selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
-      ),
-      label: Text(label),
+      avatar: Icon(icon, size: 18, color: tint),
+      label: Text(label!),
+      tooltip: tooltip,
       backgroundColor: selected ? scheme.secondaryContainer : null,
       side: selected ? BorderSide.none : null,
       onPressed: onTap,

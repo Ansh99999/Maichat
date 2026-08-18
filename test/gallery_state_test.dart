@@ -400,7 +400,9 @@ void main() {
       expect(state.active.floatingImages, hasLength(2));
       expect(state.active.floatingImages.last.imageId, images[0].id);
 
-      await state.moveFloatingImage(chat, images[0].id,
+      final first = state.active.floatingImages
+          .firstWhere((f) => f.imageId == images[0].id);
+      await state.settleFloatingImage(chat, first,
           x: 0.5, y: 0.25, width: 300, rotation: 0.4);
       final moved = state.active.floatingImages
           .firstWhere((f) => f.imageId == images[0].id);
@@ -409,7 +411,7 @@ void main() {
       expect(moved.width, 300);
       expect(moved.rotation, closeTo(0.4, 1e-9));
 
-      await state.unfloatImage(chat, images[0].id);
+      await state.unfloatImage(chat, first);
       expect(state.active.floatingImages.map((f) => f.imageId),
           [images[1].id]);
       await state.clearFloatingImages(chat);
@@ -423,7 +425,8 @@ void main() {
       final chat = state.active.id;
       await state.floatImage(chat, image.id);
 
-      await state.moveFloatingImage(chat, image.id,
+      await state.settleFloatingImage(
+          chat, state.active.floatingImages.single,
           x: 9, y: -9, width: 100000);
       final float = state.active.floatingImages.single;
       expect(float.x, lessThanOrEqualTo(1));
@@ -439,7 +442,9 @@ void main() {
       state.startChatWithCharacter(character);
       final chat = state.active.id;
       await state.floatImage(chat, image.id);
-      await state.moveFloatingImage(chat, image.id, x: 0.4, rotation: 0.2);
+      await state.settleFloatingImage(
+          chat, state.active.floatingImages.single,
+          x: 0.4, rotation: 0.2);
 
       final reopened = await app();
       final restored = reopened.conversationById(chat)!.floatingImages.single;
@@ -476,7 +481,7 @@ void main() {
       state.active.floatingImages.add(FloatingImage(imageId: 'vanished'));
       expect(state.active.floatingImages, hasLength(2));
       expect(state.floatingImagesFor(state.active), hasLength(1));
-      expect(state.floatingImagesFor(state.active).single.$2.id, image.id);
+      expect(state.floatingImagesFor(state.active).single.ref, image.image);
 
       await state.deleteGalleryImage(image.id);
       expect(state.floatingImagesFor(state.active), isEmpty);

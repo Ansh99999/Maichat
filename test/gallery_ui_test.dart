@@ -203,7 +203,7 @@ void main() {
     await tester.tapAt(const Offset(200, 40)); // Dismiss the sheet.
     await tester.pumpAndSettle();
 
-    expect(find.text('2 tags'), findsOneWidget);
+    expect(find.widgetWithText(ActionChip, '2'), findsOneWidget);
     expect(find.text('Both'), findsOneWidget);
     expect(find.text('One'), findsNothing, reason: 'tags are ANDed');
     expect(find.text('Neither'), findsNothing);
@@ -453,7 +453,13 @@ void main() {
       expect(find.text('Opened'), findsOneWidget);
       expect(find.text('1 / 2'), findsOneWidget);
       expect(find.text('beach'), findsOneWidget, reason: 'tags are shown');
-      for (final action in ['Export', 'Edit', 'Star', 'Avatar', 'Delete']) {
+      for (final action in [
+        'Export',
+        'Edit',
+        'Star',
+        'Not avatar',
+        'Delete',
+      ]) {
         expect(find.text(action), findsOneWidget, reason: action);
       }
       // Only a chat's gallery offers this.
@@ -485,11 +491,11 @@ void main() {
       await tester.tap(find.text('Loose'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Avatar'));
+      await tester.tap(find.text('Not avatar'));
       await tester.pumpAndSettle();
       expect(
-        find.text('Give this picture an owner first — then it can be their '
-            'avatar.'),
+        find.text('This picture belongs to nobody yet. Use Edit to say who, '
+            'then it can be their avatar.'),
         findsOneWidget,
       );
     });
@@ -504,15 +510,22 @@ void main() {
       await tester.tap(find.text('Hers'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Avatar'));
-      await tester.pumpAndSettle();
-      expect(state.characterById('sumire')!.avatar, 'local:a.png');
-      expect(find.text('Not avatar'), findsOneWidget);
-
       await tester.tap(find.text('Not avatar'));
       await tester.pumpAndSettle();
+      expect(state.characterById('sumire')!.avatar, 'local:a.png');
+      // Says what happened, and that one picture is not yet something to swipe.
+      expect(
+        find.text('Sumire now wears this. Add another to swipe between them in '
+            'a chat.'),
+        findsOneWidget,
+      );
+      expect(find.text('Avatar'), findsOneWidget,
+          reason: 'the control now reads as a state, not a command');
+
+      await tester.tap(find.text('Avatar'));
+      await tester.pumpAndSettle();
       expect(state.characterById('sumire')!.avatar, '');
-      expect(find.text('Avatar'), findsOneWidget);
+      expect(find.text('Not avatar'), findsOneWidget);
     });
 
     testWidgets('deleting the last picture closes the viewer', (tester) async {

@@ -176,8 +176,11 @@ void main() {
       expect(find.byType(AvatarSwipeScreen), findsNothing);
     });
 
-    testWidgets('a picture the gallery does not hold cannot float', (tester) async {
-      // An avatar that arrived on an imported card was never a gallery picture.
+    testWidgets('a picture that was never in the gallery still floats',
+        (tester) async {
+      // An avatar that arrived on an imported card was never a gallery record.
+      // Floating is about looking at a picture, so it must work anyway — v1.14.0
+      // refused, which is a distinction the user never asked for.
       final state = await chatWith(inGallery: false);
       await pumpChat(tester, state);
       await openAvatar(tester);
@@ -185,9 +188,25 @@ void main() {
       await tester.tap(find.text('Float'));
       await tester.pumpAndSettle();
 
-      expect(state.active.floatingImages, isEmpty);
-      expect(find.text('Only pictures kept in the gallery can float.'),
-          findsOneWidget);
+      final float = state.active.floatingImages.single;
+      expect(float.imageRef, 'local:one.png');
+      expect(float.imageId, isEmpty, reason: 'no record to tie it to');
+      expect(state.floatingImagesFor(state.active).single.ref, 'local:one.png');
+    });
+
+    testWidgets('a picture the gallery does hold floats as that record',
+        (tester) async {
+      final state = await chatWith();
+      await pumpChat(tester, state);
+      await openAvatar(tester);
+
+      await tester.tap(find.text('Float'));
+      await tester.pumpAndSettle();
+
+      // Tied to the record, so editing or deleting the picture reaches the float.
+      final float = state.active.floatingImages.single;
+      expect(float.imageId, 'img0');
+      expect(float.imageRef, isEmpty);
     });
 
     testWidgets('a character with no picture is not opened at all',
