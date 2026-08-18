@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import 'character_edit_screen.dart';
+import 'gallery/gallery_picker_sheet.dart';
 import 'group_add_sheet.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/chat_ui_scope.dart';
@@ -248,9 +249,9 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
     _toast('${picked.displayName} joined this chat.');
   }
 
-  /// The background chooser: an in-app gallery is not built yet, so that route
-  /// says so rather than pretending. A picked file is written to the pictures
-  /// directory straight away and only its reference is held as a draft.
+  /// The background chooser: a picture kept in the app's gallery, or a file off
+  /// the device. A picked file is written to the pictures directory straight away
+  /// and only its reference is held as a draft.
   Future<void> _pickBackground() async {
     final source = await showModalBottomSheet<_BackgroundSource>(
       context: context,
@@ -263,7 +264,7 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Gallery'),
-              subtitle: const Text('Coming soon — pictures kept in the app'),
+              subtitle: const Text('A picture kept in the app'),
               onTap: () =>
                   Navigator.of(context).pop(_BackgroundSource.gallery),
             ),
@@ -289,12 +290,27 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
 
     switch (source) {
       case _BackgroundSource.gallery:
-        _toast('The gallery is coming soon — use Files for now.');
+        await _pickBackgroundFromGallery();
       case _BackgroundSource.remove:
         setState(() => _background = null);
       case _BackgroundSource.files:
         await _pickBackgroundFile();
     }
+  }
+
+  /// Chooses a picture already kept in the app. Nothing is copied — the chat
+  /// points at the same file the gallery does, and the sweep's keep-list covers
+  /// both.
+  Future<void> _pickBackgroundFromGallery() async {
+    final conversation =
+        context.read<AppState>().conversationById(widget.conversationId);
+    final ref = await showGalleryPickerSheet(
+      context,
+      title: 'Background for this chat',
+      characterId: conversation?.characterId,
+    );
+    if (ref == null || !mounted) return;
+    setState(() => _background = ref);
   }
 
   Future<void> _pickBackgroundFile() async {

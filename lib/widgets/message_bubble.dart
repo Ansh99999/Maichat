@@ -35,6 +35,9 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onAction,
     this.onSwipe,
+    this.onAvatarTap,
+    this.avatarOverride,
+    this.userAvatarOverride,
     this.streaming = false,
   });
 
@@ -71,6 +74,21 @@ class MessageBubble extends StatelessWidget {
   /// which is only drawn when the turn actually holds alternatives. Null leaves
   /// the control read-only (the preview).
   final void Function(int)? onSwipe;
+
+  /// Opens the avatar that was tapped, full size. Called with true for the user's
+  /// side and false for the character's, so the chat can decide whose pictures to
+  /// show. Null (the preview, and a turn with nothing to show) leaves the avatar
+  /// inert — a picture that cannot be opened must not look tappable.
+  final void Function(bool isUser)? onAvatarTap;
+
+  /// The picture this turn's character wears here, when the thread has a choice of
+  /// its own. Resolved by `AppState.avatarRefFor` and passed in rather than read
+  /// off the card, so the per-chat choice reaches the two places that draw a chat
+  /// avatar and nowhere else has to know about it.
+  final String? avatarOverride;
+
+  /// The same, for the impersonated user's side.
+  final String? userAvatarOverride;
 
   /// Whether a reply is currently streaming — disables mutating actions.
   final bool streaming;
@@ -604,6 +622,7 @@ class MessageBubble extends StatelessWidget {
     if (!isUser && character != null) {
       base = CharacterAvatar(
         character: character!,
+        avatarOverride: avatarOverride,
         size: size,
         shape: style.shape,
         corner: style.corner,
@@ -613,6 +632,7 @@ class MessageBubble extends StatelessWidget {
       // The user is impersonating a character: wear that persona's picture.
       base = CharacterAvatar(
         character: userPersona!,
+        avatarOverride: userAvatarOverride,
         size: size,
         shape: style.shape,
         corner: style.corner,
@@ -627,7 +647,19 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (!interactive) {
-      return Transform.translate(offset: style.offset, child: base);
+      final tap = onAvatarTap;
+      return Transform.translate(
+        offset: style.offset,
+        // The whole avatar is the target, and only when there is something behind
+        // it to open. A hit test on the picture itself would miss the monogram.
+        child: tap == null
+            ? base
+            : GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => tap(isUser),
+                child: base,
+              ),
+      );
     }
 
     final scheme = Theme.of(context).colorScheme;

@@ -12,7 +12,9 @@ import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
+import '../widgets/avatar_swipe_sheet.dart';
 import '../widgets/character_avatar.dart';
+import '../widgets/floating_images_layer.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
 import '../widgets/startup_screen.dart';
@@ -21,6 +23,7 @@ import 'chat_export.dart';
 import 'chat_memory_panel.dart';
 import 'chat_settings_screen.dart';
 import 'chats_screen.dart';
+import 'gallery/chat_gallery_screen.dart';
 import 'group_add_sheet.dart';
 import 'prompt_view_screen.dart';
 import 'presets/chat_preset_panel.dart';
@@ -276,7 +279,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onProfile: _goHome,
         onCharacters: _openCharacters,
         onChats: _goChats,
-        onGallery: () => _openSection('Gallery', Icons.photo_library_outlined),
+        onGallery: () => openChatGallery(context, conversation.id),
         onEditChat: () => _editChat(state),
         onChatGraph: () =>
             _openSection('Chat Graph', Icons.account_tree_outlined),
@@ -312,6 +315,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       : Stack(
                           children: [
                             _messageList(conversation, state, topInset),
+                            // Pictures pinned over the thread. Above the messages
+                            // and below the composer, so a float can be moved
+                            // anywhere in the conversation without ever covering
+                            // the send bar.
+                            Positioned.fill(
+                              child: FloatingImagesLayer(
+                                conversationId: conversation.id,
+                              ),
+                            ),
                             // Sits at the bottom-right of the thread, just above
                             // the composer, and only while scrolled well up.
                             Positioned(
@@ -396,15 +408,31 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           );
         }
+        // In a group, a turn is spoken by whoever it names; in a one-to-one chat
+        // the bound character and the impersonated persona apply throughout.
+        final speaker = conversation.isGroup && message.speakerId != null
+            ? (state.characterFor(conversation, message.speakerId) ?? character)
+            : character;
+        final userSpeaker =
+            conversation.isGroup && message.isUser && message.speakerId != null
+                ? (state.characterFor(conversation, message.speakerId) ?? persona)
+                : persona;
         return MessageBubble(
           message: message,
           ui: ui,
-          character: conversation.isGroup && message.speakerId != null
-              ? (state.characterFor(conversation, message.speakerId) ?? character)
-              : character,
-          userPersona: conversation.isGroup && message.isUser && message.speakerId != null
-              ? (state.characterFor(conversation, message.speakerId) ?? persona)
-              : persona,
+          character: speaker,
+          userPersona: userSpeaker,
+          // The picture each side wears *in this thread*, resolved in the one
+          // place that decides it. Passed down rather than read off the card, so
+          // a per-chat choice cannot be honoured here and forgotten elsewhere.
+          avatarOverride: speaker == null
+              ? null
+              : state.avatarRefFor(conversation, speaker),
+          userAvatarOverride: userSpeaker == null
+              ? null
+              : state.avatarRefFor(conversation, userSpeaker),
+          onAvatarTap: (isUser) =>
+              _openAvatar(state, conversation, isUser ? userSpeaker : speaker),
           pending: isLast && state.streaming,
           streaming: state.streaming,
           onAction: (action) =>
@@ -415,6 +443,21 @@ class _ChatScreenState extends State<ChatScreen> {
               : () => _showMessageActions(state, conversation, index),
         );
       },
+    );
+  }
+
+  /// Opens [who]'s picture full size, with their other pictures to swipe through.
+  ///
+  /// Nothing happens when there is no character behind the avatar (a plain chat,
+  /// or the user speaking as themself) or when they have no picture at all — a
+  /// blank screen is not worth a route.
+  void _openAvatar(AppState state, Conversation conversation, Character? who) {
+    if (who == null) return;
+    if (!hasAvatarToShow(state, conversation, who)) return;
+    showAvatarSwipeSheet(
+      context,
+      character: who,
+      conversationId: conversation.id,
     );
   }
 

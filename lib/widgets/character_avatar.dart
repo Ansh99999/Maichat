@@ -17,6 +17,7 @@ class CharacterAvatar extends StatefulWidget {
   const CharacterAvatar({
     super.key,
     required this.character,
+    this.avatarOverride,
     this.radius = 24,
     this.size,
     this.shape = AvatarShape.circle,
@@ -25,6 +26,13 @@ class CharacterAvatar extends StatefulWidget {
   });
 
   final Character character;
+
+  /// A picture to draw instead of the card's own — what the character wears in one
+  /// thread. Resolved by `AppState.avatarRefFor` and handed in, so this widget
+  /// stays ignorant of chats and there is still only one place that decides which
+  /// picture wins.
+  final String? avatarOverride;
+
   final double radius;
 
   /// Diameter in logical pixels; overrides [radius] when set.
@@ -50,12 +58,18 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
 
   double get _diameter => widget.size ?? widget.radius * 2;
 
+  /// The picture to draw: this thread's choice when there is one, else the card's.
+  String get _ref {
+    final override = widget.avatarOverride?.trim() ?? '';
+    return override.isEmpty ? widget.character.avatar : override;
+  }
+
   ImageProvider? _resolveProvider() {
     // Shared, size-capped and deduplicated: the same picture at the same size
     // is the same provider object everywhere, so it is decoded once and held
     // once no matter how many turns show it.
     return avatarImage(
-      widget.character.avatar,
+      _ref,
       displaySize: _diameter,
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
@@ -71,6 +85,7 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
   void didUpdateWidget(CharacterAvatar old) {
     super.didUpdateWidget(old);
     if (old.character.avatar != widget.character.avatar ||
+        old.avatarOverride != widget.avatarOverride ||
         old.fit != widget.fit ||
         old.size != widget.size ||
         old.radius != widget.radius) {
