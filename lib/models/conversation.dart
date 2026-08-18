@@ -1,5 +1,6 @@
 import 'character.dart';
 import 'chat_interface.dart';
+import 'floating_image.dart';
 import 'message.dart';
 import 'preset.dart';
 
@@ -28,11 +29,15 @@ class Conversation {
     this.overrideDefinitions = false,
     this.groupResponder,
     Map<String, Character>? characterOverrides,
+    Map<String, String>? avatarOverrides,
+    List<FloatingImage>? floatingImages,
     Map<String, String>? variables,
     List<String>? lorebookIds,
     List<String>? participantIds,
   })  : characterOverrides =
             characterOverrides ?? <String, Character>{},
+        avatarOverrides = avatarOverrides ?? <String, String>{},
+        floatingImages = floatingImages ?? <FloatingImage>[],
         variables = variables ?? <String, String>{},
         lorebookIds = lorebookIds ?? <String>[],
         participantIds = participantIds ?? <String>[];
@@ -88,6 +93,18 @@ class Conversation {
   /// chat" half of the chat-settings editor. Only consulted while
   /// [overrideDefinitions] is on.
   final Map<String, Character> characterOverrides;
+
+  /// Which picture each character wears **in this thread**, by [Character.id] —
+  /// the "Set" action in the in-chat avatar viewer. The value is a picture
+  /// reference (`local:<file>` or a URL) chosen from that character's gallery.
+  /// Read it through `AppState.avatarRefFor`, never directly, so the fallback to
+  /// the card's own avatar happens in exactly one place.
+  final Map<String, String> avatarOverrides;
+
+  /// Pictures pinned over this thread, in z-order (last drawn on top). These are
+  /// pure decoration: they are never part of the transcript and never reach the
+  /// model, so nothing here affects the prompt, an export or a token count.
+  final List<FloatingImage> floatingImages;
 
   /// Per-chat macro variables ({{setvar}}/{{getvar}}), SillyTavern's local scope.
   final Map<String, String> variables;
@@ -172,6 +189,8 @@ class Conversation {
         characterOverrides: characterOverrides.map(
           (charId, character) => MapEntry(charId, character.clone()),
         ),
+        avatarOverrides: Map<String, String>.of(avatarOverrides),
+        floatingImages: floatingImages.map((f) => f.copyWith()).toList(),
         variables: Map<String, String>.of(variables),
         lorebookIds: lorebookIds.toList(),
         participantIds: participantIds.toList(),
@@ -209,6 +228,9 @@ class Conversation {
           'characterOverrides': characterOverrides.map(
             (id, character) => MapEntry(id, character.toJson()),
           ),
+        if (avatarOverrides.isNotEmpty) 'avatarOverrides': avatarOverrides,
+        if (floatingImages.isNotEmpty)
+          'floatingImages': floatingImages.map((f) => f.toJson()).toList(),
         if (variables.isNotEmpty) 'variables': variables,
         if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
         if (participantIds.isNotEmpty) 'participantIds': participantIds,
@@ -245,6 +267,12 @@ class Conversation {
             ? null
             : (json['groupResponder'] as String).trim(),
         characterOverrides: _characterMap(json['characterOverrides']),
+        avatarOverrides: _refMap(json['avatarOverrides']),
+        floatingImages: (json['floatingImages'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(FloatingImage.fromJson)
+            .where((f) => f.imageId.isNotEmpty)
+            .toList(),
         variables: (json['variables'] as Map?)?.map(
           (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
         ),
@@ -275,5 +303,18 @@ class Conversation {
       }
     }
     return overrides;
+  }
+
+  /// Reads the per-chat avatar choices, dropping any entry that does not name a
+  /// picture — an empty value would resolve to "no avatar at all" rather than
+  /// falling back to the card's own, which is not what an absent choice means.
+  static Map<String, String>? _refMap(Object? value) {
+    if (value is! Map) return null;
+    final refs = <String, String>{};
+    for (final entry in value.entries) {
+      final ref = entry.value?.toString().trim() ?? '';
+      if (ref.isNotEmpty) refs[entry.key.toString()] = ref;
+    }
+    return refs;
   }
 }

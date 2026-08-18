@@ -7,6 +7,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
+import '../models/gallery_image.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
@@ -40,6 +41,7 @@ class Storage {
   static const _conversationsKey = 'conversations';
   static const _charactersKey = 'characters';
   static const _lorebooksKey = 'lorebooks';
+  static const _galleryKey = 'gallery';
   static const _activeKey = 'activeConversation';
   static const _presetsKey = 'presets';
   static const _globalVarsKey = 'macroGlobals';
@@ -229,6 +231,36 @@ class Storage {
       (await _prefs).setString(
         _lorebooksKey,
         jsonEncode(books.map((b) => b.toJson()).toList()),
+      );
+
+  /// The pictures the user keeps in the app's gallery — the records only; the
+  /// images themselves are files in the pictures directory, referenced by
+  /// [GalleryImage.image]. Its own entry so adding a photo does not rewrite the
+  /// character roster, which is the largest thing in the store.
+  Future<List<GalleryImage>> loadGallery() async {
+    final raw = (await _prefs).getString(_galleryKey);
+    if (raw == null) return <GalleryImage>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(GalleryImage.fromJson)
+            // A record whose picture reference went missing draws nothing and
+            // cannot be exported, so it is dropped rather than shown as a hole.
+            .where((image) => image.image.isNotEmpty)
+            .toList();
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <GalleryImage>[];
+  }
+
+  Future<void> saveGallery(List<GalleryImage> images) async =>
+      (await _prefs).setString(
+        _galleryKey,
+        jsonEncode(images.map((i) => i.toJson()).toList()),
       );
 
   /// Loads stored presets and the default-preset id, or an empty state on a

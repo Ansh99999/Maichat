@@ -1,7 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/appearance.dart';
+import 'package:maichat/models/character.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/discover.dart';
+import 'package:maichat/models/floating_image.dart';
+import 'package:maichat/models/gallery_image.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/models/settings.dart';
@@ -236,5 +239,202 @@ void main() {
     expect(restored.sortFor(DiscoverKind.lorebook), isNull);
     expect(DiscoverPrefs.fromJson(const <String, dynamic>{}),
         const DiscoverPrefs());
+  });
+
+  group('gallery pictures', () {
+    test('a gallery image survives a JSON round trip', () {
+      final original = GalleryImage.create(
+        image: 'local:beach.png',
+        title: 'Beach outfit',
+        tags: ['beach', 'summer'],
+        characterId: 'sumire',
+      )
+        ..starred = true
+        ..lastViewed = DateTime(2026, 4, 24, 9, 30);
+
+      final restored = GalleryImage.fromJson(original.toJson());
+      expect(restored.id, original.id);
+      expect(restored.image, 'local:beach.png');
+      expect(restored.title, 'Beach outfit');
+      expect(restored.tags, ['beach', 'summer']);
+      expect(restored.characterId, 'sumire');
+      expect(restored.starred, isTrue);
+      expect(restored.lastViewed, DateTime(2026, 4, 24, 9, 30));
+      expect(restored.createdAt, original.createdAt);
+    });
+
+    test('an unnamed, unowned picture writes a minimal record', () {
+      final json = GalleryImage.create(image: 'local:a.png').toJson();
+      expect(json.keys, containsAll(['id', 'image', 'createdAt', 'updatedAt']));
+      expect(json.containsKey('title'), isFalse);
+      expect(json.containsKey('tags'), isFalse);
+      expect(json.containsKey('characterId'), isFalse);
+      expect(json.containsKey('starred'), isFalse);
+      expect(json.containsKey('lastViewed'), isFalse);
+    });
+
+    test('an empty owner reads back as no owner', () {
+      final restored = GalleryImage.fromJson(<String, dynamic>{
+        'image': 'local:a.png',
+        'characterId': '   ',
+      });
+      expect(restored.characterId, isNull);
+      expect(restored.displayTitle, 'Untitled');
+    });
+
+    test('tags flattened into a string are still read as tags', () {
+      final restored = GalleryImage.fromJson(<String, dynamic>{
+        'image': 'local:a.png',
+        'tags': 'beach, summer ,, smile',
+      });
+      expect(restored.tags, ['beach', 'summer', 'smile']);
+    });
+
+    test('copyWith can detach an owner, which a null default could not', () {
+      final owned = GalleryImage.create(image: 'a', characterId: 'sumire');
+      expect(owned.copyWith(title: 'x').characterId, 'sumire');
+      expect(owned.copyWith(characterId: null).characterId, isNull);
+    });
+
+    test('the zoom ladder steps and stops at both ends', () {
+      expect(kDefaultGalleryZoom, GalleryZoom.pair);
+      expect(GalleryZoom.pair.columns, 2);
+      expect(GalleryZoom.pair.grouping, DateGrouping.day);
+      expect(GalleryZoom.pair.out, GalleryZoom.quad);
+      expect(GalleryZoom.quad.grouping, DateGrouping.week);
+      expect(GalleryZoom.quad.out, GalleryZoom.month);
+      expect(GalleryZoom.month.grouping, DateGrouping.month);
+      expect(GalleryZoom.month.out, GalleryZoom.month, reason: 'ladder ends');
+      expect(GalleryZoom.pair.inward, GalleryZoom.single);
+      expect(GalleryZoom.single.inward, GalleryZoom.single);
+    });
+
+    test('only date orderings carry date headings', () {
+      expect(GallerySort.newest.isChronological, isTrue);
+      expect(GallerySort.oldest.isChronological, isTrue);
+      for (final sort in [
+        GallerySort.titleAsc,
+        GallerySort.titleDesc,
+        GallerySort.lastViewed,
+        GallerySort.character,
+      ]) {
+        expect(sort.isChronological, isFalse, reason: sort.name);
+      }
+      expect(GallerySort.byName('titleDesc'), GallerySort.titleDesc);
+      expect(GallerySort.byName('nonsense'), GallerySort.newest);
+    });
+  });
+
+  group('floating pictures', () {
+    test('a float survives a JSON round trip', () {
+      final original = FloatingImage(
+        imageId: 'img-1',
+        x: 0.4,
+        y: 0.2,
+        width: 240,
+        rotation: 0.35,
+      );
+      final restored = FloatingImage.fromJson(original.toJson());
+      expect(restored.imageId, 'img-1');
+      expect(restored.x, 0.4);
+      expect(restored.y, 0.2);
+      expect(restored.width, 240);
+      expect(restored.rotation, closeTo(0.35, 1e-9));
+    });
+
+    test('an unrotated float omits its rotation', () {
+      expect(FloatingImage(imageId: 'a').toJson().containsKey('rotation'),
+          isFalse);
+    });
+
+    test('a stored position out of range is pulled back into reach', () {
+      final restored = FloatingImage.fromJson(<String, dynamic>{
+        'imageId': 'a',
+        'x': 40.0,
+        'y': -40.0,
+        'width': 99999.0,
+      });
+      expect(restored.x, kFloatingImageMaxFraction);
+      expect(restored.y, kFloatingImageMinFraction);
+      expect(restored.width, kFloatingImageMaxWidth);
+    });
+
+    test('nonsense numbers do not escape into the layout', () {
+      final restored = FloatingImage.fromJson(<String, dynamic>{
+        'imageId': 'a',
+        'x': double.nan,
+        'y': double.infinity,
+      });
+      expect(restored.x, 0);
+      expect(restored.y, 0);
+    });
+
+    test('rotation normalises into a single turn', () {
+      expect(FloatingImage.normaliseRotation(0.5), closeTo(0.5, 1e-9));
+      // Seven half-turns is one half-turn.
+      expect(FloatingImage.normaliseRotation(7 * 3.141592653589793),
+          closeTo(3.141592653589793, 1e-9));
+      expect(FloatingImage.normaliseRotation(double.nan), 0);
+    });
+
+    test('a chat carries its floats and avatar choices through a fork', () {
+      final original = Conversation.empty()
+        ..avatarOverrides['sumire'] = 'local:two.png'
+        ..floatingImages.add(FloatingImage(imageId: 'img-1', x: 0.3));
+
+      final restored = Conversation.fromJson(original.toJson());
+      expect(restored.avatarOverrides, {'sumire': 'local:two.png'});
+      expect(restored.floatingImages.single.imageId, 'img-1');
+
+      final fork = restored.copyAs(id: 'fork');
+      expect(fork.avatarOverrides, {'sumire': 'local:two.png'});
+      expect(fork.floatingImages.single.x, 0.3);
+      // Copied, not shared: the two threads must be able to diverge.
+      fork.floatingImages.single.x = 0.9;
+      fork.avatarOverrides['sumire'] = 'local:three.png';
+      expect(restored.floatingImages.single.x, 0.3);
+      expect(restored.avatarOverrides['sumire'], 'local:two.png');
+    });
+
+    test('an empty avatar choice is dropped rather than hiding a picture', () {
+      final restored = Conversation.fromJson(<String, dynamic>{
+        'id': 'c',
+        'avatarOverrides': {'sumire': '  ', 'aoi': 'local:a.png'},
+        'floatingImages': [
+          {'imageId': ''},
+          {'imageId': 'ok'},
+        ],
+        'messages': <dynamic>[],
+      });
+      expect(restored.avatarOverrides, {'aoi': 'local:a.png'});
+      expect(restored.floatingImages.map((f) => f.imageId), ['ok']);
+    });
+
+    test('a chat with no gallery state writes no gallery keys', () {
+      final json = Conversation.empty().toJson();
+      expect(json.containsKey('avatarOverrides'), isFalse);
+      expect(json.containsKey('floatingImages'), isFalse);
+    });
+  });
+
+  group('character avatar pool', () {
+    test('extra avatars round-trip and are omitted when empty', () {
+      final plain = Character(id: 'c', name: 'Sumire', avatar: 'local:a.png');
+      expect(plain.toJson().containsKey('avatars'), isFalse);
+
+      plain.avatars.addAll(['local:b.png', 'local:c.png']);
+      final restored = Character.fromJson(plain.toJson());
+      expect(restored.avatar, 'local:a.png');
+      expect(restored.avatars, ['local:b.png', 'local:c.png']);
+    });
+
+    test('a copy owns its own pool', () {
+      final original = Character(id: 'c', name: 'Sumire')
+        ..avatars.add('local:a.png');
+      final copy = original.clone();
+      copy.avatars.add('local:b.png');
+      expect(original.avatars, ['local:a.png']);
+      expect(copy.avatars, ['local:a.png', 'local:b.png']);
+    });
   });
 }

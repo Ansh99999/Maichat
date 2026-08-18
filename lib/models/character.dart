@@ -31,6 +31,7 @@ class Character {
     required this.id,
     required this.name,
     this.avatar = '',
+    List<String>? avatars,
     this.description = '',
     this.personality = '',
     this.scenario = '',
@@ -47,7 +48,8 @@ class Character {
     this.starred = false,
     DateTime? createdAt,
     DateTime? updatedAt,
-  })  : createdAt = createdAt ?? DateTime.now(),
+  })  : avatars = avatars ?? <String>[],
+        createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
   final String id;
@@ -56,6 +58,14 @@ class Character {
   /// Either an `http(s)` URL or a base64-encoded image (no `data:` prefix).
   /// Imported PNG cards keep their own picture here as base64.
   String avatar;
+
+  /// Extra pictures this character can wear, added from its gallery — the pool
+  /// the in-chat avatar viewer swipes through. [avatar] stays the default (and is
+  /// not repeated here), so every existing read of a character's picture is
+  /// unaffected by this field; see `AppState.avatarPoolFor`, which is the one
+  /// place that joins the two.
+  List<String> avatars;
+
   String description;
   String personality;
   String scenario;
@@ -239,6 +249,7 @@ class Character {
         id: id ?? this.id,
         name: name ?? this.name,
         avatar: avatar,
+        avatars: List<String>.from(avatars),
         description: description,
         personality: personality,
         scenario: scenario,
@@ -269,6 +280,7 @@ class Character {
         'id': id,
         'name': name,
         'avatar': avatar,
+        if (avatars.isNotEmpty) 'avatars': avatars,
         'description': description,
         'personality': personality,
         'scenario': scenario,
@@ -292,6 +304,7 @@ class Character {
             DateTime.now().microsecondsSinceEpoch.toString(),
         name: json['name'] as String? ?? '',
         avatar: json['avatar'] as String? ?? '',
+        avatars: _stringList(json['avatars']),
         description: json['description'] as String? ?? '',
         personality: json['personality'] as String? ?? '',
         scenario: json['scenario'] as String? ?? '',

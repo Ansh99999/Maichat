@@ -9,6 +9,8 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
+import '../models/floating_image.dart';
+import '../models/gallery_image.dart';
 import '../models/lorebook.dart';
 import '../models/message.dart';
 import '../models/preset.dart';
@@ -16,6 +18,7 @@ import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../services/avatar_store.dart';
+import '../services/gallery_group.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
 import '../services/model_context.dart';
@@ -59,6 +62,7 @@ class AppState extends ChangeNotifier {
   final List<Provider> _providers = <Provider>[];
   final List<Character> _characters = <Character>[];
   final List<Lorebook> _lorebooks = <Lorebook>[];
+  final List<GalleryImage> _gallery = <GalleryImage>[];
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
   final Map<String, List<String>> _modelCache = <String, List<String>>{};
@@ -101,6 +105,7 @@ class AppState extends ChangeNotifier {
   List<Provider> get providers => List.unmodifiable(_providers);
   List<Character> get characters => List.unmodifiable(_characters);
   List<Lorebook> get lorebooks => List.unmodifiable(_lorebooks);
+  List<GalleryImage> get gallery => List.unmodifiable(_gallery);
   List<Preset> get presets => List.unmodifiable(_presets);
   Appearance get appearance => _appearance;
   ChatInterface get chatInterface => _chatInterface;
@@ -199,6 +204,9 @@ class AppState extends ChangeNotifier {
     _lorebooks
       ..clear()
       ..addAll(await _storage.loadLorebooks());
+    _gallery
+      ..clear()
+      ..addAll(await _storage.loadGallery());
     await _loadPresets();
     _globalVars
       ..clear()
@@ -911,24 +919,49 @@ class AppState extends ChangeNotifier {
 
   Future<void> deleteCharacter(String id) async {
     _characters.removeWhere((c) => c.id == id);
+    // Their photos are kept, just detached: a picture the user took the trouble
+    // to import and tag is worth more than the card it happened to be filed
+    // under, and it still shows in the whole-app gallery. (Agnai deletes them
+    // with the character; this deliberately does not.)
+    var detached = false;
+    for (final image in _gallery) {
+      if (image.characterId == id) {
+        image.characterId = null;
+        image.updatedAt = DateTime.now();
+        detached = true;
+      }
+    }
+    // The per-chat avatar choices for a character nobody can reach are dead
+    // weight, and holding them would keep their picture files alive for ever.
+    var touchedChats = false;
+    for (final conversation in _conversations) {
+      if (conversation.avatarOverrides.remove(id) != null) touchedChats = true;
+    }
     notifyListeners();
     await _persistCharacters();
+    if (detached) await _persistGallery();
+    if (touchedChats) await _saveConversations();
     await _sweepAvatars();
   }
 
   /// Deletes picture files nothing refers to any more. The keep-list has to name
-  /// every place a picture can be referenced from — a chat's background and a
-  /// per-chat character override both live outside the roster, and a sweep that
-  /// forgot them would delete a picture still on screen.
+  /// every place a picture can be referenced from — a chat's background, a
+  /// per-chat character override, a gallery entry, a character's extra avatars and
+  /// a per-chat avatar choice all live outside the roster's `avatar` field, and a
+  /// sweep that forgot one would delete a picture still on screen.
   Future<void> _sweepAvatars() async {
     final store = _avatars;
     if (store == null || !_writable) return;
     await store.sweep([
       ..._characters.map((c) => c.avatar),
+      ..._characters.expand((c) => c.avatars),
       ..._lorebooks.map((b) => b.thumbnail),
+      ..._gallery.map((g) => g.image),
       for (final c in _conversations) ...[
         c.backgroundImage ?? '',
         ...c.characterOverrides.values.map((o) => o.avatar),
+        ...c.characterOverrides.values.expand((o) => o.avatars),
+        ...c.avatarOverrides.values,
       ],
     ]);
   }
@@ -1081,6 +1114,374 @@ class AppState extends ChangeNotifier {
       ..addAll(bookIds);
     notifyListeners();
     await _saveConversations();
+  }
+
+  // --- Gallery -------------------------------------------------------------
+
+  Future<void> _persistGallery() async {
+    if (!_writable) return;
+    await _storage.saveGallery(_gallery);
+  }
+
+  GalleryImage? galleryImageById(String? id) {
+    if (id == null) return null;
+    for (final image in _gallery) {
+      if (image.id == id) return image;
+    }
+    return null;
+  }
+
+  /// The pictures filed under [characterId], newest first. A null [characterId]
+  /// asks for the unattached ones, not for everything — [gallery] is everything.
+  List<GalleryImage> galleryFor(String? characterId) => sortImages(
+        _gallery.where((image) => image.characterId == characterId).toList(),
+        GallerySort.newest,
+      );
+
+  /// Every tag across the whole gallery, sorted — what the tag-filter sheet
+  /// lists.
+  List<String> get galleryTags {
+    final tags = <String>{};
+    for (final image in _gallery) {
+      tags.addAll(image.tags);
+    }
+    return tags.toList()..sort();
+  }
+
+  /// How many pictures [characterId] has, for the "N photos" line on a row.
+  int galleryCountFor(String? characterId) =>
+      _gallery.where((image) => image.characterId == characterId).length;
+
+  /// Files each of [pictures] into the gallery, returning what was added.
+  ///
+  /// The bytes go through [storePicture], so a photo becomes a file in the
+  /// pictures directory and only its reference is stored — the same path every
+  /// other picture in the app takes. Several pictures added at once share [tags]
+  /// and, when there is more than one, are numbered from [title].
+  Future<List<GalleryImage>> addGalleryImages(
+    List<Uint8List> pictures, {
+    String? characterId,
+    String title = '',
+    List<String> tags = const <String>[],
+  }) async {
+    if (pictures.isEmpty) return const <GalleryImage>[];
+    final added = <GalleryImage>[];
+    final base = title.trim();
+    for (var i = 0; i < pictures.length; i++) {
+      final ref = await storePicture(pictures[i]);
+      if (ref == null) continue; // Nowhere to write it; skip rather than lie.
+      added.add(GalleryImage.create(
+        image: ref,
+        title: base.isEmpty
+            ? ''
+            : pictures.length == 1
+                ? base
+                : '$base ${i + 1}',
+        tags: List<String>.from(tags),
+        characterId: characterId,
+      ));
+    }
+    if (added.isEmpty) return added;
+    _gallery.insertAll(0, added);
+    notifyListeners();
+    await _persistGallery();
+    return added;
+  }
+
+  /// Replaces the stored record sharing [image]'s id (title, tags, owner, star).
+  Future<void> saveGalleryImage(GalleryImage image) async {
+    final index = _gallery.indexWhere((i) => i.id == image.id);
+    image.updatedAt = DateTime.now();
+    if (index == -1) {
+      _gallery.insert(0, image);
+    } else {
+      _gallery[index] = image;
+    }
+    notifyListeners();
+    await _persistGallery();
+  }
+
+  Future<void> toggleGalleryStar(String id) async {
+    final image = galleryImageById(id);
+    if (image == null) return;
+    image.starred = !image.starred;
+    image.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistGallery();
+  }
+
+  /// Files a picture under [characterId] (or detaches it with null).
+  Future<void> assignGalleryImage(String id, String? characterId) async {
+    final image = galleryImageById(id);
+    if (image == null || image.characterId == characterId) return;
+    image.characterId = characterId;
+    image.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistGallery();
+  }
+
+  /// Notes that a picture was opened, which is what the "Last viewed" ordering
+  /// sorts on. Deliberately does not touch [GalleryImage.updatedAt] — looking at
+  /// something is not editing it.
+  Future<void> touchGalleryImage(String id) async {
+    final image = galleryImageById(id);
+    if (image == null) return;
+    image.lastViewed = DateTime.now();
+    // No notifyListeners: nothing visible changes, and rebuilding the grid the
+    // instant a picture opens would be work for nothing. The new order is picked
+    // up the next time the list is built.
+    await _persistGallery();
+  }
+
+  /// Deletes a picture and unpicks every reference to it.
+  ///
+  /// A gallery picture can be worn as a character's avatar, sit in a character's
+  /// pool, or be a chat's own choice for that character — deleting the record
+  /// without clearing those would leave avatars pointing at a file the next sweep
+  /// removes, i.e. characters whose picture silently becomes a monogram later.
+  /// So the cascade is part of the delete, as it is in Agnai's `deleteGalleryImage`.
+  Future<void> deleteGalleryImages(Iterable<String> ids) async {
+    final wanted = ids.toSet();
+    if (wanted.isEmpty) return;
+    final refs = <String>{};
+    for (final id in wanted) {
+      final image = galleryImageById(id);
+      if (image != null) refs.add(image.image);
+    }
+    _gallery.removeWhere((image) => wanted.contains(image.id));
+
+    var touchedCharacters = false;
+    for (final character in _characters) {
+      if (_dropAvatarRefs(character, refs)) touchedCharacters = true;
+    }
+
+    var touchedChats = false;
+    for (final conversation in _conversations) {
+      // A chat's own choice for a character falls back to the card's avatar.
+      conversation.avatarOverrides.removeWhere((_, ref) {
+        final gone = refs.contains(ref);
+        if (gone) touchedChats = true;
+        return gone;
+      });
+      // Per-chat character definitions carry their own copy of the pool.
+      for (final override in conversation.characterOverrides.values) {
+        if (_dropAvatarRefs(override, refs)) touchedChats = true;
+      }
+      // A float showing a deleted picture has nothing left to draw.
+      final before = conversation.floatingImages.length;
+      conversation.floatingImages
+          .removeWhere((f) => wanted.contains(f.imageId));
+      if (conversation.floatingImages.length != before) touchedChats = true;
+    }
+
+    notifyListeners();
+    await _persistGallery();
+    if (touchedCharacters) await _persistCharacters();
+    if (touchedChats) await _saveConversations();
+    await _sweepAvatars();
+  }
+
+  Future<void> deleteGalleryImage(String id) =>
+      deleteGalleryImages(<String>[id]);
+
+  /// Takes [refs] out of [character]'s pool, and off its face when it was wearing
+  /// one: the next pooled picture takes over, or it goes back to a monogram.
+  /// Returns whether anything changed.
+  bool _dropAvatarRefs(Character character, Set<String> refs) {
+    var changed = false;
+    if (character.avatars.any(refs.contains)) {
+      character.avatars.removeWhere(refs.contains);
+      changed = true;
+    }
+    if (refs.contains(character.avatar) && character.avatar.isNotEmpty) {
+      character.avatar =
+          character.avatars.isEmpty ? '' : character.avatars.removeAt(0);
+      changed = true;
+    }
+    if (changed) character.updatedAt = DateTime.now();
+    return changed;
+  }
+
+  // --- Avatars from the gallery --------------------------------------------
+
+  /// Every picture [character] can wear, in order: the one it is wearing first,
+  /// then its pool, de-duplicated.
+  ///
+  /// This is the single definition of "a character's avatars" — the swipe viewer,
+  /// the "set as avatar" toggle and the delete cascade all read it, so the pool
+  /// cannot mean one thing in one place and something else in another. Mirrors
+  /// Agnai's `getCharacterAvatars`.
+  List<String> avatarPoolFor(Character character) {
+    final out = <String>[];
+    for (final ref in [character.avatar, ...character.avatars]) {
+      final trimmed = ref.trim();
+      if (trimmed.isEmpty || out.contains(trimmed)) continue;
+      out.add(trimmed);
+    }
+    return out;
+  }
+
+  /// Which picture [character] wears inside [conversation]: the chat's own choice
+  /// when it has one, otherwise the card's.
+  ///
+  /// The counterpart of [interfaceFor] and [characterFor] — read a chat avatar
+  /// through here and nowhere else, so a per-chat choice cannot be honoured by the
+  /// bubbles and forgotten by everything else.
+  String avatarRefFor(Conversation? conversation, Character character) {
+    final override = conversation?.avatarOverrides[character.id];
+    if (override != null && override.trim().isNotEmpty) return override.trim();
+    return character.avatar;
+  }
+
+  /// Whether [ref] is already one of [character]'s avatars.
+  bool isAvatarOf(Character character, String ref) =>
+      avatarPoolFor(character).contains(ref.trim());
+
+  /// Adds [ref] to [character]'s pool — the "set as avatar" action. A character
+  /// with no picture yet wears it straight away, so the action visibly does
+  /// something the first time it is used.
+  Future<void> addAvatarToPool(String characterId, String ref) async {
+    final character = characterById(characterId);
+    final trimmed = ref.trim();
+    if (character == null || trimmed.isEmpty) return;
+    if (isAvatarOf(character, trimmed)) return;
+    if (character.avatar.trim().isEmpty) {
+      character.avatar = trimmed;
+    } else {
+      character.avatars.add(trimmed);
+    }
+    character.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// Takes [ref] back out of [character]'s pool.
+  Future<void> removeAvatarFromPool(String characterId, String ref) async {
+    final character = characterById(characterId);
+    if (character == null) return;
+    if (!_dropAvatarRefs(character, <String>{ref.trim()})) return;
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// Makes [ref] the picture [character] wears everywhere ("set as default").
+  /// The one it was wearing stays in the pool, so this is a reorder rather than a
+  /// replacement — nothing is lost by trying a different face.
+  Future<void> setDefaultAvatar(String characterId, String ref) async {
+    final character = characterById(characterId);
+    final trimmed = ref.trim();
+    if (character == null || trimmed.isEmpty) return;
+    if (character.avatar == trimmed) return;
+    final previous = character.avatar.trim();
+    character.avatars.remove(trimmed);
+    if (previous.isNotEmpty && !character.avatars.contains(previous)) {
+      character.avatars.insert(0, previous);
+    }
+    character.avatar = trimmed;
+    character.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// Makes [ref] the picture [characterId] wears **in this chat only**, or clears
+  /// the choice when [ref] is null so the card's own picture shows again.
+  Future<void> setChatAvatar(
+    String conversationId,
+    String characterId,
+    String? ref,
+  ) async {
+    await _editConversation(conversationId, (c) {
+      final trimmed = ref?.trim() ?? '';
+      if (trimmed.isEmpty) {
+        c.avatarOverrides.remove(characterId);
+      } else {
+        c.avatarOverrides[characterId] = trimmed;
+      }
+    });
+    await _sweepAvatars();
+  }
+
+  // --- Floating pictures ---------------------------------------------------
+
+  /// Pins a gallery picture over a chat. Floating the same picture twice just
+  /// raises the one already there rather than stacking a duplicate on top of it.
+  Future<void> floatImage(String conversationId, String imageId) async {
+    final image = galleryImageById(imageId);
+    if (image == null) return;
+    await _editConversation(conversationId, (c) {
+      final existing =
+          c.floatingImages.indexWhere((f) => f.imageId == imageId);
+      if (existing != -1) {
+        c.floatingImages.add(c.floatingImages.removeAt(existing));
+        return;
+      }
+      // Each new float is offset a little from the last so a run of them fans
+      // out instead of hiding one another exactly.
+      final step = c.floatingImages.length % 4;
+      c.floatingImages.add(FloatingImage(
+        imageId: imageId,
+        x: FloatingImage.clampFraction(0.08 + step * 0.05),
+        y: FloatingImage.clampFraction(0.12 + step * 0.06),
+      ));
+    });
+    await touchGalleryImage(imageId);
+  }
+
+  Future<void> unfloatImage(String conversationId, String imageId) =>
+      _editConversation(conversationId,
+          (c) => c.floatingImages.removeWhere((f) => f.imageId == imageId));
+
+  Future<void> clearFloatingImages(String conversationId) =>
+      _editConversation(conversationId, (c) => c.floatingImages.clear());
+
+  /// Commits where a float ended up. Called when a gesture *finishes*, not while
+  /// it runs: the layer tracks the live transform itself, because persisting the
+  /// conversation on every pointer move would rewrite the whole store many times
+  /// a second.
+  Future<void> moveFloatingImage(
+    String conversationId,
+    String imageId, {
+    double? x,
+    double? y,
+    double? width,
+    double? rotation,
+  }) =>
+      _editConversation(conversationId, (c) {
+        final index = c.floatingImages.indexWhere((f) => f.imageId == imageId);
+        if (index == -1) return;
+        final float = c.floatingImages[index];
+        if (x != null) float.x = FloatingImage.clampFraction(x);
+        if (y != null) float.y = FloatingImage.clampFraction(y);
+        if (width != null) {
+          float.width = width
+              .clamp(kFloatingImageMinWidth, kFloatingImageMaxWidth)
+              .toDouble();
+        }
+        if (rotation != null) {
+          float.rotation = FloatingImage.normaliseRotation(rotation);
+        }
+      });
+
+  /// Brings a float to the front — the list's order *is* its z-order.
+  Future<void> raiseFloatingImage(String conversationId, String imageId) =>
+      _editConversation(conversationId, (c) {
+        final index = c.floatingImages.indexWhere((f) => f.imageId == imageId);
+        if (index == -1 || index == c.floatingImages.length - 1) return;
+        c.floatingImages.add(c.floatingImages.removeAt(index));
+      });
+
+  /// The floats of [conversation] paired with the picture each one shows, in
+  /// z-order. A float whose picture has gone is skipped rather than drawn as a
+  /// blank frame.
+  List<(FloatingImage, GalleryImage)> floatingImagesFor(
+      Conversation? conversation) {
+    if (conversation == null) return const <(FloatingImage, GalleryImage)>[];
+    final out = <(FloatingImage, GalleryImage)>[];
+    for (final float in conversation.floatingImages) {
+      final image = galleryImageById(float.imageId);
+      if (image != null) out.add((float, image));
+    }
+    return out;
   }
 
 
