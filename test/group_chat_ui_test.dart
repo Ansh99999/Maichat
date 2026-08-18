@@ -53,7 +53,8 @@ void main() {
 
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Bob'), findsOneWidget);
-    expect(find.text('Add'), findsOneWidget);
+    // Adding a character is not offered here — that lives in Chat settings.
+    expect(find.widgetWithText(InkWell, 'Add'), findsNothing);
 
     // The ✕ hides the bar again.
     await tester.tap(find.byIcon(Icons.close));

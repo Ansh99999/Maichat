@@ -347,8 +347,6 @@ class _ChatScreenState extends State<ChatScreen> {
                           onUser: () => _openImpersonatePicker(state),
                           onRemove: (id) =>
                               state.removeParticipant(conversation.id, id),
-                          onAdd: () => showGroupAddSheet(context,
-                              conversationId: conversation.id),
                           onClose: () => setState(() => _showGroupBar = false),
                         )
                       : const SizedBox(width: double.infinity),
@@ -598,22 +596,23 @@ class _ChatScreenState extends State<ChatScreen> {
           // switched on; a muted note stands in when there is nothing to show
           // yet, so the strip never opens to an empty, broken-looking gap.
           //
-          // AnimatedSize expands it open/closed. It is anchored top-left so the
-          // strip grows straight down from under the button and its content sits
-          // inside the clip the whole way — the earlier animated attempt used the
-          // default centre alignment, which clipped the group symbol mid-grow and
-          // left it untappable. At rest the size settles to the strip's natural
-          // size, so the symbol keeps its full hit region.
+          // AnimatedSize expands it open/closed. It is anchored top-right so the
+          // strip grows straight down from under the ⋯ button (which lives at the
+          // right, beside Send) and its content sits inside the clip the whole
+          // way — the earlier animated attempt used the default centre alignment,
+          // which clipped the group symbol mid-grow and left it untappable. At
+          // rest the size settles to the strip's natural size, so the symbol
+          // keeps its full hit region.
           AnimatedSize(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOutCubic,
-            alignment: Alignment.topLeft,
+            alignment: Alignment.topRight,
             child: !_showOps
                 ? const SizedBox(width: double.infinity)
                 : Align(
-                    alignment: Alignment.centerLeft,
+                    alignment: Alignment.centerRight,
                     child: Padding(
-                      padding: const EdgeInsets.only(bottom: 6, left: 4),
+                      padding: const EdgeInsets.only(bottom: 6, right: 4),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -646,26 +645,11 @@ class _ChatScreenState extends State<ChatScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // The operations button is a permanent home for per-chat
-                  // actions, sitting above the impersonate avatar. Group chat is
-                  // the first, and it stays put for the ones to come, so it shows
-                  // whether or not group chats are switched on.
-                  IconButton(
-                    key: const Key('composer-ops-button'),
-                    tooltip: 'More',
-                    visualDensity: VisualDensity.compact,
-                    isSelected: _showOps,
-                    onPressed: () => setState(() => _showOps = !_showOps),
-                    icon: const Icon(Icons.more_horiz),
-                  ),
-                  _ImpersonateButton(
-                    persona: persona,
-                    onTap: () => _openImpersonatePicker(state),
-                  ),
-                ],
+              // The impersonate avatar sits alone on the left, so the send bar
+              // stays a single row tall.
+              _ImpersonateButton(
+                persona: persona,
+                onTap: () => _openImpersonatePicker(state),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -685,6 +669,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               const SizedBox(width: 8),
+              // The operations button — a permanent home for per-chat actions,
+              // grouped with Send on the right so it never adds height to the
+              // send bar. Group chat is the first, and it shows whether or not
+              // group chats are switched on.
+              IconButton(
+                key: const Key('composer-ops-button'),
+                tooltip: 'More',
+                visualDensity: VisualDensity.compact,
+                isSelected: _showOps,
+                onPressed: () => setState(() => _showOps = !_showOps),
+                icon: const Icon(Icons.more_horiz),
+              ),
               _sendButton(state),
             ],
           ),
@@ -806,9 +802,11 @@ class _ChatBackground extends StatelessWidget {
 
 /// The group participant bar shown above the composer: a fixed-height strip of
 /// tappable character chips (tap to let that character speak, long-press to
-/// remove), the impersonated "you" chip, an add (+) chip, and a persistent ✕ to
-/// hide it. Its height and background come from the chat's [ChatInterface], so
-/// both are tunable app-wide and per chat.
+/// remove), the impersonated "you" chip, and a persistent ✕ to hide it. Adding
+/// a character is deliberately *not* here — that goes through the one flow that
+/// owns it, Chat settings › Characters involved › +. Its height and background
+/// come from the chat's [ChatInterface], so both are tunable app-wide and per
+/// chat.
 class _GroupBar extends StatelessWidget {
   const _GroupBar({
     required this.conversation,
@@ -818,7 +816,6 @@ class _GroupBar extends StatelessWidget {
     required this.onChip,
     required this.onUser,
     required this.onRemove,
-    required this.onAdd,
     required this.onClose,
   });
 
@@ -829,7 +826,6 @@ class _GroupBar extends StatelessWidget {
   final ValueChanged<String> onChip;
   final VoidCallback onUser;
   final ValueChanged<String> onRemove;
-  final VoidCallback onAdd;
   final VoidCallback onClose;
 
   @override
@@ -860,11 +856,6 @@ class _GroupBar extends StatelessWidget {
                 runSpacing: 6,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  _GroupChip(
-                    label: 'Add',
-                    icon: Icons.add,
-                    onTap: onAdd,
-                  ),
                   if (user != null)
                     _GroupChip(
                       label: user!.displayName,
@@ -899,7 +890,6 @@ class _GroupChip extends StatelessWidget {
   const _GroupChip({
     required this.label,
     this.character,
-    this.icon,
     this.highlight = false,
     required this.onTap,
     this.onLongPress,
@@ -907,7 +897,6 @@ class _GroupChip extends StatelessWidget {
 
   final String label;
   final Character? character;
-  final IconData? icon;
   final bool highlight;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -917,7 +906,7 @@ class _GroupChip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final Widget leading = character != null
         ? CharacterAvatar(character: character!, radius: 12)
-        : Icon(icon ?? Icons.person, size: 18, color: scheme.onSecondaryContainer);
+        : Icon(Icons.person, size: 18, color: scheme.onSecondaryContainer);
     return Material(
       color: highlight
           ? scheme.primaryContainer
