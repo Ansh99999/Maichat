@@ -127,13 +127,23 @@ the code are the source of truth — verify file:line claims before relying on t
 - **Chat portability:** `services/chat_codec.dart` (imports ST `.jsonl`, Agnai,
   ooba, CAI, Risu, Kobold, plain logs; native export is one file ST+Agnai+MaiChat
   all read). `test/chat_codec_test.dart` has a "what the other apps accept" group.
+- **Gallery:** `models/gallery_image.dart` (a record + the sort/zoom enums),
+  `models/floating_image.dart`, `services/gallery_group.dart` (the pure
+  date-bucketing and sorting the screens draw), `screens/gallery/*` (one
+  `GalleryScreen` in three modes, the viewer, the upload/edit/picker sheets, the
+  pinch ladder), `widgets/avatar_swipe_sheet.dart`,
+  `widgets/floating_images_layer.dart`. Pictures are files like every other
+  image; a character's extra avatars live in `Character.avatars` and are resolved
+  only through `AppState.avatarPoolFor`/`avatarRefFor`.
 - **Chat UI:** `screens/chat_screen.dart`, `widgets/message_bubble.dart`
   (swipes/variants, per-message action bar, name placement), `widgets/thinking_block.dart`,
   per-chat settings screen, `screens/prompt_view_screen.dart` (View prompt inspector).
 
 ## Can't be verified from a headless host
 
-- **On-device gestures/touch** — verify drag/nudge on the user's phone.
+- **On-device gestures/touch** — verify drag/nudge on the user's phone. This now
+  includes the gallery's pinch-to-zoom ladder and the drag/resize/rotate of
+  pictures floating over a chat.
 - **Chub** (`api.chub.ai` etc.) geo-blocks datacentre IPs; **JannyAI** is
   Cloudflare-challenged from a datacentre. Those Discover paths are written from
   agreeing sources + loopback tests and confirmed on the user's phone, not here.
