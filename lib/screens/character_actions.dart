@@ -11,7 +11,7 @@ import 'chats_screen.dart';
 import 'character_detail_screen.dart';
 import 'character_edit_screen.dart';
 import 'chat_screen.dart';
-import 'section_screen.dart';
+import 'gallery/gallery_screen.dart';
 
 /// The per-character actions, shared by the roster's 3-dot menu (both the
 /// avatar card and the list row) and the detail screen, so every entry point
@@ -70,9 +70,9 @@ Future<void> runCharacterAction(
       ));
     case CharacterAction.gallery:
       Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => const SectionScreen(
-          title: 'Gallery',
-          icon: Icons.photo_library_outlined,
+        builder: (_) => GalleryScreen(
+          mode: GalleryMode.character,
+          characterId: character.id,
         ),
       ));
     case CharacterAction.duplicate:

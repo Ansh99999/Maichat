@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../screens/characters_screen.dart';
 import '../screens/chats_screen.dart';
 import '../screens/discover/discover_screen.dart';
+import '../screens/gallery/gallery_screen.dart';
 import '../screens/library/library_screen.dart';
 import '../screens/presets/presets_screen.dart';
 import '../screens/section_screen.dart';
@@ -17,7 +18,7 @@ import '../screens/settings_screen.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
-enum DrawerSection { home, chats, characters, discover, library, presets }
+enum DrawerSection { home, chats, characters, discover, library, gallery, presets }
 
 /// The navigation drawer shared by the top-level sections (Home and Chats).
 ///
@@ -100,6 +101,15 @@ class AppDrawer extends StatelessWidget {
     if (selected != DrawerSection.library) {
       Navigator.of(context)
           .push(MaterialPageRoute<void>(builder: (_) => const LibraryScreen()));
+    }
+  }
+
+  /// Opens the whole-app gallery, unless it is already the host screen.
+  void _goGallery(BuildContext context) {
+    Navigator.of(context).pop();
+    if (selected != DrawerSection.gallery) {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => const GalleryScreen()));
     }
   }
 
@@ -208,10 +218,8 @@ class AppDrawer extends StatelessWidget {
           _NavItem(
             icon: Icons.photo_library_outlined,
             label: 'Gallery',
-            onTap: () => _go(
-                context,
-                const SectionScreen(
-                    title: 'Gallery', icon: Icons.photo_library_outlined)),
+            selected: selected == DrawerSection.gallery,
+            onTap: () => _goGallery(context),
           ),
           _NavItem(
             icon: Icons.tune_outlined,

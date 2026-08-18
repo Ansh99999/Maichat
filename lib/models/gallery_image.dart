@@ -148,15 +148,21 @@ const Object _unset = Object();
 /// How a gallery is ordered. The labels are Agnai's, so the two apps read the
 /// same way to someone who uses both.
 enum GallerySort {
-  newest('Last uploaded'),
-  oldest('First uploaded'),
-  titleAsc('Name (A–Z)'),
-  titleDesc('Name (Z–A)'),
-  lastViewed('Last viewed'),
-  character('Character');
+  newest('Last uploaded', 'Newest'),
+  oldest('First uploaded', 'Oldest'),
+  titleAsc('Name (A–Z)', 'A–Z'),
+  titleDesc('Name (Z–A)', 'Z–A'),
+  lastViewed('Last viewed', 'Viewed'),
+  character('Character', 'Owner');
 
-  const GallerySort(this.label);
+  const GallerySort(this.label, this.shortLabel);
+
+  /// The full name, as the sort sheet lists it.
   final String label;
+
+  /// What fits on the control chip beside two other chips on a phone. "Last
+  /// uploaded" on the chip pushed the tag filter off the edge of a 400 px screen.
+  final String shortLabel;
 
   /// Whether this ordering runs along the calendar, and so can carry date
   /// headings. A name-ordered list under an "April 2026" band would be a lie.

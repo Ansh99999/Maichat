@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/floating_image.dart';
-import 'package:maichat/models/gallery_image.dart';
 import 'package:maichat/services/avatar_store.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:maichat/widgets/avatar_image.dart';
