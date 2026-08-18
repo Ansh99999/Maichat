@@ -3,6 +3,11 @@ import 'chat_interface.dart';
 import 'message.dart';
 import 'preset.dart';
 
+/// The [Conversation.groupResponder] value meaning "a random member replies to
+/// each send". Any other non-null value is a member's [Character.id]; null means
+/// nobody replies automatically (the user taps a chip to pick who speaks).
+const String kGroupResponderRandom = '__random__';
+
 /// A named thread of messages, persisted as a whole.
 class Conversation {
   Conversation({
@@ -21,6 +26,7 @@ class Conversation {
     this.backgroundOpacity = 1,
     this.interfaceOverride,
     this.overrideDefinitions = false,
+    this.groupResponder,
     Map<String, Character>? characterOverrides,
     Map<String, String>? variables,
     List<String>? lorebookIds,
@@ -104,6 +110,13 @@ class Conversation {
   /// Whether this thread is a group chat (two or more characters take part).
   bool get isGroup => participantIds.length >= 2;
 
+  /// In a **group chat**, who replies automatically when the user sends a
+  /// message: null means nobody (the default — the user taps a chip to pick who
+  /// speaks), [kGroupResponderRandom] means a random member each turn, and any
+  /// other value is the [Character.id] of the one member who always answers.
+  /// Ignored outside a group. Persisted so the choice survives a restart.
+  String? groupResponder;
+
   /// Every AI character in the thread, in order — the group roster when it is a
   /// group, otherwise the single bound character (or nothing).
   List<String> get memberIds {
@@ -155,6 +168,7 @@ class Conversation {
             ? null
             : ChatInterface.fromJson(interfaceOverride!.toJson()),
         overrideDefinitions: overrideDefinitions,
+        groupResponder: groupResponder,
         characterOverrides: characterOverrides.map(
           (charId, character) => MapEntry(charId, character.clone()),
         ),
@@ -190,6 +204,7 @@ class Conversation {
         if (interfaceOverride != null)
           'interfaceOverride': interfaceOverride!.toJson(),
         if (overrideDefinitions) 'overrideDefinitions': true,
+        if (groupResponder != null) 'groupResponder': groupResponder,
         if (characterOverrides.isNotEmpty)
           'characterOverrides': characterOverrides.map(
             (id, character) => MapEntry(id, character.toJson()),
@@ -226,6 +241,9 @@ class Conversation {
                 json['interfaceOverride'] as Map<String, dynamic>)
             : null,
         overrideDefinitions: json['overrideDefinitions'] as bool? ?? false,
+        groupResponder: (json['groupResponder'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['groupResponder'] as String).trim(),
         characterOverrides: _characterMap(json['characterOverrides']),
         variables: (json['variables'] as Map?)?.map(
           (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),

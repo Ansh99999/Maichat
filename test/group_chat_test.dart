@@ -115,6 +115,32 @@ void main() {
       expect(back.groupBarImage, 'local:pic.png');
       expect(back, ui);
     });
+
+    test('groupResponder round-trips (a member, random, and unset)', () {
+      Conversation base() => Conversation.empty()
+        ..characterId = 'alice'
+        ..participantIds.addAll(['alice', 'bob']);
+
+      final named = base()..groupResponder = 'bob';
+      expect(Conversation.fromJson(named.toJson()).groupResponder, 'bob');
+
+      final random = base()..groupResponder = kGroupResponderRandom;
+      expect(Conversation.fromJson(random.toJson()).groupResponder,
+          kGroupResponderRandom);
+
+      // Unset is the default and stays out of the JSON entirely.
+      final manual = base();
+      expect(manual.toJson().containsKey('groupResponder'), isFalse);
+      expect(Conversation.fromJson(manual.toJson()).groupResponder, isNull);
+    });
+
+    test('copyAs carries the group responder (fork/renumber keep it)', () {
+      final c = Conversation.empty()
+        ..characterId = 'alice'
+        ..participantIds.addAll(['alice', 'bob'])
+        ..groupResponder = 'bob';
+      expect(c.copyAs(id: 'x').groupResponder, 'bob');
+    });
   });
   // APPEND-GROUP-TESTS
 
@@ -145,17 +171,90 @@ void main() {
       expect(state.active.characterId, 'alice');
     });
 
-    test('next speaker round-robins over the participant order', () async {
+    test('a plain send in a group adds no automatic reply', () async {
+      final (state, client) = await _state();
+      await state.addCharacter(_alice());
+      await state.addCharacter(_bob());
+      state.startChatWithCharacter(_alice());
+      await state.addParticipant(state.active.id, _bob());
+
+      final before = state.active.messages.length;
+      await state.send('hello everyone');
+      // Only the user's turn lands; nobody speaks until a chip (or an
+      // auto-responder) picks them.
+      expect(state.active.messages.length, before + 1);
+      expect(state.active.messages.last.isUser, isTrue);
+      expect(client.lastHistory, isNull); // never generated
+    });
+
+    test('a chosen member auto-replies to every send', () async {
+      final (state, client) = await _state();
+      await state.addCharacter(_alice());
+      await state.addCharacter(_bob());
+      state.startChatWithCharacter(_alice());
+      await state.addParticipant(state.active.id, _bob());
+
+      // Pick Bob as the auto-responder, then send twice: Bob answers both.
+      await state.toggleGroupResponder(state.active.id, 'bob');
+      await state.send('one');
+      expect(state.active.messages.last.speakerId, 'bob');
+      await state.send('two');
+      expect(state.active.messages.last.speakerId, 'bob');
+      expect(_dump(client.lastHistory), contains('Write the next reply as Bob only'));
+    });
+
+    test('a random responder picks a current member each send', () async {
+      final (state, _) = await _state();
+      await state.addCharacter(_alice());
+      await state.addCharacter(_bob());
+      state.startChatWithCharacter(_alice());
+      await state.addParticipant(state.active.id, _bob());
+
+      await state.toggleGroupResponder(state.active.id, kGroupResponderRandom);
+      await state.send('anyone?');
+      final speaker = state.active.messages.last.speakerId;
+      expect(speaker, isNotNull);
+      expect(['alice', 'bob'], contains(speaker));
+    });
+
+    test('toggleGroupResponder sets, then clears when tapped again', () async {
+      final (state, _) = await _state();
+      await state.addCharacter(_alice());
+      await state.addCharacter(_bob());
+      state.startChatWithCharacter(_alice());
+      await state.addParticipant(state.active.id, _bob());
+
+      await state.toggleGroupResponder(state.active.id, 'bob');
+      expect(state.active.groupResponder, 'bob');
+      // Tapping the same choice again returns the thread to manual.
+      await state.toggleGroupResponder(state.active.id, 'bob');
+      expect(state.active.groupResponder, isNull);
+    });
+
+    test('removing the chosen responder drops back to manual', () async {
+      final (state, _) = await _state();
+      await state.addCharacter(_alice());
+      await state.addCharacter(_bob());
+      await state.addCharacter(_cara());
+      state.startChatWithCharacter(_alice());
+      await state.addParticipant(state.active.id, _bob());
+      await state.addParticipant(state.active.id, _cara());
+
+      await state.toggleGroupResponder(state.active.id, 'bob');
+      await state.removeParticipant(state.active.id, 'bob');
+      // Bob is gone; the thread must not silently answer as someone else.
+      expect(state.active.groupResponder, isNull);
+    });
+
+    test('nextSpeaker still round-robins over the participant order', () async {
       final state = await grouped();
       await state.addParticipant(state.active.id, _cara());
       // No member has spoken (only the greeting): the first is up.
       expect(state.nextSpeaker(state.active)?.id, 'alice');
-      await state.send('hello everyone');
-      expect(state.active.messages.last.speakerId, 'alice');
-      // Alice spoke, so Bob is next.
+      // Alice speaks (a chip tap), so Bob is next; then Cara.
+      await state.speakAs('alice');
       expect(state.nextSpeaker(state.active)?.id, 'bob');
-      await state.send('and again');
-      expect(state.active.messages.last.speakerId, 'bob');
+      await state.speakAs('bob');
       expect(state.nextSpeaker(state.active)?.id, 'cara');
     });
 
@@ -167,7 +266,7 @@ void main() {
       state.startChatWithCharacter(_alice());
       await state.addParticipant(state.active.id, _bob());
 
-      await state.send('hi'); // Alice replies first.
+      await state.speakAs('alice'); // Alice replies.
       final text = _dump(client.lastHistory);
       expect(text, contains('A curious explorer')); // Alice's own card
       expect(text, contains('Write the next reply as Alice only'));
@@ -182,8 +281,7 @@ void main() {
       state.startChatWithCharacter(_alice());
       await state.addParticipant(state.active.id, _bob());
 
-      await state.send('hi'); // Alice
-      await state.send('you'); // Bob
+      await state.speakAs('bob');
       final last = state.active.messages.last;
       expect(last.speakerId, 'bob');
       expect(last.speakerName, 'Bob');

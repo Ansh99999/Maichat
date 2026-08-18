@@ -782,6 +782,8 @@ class AppState extends ChangeNotifier {
       conversation.characterId = sole;
       conversation.characterName =
           characterFor(conversation, sole)?.displayName;
+      // Auto-reply is a group-only notion; there is no roster to choose from now.
+      conversation.groupResponder = null;
     } else {
       conversation.participantIds
         ..clear()
@@ -790,6 +792,11 @@ class AppState extends ChangeNotifier {
         conversation.characterId = members.first;
         conversation.characterName =
             characterFor(conversation, members.first)?.displayName;
+      }
+      // The chosen auto-responder just left; drop back to manual rather than
+      // silently answering as someone else.
+      if (conversation.groupResponder == characterId) {
+        conversation.groupResponder = null;
       }
     }
     conversation.updatedAt = DateTime.now();
@@ -1262,7 +1269,57 @@ class AppState extends ChangeNotifier {
       speakerName: speaking?.displayName,
     ));
 
+    // In a group chat nobody replies automatically: the user's turn just lands
+    // and they tap a chip to pick who speaks. The exception is a chosen
+    // auto-responder — a specific member, or a random one each turn — set from
+    // the participant bar's options menu.
+    if (conversation.isGroup) {
+      final responder = groupAutoResponder(conversation);
+      if (responder == null) {
+        conversation.updatedAt = DateTime.now();
+        _moveToTop(conversation);
+        notifyListeners();
+        await _saveConversations();
+        return;
+      }
+      await _generate(conversation, responder: responder);
+      return;
+    }
+
     await _generate(conversation);
+  }
+
+  /// The member who should reply to a plain [send] in a group [conversation],
+  /// honouring [Conversation.groupResponder]: null when nobody is set (manual —
+  /// the user taps a chip), a random member when set to [kGroupResponderRandom],
+  /// or the named member. Returns null (nobody) when the named member no longer
+  /// resolves. Not used outside a group.
+  Character? groupAutoResponder(Conversation conversation) {
+    final mode = conversation.groupResponder;
+    if (mode == null) return null;
+    final members = participantsOf(conversation);
+    if (members.isEmpty) return null;
+    if (mode == kGroupResponderRandom) {
+      return members[_random.nextInt(members.length)];
+    }
+    for (final member in members) {
+      if (member.id == mode) return member;
+    }
+    return null;
+  }
+
+  /// Sets who auto-replies in [conversationId]'s group chat, toggling off when
+  /// [value] is already the current choice — so tapping the selected entry in
+  /// the options menu returns the thread to manual (nobody). [value] is a
+  /// member's [Character.id], [kGroupResponderRandom], or null to clear.
+  Future<void> toggleGroupResponder(
+      String conversationId, String? value) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    conversation.groupResponder =
+        conversation.groupResponder == value ? null : value;
+    notifyListeners();
+    await _saveConversations();
   }
 
   /// Streams an assistant reply into [conversation], whose messages already end

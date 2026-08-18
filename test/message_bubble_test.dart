@@ -186,6 +186,57 @@ void main() {
       expect(find.byIcon(Icons.refresh), findsNothing);
       expect(find.byIcon(Icons.more_vert), findsNothing);
     });
+
+    // Opposite-name puts the bar at the edge *away* from the name: a left name
+    // gets its actions on the right, a right name gets them on the left.
+    testWidgets('opposite-name places actions across from the name',
+        (tester) async {
+      Future<void> pump(NameAlign align) => tester.pumpWidget(host(
+            ListView(children: [
+              MessageBubble(
+                message: ChatMessage(role: 'assistant', content: 'Hi'),
+                ui: ChatInterface(
+                  showNames: true,
+                  actionBarPlacement: ActionBarPlacement.oppositeName,
+                  botNameStyle: NameStyle(align: align),
+                ),
+                onAction: (_) {},
+              ),
+            ]),
+          ));
+
+      await pump(NameAlign.start);
+      expect(find.byIcon(Icons.refresh), findsOneWidget);
+      expect(
+        tester.getCenter(find.byIcon(Icons.refresh)).dx,
+        greaterThan(tester.getCenter(find.text('Assistant').last).dx),
+        reason: 'name left → actions to its right',
+      );
+
+      await pump(NameAlign.end);
+      expect(
+        tester.getCenter(find.byIcon(Icons.refresh)).dx,
+        lessThan(tester.getCenter(find.text('Assistant').last).dx),
+        reason: 'name right → actions to its left',
+      );
+    });
+
+    // With names off there is nothing to sit across from, so it falls back to
+    // below-message and still shows the inline actions.
+    testWidgets('opposite-name falls back to below-message with names off',
+        (tester) async {
+      await tester.pumpWidget(bubble(
+        isUser: false,
+        onAction: (_) {},
+        ui: const ChatInterface(
+          showNames: false,
+          actionBarPlacement: ActionBarPlacement.oppositeName,
+        ),
+      ));
+      expect(tester.takeException(), isNull);
+      expect(find.byIcon(Icons.refresh), findsOneWidget);
+      expect(find.byIcon(Icons.more_vert), findsOneWidget);
+    });
   });
 
   // Every content width should lay out (esp. document mode / full) without

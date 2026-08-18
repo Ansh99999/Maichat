@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/chat_interface.dart';
+import 'package:maichat/models/conversation.dart';
 import 'package:maichat/screens/chat_screen.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:provider/provider.dart';
@@ -76,5 +77,35 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.groups_outlined), findsNothing);
     expect(find.text('More actions coming soon'), findsOneWidget);
+  });
+
+  testWidgets('the auto-reply menu sets a responder and toggles it off',
+      (tester) async {
+    final state = await groupChat();
+    await tester.pumpWidget(host(state));
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('composer-ops-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.groups_outlined));
+    await tester.pumpAndSettle();
+
+    // Nobody is chosen yet, so the menu's marker is the outlined voice icon.
+    expect(state.active.groupResponder, isNull);
+    await tester.tap(find.byIcon(Icons.record_voice_over_outlined));
+    await tester.pumpAndSettle();
+
+    // 'Random' is a menu-only entry (no such chip), so it is unambiguous.
+    expect(find.text('Random'), findsOneWidget);
+    await tester.tap(find.text('Random'));
+    await tester.pumpAndSettle();
+    expect(state.active.groupResponder, kGroupResponderRandom);
+
+    // Reopen (the marker is now filled) and tap Random again to clear it.
+    await tester.tap(find.byIcon(Icons.record_voice_over));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Random'));
+    await tester.pumpAndSettle();
+    expect(state.active.groupResponder, isNull);
   });
 }

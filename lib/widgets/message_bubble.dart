@@ -130,6 +130,10 @@ class MessageBubble extends StatelessWidget {
     if (placement == ActionBarPlacement.besideName && !ui.showNames) {
       placement = ActionBarPlacement.belowMessage;
     }
+    // Opposite-name needs a name to sit across from, too.
+    if (placement == ActionBarPlacement.oppositeName && !ui.showNames) {
+      placement = ActionBarPlacement.belowMessage;
+    }
     // Beside-avatar: hang the bar under the avatar so it rides with it.
     if (actionsBar != null && placement == ActionBarPlacement.besideAvatar) {
       avatar = Column(
@@ -194,10 +198,14 @@ class MessageBubble extends StatelessWidget {
 
     // The name is drawn in a band spanning the whole row, so its alignment reads
     // against the *screen* ("Right" = the right edge of the chat) rather than
-    // against the width of the bubble it happens to sit over.
+    // against the width of the bubble it happens to sit over. In the
+    // opposite-name placement the band also carries the action bar, pinned to
+    // the edge *away* from the name (name left → actions right, and vice versa).
     final Widget? band = nameW == null
         ? null
-        : Align(alignment: nameStyle.align.alignment, child: nameW);
+        : (actionsBar != null && placement == ActionBarPlacement.oppositeName)
+            ? _oppositeNameBand(nameW, actionsBar, nameStyle.align)
+            : Align(alignment: nameStyle.align.alignment, child: nameW);
 
     // Keeps a band's slot in the layout without drawing it, so an overlaid or
     // nudged label never makes the turn jump or run into its neighbour.
@@ -442,6 +450,32 @@ class MessageBubble extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+
+  /// The name band for [ActionBarPlacement.oppositeName]: the label at its own
+  /// aligned edge and the action bar hard against the *opposite* edge of the
+  /// full-width row. A left name puts the bar on the right and a right name puts
+  /// it on the left; a centred name keeps its centre and the bar sits at the
+  /// right. The name is [Flexible] so a long one never shoves the bar off-screen.
+  Widget _oppositeNameBand(Widget name, Widget actions, NameAlign align) {
+    final nameOnRight = align == NameAlign.end;
+    return Row(
+      mainAxisSize: MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: nameOnRight
+          ? [
+              actions,
+              Expanded(
+                child: Align(alignment: Alignment.centerRight, child: name),
+              ),
+            ]
+          : [
+              Expanded(
+                child: Align(alignment: align.alignment, child: name),
+              ),
+              actions,
+            ],
     );
   }
 

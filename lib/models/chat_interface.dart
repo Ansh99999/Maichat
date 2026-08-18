@@ -260,6 +260,7 @@ enum ContentWidth {
 enum ActionBarPlacement {
   belowMessage('Below message'),
   besideName('Beside name'),
+  oppositeName('Opposite name'),
   besideAvatar('Beside avatar'),
   messageRight('Right of message');
 

@@ -6,4 +6,4 @@
 /// against *this* string, so a stale value here makes an up-to-date install
 /// offer an update it already has, for ever. `test/app_version_test.dart` reads
 /// pubspec.yaml and fails when they drift.
-const String kAppVersion = '1.13.6';
+const String kAppVersion = '1.13.7';

@@ -347,6 +347,8 @@ class _ChatScreenState extends State<ChatScreen> {
                           onUser: () => _openImpersonatePicker(state),
                           onRemove: (id) =>
                               state.removeParticipant(conversation.id, id),
+                          onResponder: (value) =>
+                              state.toggleGroupResponder(conversation.id, value),
                           onClose: () => setState(() => _showGroupBar = false),
                         )
                       : const SizedBox(width: double.infinity),
@@ -816,6 +818,7 @@ class _GroupBar extends StatelessWidget {
     required this.onChip,
     required this.onUser,
     required this.onRemove,
+    required this.onResponder,
     required this.onClose,
   });
 
@@ -826,6 +829,10 @@ class _GroupBar extends StatelessWidget {
   final ValueChanged<String> onChip;
   final VoidCallback onUser;
   final ValueChanged<String> onRemove;
+
+  /// Sets (or, when the tapped value is already current, clears) who replies
+  /// automatically: a member's [Character.id] or [kGroupResponderRandom].
+  final ValueChanged<String> onResponder;
   final VoidCallback onClose;
 
   @override
@@ -837,6 +844,7 @@ class _GroupBar extends StatelessWidget {
     final image = ui.groupBarImage == null
         ? null
         : avatarImage(ui.groupBarImage!, displaySize: 600, devicePixelRatio: 1);
+    final responder = conversation.groupResponder;
     return Container(
       height: ui.groupBarHeight.clamp(kMinGroupBarHeight, kMaxGroupBarHeight),
       decoration: BoxDecoration(
@@ -867,12 +875,20 @@ class _GroupBar extends StatelessWidget {
                     _GroupChip(
                       label: c.displayName,
                       character: c,
+                      // Mark the member who now answers every send, so "from
+                      // then on Bob replies" is visible at a glance.
+                      responder: responder == c.id,
                       onTap: () => onChip(c.id),
                       onLongPress: () => onRemove(c.id),
                     ),
                 ],
               ),
             ),
+          ),
+          _ResponderMenu(
+            participants: participants,
+            current: responder,
+            onSelected: onResponder,
           ),
           IconButton(
             tooltip: 'Hide participants',
@@ -885,12 +901,76 @@ class _GroupBar extends StatelessWidget {
   }
 }
 
+/// The participant bar's "who answers automatically" menu — a small popup of
+/// 🎲 Random and each member, with a check on the current choice. Selecting the
+/// current one again clears it (back to manual, nobody), which the parent
+/// handles via [AppState.toggleGroupResponder].
+class _ResponderMenu extends StatelessWidget {
+  const _ResponderMenu({
+    required this.participants,
+    required this.current,
+    required this.onSelected,
+  });
+
+  final List<Character> participants;
+  final String? current;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget trailingCheck(bool on) => on
+        ? Icon(Icons.check, size: 18, color: scheme.primary)
+        : const SizedBox(width: 18);
+    return PopupMenuButton<String>(
+      tooltip: 'Auto-reply',
+      icon: Icon(
+        // A filled marker when someone is on auto, so the bar shows at a glance
+        // that sends won't wait for a chip tap.
+        current == null ? Icons.record_voice_over_outlined : Icons.record_voice_over,
+        color: current == null ? null : scheme.primary,
+      ),
+      position: PopupMenuPosition.under,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          value: kGroupResponderRandom,
+          child: Row(
+            children: [
+              const Icon(Icons.casino_outlined, size: 20),
+              const SizedBox(width: 12),
+              const Expanded(child: Text('Random')),
+              trailingCheck(current == kGroupResponderRandom),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        for (final c in participants)
+          PopupMenuItem<String>(
+            value: c.id,
+            child: Row(
+              children: [
+                CharacterAvatar(character: c, radius: 10),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(c.displayName, overflow: TextOverflow.ellipsis),
+                ),
+                trailingCheck(current == c.id),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 /// One chip in the [_GroupBar] — an avatar (or leading icon) with a name.
 class _GroupChip extends StatelessWidget {
   const _GroupChip({
     required this.label,
     this.character,
     this.highlight = false,
+    this.responder = false,
     required this.onTap,
     this.onLongPress,
   });
@@ -898,6 +978,10 @@ class _GroupChip extends StatelessWidget {
   final String label;
   final Character? character;
   final bool highlight;
+
+  /// The member who answers every send: drawn with a primary outline and a
+  /// small auto-reply glyph, distinct from the user chip's [highlight] fill.
+  final bool responder;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
@@ -913,6 +997,12 @@ class _GroupChip extends StatelessWidget {
           : scheme.secondaryContainer,
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
+      shape: responder
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: BorderSide(color: scheme.primary, width: 1.5),
+            )
+          : null,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
@@ -925,6 +1015,10 @@ class _GroupChip extends StatelessWidget {
               const SizedBox(width: 6),
               Text(label,
                   style: Theme.of(context).textTheme.labelLarge),
+              if (responder) ...[
+                const SizedBox(width: 6),
+                Icon(Icons.record_voice_over, size: 15, color: scheme.primary),
+              ],
             ],
           ),
         ),
