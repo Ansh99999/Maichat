@@ -173,26 +173,19 @@ void main() {
     );
   });
 
-  testWidgets('a float is captured to a texture for the length of a touch',
+  testWidgets('the picture is drawn bare while being manipulated, framed at rest',
       (tester) async {
-    // The measured fix for the stutter/freeze: transforming a live picture
-    // re-rasterises it every frame, so instead the frame is captured to one GPU
-    // texture and only that is moved/scaled/turned. The capture must be on for
-    // the WHOLE touch (from first finger down to last finger up) — toggling it
-    // per gesture segment would re-capture repeatedly, which is why the first
-    // attempt still stuttered. Off at rest, so the picture stays crisp.
+    // The measured fix for the stutter: transforming the framed picture
+    // (rounded clip + blurred shadow) re-rasterises it every frame (~16ms raster,
+    // most frames over budget); drawing the *bare* bitmap under the transform is
+    // a GPU texture sample (~5ms, no spikes). So while a touch is manipulating the
+    // picture it drops to bare — no clip, no shadow, no ✕ — and the frame returns
+    // the instant the fingers leave. The ✕ (only on the framed picture) is the
+    // visible tell. It must stay put for a plain tap, so the swap waits for the
+    // first move, not the first touch.
     final state = await chatWithFloats();
     await pumpChat(tester, state);
-    final snap = tester.widget<SnapshotWidget>(
-      find
-          .descendant(
-            of: find.byType(FloatingImagesLayer),
-            matching: find.byType(SnapshotWidget),
-          )
-          .first,
-    );
-    expect(snap.controller.allowSnapshotting, isFalse,
-        reason: 'crisp at rest');
+    expect(find.byIcon(Icons.close), findsOneWidget, reason: 'framed at rest');
 
     final grip =
         tester.getCenter(find.byIcon(Icons.close)) + const Offset(0, 40);
@@ -201,14 +194,14 @@ void main() {
       await gesture.moveBy(const Offset(8, 6));
       await tester.pump();
     }
-    expect(snap.controller.allowSnapshotting, isTrue,
-        reason: 'a single texture while the finger is down');
+    expect(find.byIcon(Icons.close), findsNothing,
+        reason: 'bare (no frame/✕) while being moved');
 
     await gesture.up();
     await tester.pump();
     await tester.pump();
-    expect(snap.controller.allowSnapshotting, isFalse,
-        reason: 'back to live, crisp again once the finger leaves');
+    expect(find.byIcon(Icons.close), findsOneWidget,
+        reason: 'framed again the moment it is placed');
   });
 
   testWidgets('a finger left over from a pinch does not drag it away',
