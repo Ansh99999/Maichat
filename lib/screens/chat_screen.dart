@@ -831,13 +831,18 @@ class _ChatBackground extends StatelessWidget {
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
     if (provider == null) return const SizedBox.shrink();
-    return IgnorePointer(
-      child: Opacity(
-        opacity: opacity.clamp(0.0, 1.0),
-        child: Image(
-          image: provider,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+    return RepaintBoundary(
+      // Its own layer, so moving a floating picture over the chat re-records the
+      // body's display list without re-rasterising this background (and its
+      // `Opacity` save-layer) every frame.
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: opacity.clamp(0.0, 1.0),
+          child: Image(
+            image: provider,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+          ),
         ),
       ),
     );
