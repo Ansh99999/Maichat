@@ -103,7 +103,7 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
       );
     }
 
-    final pool = state.avatarPoolFor(character);
+    final pool = state.avatarPoolIn(conversation, widget.characterId);
     final current = state.avatarRefFor(conversation, character);
     if (!_aimed) {
       _aimed = true;
@@ -348,5 +348,4 @@ bool hasAvatarToShow(
   Conversation? conversation,
   Character character,
 ) =>
-    state.avatarPoolFor(character).isNotEmpty ||
-    state.avatarRefFor(conversation, character).trim().isNotEmpty;
+    state.avatarPoolIn(conversation, character.id).isNotEmpty;

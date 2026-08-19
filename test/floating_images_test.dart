@@ -181,23 +181,36 @@ void main() {
   testWidgets('several floats coexist, and touching one raises it',
       (tester) async {
     final state = await chatWithFloats(count: 3);
+    // Spread them apart so a touch lands on one unambiguously. Fanned-out
+    // defaults overlap by design, and a computed point in the pile hits whichever
+    // float happens to be on top there — which is what a geometry-guessing
+    // version of this test kept doing.
+    final chat = state.active.id;
+    for (var i = 0; i < 3; i++) {
+      await state.settleFloatingImage(
+        chat,
+        state.active.floatingImages.firstWhere((f) => f.imageId == 'img$i'),
+        x: 0.05,
+        y: 0.04 + i * 0.28,
+        width: 90,
+      );
+    }
     await pumpChat(tester, state);
     expect(state.active.floatingImages, hasLength(3));
     expect(find.byIcon(Icons.close), findsNWidgets(3));
-    // Fanned out rather than exactly stacked, so all three can be reached.
-    final xs = state.active.floatingImages.map((f) => f.x).toSet();
-    expect(xs, hasLength(3));
 
     // The first-floated is at the back; dragging it should bring it to the front.
     expect(state.active.floatingImages.first.imageId, 'img0');
-    final grip = tester.getTopLeft(find.byType(FloatingImagesLayer)) +
-        Offset(
-          state.active.floatingImages.first.x * 400 + 40,
-          state.active.floatingImages.first.y * 700 + 60,
-        );
+    final grip =
+        tester.getCenter(find.byIcon(Icons.close).first) + const Offset(-20, 40);
     final gesture = await tester.startGesture(grip);
-    await gesture.moveBy(const Offset(6, 6));
-    await tester.pump();
+    // Well past kPanSlop (36 logical pixels) in total, or the scale recogniser
+    // never claims the pointer and neither onStart nor onEnd fires — the float
+    // would not be raised because it was never really dragged.
+    for (var i = 0; i < 8; i++) {
+      await gesture.moveBy(const Offset(6, 5));
+      await tester.pump();
+    }
     await gesture.up();
     await tester.pump();
     await tester.pump();
@@ -342,6 +355,64 @@ void main() {
       await tester.pump();
 
       expect(tester.element(find.byIcon(Icons.close)), same(frameBefore));
+    });
+
+    testWidgets('raising a float mid-drag keeps the gesture alive',
+        (tester) async {
+      // The freeze in 1.14.0 and 1.14.1. Touching a float raises it, which
+      // reorders the layer's children — and the `ValueKey` used to sit on the
+      // picture *inside* each `Positioned`. Reconciliation matches children by key
+      // at the level of the list being rebuilt, so unkeyed `Positioned`s matched
+      // slot-for-slot, found a different key beneath each one, and rebuilt all
+      // three from scratch. That destroyed the `State` — and its gesture
+      // recogniser — of the float being dragged, on the first pointer-move.
+      //
+      // The symptom was a float that could not be moved at all. The measurable
+      // fact is that the drag stops being delivered, so this asserts the picture
+      // keeps moving *after* the raise.
+      final state = await chatWithFloats(count: 3);
+      final chat = state.active.id;
+      // Spread them so a touch lands on one unambiguously.
+      for (var i = 0; i < 3; i++) {
+        await state.settleFloatingImage(
+          chat,
+          state.active.floatingImages.firstWhere((f) => f.imageId == 'img$i'),
+          x: 0.05,
+          y: 0.04 + i * 0.28,
+          width: 90,
+        );
+      }
+      await pumpChat(tester, state);
+
+      // The one at the back, so touching it genuinely reorders the children.
+      expect(state.active.floatingImages.first.imageId, 'img0');
+      final grip = tester.getCenter(find.byIcon(Icons.close).first) +
+          const Offset(-20, 40);
+      final gesture = await tester.startGesture(grip);
+
+      // Past the slop, which is when the raise happens.
+      for (var i = 0; i < 8; i++) {
+        await gesture.moveBy(const Offset(6, 5));
+        await tester.pump();
+      }
+      // Then keep going a long way. If the state object was replaced by the
+      // raise, these updates reach a dead recogniser and the float stops here.
+      for (var i = 0; i < 20; i++) {
+        await gesture.moveBy(const Offset(8, 6));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pump();
+      await tester.pump();
+
+      final moved = state.active.floatingImages
+          .firstWhere((f) => f.imageId == 'img0');
+      // 28 moves of ~7px across a 400px chat is well past a third of the way, so
+      // this cannot pass on the first eight moves alone.
+      expect(moved.x, greaterThan(0.35),
+          reason: 'the drag must survive the raise');
+      expect(state.active.floatingImages.last.imageId, 'img0',
+          reason: 'and it is on top afterwards');
     });
   });
 }

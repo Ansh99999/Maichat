@@ -265,6 +265,78 @@ void main() {
     });
   });
 
+  group('a chat with its own character definitions', () {
+    // The second "multiple avatars don't work" report. `characterFor` returns the
+    // chat's *frozen copy* of the card when per-chat definitions are on, and the
+    // pool used to be read off that copy — so a picture added to the roster
+    // afterwards (which is what "set as avatar" does) was invisible in that chat,
+    // and the viewer opened on one picture with nothing to swipe.
+
+    /// A chat that carries a per-chat copy of Aria, taken before any gallery
+    /// picture was ever added to her.
+    Future<AppState> withOverride() async {
+      final state = AppState();
+      await state.init();
+      final aria = Character(
+        id: 'aria',
+        name: 'Aria',
+        firstMes: 'Hello.',
+        avatar: 'local:card.png',
+      );
+      await state.addCharacter(aria);
+      state.startChatWithCharacter(aria);
+      await state.saveChatCharacterOverride(state.active.id, aria.clone());
+      await state.updateChatInterface(const ChatInterface(
+        botAvatar: AvatarStyle(size: 56, side: ChatSide.left),
+      ));
+      return state;
+    }
+
+    test('the pool unions the override and the roster', () async {
+      final state = await withOverride();
+      // "Set as avatar" edits the roster card, as it always has.
+      await state.addAvatarToPool('aria', 'local:new.png');
+
+      final inChat = state.characterFor(state.active, 'aria')!;
+      expect(state.avatarPoolFor(inChat), ['local:card.png'],
+          reason: 'the frozen copy alone knows nothing about it');
+      expect(
+        state.avatarPoolIn(state.active, 'aria'),
+        containsAll(['local:card.png', 'local:new.png']),
+        reason: 'but the chat can still wear it',
+      );
+    });
+
+    testWidgets('so the viewer has something to swipe', (tester) async {
+      final state = await withOverride();
+      await state.addAvatarToPool('aria', 'local:new.png');
+      await pumpChat(tester, state);
+
+      await openAvatar(tester);
+      expect(find.byType(AvatarSwipeScreen), findsOneWidget);
+      expect(find.text('1 / 2'), findsOneWidget,
+          reason: 'one picture with nothing to swipe was the bug');
+
+      await tester.drag(find.byType(PageView), const Offset(-400, 0));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Set'));
+      await tester.pumpAndSettle();
+      expect(state.active.avatarOverrides['aria'], 'local:new.png');
+    });
+
+    testWidgets('the chat\'s own choice leads the pool', (tester) async {
+      final state = await withOverride();
+      await state.addAvatarToPool('aria', 'local:new.png');
+      await state.setChatAvatar(state.active.id, 'aria', 'local:new.png');
+      await pumpChat(tester, state);
+
+      await openAvatar(tester);
+      // Opens on what the chat is actually wearing, not on the card's picture.
+      expect(find.text('1 / 2'), findsOneWidget);
+      expect(state.avatarPoolIn(state.active, 'aria').first, 'local:new.png');
+    });
+  });
+
   group('the chat draws the chosen picture', () {
     testWidgets('a per-chat choice reaches the bubble', (tester) async {
       final state = await chatWith();

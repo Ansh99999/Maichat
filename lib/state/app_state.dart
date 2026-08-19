@@ -1315,9 +1315,34 @@ class AppState extends ChangeNotifier {
   /// the "set as avatar" toggle and the delete cascade all read it, so the pool
   /// cannot mean one thing in one place and something else in another. Mirrors
   /// Agnai's `getCharacterAvatars`.
-  List<String> avatarPoolFor(Character character) {
+  List<String> avatarPoolFor(Character character) =>
+      _pool([character.avatar, ...character.avatars]);
+
+  /// Every picture [characterId] can wear **inside [conversation]**.
+  ///
+  /// Not simply [avatarPoolFor] of the resolved card: a thread with per-chat
+  /// character definitions holds a *frozen copy* of the card, so a picture added
+  /// to the roster afterwards was invisible in that chat — the avatar viewer
+  /// opened on one picture with nothing to swipe, which is precisely the "multiple
+  /// avatars don't work" report. A per-chat override is about a character's text,
+  /// never about which pictures exist, so both pools are unioned here and the
+  /// chat's own choice leads.
+  List<String> avatarPoolIn(Conversation? conversation, String characterId) {
+    final roster = characterById(characterId);
+    final override = conversation?.overrideDefinitions == true
+        ? conversation?.characterOverrides[characterId]
+        : null;
+    return _pool([
+      if (conversation != null) conversation.avatarOverrides[characterId] ?? '',
+      if (override != null) ...[override.avatar, ...override.avatars],
+      if (roster != null) ...[roster.avatar, ...roster.avatars],
+    ]);
+  }
+
+  /// Trims, drops empties and de-duplicates, keeping the first spelling.
+  List<String> _pool(Iterable<String> refs) {
     final out = <String>[];
-    for (final ref in [character.avatar, ...character.avatars]) {
+    for (final ref in refs) {
       final trimmed = ref.trim();
       if (trimmed.isEmpty || out.contains(trimmed)) continue;
       out.add(trimmed);
