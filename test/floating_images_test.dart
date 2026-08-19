@@ -173,6 +173,44 @@ void main() {
     );
   });
 
+  testWidgets('a float is captured to a texture while it is manipulated',
+      (tester) async {
+    // The rotate/zoom raster spike (bottom graph of the perf overlay): a scaled
+    // or rotated layer drops out of the raster cache and its clip, image and
+    // shadow are re-painted every frame. Snapshotting captures the frame to one
+    // texture that the GPU then just transforms — no per-frame re-paint. It must
+    // be on only while fingers are down, so the picture is crisp at rest.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+    final snap = tester.widget<SnapshotWidget>(
+      find
+          .descendant(
+            of: find.byType(FloatingImagesLayer),
+            matching: find.byType(SnapshotWidget),
+          )
+          .first,
+    );
+    expect(snap.controller.allowSnapshotting, isFalse,
+        reason: 'crisp at rest — no snapshot');
+
+    final anchor =
+        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
+    final left = await tester.startGesture(anchor - const Offset(40, 0));
+    final right = await tester.startGesture(anchor + const Offset(40, 0));
+    await left.moveBy(const Offset(-8, -4));
+    await right.moveBy(const Offset(8, 4));
+    await tester.pump();
+    expect(snap.controller.allowSnapshotting, isTrue,
+        reason: 'a single texture while it is being manipulated');
+
+    await left.up();
+    await right.up();
+    await tester.pump();
+    await tester.pump();
+    expect(snap.controller.allowSnapshotting, isFalse,
+        reason: 'live and crisp again the moment it is placed');
+  });
+
   testWidgets('a placed float does not slide away when the fingers leave',
       (tester) async {
     // The on-device "shifting thing": a float jumped away from where it was put
