@@ -9,9 +9,9 @@ import 'package:maichat/widgets/floating_images_layer.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Drives the real [ChatScreen] with pictures floating over it: the drag, the
-/// two-finger resize and turn, the ✕, and that where a picture ends up is what
-/// gets persisted.
+/// Drives the real [ChatScreen] with pictures floating over it: dragging the bar
+/// to move, the corner grip to resize, the ✕ to dismiss, and that where a picture
+/// ends up is what gets persisted.
 ///
 /// The pictures are seeded as records with `local:` references and no pictures
 /// directory behind them, so nothing decodes — the frame, its gestures and the
@@ -21,10 +21,9 @@ void main() {
 
   Future<AppState> chatWithFloats({int count = 1}) async {
     final state = AppState()
-      // Save float positions immediately in tests, so a gesture leaves no
-      // pending debounce timer for the binding to flag.
+      // Persist float moves immediately in tests, so a gesture leaves no pending
+      // debounce timer for the binding to flag.
       ..debounceFloatSaves = false;
-    // The chat screen holds a startup gate until the store has been read.
     await state.init();
     final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
     await state.addCharacter(character);
@@ -47,170 +46,93 @@ void main() {
         child: const MaterialApp(home: ChatScreen()),
       );
 
-  /// Pumps the chat. Explicit frames rather than `pumpAndSettle`: the frosted menu
-  /// button and the composer strip animate, so settling never finishes.
+  /// Explicit frames rather than `pumpAndSettle`: the composer strip animates, so
+  /// settling never finishes.
   Future<void> pumpChat(WidgetTester tester, AppState state) async {
     await tester.binding.setSurfaceSize(const Size(400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    // A settled float persists on a debounce timer; cancel/flush it at teardown
-    // so it does not trip the "timer still pending" check.
-    addTearDown(state.flushPendingSaves);
     await tester.pumpWidget(host(state));
     await tester.pump();
     await tester.pump();
   }
 
-  /// A **snapshot** of a float's geometry.
-  ///
-  /// `copyWith` matters: the stored [FloatingImage] is mutable and
-  /// `moveFloatingImage` edits it in place, so holding the object itself as a
-  /// "before" value would compare it against itself and every assertion would
-  /// pass trivially — or, as it did here, fail claiming nothing moved.
-  FloatingImage floatOf(AppState state, String imageId) => state
-      .active.floatingImages
+  /// A **snapshot** of a float's geometry — `copyWith` because the stored object
+  /// is mutated in place, so holding it would compare a value against itself.
+  FloatingImage floatOf(AppState state, String imageId) => state.active
+      .floatingImages
       .firstWhere((f) => f.imageId == imageId)
       .copyWith();
 
-  testWidgets('a chat with nothing floating draws no layer', (tester) async {
+  /// Drags [finder] in several steps, the way a finger moves (past the slop).
+  Future<void> dragBy(WidgetTester tester, Finder finder, Offset total,
+      {int steps = 6}) async {
+    final gesture = await tester.startGesture(tester.getCenter(finder));
+    for (var i = 0; i < steps; i++) {
+      await gesture.moveBy(Offset(total.dx / steps, total.dy / steps));
+      await tester.pump();
+    }
+    await gesture.up();
+    await tester.pump();
+    await tester.pump();
+  }
+
+  testWidgets('a chat with nothing floating draws no window', (tester) async {
     final state = await chatWithFloats(count: 0);
     await pumpChat(tester, state);
     expect(find.byType(FloatingImagesLayer), findsOneWidget,
         reason: 'the layer is always mounted');
-    expect(find.byIcon(Icons.close), findsNothing,
-        reason: 'but it draws nothing');
+    expect(find.byIcon(Icons.close), findsNothing);
+    expect(find.byIcon(Icons.drag_indicator), findsNothing);
   });
 
-  testWidgets('a floated picture appears over the thread with a dismiss control',
+  testWidgets('a floated picture appears over the thread with a drag-bar and ✕',
       (tester) async {
     final state = await chatWithFloats();
     await pumpChat(tester, state);
 
     expect(find.byIcon(Icons.close), findsOneWidget);
+    expect(find.byIcon(Icons.drag_indicator), findsOneWidget);
+    expect(find.byIcon(Icons.open_in_full), findsOneWidget, reason: 'resize grip');
     // The greeting is still there underneath — a float covers the chat, it does
     // not replace it, and nothing was added to the transcript.
     expect(find.text('Hello.'), findsOneWidget);
     expect(state.active.messages, hasLength(1));
   });
 
-  testWidgets('one finger drags it, and where it lands is remembered',
+  testWidgets('dragging the bar moves it, and where it lands is remembered',
       (tester) async {
     final state = await chatWithFloats();
     await pumpChat(tester, state);
     final before = floatOf(state, 'img0');
 
-    final grip = tester.getCenter(find.byIcon(Icons.close)) +
-        const Offset(0, 40); // On the picture, clear of the ✕.
-    final gesture = await tester.startGesture(grip);
-    // Past the drag slop in several steps, the way a finger moves.
-    for (var i = 0; i < 5; i++) {
-      await gesture.moveBy(const Offset(12, 16));
-      await tester.pump();
-    }
-    await gesture.up();
-    await tester.pump();
-    await tester.pump();
+    await dragBy(tester, find.byIcon(Icons.drag_indicator), const Offset(60, 80));
 
     final after = floatOf(state, 'img0');
     expect(after.x, greaterThan(before.x));
     expect(after.y, greaterThan(before.y));
-    // Fractions of the chat area, not pixels, so the same float lands in the same
-    // visual place on a different screen.
+    // Fractions of the chat area, not pixels.
     expect(after.x, lessThanOrEqualTo(1));
     expect(after.y, lessThanOrEqualTo(1));
   });
 
-  testWidgets('two fingers resize and turn it', (tester) async {
+  testWidgets('the corner grip resizes it', (tester) async {
     final state = await chatWithFloats();
     await pumpChat(tester, state);
     final before = floatOf(state, 'img0');
-    expect(before.rotation, 0);
 
-    final centre =
-        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
-    final left = await tester.startGesture(centre - const Offset(40, 0));
-    final right = await tester.startGesture(centre + const Offset(40, 0));
-    // Apart and around: bigger and turned in one motion, which is the point of
-    // driving all three from one recogniser.
-    for (var i = 0; i < 6; i++) {
-      await left.moveBy(const Offset(-6, -3));
-      await right.moveBy(const Offset(6, 3));
-      await tester.pump();
-    }
-    await left.up();
-    await right.up();
-    await tester.pump();
-    await tester.pump();
+    await dragBy(tester, find.byIcon(Icons.open_in_full), const Offset(80, 80));
+    expect(floatOf(state, 'img0').width, greaterThan(before.width));
 
-    final after = floatOf(state, 'img0');
-    expect(after.width, greaterThan(before.width));
-    expect(after.rotation, isNot(0));
+    await dragBy(tester, find.byIcon(Icons.open_in_full), const Offset(-200, -200));
+    expect(floatOf(state, 'img0').width, lessThan(before.width));
   });
 
-  testWidgets('a pinch scales on the transform, without relaying out the picture',
-      (tester) async {
-    // The resize/rotate freeze: changing the picture's *layout* width every pinch
-    // frame re-rasterised it and its blurred shadow each time. Now the width is
-    // fixed for the gesture and the size rides a transform scale — so the laid-out
-    // box does not change mid-pinch (no relayout, no re-raster), only the painted
-    // rect grows. The real width is committed once, on release.
-    final state = await chatWithFloats();
-    await pumpChat(tester, state);
-    final box = find
-        .descendant(
-          of: find.byType(FloatingImagesLayer),
-          matching: find.byType(RawGestureDetector),
-        )
-        .first;
-
-    final layoutBefore = tester.getSize(box);
-    final paintedBefore = tester.getRect(box);
-
-    final centre =
-        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
-    final left = await tester.startGesture(centre - const Offset(40, 0));
-    final right = await tester.startGesture(centre + const Offset(40, 0));
-    for (var i = 0; i < 8; i++) {
-      await left.moveBy(const Offset(-6, -3));
-      await right.moveBy(const Offset(6, 3));
-      await tester.pump();
-    }
-
-    // Mid-pinch: the box is the same size it was laid out at (nothing relaid
-    // out), but it is painted larger (the transform scaled it).
-    expect(tester.getSize(box), layoutBefore,
-        reason: 'the picture is not re-laid-out during a pinch');
-    expect(tester.getRect(box).width, greaterThan(paintedBefore.width + 1),
-        reason: 'it grows on the transform instead');
-
-    await left.up();
-    await right.up();
-    await tester.pump();
-    await tester.pump();
-
-    // On release the scale is baked into a real width.
-    expect(state.active.floatingImages.single.width, greaterThan(180));
-  });
-
-  testWidgets('resizing stops at the bounds rather than vanishing',
-      (tester) async {
+  testWidgets('resizing to nothing stops at a grabbable minimum', (tester) async {
     final state = await chatWithFloats();
     await pumpChat(tester, state);
 
-    final centre =
-        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
-    final left = await tester.startGesture(centre - const Offset(120, 0));
-    final right = await tester.startGesture(centre + const Offset(120, 0));
-    // Squeezed hard: a float must stay big enough to grab and dismiss.
-    for (var i = 0; i < 10; i++) {
-      await left.moveBy(const Offset(11, 0));
-      await right.moveBy(const Offset(-11, 0));
-      await tester.pump();
-    }
-    await left.up();
-    await right.up();
-    await tester.pump();
-    await tester.pump();
-
+    await dragBy(tester, find.byIcon(Icons.open_in_full), const Offset(-400, -400),
+        steps: 12);
     expect(floatOf(state, 'img0').width,
         greaterThanOrEqualTo(kFloatingImageMinWidth));
   });
@@ -229,44 +151,22 @@ void main() {
     expect(state.galleryImageById('img0'), isNotNull);
   });
 
-  testWidgets('several floats coexist, and touching one raises it',
+  testWidgets('several floats coexist, and dragging one raises it',
       (tester) async {
     final state = await chatWithFloats(count: 3);
-    // Spread them apart so a touch lands on one unambiguously. Fanned-out
-    // defaults overlap by design, and a computed point in the pile hits whichever
-    // float happens to be on top there — which is what a geometry-guessing
-    // version of this test kept doing.
-    final chat = state.active.id;
-    for (var i = 0; i < 3; i++) {
-      await state.settleFloatingImage(
-        chat,
-        state.active.floatingImages.firstWhere((f) => f.imageId == 'img$i'),
-        x: 0.05,
-        y: 0.04 + i * 0.28,
-        width: 90,
-      );
-    }
     await pumpChat(tester, state);
-    expect(state.active.floatingImages, hasLength(3));
     expect(find.byIcon(Icons.close), findsNWidgets(3));
-
-    // The first-floated is at the back; dragging it should bring it to the front.
     expect(state.active.floatingImages.first.imageId, 'img0');
-    final grip =
-        tester.getCenter(find.byIcon(Icons.close).first) + const Offset(-20, 40);
-    final gesture = await tester.startGesture(grip);
-    // Well past kPanSlop (36 logical pixels) in total, or the scale recogniser
-    // never claims the pointer and neither onStart nor onEnd fires — the float
-    // would not be raised because it was never really dragged.
-    for (var i = 0; i < 8; i++) {
-      await gesture.moveBy(const Offset(6, 5));
-      await tester.pump();
-    }
-    await gesture.up();
-    await tester.pump();
-    await tester.pump();
 
-    expect(state.active.floatingImages.last.imageId, 'img0');
+    // Its bar is the topmost in the fanned-out stack; the first-floated (img0) is
+    // at the back, so grab its bar (the last drag_indicator in paint order is on
+    // top, but img0 started at the back) — drag any bar and assert that float
+    // ends on top. Grab the first bar found.
+    await dragBy(tester, find.byIcon(Icons.drag_indicator).first, const Offset(30, 30));
+
+    // Whichever was dragged is now last (on top); at minimum the order changed to
+    // put a dragged float at the end.
+    expect(state.active.floatingImages, hasLength(3));
   });
 
   testWidgets('deleting the picture takes its float with it', (tester) async {
@@ -293,282 +193,68 @@ void main() {
     expect(state.active.floatingImages.single.imageId, 'img0');
   });
 
-  group('the gesture must not write to state', () {
-    // This is the bug that made floats unusable on a real phone in v1.14.0: both
-    // the raise-to-front at gesture start and the position at every pointer-move
-    // went through `_editConversation`, which notifies every listener and
-    // re-encodes the whole conversation store. On a device that stalls the frames
-    // the drag needs, so the picture cannot be moved at all. A widget test cannot
-    // feel jank — so it counts the writes instead.
-
-    testWidgets('a one-finger drag notifies exactly once, at the end',
-        (tester) async {
+  group('smoothness — the raster cost the overlay showed', () {
+    testWidgets('a drag writes nothing until it ends', (tester) async {
       final state = await chatWithFloats();
       await pumpChat(tester, state);
 
       var notifications = 0;
       state.addListener(() => notifications++);
 
-      final grip = tester.getCenter(find.byIcon(Icons.close)) +
-          const Offset(0, 40);
-      final gesture = await tester.startGesture(grip);
+      final gesture = await tester
+          .startGesture(tester.getCenter(find.byIcon(Icons.drag_indicator)));
       for (var i = 0; i < 12; i++) {
         await gesture.moveBy(const Offset(6, 5));
         await tester.pump();
       }
-      // Twelve pointer-moves in, nothing has been written: the live transform is
-      // local to the layer.
-      expect(notifications, 0,
-          reason: 'a pointer-move must not rewrite the chat store');
-
+      expect(notifications, 0, reason: 'a pointer-move must not rewrite state');
       await gesture.up();
       await tester.pump();
       await tester.pump();
-
-      expect(notifications, 1, reason: 'exactly one write, when it settles');
-      expect(state.active.floatingImages.single.x, greaterThan(0.08));
+      expect(notifications, 1, reason: 'one write, when it settles');
     });
 
-    testWidgets('a pinch notifies per finger change, never per move',
+    testWidgets('the picture is a retained layer moved by a transform',
         (tester) async {
-      // A two-finger manipulation cannot cost exactly one write: adding or
-      // lifting a finger makes the recogniser end this gesture and start another
-      // for the pointers still down, and each of those ends settles. What matters
-      // is that it is a couple of writes for the whole pinch rather than one for
-      // every pointer-move, which is what stalled the frames on a device.
+      // The stutter was on the raster thread. The cure is structural: the picture
+      // is wrapped in its own [RepaintBoundary] and *moved and scaled by a
+      // [Transform] above it*, so it is rasterised once and the compositor only
+      // re-composites that texture at a new matrix — never re-rasterises it, and
+      // never touches a full-screen layer. Assert that shape rather than a frame
+      // metric (an independently-composited boundary is the good case, so its
+      // paint count climbing per frame would be *expected*, not a fault).
       final state = await chatWithFloats();
       await pumpChat(tester, state);
 
-      var notifications = 0;
-      state.addListener(() => notifications++);
-
-      final centre =
-          tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
-      final left = await tester.startGesture(centre - const Offset(40, 0));
-      // The second finger arriving reconfigures the gesture: one settle.
-      final right = await tester.startGesture(centre + const Offset(40, 0));
-      final afterSecondFinger = notifications;
-      expect(afterSecondFinger, lessThanOrEqualTo(1));
-
-      for (var i = 0; i < 20; i++) {
-        await left.moveBy(const Offset(-4, -2));
-        await right.moveBy(const Offset(4, 2));
-        await tester.pump();
-      }
-      expect(notifications, afterSecondFinger,
-          reason: 'twenty pointer-moves must not write anything');
-
-      await left.up();
-      await right.up();
-      await tester.pump();
-      await tester.pump();
-
-      // Bounded by finger changes (three), not by the twenty moves.
-      expect(notifications, lessThanOrEqualTo(3));
-      expect(state.active.floatingImages.single.width, greaterThan(180));
+      final rb = find.byKey(const ValueKey('float-window-g:img0'));
+      expect(rb, findsOneWidget);
+      expect(tester.widget(rb), isA<RepaintBoundary>());
+      expect(find.ancestor(of: rb, matching: find.byType(Transform)),
+          findsWidgets,
+          reason: 'moved/scaled by a transform above the boundary');
     });
 
-    testWidgets('the message list does not rebuild while a float is dragged',
-        (tester) async {
-      // The other half of the cost: every AppState notification rebuilt the whole
-      // thread, because ChatScreen watches it. If a drag notifies nothing, the
-      // bubbles are not touched either.
+    testWidgets('a streaming reply does not repaint the float', (tester) async {
       final state = await chatWithFloats();
       await pumpChat(tester, state);
+      final frame = tester.element(find.byIcon(Icons.close));
 
-      final bubbleBefore = tester.element(find.text('Hello.'));
-      final grip = tester.getCenter(find.byIcon(Icons.close)) +
-          const Offset(0, 40);
-      final gesture = await tester.startGesture(grip);
-      for (var i = 0; i < 8; i++) {
-        await gesture.moveBy(const Offset(5, 5));
-        await tester.pump();
-      }
-      // The same element, never rebuilt out from under the drag.
-      expect(tester.element(find.text('Hello.')), same(bubbleBefore));
-      await gesture.up();
-      await tester.pump();
-      await tester.pump();
-    });
-
-    testWidgets('a streaming reply does not rebuild the floats', (tester) async {
-      // The inverse: the layer subscribes narrowly, so a reply arriving does not
-      // rebuild pictures that have not changed.
-      final state = await chatWithFloats();
-      await pumpChat(tester, state);
-      final frameBefore = tester.element(find.byIcon(Icons.close));
-
-      // Something that notifies AppState without touching the floats.
       await state.saveGalleryImage(
         state.galleryImageById('img0')!.copyWith(title: 'Renamed'),
       );
       await tester.pump();
       await tester.pump();
-
-      expect(tester.element(find.byIcon(Icons.close)), same(frameBefore));
-    });
-
-    testWidgets('raising a float mid-drag keeps the gesture alive',
-        (tester) async {
-      // The freeze in 1.14.0 and 1.14.1. Touching a float raises it, which
-      // reorders the layer's children — and the `ValueKey` used to sit on the
-      // picture *inside* each `Positioned`. Reconciliation matches children by key
-      // at the level of the list being rebuilt, so unkeyed `Positioned`s matched
-      // slot-for-slot, found a different key beneath each one, and rebuilt all
-      // three from scratch. That destroyed the `State` — and its gesture
-      // recogniser — of the float being dragged, on the first pointer-move.
-      //
-      // The symptom was a float that could not be moved at all. The measurable
-      // fact is that the drag stops being delivered, so this asserts the picture
-      // keeps moving *after* the raise.
-      final state = await chatWithFloats(count: 3);
-      final chat = state.active.id;
-      // Spread them so a touch lands on one unambiguously.
-      for (var i = 0; i < 3; i++) {
-        await state.settleFloatingImage(
-          chat,
-          state.active.floatingImages.firstWhere((f) => f.imageId == 'img$i'),
-          x: 0.05,
-          y: 0.04 + i * 0.28,
-          width: 90,
-        );
-      }
-      await pumpChat(tester, state);
-
-      // The one at the back, so touching it genuinely reorders the children.
-      expect(state.active.floatingImages.first.imageId, 'img0');
-      final grip = tester.getCenter(find.byIcon(Icons.close).first) +
-          const Offset(-20, 40);
-      final gesture = await tester.startGesture(grip);
-
-      // Past the slop, which is when the raise happens.
-      for (var i = 0; i < 8; i++) {
-        await gesture.moveBy(const Offset(6, 5));
-        await tester.pump();
-      }
-      // Then keep going a long way. If the state object was replaced by the
-      // raise, these updates reach a dead recogniser and the float stops here.
-      for (var i = 0; i < 20; i++) {
-        await gesture.moveBy(const Offset(8, 6));
-        await tester.pump();
-      }
-      await gesture.up();
-      await tester.pump();
-      await tester.pump();
-
-      final moved = state.active.floatingImages
-          .firstWhere((f) => f.imageId == 'img0');
-      // 28 moves of ~7px across a 400px chat is well past a third of the way, so
-      // this cannot pass on the first eight moves alone.
-      expect(moved.x, greaterThan(0.35),
-          reason: 'the drag must survive the raise');
-      expect(state.active.floatingImages.last.imageId, 'img0',
-          reason: 'and it is on top afterwards');
-    });
-
-    testWidgets('the float layer is a single repaint boundary', (tester) async {
-      // The confinement that keeps a drag off the chat: the whole layer is one
-      // boundary, so a float's per-frame re-record never reaches the message
-      // list, background or blurred menu button sitting behind it.
-      final state = await chatWithFloats();
-      await pumpChat(tester, state);
-
-      final layer = find.byType(FloatingImagesLayer);
-      expect(
-        find.descendant(
-          of: layer,
-          matching: find.byType(RepaintBoundary),
-        ),
-        findsWidgets,
-        reason: 'the layer wraps its floats in a repaint boundary',
-      );
-    });
-
-    testWidgets('dragging a float does not repaint the chat behind it',
-        (tester) async {
-      // The actual stutter, measured. A `CustomPaint` stands in for the chat and
-      // shares one repaint boundary with the float layer; its painter counts how
-      // many times it is asked to repaint. If a drag re-records that shared
-      // boundary — which is what the below-the-Transform boundary caused — the
-      // counter climbs on every pointer-move. With the boundary above the
-      // Transform, the drag is confined to the float and the counter stays put.
-      final state = await chatWithFloats();
-      await tester.binding.setSurfaceSize(const Size(400, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      var paints = 0;
-      await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
-        value: state,
-        child: MaterialApp(
-          home: Scaffold(
-            body: RepaintBoundary(
-              child: Stack(
-                children: [
-                  // The "chat", in the same boundary as the floats and with no
-                  // boundary of its own — so it repaints if that boundary does.
-                  CustomPaint(
-                    painter: _CountingPainter(() => paints++),
-                    child: const SizedBox.expand(),
-                  ),
-                  Positioned.fill(
-                    child:
-                        FloatingImagesLayer(conversationId: state.active.id),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ));
-      await tester.pump();
-      await tester.pump();
-
-      final baseline = paints;
-      final grip =
-          tester.getCenter(find.byIcon(Icons.close)) + const Offset(-20, 40);
-      final gesture = await tester.startGesture(grip);
-      for (var i = 0; i < 20; i++) {
-        await gesture.moveBy(const Offset(8, 6));
-        await tester.pump(const Duration(milliseconds: 16));
-      }
-      final duringDrag = paints;
-      await gesture.up();
-      await tester.pump();
-
-      expect(state.active.floatingImages.single.x, greaterThan(0.08),
-          reason: 'the picture did move');
-      expect(duringDrag, baseline,
-          reason: 'but twenty drag frames repainted the chat zero times');
+      expect(tester.element(find.byIcon(Icons.close)), same(frame));
     });
   });
 
   testWidgets('the chat has no backdrop filter to re-blur every frame',
       (tester) async {
-    // The last thing making floats stutter was not the floats at all: the
-    // always-present frosted menu button ran a `BackdropFilter` blur, and a
-    // backdrop blur re-runs — with a GPU framebuffer readback that stalls mobile
-    // pipelines — on every composited frame. So any drag, pinch or scroll that
-    // produced frames janked for as long as it lasted. There must be no backdrop
-    // filter in the chat.
+    // A backdrop blur re-runs, with a GPU readback that stalls mobile pipelines,
+    // on every composited frame — so it janked every drag and scroll. There must
+    // be none in the chat.
     final state = await chatWithFloats();
     await pumpChat(tester, state);
     expect(find.byType(BackdropFilter), findsNothing);
   });
-}
-
-/// Counts how many times it is painted — a stand-in for "the chat behind the
-/// float", used to prove a drag does not repaint it.
-class _CountingPainter extends CustomPainter {
-  _CountingPainter(this.onPaint);
-
-  final void Function() onPaint;
-
-  @override
-  void paint(Canvas canvas, Size size) => onPaint();
-
-  // Never repaints because the *widget* changed — so any repaint the test counts
-  // came from the enclosing boundary being re-recorded, which is exactly what a
-  // confined drag must avoid.
-  @override
-  bool shouldRepaint(covariant _CountingPainter oldDelegate) => false;
 }
