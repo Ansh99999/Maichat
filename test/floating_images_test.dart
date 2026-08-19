@@ -92,6 +92,87 @@ void main() {
     expect(state.active.messages, hasLength(1));
   });
 
+  testWidgets('resize and turn pivot about the centre, not the corner',
+      (tester) async {
+    // The "funky" rotation and the runaway zoom: rotation and scale used to be
+    // folded into the positioning matrix, which pivoted them about the picture's
+    // top-left corner. A small turn then swept the picture through a wide arc and
+    // a pinch grew it away toward the bottom-right — a light two-finger touch
+    // shoved the picture a long way across the chat. Pivoting about the centre
+    // instead keeps the picture where it is and only turns/grows it in place.
+    //
+    // With the two fingers moved symmetrically about their midpoint the focal
+    // point does not translate, so a centre pivot leaves the picture's centre
+    // fixed while a corner pivot swings it. The frame's on-screen bounding box
+    // shares its centre with the picture, so its centre must barely move.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+
+    final frame = find
+        .descendant(
+          of: find.byType(FloatingImagesLayer),
+          matching: find.byType(RawGestureDetector),
+        )
+        .first;
+    final centreBefore = tester.getRect(frame).center;
+
+    final anchor =
+        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
+    final left = await tester.startGesture(anchor - const Offset(40, 0));
+    final right = await tester.startGesture(anchor + const Offset(40, 0));
+    // Symmetric about the midpoint: turns and spreads without dragging the focal
+    // point, so the only thing that could move the centre is the pivot.
+    for (var i = 0; i < 6; i++) {
+      await left.moveBy(const Offset(-5, -6));
+      await right.moveBy(const Offset(5, 6));
+      await tester.pump();
+    }
+    final centreDuring = tester.getRect(frame).center;
+    await left.up();
+    await right.up();
+    await tester.pump();
+    await tester.pump();
+
+    // It really did manipulate the picture...
+    expect(state.active.floatingImages.single.width, greaterThan(180),
+        reason: 'the fingers spread, so it grew');
+    expect(state.active.floatingImages.single.rotation, isNot(0),
+        reason: 'and turned');
+    // ...but its centre stayed put. The old corner pivot moved it tens of pixels
+    // for a manipulation this size; a centre pivot keeps it within a hair.
+    expect((centreDuring - centreBefore).distance, lessThan(12),
+        reason: 'a centre pivot leaves the picture where it is');
+  });
+
+  testWidgets('the message list is its own retained layer, isolated from floats',
+      (tester) async {
+    // Moving a float must not force the whole thread to re-record on the UI
+    // thread every frame. The message viewport sits behind its own repaint
+    // boundary so a float's repaint composites one cached layer instead of
+    // walking every visible bubble. What proves isolation is not that *a*
+    // boundary exists above the list (the framework has plenty) but that the
+    // closest one wraps the list *without* also enclosing the float layer — so
+    // the two are on separate layers. Guards against the drag/pinch stutter on a
+    // long chat.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+    final listBoundary = find
+        .ancestor(
+          of: find.byType(ListView),
+          matching: find.byType(RepaintBoundary),
+        )
+        .first;
+    expect(listBoundary, findsOneWidget);
+    expect(
+      find.descendant(
+        of: listBoundary,
+        matching: find.byType(FloatingImagesLayer),
+      ),
+      findsNothing,
+      reason: 'the thread and the floats over it are on separate layers',
+    );
+  });
+
   testWidgets('one finger drags it, and where it lands is remembered',
       (tester) async {
     final state = await chatWithFloats();

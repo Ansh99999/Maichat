@@ -313,7 +313,18 @@ class _ChatScreenState extends State<ChatScreen> {
                         )
                       : Stack(
                           children: [
-                            _messageList(conversation, state, topInset),
+                            // The thread is its own retained layer, so moving a
+                            // floating picture over it re-composites that one
+                            // cached layer instead of re-recording the whole
+                            // message viewport (every visible bubble) on the UI
+                            // thread each frame. Without this boundary a float's
+                            // repaint bubbles past the list to a far ancestor and
+                            // re-records it — the drag/pinch stutter on a busy
+                            // chat. Scrolling still repaints the list as normal;
+                            // this only isolates it from its siblings.
+                            RepaintBoundary(
+                              child: _messageList(conversation, state, topInset),
+                            ),
                             // Pictures pinned over the thread. Above the messages
                             // and below the composer, so a float can be moved
                             // anywhere in the conversation without ever covering
