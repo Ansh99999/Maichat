@@ -414,5 +414,97 @@ void main() {
       expect(state.active.floatingImages.last.imageId, 'img0',
           reason: 'and it is on top afterwards');
     });
+
+    testWidgets('the float layer is a single repaint boundary', (tester) async {
+      // The confinement that keeps a drag off the chat: the whole layer is one
+      // boundary, so a float's per-frame re-record never reaches the message
+      // list, background or blurred menu button sitting behind it.
+      final state = await chatWithFloats();
+      await pumpChat(tester, state);
+
+      final layer = find.byType(FloatingImagesLayer);
+      expect(
+        find.descendant(
+          of: layer,
+          matching: find.byType(RepaintBoundary),
+        ),
+        findsWidgets,
+        reason: 'the layer wraps its floats in a repaint boundary',
+      );
+    });
+
+    testWidgets('dragging a float does not repaint the chat behind it',
+        (tester) async {
+      // The actual stutter, measured. A `CustomPaint` stands in for the chat and
+      // shares one repaint boundary with the float layer; its painter counts how
+      // many times it is asked to repaint. If a drag re-records that shared
+      // boundary — which is what the below-the-Transform boundary caused — the
+      // counter climbs on every pointer-move. With the boundary above the
+      // Transform, the drag is confined to the float and the counter stays put.
+      final state = await chatWithFloats();
+      await tester.binding.setSurfaceSize(const Size(400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      var paints = 0;
+      await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: MaterialApp(
+          home: Scaffold(
+            body: RepaintBoundary(
+              child: Stack(
+                children: [
+                  // The "chat", in the same boundary as the floats and with no
+                  // boundary of its own — so it repaints if that boundary does.
+                  CustomPaint(
+                    painter: _CountingPainter(() => paints++),
+                    child: const SizedBox.expand(),
+                  ),
+                  Positioned.fill(
+                    child:
+                        FloatingImagesLayer(conversationId: state.active.id),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+
+      final baseline = paints;
+      final grip =
+          tester.getCenter(find.byIcon(Icons.close)) + const Offset(-20, 40);
+      final gesture = await tester.startGesture(grip);
+      for (var i = 0; i < 20; i++) {
+        await gesture.moveBy(const Offset(8, 6));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final duringDrag = paints;
+      await gesture.up();
+      await tester.pump();
+
+      expect(state.active.floatingImages.single.x, greaterThan(0.08),
+          reason: 'the picture did move');
+      expect(duringDrag, baseline,
+          reason: 'but twenty drag frames repainted the chat zero times');
+    });
   });
+}
+
+/// Counts how many times it is painted — a stand-in for "the chat behind the
+/// float", used to prove a drag does not repaint it.
+class _CountingPainter extends CustomPainter {
+  _CountingPainter(this.onPaint);
+
+  final void Function() onPaint;
+
+  @override
+  void paint(Canvas canvas, Size size) => onPaint();
+
+  // Never repaints because the *widget* changed — so any repaint the test counts
+  // came from the enclosing boundary being re-recorded, which is exactly what a
+  // confined drag must avoid.
+  @override
+  bool shouldRepaint(covariant _CountingPainter oldDelegate) => false;
 }
