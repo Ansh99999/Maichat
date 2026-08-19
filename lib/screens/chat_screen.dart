@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1160,18 +1159,22 @@ class _TranslucentMenuButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-        child: Material(
-          color: scheme.surface.withValues(alpha: 0.4),
-          shape: const CircleBorder(),
-          child: IconButton(
-            tooltip: 'Menu',
-            icon: Icon(Icons.menu, color: scheme.onSurface.withValues(alpha: 0.9)),
-            onPressed: onTap,
-          ),
-        ),
+    // A solid, mostly-opaque circle — deliberately **not** a `BackdropFilter`.
+    // The frosted version re-ran a full backdrop blur, with a framebuffer
+    // readback that stalls mobile GPUs, on *every composited frame*. So it janked
+    // every drag, pinch and even a scroll for as long as they produced frames —
+    // this button, always on screen, was the per-frame cost behind the floating
+    // pictures never feeling smooth however cheap their own painting became. A
+    // translucent fill reads the same at a glance and costs nothing per frame.
+    return Material(
+      color: scheme.surface.withValues(alpha: 0.88),
+      shape: const CircleBorder(),
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.3),
+      child: IconButton(
+        tooltip: 'Menu',
+        icon: Icon(Icons.menu, color: scheme.onSurface.withValues(alpha: 0.9)),
+        onPressed: onTap,
       ),
     );
   }

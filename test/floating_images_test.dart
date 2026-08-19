@@ -535,6 +535,19 @@ void main() {
           reason: 'but twenty drag frames repainted the chat zero times');
     });
   });
+
+  testWidgets('the chat has no backdrop filter to re-blur every frame',
+      (tester) async {
+    // The last thing making floats stutter was not the floats at all: the
+    // always-present frosted menu button ran a `BackdropFilter` blur, and a
+    // backdrop blur re-runs — with a GPU framebuffer readback that stalls mobile
+    // pipelines — on every composited frame. So any drag, pinch or scroll that
+    // produced frames janked for as long as it lasted. There must be no backdrop
+    // filter in the chat.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+    expect(find.byType(BackdropFilter), findsNothing);
+  });
 }
 
 /// Counts how many times it is painted — a stand-in for "the chat behind the
