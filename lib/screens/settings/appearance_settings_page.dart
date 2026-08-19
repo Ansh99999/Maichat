@@ -98,6 +98,30 @@ class AppearanceSettingsPage extends StatelessWidget {
                 'Frame-time graphs for diagnosing stutter — top is UI, bottom '
                 'is the GPU'),
           ),
+          // Diagnostic read-out: exact UI/raster milliseconds, plus a switch for
+          // how a float is drawn mid-pinch, so the three strategies can be
+          // compared on the device. Temporary — for chasing the float stutter.
+          SwitchListTile(
+            dense: true,
+            value: state.frameStats,
+            onChanged: (_) => state.toggleFrameStats(),
+            secondary: const Icon(Icons.analytics_outlined),
+            title: const Text('Frame timing read-out (float debug)'),
+            subtitle: const Text(
+                'Shows avg/worst UI and raster ms; tap the mode row to compare '
+                'float render strategies'),
+          ),
+          if (state.frameStats)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.auto_awesome_motion_outlined),
+              title: const Text('Float manipulation mode'),
+              subtitle: Text(state.floatGestureModeName),
+              trailing: FilledButton.tonal(
+                onPressed: state.cycleFloatGestureMode,
+                child: const Text('Next'),
+              ),
+            ),
         ],
       ),
     );

@@ -125,6 +125,37 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Diagnostic: overlays a live read-out of the UI-thread and raster-thread
+  /// frame times (avg + worst over the last ~2s), so the actual cost of moving a
+  /// float can be read straight off the device without a debugger. Not persisted.
+  bool _frameStats = false;
+  bool get frameStats => _frameStats;
+  void toggleFrameStats() {
+    _frameStats = !_frameStats;
+    notifyListeners();
+  }
+
+  /// Diagnostic: how a float is drawn *while it is being pinched/rotated*, so the
+  /// three candidate strategies can be compared on real hardware with
+  /// [frameStats] on. 0 = capture to a GPU texture (the shipped default),
+  /// 1 = transform the live image every frame (no texture — the raw cost),
+  /// 2 = draw only a cheap outline while manipulating and drop the photo in on
+  /// release. At rest every mode is identical. Not persisted.
+  int _floatGestureMode = 0;
+  int get floatGestureMode => _floatGestureMode;
+
+  /// Names line up with [_floatGestureMode].
+  static const List<String> floatGestureModeNames = <String>[
+    'Texture (default)',
+    'Live image',
+    'Outline preview',
+  ];
+  String get floatGestureModeName => floatGestureModeNames[_floatGestureMode];
+  void cycleFloatGestureMode() {
+    _floatGestureMode = (_floatGestureMode + 1) % floatGestureModeNames.length;
+    notifyListeners();
+  }
+
   /// Whether a float's position is persisted on a debounce (the real-app
   /// behaviour — see [settleFloatingImage]) or written straight away. Tests turn
   /// it off so a manipulation leaves no pending timer to trip the test binding.
