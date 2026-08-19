@@ -9,18 +9,22 @@ import 'dart:math' as math;
 /// something that was never a gallery entry — an avatar that arrived on an
 /// imported card, say. Exactly one of the two is set.
 ///
-/// [x] and [y] are **fractions of the chat area** (0..1 from its top left), not
-/// logical pixels. A phone rotated, a tablet, or a different text scale all change
-/// the area's size, and a float stored in pixels would drift off screen or bunch
-/// into a corner; a fraction lands in the same visual place everywhere. [width] is
-/// in logical pixels, because a picture should not grow just because the window
-/// did.
+/// [x] and [y] are the float's **centre**, as **fractions of the chat area**
+/// (0..1 from its top left), not logical pixels. The centre — not a corner — is
+/// the anchor on purpose: a pinch turns and scales the picture about its centre,
+/// so storing the centre is the only thing that keeps a placed picture from
+/// jumping the moment the fingers leave (re-pinning a corner after a
+/// centre-pivot resize slides it by half the size change). A phone rotated, a
+/// tablet, or a different text scale all change the area's size, and a float
+/// stored in pixels would drift off screen or bunch into a corner; a fraction
+/// lands in the same visual place everywhere. [width] is in logical pixels,
+/// because a picture should not grow just because the window did.
 class FloatingImage {
   FloatingImage({
     this.imageId = '',
     this.imageRef = '',
-    this.x = 0.08,
-    this.y = 0.12,
+    this.x = 0.2,
+    this.y = 0.24,
     this.width = kFloatingImageDefaultWidth,
     this.rotation = 0,
   });
@@ -33,7 +37,7 @@ class FloatingImage {
   /// not backed by a gallery record.
   final String imageRef;
 
-  /// Position of the float's top-left corner, as a fraction of the chat area.
+  /// Position of the float's **centre**, as a fraction of the chat area.
   double x;
   double y;
 
@@ -98,8 +102,8 @@ class FloatingImage {
         .toDouble();
   }
 
-  /// Keeps a float's corner inside the chat area, leaving a sliver of it always
-  /// reachable so it can be dragged back or closed.
+  /// Keeps a float's centre inside the chat area, so a picture can always be
+  /// grabbed by its middle and dragged back or closed, however big it is.
   static double clampFraction(double value) => _fraction(value);
 
   /// Rotation, normalised into (-π, π] so repeated turns do not accumulate into
@@ -140,7 +144,7 @@ const double kFloatingImageDefaultWidth = 180;
 const double kFloatingImageMinWidth = 72;
 const double kFloatingImageMaxWidth = 1600;
 
-/// A float may hang a little off the edge, but never so far that its handle
-/// leaves the chat area.
-const double kFloatingImageMinFraction = -0.15;
+/// A float's **centre** stays within this fraction of the chat area, so its
+/// middle is always on screen and grabbable no matter how large it has grown.
+const double kFloatingImageMinFraction = 0.05;
 const double kFloatingImageMaxFraction = 0.95;

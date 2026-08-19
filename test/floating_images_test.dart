@@ -173,6 +173,47 @@ void main() {
     );
   });
 
+  testWidgets('a placed float does not slide away when the fingers leave',
+      (tester) async {
+    // The on-device "shifting thing": a float jumped away from where it was put
+    // the instant the fingers lifted. Cause — a pinch scaled the picture about
+    // its centre (correct), but the stored anchor was the top-left *corner*, so
+    // on release the picture was re-laid-out pinned to that corner and slid by
+    // half the size change. Anchoring the centre makes the held position and the
+    // settled position the same point.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+    final frame = find
+        .descendant(
+          of: find.byType(FloatingImagesLayer),
+          matching: find.byType(RawGestureDetector),
+        )
+        .first;
+
+    // Grow it with a symmetric two-finger spread: the focal point does not move,
+    // so nothing but the release could shift its centre.
+    final anchor =
+        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
+    final left = await tester.startGesture(anchor - const Offset(40, 0));
+    final right = await tester.startGesture(anchor + const Offset(40, 0));
+    for (var i = 0; i < 8; i++) {
+      await left.moveBy(const Offset(-6, -4));
+      await right.moveBy(const Offset(6, 4));
+      await tester.pump();
+    }
+    final centreWhileHeld = tester.getRect(frame).center;
+    await left.up();
+    await right.up();
+    await tester.pump();
+    await tester.pump();
+    final centreAfterRelease = tester.getRect(frame).center;
+
+    expect(state.active.floatingImages.single.width, greaterThan(180),
+        reason: 'it really did resize');
+    expect((centreAfterRelease - centreWhileHeld).distance, lessThan(6),
+        reason: 'the picture stays where it was placed when the fingers leave');
+  });
+
   testWidgets('one finger drags it, and where it lands is remembered',
       (tester) async {
     final state = await chatWithFloats();

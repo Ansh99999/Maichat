@@ -1499,11 +1499,11 @@ class AppState extends ChangeNotifier {
           return;
         }
         // Each new float is offset a little from the last so a run of them fans
-        // out instead of hiding one another exactly.
+        // out instead of hiding one another exactly. These are centre positions.
         final step = c.floatingImages.length % 4;
         float
-          ..x = FloatingImage.clampFraction(0.08 + step * 0.05)
-          ..y = FloatingImage.clampFraction(0.12 + step * 0.06);
+          ..x = FloatingImage.clampFraction(0.2 + step * 0.05)
+          ..y = FloatingImage.clampFraction(0.24 + step * 0.06);
         c.floatingImages.add(float);
       });
 
