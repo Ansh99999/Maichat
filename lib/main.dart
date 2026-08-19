@@ -42,6 +42,7 @@ class MaiChatApp extends StatelessWidget {
               return MaterialApp(
                 title: 'MaiChat',
                 debugShowCheckedModeBanner: false,
+                showPerformanceOverlay: state.perfOverlay,
                 themeMode: _themeMode(appearance.mode),
                 theme: _theme(wanted ? lightDynamic : null, Brightness.light,
                     seed, fontFamily: appearance.fontFamily),

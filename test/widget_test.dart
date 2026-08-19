@@ -147,10 +147,16 @@ void main() {
     await tester.tap(find.text('Appearance'));
     await tester.pumpAndSettle();
 
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    // The Appearance page now also has a "Show performance overlay" switch, so
+    // target the system-colours one specifically rather than "the only switch".
+    final systemColours = find.descendant(
+      of: find.widgetWithText(SwitchListTile, 'Use system colours'),
+      matching: find.byType(Switch),
+    );
+    expect(tester.widget<Switch>(systemColours).value, isTrue);
     await tester.tap(find.text('Use system colours'));
     await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    expect(tester.widget<Switch>(systemColours).value, isFalse);
 
     // Theme mode is a compact dropdown; open it and choose Light.
     await tester.tap(find.text('System'));

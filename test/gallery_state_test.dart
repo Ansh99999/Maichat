@@ -34,7 +34,9 @@ void main() {
   });
 
   Future<AppState> app() async {
-    final state = AppState(avatars: store);
+    final state = AppState(avatars: store)
+      // Persist float moves immediately in tests — no debounce timer to leak.
+      ..debounceFloatSaves = false;
     await state.init();
     return state;
   }
@@ -416,6 +418,7 @@ void main() {
           [images[1].id]);
       await state.clearFloatingImages(chat);
       expect(state.active.floatingImages, isEmpty);
+      await state.flushPendingSaves();
     });
 
     test('a float is clamped to somewhere reachable', () async {
@@ -432,6 +435,7 @@ void main() {
       expect(float.x, lessThanOrEqualTo(1));
       expect(float.y, greaterThanOrEqualTo(-1));
       expect(float.width, lessThanOrEqualTo(1600));
+      await state.flushPendingSaves();
     });
 
     test('floats survive a restart and a fork', () async {
@@ -445,6 +449,9 @@ void main() {
       await state.settleFloatingImage(
           chat, state.active.floatingImages.single,
           x: 0.4, rotation: 0.2);
+      // A float's position is saved on a debounce (so a manipulation doesn't
+      // re-encode the store mid-gesture); flush it before reopening the store.
+      await state.flushPendingSaves();
 
       final reopened = await app();
       final restored = reopened.conversationById(chat)!.floatingImages.single;

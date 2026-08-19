@@ -83,6 +83,21 @@ class AppearanceSettingsPage extends StatelessWidget {
               ),
             ),
           ),
+          const Divider(height: 24),
+          // A diagnostic, not a preference (so it is not persisted): overlays two
+          // frame-time graphs — UI thread on top, raster/GPU thread below. A bar
+          // over the green line is a dropped frame. Use it to see *which* thread
+          // is slow when something stutters.
+          SwitchListTile(
+            dense: true,
+            value: state.perfOverlay,
+            onChanged: (_) => state.togglePerfOverlay(),
+            secondary: const Icon(Icons.speed_outlined),
+            title: const Text('Show performance overlay'),
+            subtitle: const Text(
+                'Frame-time graphs for diagnosing stutter — top is UI, bottom '
+                'is the GPU'),
+          ),
         ],
       ),
     );

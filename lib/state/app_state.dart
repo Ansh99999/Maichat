@@ -112,6 +112,37 @@ class AppState extends ChangeNotifier {
   bool get ready => _ready;
   bool get streaming => _streaming;
 
+  /// Whether Flutter's performance overlay is shown over the whole app — a
+  /// diagnostic the user can flip from Appearance settings. Two stacked graphs:
+  /// the top is the UI (build/layout/paint) thread, the bottom is the raster
+  /// (GPU compositing) thread; a bar crossing the green line is a dropped frame.
+  /// Deliberately not persisted — it is a "show me what's slow right now" switch,
+  /// not a preference.
+  bool _perfOverlay = false;
+  bool get perfOverlay => _perfOverlay;
+  void togglePerfOverlay() {
+    _perfOverlay = !_perfOverlay;
+    notifyListeners();
+  }
+
+  /// Whether a float's position is persisted on a debounce (the real-app
+  /// behaviour — see [settleFloatingImage]) or written straight away. Tests turn
+  /// it off so a manipulation leaves no pending timer to trip the test binding.
+  bool debounceFloatSaves = true;
+
+  /// Writes any debounced float position straight away — for a test, or for the
+  /// app being backgrounded before the timer fires.
+  Future<void> flushPendingSaves() async {
+    if (_floatPersist?.isActive ?? false) {
+      _floatPersist!.cancel();
+      _floatPersist = null;
+      if (_writable) await _storage.saveConversations(_conversations);
+    }
+  }
+
+  /// Debounces persisting a float's new position/size — see [settleFloatingImage].
+  Timer? _floatPersist;
+
   /// A human-readable reason the stored data could not be read, or null.
   /// Non-null means the session is read-only until [retryLoad] succeeds.
   String? get loadError => _loadError;
@@ -1498,26 +1529,45 @@ class AppState extends ChangeNotifier {
     double? width,
     double? rotation,
     bool raise = false,
-  }) =>
-      _editConversation(conversationId, (c) {
-        final index = c.floatingImages.indexWhere((f) => f.key == float.key);
-        if (index == -1) return;
-        final stored = c.floatingImages[index];
-        if (x != null) stored.x = FloatingImage.clampFraction(x);
-        if (y != null) stored.y = FloatingImage.clampFraction(y);
-        if (width != null) {
-          stored.width = width
-              .clamp(kFloatingImageMinWidth, kFloatingImageMaxWidth)
-              .toDouble();
-        }
-        if (rotation != null) {
-          stored.rotation = FloatingImage.normaliseRotation(rotation);
-        }
-        // The list's order *is* z-order, so the last one is on top.
-        if (raise && index != c.floatingImages.length - 1) {
-          c.floatingImages.add(c.floatingImages.removeAt(index));
-        }
-      });
+  }) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    final index =
+        conversation.floatingImages.indexWhere((f) => f.key == float.key);
+    if (index == -1) return;
+    final stored = conversation.floatingImages[index];
+    if (x != null) stored.x = FloatingImage.clampFraction(x);
+    if (y != null) stored.y = FloatingImage.clampFraction(y);
+    if (width != null) {
+      stored.width = width
+          .clamp(kFloatingImageMinWidth, kFloatingImageMaxWidth)
+          .toDouble();
+    }
+    if (rotation != null) {
+      stored.rotation = FloatingImage.normaliseRotation(rotation);
+    }
+    // The list's order *is* z-order, so the last one is on top.
+    if (raise && index != conversation.floatingImages.length - 1) {
+      conversation.floatingImages.add(conversation.floatingImages.removeAt(index));
+    }
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    // Persist is **debounced**, not immediate — the one thing a moving float must
+    // not do synchronously. Saving re-encodes the whole conversation store to
+    // JSON, which on a real chat history is a noticeable freeze on the UI thread.
+    // A two-finger manipulation settles several times (the scale recogniser ends
+    // and restarts as fingers land and lift — one of them mid gesture, as the
+    // second finger touches down), so an immediate save meant that cost was paid
+    // *during* the pinch. Coalesced to one save once the hands are off.
+    if (!debounceFloatSaves) {
+      if (_writable) unawaited(_storage.saveConversations(_conversations));
+      return;
+    }
+    _floatPersist?.cancel();
+    _floatPersist = Timer(const Duration(milliseconds: 500), () {
+      if (_writable) unawaited(_storage.saveConversations(_conversations));
+    });
+  }
 
   /// The floats of [conversation] paired with the picture each one draws, in
   /// z-order. A float whose gallery record has gone is skipped rather than drawn

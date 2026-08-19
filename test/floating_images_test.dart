@@ -20,7 +20,10 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
 
   Future<AppState> chatWithFloats({int count = 1}) async {
-    final state = AppState();
+    final state = AppState()
+      // Save float positions immediately in tests, so a gesture leaves no
+      // pending debounce timer for the binding to flag.
+      ..debounceFloatSaves = false;
     // The chat screen holds a startup gate until the store has been read.
     await state.init();
     final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
@@ -49,6 +52,9 @@ void main() {
   Future<void> pumpChat(WidgetTester tester, AppState state) async {
     await tester.binding.setSurfaceSize(const Size(400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    // A settled float persists on a debounce timer; cancel/flush it at teardown
+    // so it does not trip the "timer still pending" check.
+    addTearDown(state.flushPendingSaves);
     await tester.pumpWidget(host(state));
     await tester.pump();
     await tester.pump();
