@@ -173,6 +173,44 @@ void main() {
     );
   });
 
+  testWidgets('a float is captured to a texture for the length of a touch',
+      (tester) async {
+    // The measured fix for the stutter/freeze: transforming a live picture
+    // re-rasterises it every frame, so instead the frame is captured to one GPU
+    // texture and only that is moved/scaled/turned. The capture must be on for
+    // the WHOLE touch (from first finger down to last finger up) — toggling it
+    // per gesture segment would re-capture repeatedly, which is why the first
+    // attempt still stuttered. Off at rest, so the picture stays crisp.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+    final snap = tester.widget<SnapshotWidget>(
+      find
+          .descendant(
+            of: find.byType(FloatingImagesLayer),
+            matching: find.byType(SnapshotWidget),
+          )
+          .first,
+    );
+    expect(snap.controller.allowSnapshotting, isFalse,
+        reason: 'crisp at rest');
+
+    final grip =
+        tester.getCenter(find.byIcon(Icons.close)) + const Offset(0, 40);
+    final gesture = await tester.startGesture(grip);
+    for (var i = 0; i < 4; i++) {
+      await gesture.moveBy(const Offset(8, 6));
+      await tester.pump();
+    }
+    expect(snap.controller.allowSnapshotting, isTrue,
+        reason: 'a single texture while the finger is down');
+
+    await gesture.up();
+    await tester.pump();
+    await tester.pump();
+    expect(snap.controller.allowSnapshotting, isFalse,
+        reason: 'back to live, crisp again once the finger leaves');
+  });
+
   testWidgets('a finger left over from a pinch does not drag it away',
       (tester) async {
     // The intermittent "glitch away on release": lifting two fingers is never

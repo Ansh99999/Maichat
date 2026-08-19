@@ -8,7 +8,6 @@ import 'models/appearance.dart';
 import 'screens/home_screen.dart';
 import 'services/avatar_store.dart';
 import 'state/app_state.dart';
-import 'widgets/frame_stats_hud.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,21 +54,6 @@ class MaiChatApp extends StatelessWidget {
                   fontFamily: appearance.fontFamily,
                 ),
                 home: const HomeScreen(),
-                // Diagnostic read-out floats above everything when enabled from
-                // Appearance settings; a no-op otherwise.
-                builder: (context, child) {
-                  if (!state.frameStats || child == null) return child ?? const SizedBox.shrink();
-                  return Stack(
-                    children: [
-                      child,
-                      Positioned(
-                        left: 8,
-                        top: MediaQuery.of(context).padding.top + 8,
-                        child: const FrameStatsHud(),
-                      ),
-                    ],
-                  );
-                },
               );
             },
           );

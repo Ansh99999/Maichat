@@ -125,36 +125,6 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Diagnostic: overlays a live read-out of the UI-thread and raster-thread
-  /// frame times (avg + worst over the last ~2s), so the actual cost of moving a
-  /// float can be read straight off the device without a debugger. Not persisted.
-  bool _frameStats = false;
-  bool get frameStats => _frameStats;
-  void toggleFrameStats() {
-    _frameStats = !_frameStats;
-    notifyListeners();
-  }
-
-  /// Diagnostic: how a float is drawn *while it is being pinched/rotated*, so the
-  /// candidate strategies can be compared on real hardware with [frameStats] on.
-  /// The device read-out showed doing *less* is cheaper, so the default is the
-  /// plainest path: 0 = plain live transform (the shipped default), 1 = wrap each
-  /// float in its own repaint boundary (measured slower on device — kept only for
-  /// A/B). At rest both are identical. Not persisted.
-  int _floatGestureMode = 0;
-  int get floatGestureMode => _floatGestureMode;
-
-  /// Names line up with [_floatGestureMode].
-  static const List<String> floatGestureModeNames = <String>[
-    'Plain (default)',
-    'Per-float isolation',
-  ];
-  String get floatGestureModeName => floatGestureModeNames[_floatGestureMode];
-  void cycleFloatGestureMode() {
-    _floatGestureMode = (_floatGestureMode + 1) % floatGestureModeNames.length;
-    notifyListeners();
-  }
-
   /// Whether a float's position is persisted on a debounce (the real-app
   /// behaviour — see [settleFloatingImage]) or written straight away. Tests turn
   /// it off so a manipulation leaves no pending timer to trip the test binding.
