@@ -533,13 +533,13 @@ void main() {
       expect(state.active.floatingImages.single.x, greaterThan(0.08));
     });
 
-    testWidgets('a pinch notifies per finger change, never per move',
+    testWidgets('a pinch persists exactly once, when the whole touch ends',
         (tester) async {
-      // A two-finger manipulation cannot cost exactly one write: adding or
-      // lifting a finger makes the recogniser end this gesture and start another
-      // for the pointers still down, and each of those ends settles. What matters
-      // is that it is a couple of writes for the whole pinch rather than one for
-      // every pointer-move, which is what stalled the frames on a device.
+      // The freeze that survived the render fix: settling calls notifyListeners
+      // and schedules a whole-store save, and it used to run on every finger
+      // change during a pinch — periodic freezes, and the mid-manipulation
+      // rebuild is what made the picture shift. Now nothing is written until the
+      // last finger leaves, so a whole two-finger manipulation is one write.
       final state = await chatWithFloats();
       await pumpChat(tester, state);
 
@@ -549,26 +549,26 @@ void main() {
       final centre =
           tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
       final left = await tester.startGesture(centre - const Offset(40, 0));
-      // The second finger arriving reconfigures the gesture: one settle.
       final right = await tester.startGesture(centre + const Offset(40, 0));
-      final afterSecondFinger = notifications;
-      expect(afterSecondFinger, lessThanOrEqualTo(1));
 
       for (var i = 0; i < 20; i++) {
         await left.moveBy(const Offset(-4, -2));
         await right.moveBy(const Offset(4, 2));
         await tester.pump();
       }
-      expect(notifications, afterSecondFinger,
-          reason: 'twenty pointer-moves must not write anything');
-
+      // One finger lifts mid-manipulation — still nothing written.
       await left.up();
+      await tester.pump();
+      expect(notifications, 0,
+          reason: 'a finger lift mid-manipulation must not write');
+
+      // The last finger leaves: exactly one write, now.
       await right.up();
       await tester.pump();
       await tester.pump();
 
-      // Bounded by finger changes (three), not by the twenty moves.
-      expect(notifications, lessThanOrEqualTo(3));
+      expect(notifications, 1,
+          reason: 'the whole touch persists once, at the end');
       expect(state.active.floatingImages.single.width, greaterThan(180));
     });
 
