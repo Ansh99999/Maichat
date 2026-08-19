@@ -140,6 +140,51 @@ void main() {
     expect(after.rotation, isNot(0));
   });
 
+  testWidgets('a pinch scales on the transform, without relaying out the picture',
+      (tester) async {
+    // The resize/rotate freeze: changing the picture's *layout* width every pinch
+    // frame re-rasterised it and its blurred shadow each time. Now the width is
+    // fixed for the gesture and the size rides a transform scale — so the laid-out
+    // box does not change mid-pinch (no relayout, no re-raster), only the painted
+    // rect grows. The real width is committed once, on release.
+    final state = await chatWithFloats();
+    await pumpChat(tester, state);
+    final box = find
+        .descendant(
+          of: find.byType(FloatingImagesLayer),
+          matching: find.byType(RawGestureDetector),
+        )
+        .first;
+
+    final layoutBefore = tester.getSize(box);
+    final paintedBefore = tester.getRect(box);
+
+    final centre =
+        tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
+    final left = await tester.startGesture(centre - const Offset(40, 0));
+    final right = await tester.startGesture(centre + const Offset(40, 0));
+    for (var i = 0; i < 8; i++) {
+      await left.moveBy(const Offset(-6, -3));
+      await right.moveBy(const Offset(6, 3));
+      await tester.pump();
+    }
+
+    // Mid-pinch: the box is the same size it was laid out at (nothing relaid
+    // out), but it is painted larger (the transform scaled it).
+    expect(tester.getSize(box), layoutBefore,
+        reason: 'the picture is not re-laid-out during a pinch');
+    expect(tester.getRect(box).width, greaterThan(paintedBefore.width + 1),
+        reason: 'it grows on the transform instead');
+
+    await left.up();
+    await right.up();
+    await tester.pump();
+    await tester.pump();
+
+    // On release the scale is baked into a real width.
+    expect(state.active.floatingImages.single.width, greaterThan(180));
+  });
+
   testWidgets('resizing stops at the bounds rather than vanishing',
       (tester) async {
     final state = await chatWithFloats();
