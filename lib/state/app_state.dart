@@ -136,19 +136,18 @@ class AppState extends ChangeNotifier {
   }
 
   /// Diagnostic: how a float is drawn *while it is being pinched/rotated*, so the
-  /// three candidate strategies can be compared on real hardware with
-  /// [frameStats] on. 0 = capture to a GPU texture (the shipped default),
-  /// 1 = transform the live image every frame (no texture — the raw cost),
-  /// 2 = draw only a cheap outline while manipulating and drop the photo in on
-  /// release. At rest every mode is identical. Not persisted.
+  /// candidate strategies can be compared on real hardware with [frameStats] on.
+  /// The on-device read-out showed the cost is on the UI thread, so the lever is
+  /// paint isolation: 0 = each float behind its own repaint boundary (the shipped
+  /// default), 1 = no isolation (the raw cost). At rest both are identical. Not
+  /// persisted.
   int _floatGestureMode = 0;
   int get floatGestureMode => _floatGestureMode;
 
   /// Names line up with [_floatGestureMode].
   static const List<String> floatGestureModeNames = <String>[
-    'Texture (default)',
-    'Live image',
-    'Outline preview',
+    'Isolated (default)',
+    'No isolation',
   ];
   String get floatGestureModeName => floatGestureModeNames[_floatGestureMode];
   void cycleFloatGestureMode() {

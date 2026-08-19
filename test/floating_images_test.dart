@@ -173,42 +173,48 @@ void main() {
     );
   });
 
-  testWidgets('a float is captured to a texture while it is manipulated',
+  testWidgets('a finger left over from a pinch does not drag it away',
       (tester) async {
-    // The rotate/zoom raster spike (bottom graph of the perf overlay): a scaled
-    // or rotated layer drops out of the raster cache and its clip, image and
-    // shadow are re-painted every frame. Snapshotting captures the frame to one
-    // texture that the GPU then just transforms — no per-frame re-paint. It must
-    // be on only while fingers are down, so the picture is crisp at rest.
+    // The intermittent "glitch away on release": lifting two fingers is never
+    // perfectly simultaneous, and the last finger slides as the hand leaves. The
+    // scale recogniser would apply that slide as a drag, flinging the picture to
+    // a new spot. Once a gesture has had two fingers, a lone remaining finger
+    // must no longer move it.
     final state = await chatWithFloats();
     await pumpChat(tester, state);
-    final snap = tester.widget<SnapshotWidget>(
-      find
-          .descendant(
-            of: find.byType(FloatingImagesLayer),
-            matching: find.byType(SnapshotWidget),
-          )
-          .first,
-    );
-    expect(snap.controller.allowSnapshotting, isFalse,
-        reason: 'crisp at rest — no snapshot');
+    final frame = find
+        .descendant(
+          of: find.byType(FloatingImagesLayer),
+          matching: find.byType(RawGestureDetector),
+        )
+        .first;
 
     final anchor =
         tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
-    final left = await tester.startGesture(anchor - const Offset(40, 0));
-    final right = await tester.startGesture(anchor + const Offset(40, 0));
-    await left.moveBy(const Offset(-8, -4));
-    await right.moveBy(const Offset(8, 4));
+    final a = await tester.startGesture(anchor - const Offset(40, 0));
+    final b = await tester.startGesture(anchor + const Offset(40, 0));
+    // A small two-finger pinch, so this is unambiguously a two-finger gesture.
+    for (var i = 0; i < 4; i++) {
+      await a.moveBy(const Offset(-4, -2));
+      await b.moveBy(const Offset(4, 2));
+      await tester.pump();
+    }
+    // One finger lifts — the pinch is over.
+    await b.up();
     await tester.pump();
-    expect(snap.controller.allowSnapshotting, isTrue,
-        reason: 'a single texture while it is being manipulated');
+    final centreAfterPinch = tester.getRect(frame).center;
 
-    await left.up();
-    await right.up();
+    // The remaining finger now slides a long way. It must NOT drag the picture.
+    for (var i = 0; i < 10; i++) {
+      await a.moveBy(const Offset(16, 11));
+      await tester.pump();
+    }
+    await a.up();
     await tester.pump();
     await tester.pump();
-    expect(snap.controller.allowSnapshotting, isFalse,
-        reason: 'live and crisp again the moment it is placed');
+
+    expect((tester.getRect(frame).center - centreAfterPinch).distance, lessThan(6),
+        reason: 'the leftover finger must not carry the picture off');
   });
 
   testWidgets('a placed float does not slide away when the fingers leave',
@@ -626,12 +632,14 @@ void main() {
           reason: 'and it is on top afterwards');
     });
 
-    testWidgets('each float is its own small retained layer', (tester) async {
-      // The smooth path: every float's picture is wrapped in its own
-      // RepaintBoundary, so it rasterises once and the compositor just moves that
-      // small texture. There is deliberately no full-screen boundary over the
-      // whole layer any more — that screen-sized texture, re-rasterised per frame,
-      // was the raster-thread stutter.
+    testWidgets('each float is isolated behind its own repaint boundaries',
+        (tester) async {
+      // The cost of moving a float is on the UI thread (re-recording paint), so
+      // in the default "isolated" mode each float carries two repaint boundaries:
+      // an outer one confining that re-record to the float, and an inner one
+      // caching the picture itself. There is deliberately no single boundary over
+      // the whole layer — that screen-sized texture, re-rasterised per frame, was
+      // the old raster-thread stutter. Two floats × two boundaries = four.
       final state = await chatWithFloats(count: 2);
       await pumpChat(tester, state);
 
@@ -639,8 +647,8 @@ void main() {
         of: find.byType(FloatingImagesLayer),
         matching: find.byType(RepaintBoundary),
       );
-      expect(boundaries, findsNWidgets(2),
-          reason: 'one small boundary per float, and no layer-wide one');
+      expect(boundaries, findsNWidgets(4),
+          reason: 'an outer and inner boundary per float, no layer-wide one');
     });
 
     testWidgets('dragging a float does not re-rasterise the chat behind it',
