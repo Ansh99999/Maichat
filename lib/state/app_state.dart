@@ -137,17 +137,17 @@ class AppState extends ChangeNotifier {
 
   /// Diagnostic: how a float is drawn *while it is being pinched/rotated*, so the
   /// candidate strategies can be compared on real hardware with [frameStats] on.
-  /// The on-device read-out showed the cost is on the UI thread, so the lever is
-  /// paint isolation: 0 = each float behind its own repaint boundary (the shipped
-  /// default), 1 = no isolation (the raw cost). At rest both are identical. Not
-  /// persisted.
+  /// The device read-out showed doing *less* is cheaper, so the default is the
+  /// plainest path: 0 = plain live transform (the shipped default), 1 = wrap each
+  /// float in its own repaint boundary (measured slower on device — kept only for
+  /// A/B). At rest both are identical. Not persisted.
   int _floatGestureMode = 0;
   int get floatGestureMode => _floatGestureMode;
 
   /// Names line up with [_floatGestureMode].
   static const List<String> floatGestureModeNames = <String>[
-    'Isolated (default)',
-    'No isolation',
+    'Plain (default)',
+    'Per-float isolation',
   ];
   String get floatGestureModeName => floatGestureModeNames[_floatGestureMode];
   void cycleFloatGestureMode() {

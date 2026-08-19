@@ -632,14 +632,14 @@ void main() {
           reason: 'and it is on top afterwards');
     });
 
-    testWidgets('each float is isolated behind its own repaint boundaries',
+    testWidgets('each float has its own picture boundary, no layer-wide one',
         (tester) async {
-      // The cost of moving a float is on the UI thread (re-recording paint), so
-      // in the default "isolated" mode each float carries two repaint boundaries:
-      // an outer one confining that re-record to the float, and an inner one
-      // caching the picture itself. There is deliberately no single boundary over
-      // the whole layer — that screen-sized texture, re-rasterised per frame, was
-      // the old raster-thread stutter. Two floats × two boundaries = four.
+      // Every float's picture sits behind its own RepaintBoundary so it
+      // rasterises once and the compositor moves that small texture. There is no
+      // single boundary over the whole layer — that screen-sized texture,
+      // re-rasterised per frame, was the old raster-thread stutter. The default
+      // mode adds no extra per-float boundary (it measured slower on device), so
+      // it is exactly one boundary per float.
       final state = await chatWithFloats(count: 2);
       await pumpChat(tester, state);
 
@@ -647,8 +647,8 @@ void main() {
         of: find.byType(FloatingImagesLayer),
         matching: find.byType(RepaintBoundary),
       );
-      expect(boundaries, findsNWidgets(4),
-          reason: 'an outer and inner boundary per float, no layer-wide one');
+      expect(boundaries, findsNWidgets(2),
+          reason: 'one picture boundary per float, and no layer-wide one');
     });
 
     testWidgets('dragging a float does not re-rasterise the chat behind it',
