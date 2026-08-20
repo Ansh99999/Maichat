@@ -59,6 +59,16 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+        getByName("profile") {
+            // Sign the profile build the same way as release, so a profiling
+            // build installs in place over an existing install (no uninstall, no
+            // lost chats) when profiling on a real device.
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
     }
 }
 
