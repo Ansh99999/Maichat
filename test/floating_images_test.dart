@@ -498,13 +498,11 @@ void main() {
     // the drag needs, so the picture cannot be moved at all. A widget test cannot
     // feel jank — so it counts the writes instead.
 
-    testWidgets('a one-finger drag notifies exactly once, at the end',
+    testWidgets('a one-finger drag persists where it lands, not per move',
         (tester) async {
       final state = await chatWithFloats();
       await pumpChat(tester, state);
-
-      var notifications = 0;
-      state.addListener(() => notifications++);
+      final startX = floatOf(state, 'img0').x;
 
       final grip = tester.getCenter(find.byIcon(Icons.close)) +
           const Offset(0, 40);
@@ -513,31 +511,31 @@ void main() {
         await gesture.moveBy(const Offset(6, 5));
         await tester.pump();
       }
-      // Twelve pointer-moves in, nothing has been written: the live transform is
-      // local to the layer.
-      expect(notifications, 0,
-          reason: 'a pointer-move must not rewrite the chat store');
+      // Twelve pointer-moves in, the stored float has not moved: the live
+      // transform is local to the layer, so a pointer-move never writes to the
+      // chat store.
+      expect(floatOf(state, 'img0').x, startX,
+          reason: 'a pointer-move must not rewrite the stored float');
 
       await gesture.up();
       await tester.pump();
       await tester.pump();
 
-      expect(notifications, 1, reason: 'exactly one write, when it settles');
-      expect(state.active.floatingImages.single.x, greaterThan(0.08));
+      // On release the landing position is persisted (once). Note it does NOT
+      // notify listeners — settling a float must not rebuild the whole chat (the
+      // ~18ms UI-thread build a device profile pinned as the jank).
+      expect(floatOf(state, 'img0').x, greaterThan(startX),
+          reason: 'the landing position is saved on release');
     });
 
-    testWidgets('a pinch persists exactly once, when the whole touch ends',
+    testWidgets('a pinch persists only when the whole touch ends',
         (tester) async {
-      // The freeze that survived the render fix: settling calls notifyListeners
-      // and schedules a whole-store save, and it used to run on every finger
-      // change during a pinch — periodic freezes, and the mid-manipulation
-      // rebuild is what made the picture shift. Now nothing is written until the
-      // last finger leaves, so a whole two-finger manipulation is one write.
+      // The float lag a device profile pinned to the UI thread: settling rebuilt
+      // the whole ChatScreen (every message bubble). Now a settle persists the
+      // geometry WITHOUT notifying — and only once, when the last finger leaves.
       final state = await chatWithFloats();
       await pumpChat(tester, state);
-
-      var notifications = 0;
-      state.addListener(() => notifications++);
+      final startWidth = floatOf(state, 'img0').width;
 
       final centre =
           tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
@@ -549,20 +547,19 @@ void main() {
         await right.moveBy(const Offset(4, 2));
         await tester.pump();
       }
-      // One finger lifts mid-manipulation — still nothing written.
+      // One finger lifts mid-manipulation — still nothing persisted.
       await left.up();
       await tester.pump();
-      expect(notifications, 0,
-          reason: 'a finger lift mid-manipulation must not write');
+      expect(floatOf(state, 'img0').width, startWidth,
+          reason: 'a finger lift mid-manipulation must not persist');
 
-      // The last finger leaves: exactly one write, now.
+      // The last finger leaves: persisted once, now.
       await right.up();
       await tester.pump();
       await tester.pump();
 
-      expect(notifications, 1,
+      expect(floatOf(state, 'img0').width, greaterThan(startWidth),
           reason: 'the whole touch persists once, at the end');
-      expect(state.active.floatingImages.single.width, greaterThan(180));
     });
 
     testWidgets('the message list does not rebuild while a float is dragged',

@@ -1551,7 +1551,15 @@ class AppState extends ChangeNotifier {
       conversation.floatingImages.add(conversation.floatingImages.removeAt(index));
     }
     conversation.updatedAt = DateTime.now();
-    notifyListeners();
+    // Deliberately **no** notifyListeners here. An on-device profile (DevTools,
+    // real phone) showed the float lag is a UI-thread *Build* spike (~18 ms),
+    // not the GPU — and its cause is this settle rebuilding the whole ChatScreen,
+    // i.e. re-building every visible message bubble (markdown/HTML) just because
+    // a picture moved. The floating layer already tracks the live geometry
+    // itself and is showing the settled position; the store is updated for
+    // persistence and the next open. So a float settling must not rebuild the
+    // thread. (Adding/removing a float still notifies — see floatImage /
+    // unfloatImage — because the layer must add or drop a child then.)
     // Persist is **debounced**, not immediate — the one thing a moving float must
     // not do synchronously. Saving re-encodes the whole conversation store to
     // JSON, which on a real chat history is a noticeable freeze on the UI thread.
