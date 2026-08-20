@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/character.dart';
+import '../../services/jank_logger.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import 'gallery_screen.dart';
@@ -95,6 +96,7 @@ class ChatGalleryScreen extends StatelessWidget {
 /// Opens the gallery for a chat: straight into the album in a one-to-one thread,
 /// or the "whose gallery?" list when several characters are involved.
 void openChatGallery(BuildContext context, String conversationId) {
+  JankLogger.instance.breadcrumb('chat gallery opened');
   final state = context.read<AppState>();
   final conversation = state.conversationById(conversationId);
   final members = conversation?.memberIds ?? const <String>[];

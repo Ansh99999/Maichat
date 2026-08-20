@@ -9,6 +9,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
+import '../services/jank_logger.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/avatar_swipe_sheet.dart';
@@ -76,10 +77,12 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    JankLogger.instance.breadcrumb('chat screen opened');
     _scroll.addListener(_onScroll);
     // Never pop the soft keyboard just because the chat opened — drop any focus
     // carried in from the previous screen once the first frame is laid out.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      JankLogger.instance.breadcrumb('chat first frame built');
       if (mounted) FocusManager.instance.primaryFocus?.unfocus();
     });
   }

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/gallery_image.dart';
 import '../../state/app_state.dart';
+import '../../services/jank_logger.dart';
 import '../../widgets/avatar_image.dart';
 import 'gallery_actions.dart';
 
@@ -172,6 +173,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Future<void> _sendToChat(AppState state, GalleryImage image) async {
     final conversationId = widget.conversationId;
     if (conversationId == null) return;
+    JankLogger.instance.breadcrumb('float added from gallery viewer');
     await state.floatImage(conversationId, image.id);
     if (!mounted) return;
     // Straight back to the chat, where the picture now is — staying here would

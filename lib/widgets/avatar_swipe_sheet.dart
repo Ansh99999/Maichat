@@ -3,6 +3,7 @@ import 'package:provider/provider.dart' hide Provider;
 
 import '../models/character.dart';
 import '../models/conversation.dart';
+import '../services/jank_logger.dart';
 import '../state/app_state.dart';
 import 'avatar_image.dart';
 
@@ -83,6 +84,7 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
     // Any picture the app can draw can float — a gallery entry is not a
     // prerequisite, so an avatar that arrived on an imported card works too.
     // `floatPictureRef` ties it to the gallery record when there is one.
+    JankLogger.instance.breadcrumb('float added from avatar sheet');
     await state.floatPictureRef(widget.conversationId, ref);
     if (!mounted) return;
     Navigator.of(context).pop();
