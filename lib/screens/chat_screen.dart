@@ -9,6 +9,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
+import '../services/float_overlay_channel.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/avatar_swipe_sheet.dart';
@@ -16,6 +17,7 @@ import '../widgets/character_avatar.dart';
 import '../widgets/floating_images_layer.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
+import '../widgets/native_floating_images.dart';
 import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
 import 'chat_export.dart';
@@ -328,11 +330,17 @@ class _ChatScreenState extends State<ChatScreen> {
                             // Pictures pinned over the thread. Above the messages
                             // and below the composer, so a float can be moved
                             // anywhere in the conversation without ever covering
-                            // the send bar.
+                            // the send bar. On Android the floats are drawn by a
+                            // native overlay (GPU-composited transforms → smooth
+                            // pinch); everywhere else by the Flutter layer.
                             Positioned.fill(
-                              child: FloatingImagesLayer(
-                                conversationId: conversation.id,
-                              ),
+                              child: floatOverlaySupported
+                                  ? NativeFloatingImages(
+                                      conversationId: conversation.id,
+                                    )
+                                  : FloatingImagesLayer(
+                                      conversationId: conversation.id,
+                                    ),
                             ),
                             // Sits at the bottom-right of the thread, just above
                             // the composer, and only while scrolled well up.
