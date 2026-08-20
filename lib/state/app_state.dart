@@ -19,6 +19,7 @@ import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../services/avatar_store.dart';
 import '../services/gallery_group.dart';
+import '../services/jank_logger.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
 import '../services/model_context.dart';
@@ -122,6 +123,19 @@ class AppState extends ChangeNotifier {
   bool get perfOverlay => _perfOverlay;
   void togglePerfOverlay() {
     _perfOverlay = !_perfOverlay;
+    notifyListeners();
+  }
+
+  /// **Temporary.** Records janky frames + a breadcrumb trail to a downloadable
+  /// log, so a real device can say whether a stutter is UI-thread (build) or GPU
+  /// (raster) and what was running — see [JankLogger]. Not persisted.
+  bool get jankLogging => JankLogger.instance.isOn;
+  Future<void> toggleJankLogging() async {
+    if (JankLogger.instance.isOn) {
+      await JankLogger.instance.stop();
+    } else {
+      await JankLogger.instance.start();
+    }
     notifyListeners();
   }
 
@@ -1573,6 +1587,7 @@ class AppState extends ChangeNotifier {
     }
     _floatPersist?.cancel();
     _floatPersist = Timer(const Duration(milliseconds: 500), () {
+      JankLogger.instance.breadcrumb('float settle → save all conversations');
       if (_writable) unawaited(_storage.saveConversations(_conversations));
     });
   }
@@ -1892,6 +1907,7 @@ class AppState extends ChangeNotifier {
     _moveToTop(conversation);
     _streaming = true;
     _stopRequested = false;
+    JankLogger.instance.activity('streaming');
     notifyListeners();
 
     // Everything the model sent as message text, tags included; the split into
@@ -1961,6 +1977,7 @@ class AppState extends ChangeNotifier {
     } finally {
       _streaming = false;
       _stopRequested = false;
+      JankLogger.instance.activity('idle');
       conversation.updatedAt = DateTime.now();
       notifyListeners();
       await _saveConversations();

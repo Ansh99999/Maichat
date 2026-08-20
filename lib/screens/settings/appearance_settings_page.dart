@@ -7,6 +7,7 @@ import '../../widgets/color_picker.dart';
 import '../../widgets/font_picker_row.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
+import 'jank_logs_page.dart';
 
 /// How the app colours itself: light/dark mode and whether to borrow the
 /// system's Material You palette. Kept deliberately compact — each of the three
@@ -97,6 +98,31 @@ class AppearanceSettingsPage extends StatelessWidget {
             subtitle: const Text(
                 'Frame-time graphs for diagnosing stutter — top is UI, bottom '
                 'is the GPU'),
+          ),
+          // Temporary diagnostic: record over-budget frames + a breadcrumb trail
+          // to a downloadable log, so a real device can say whether a stutter is
+          // the UI thread (build) or the GPU (raster), and what was running.
+          SwitchListTile(
+            dense: true,
+            value: state.jankLogging,
+            onChanged: (_) => state.toggleJankLogging(),
+            secondary: const Icon(Icons.bug_report_outlined),
+            title: const Text('Record jank logs'),
+            subtitle: const Text(
+                'Catches stutters and freezes as they happen — then open the '
+                'log below and send it over'),
+          ),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.description_outlined),
+            title: const Text('Jank logs'),
+            subtitle: const Text('View, copy or save the recorded frames'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const JankLogsPage(),
+              ),
+            ),
           ),
         ],
       ),
