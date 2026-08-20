@@ -87,6 +87,26 @@ jobs:
           path: build/app/outputs/flutter-apk/MaiChat-*.apk
           if-no-files-found: error
 
+      - name: Build profile APK
+        # A profile build keeps the Dart VM Service open so DevTools can attach
+        # and record a real performance timeline on-device — at near-release
+        # speed (unlike a debug build). Used to diagnose the floating-picture
+        # pinch on the actual phone.
+        run: flutter build apk --profile
+
+      - name: Rename profile APK
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          mv build/app/outputs/flutter-apk/app-profile.apk \
+             "build/app/outputs/flutter-apk/MaiChat-${VERSION}-profile.apk"
+
+      - name: Upload profile APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaiChat-profile-apk
+          path: build/app/outputs/flutter-apk/MaiChat-*-profile.apk
+          if-no-files-found: error
+
       - name: Attach APK to release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
