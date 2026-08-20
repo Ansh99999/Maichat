@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- MaiChat's seed colour, matching the fallback theme in main.dart. -->
-    <color name="ic_launcher_background">#7C5CFF</color>
+    <!-- Lavender behind the app-logo foreground, sampled from the artwork so
+         the adaptive-icon bleed/parallax edges blend into the picture. -->
+    <color name="ic_launcher_background">#D4C0EE</color>
 </resources>
