@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
@@ -13,7 +12,6 @@ import android.graphics.Path
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import kotlin.math.atan2
 import kotlin.math.hypot
@@ -142,14 +140,17 @@ class FloatOverlayView(context: Context) : FrameLayout(context) {
     private var moved = false
     private val touchSlop = (8f * resources.displayMetrics.density)
 
-    private fun focal(e: MotionEvent): FloatArray {
+    private fun focal(e: MotionEvent, exclude: Int = -1): FloatArray {
         var sx = 0f
         var sy = 0f
-        val n = e.pointerCount
-        for (i in 0 until n) {
+        var n = 0
+        for (i in 0 until e.pointerCount) {
+            if (i == exclude) continue
             sx += e.getX(i)
             sy += e.getY(i)
+            n++
         }
+        if (n == 0) return floatArrayOf(e.getX(0), e.getY(0))
         return floatArrayOf(sx / n, sy / n)
     }
 
@@ -185,7 +186,7 @@ class FloatOverlayView(context: Context) : FrameLayout(context) {
                 return true
             }
 
-            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+            MotionEvent.ACTION_POINTER_DOWN -> {
                 val f = focal(e)
                 lastFocalX = f[0]
                 lastFocalY = f[1]
@@ -197,6 +198,17 @@ class FloatOverlayView(context: Context) : FrameLayout(context) {
                     startScale = v.scaleX
                     startRotationDeg = v.rotation
                 }
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                // Recompute the focal point WITHOUT the finger that is leaving —
+                // otherwise the next move measures its delta against the old
+                // midpoint and the picture jumps toward whichever finger stayed.
+                // That was the "release shift".
+                val f = focal(e, e.actionIndex)
+                lastFocalX = f[0]
+                lastFocalY = f[1]
                 return true
             }
 
@@ -286,18 +298,11 @@ class FloatView(
     }
     private val clipPath = Path()
 
-    init {
-        // A hardware layer: the bitmap rasterises once and the compositor moves,
-        // scales and rotates that texture — the whole reason this is smooth.
-        setLayerType(LAYER_TYPE_HARDWARE, null)
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, o: Outline) {
-                o.setRoundRect(0, 0, view.width, view.height, 12f * overlay.dpr)
-            }
-        }
-        elevation = 8f * overlay.dpr
-        clipToOutline = false // so the ✕ badge is not clipped by the corners
-    }
+    // No forced hardware layer, no elevation shadow: a plain view's drawing is
+    // cached in its RenderNode, and translation/scale/rotation are applied by the
+    // compositor to that cached node with no re-draw — cheap. (An elevation
+    // shadow is re-projected every frame a view transforms, which is a per-frame
+    // cost we don't want during a pinch.)
 
     /** Lay out at the float's resting centre/size/rotation and clear any live
      *  transform. Skipped while [gesturing] (the overlay guards that). */
@@ -330,7 +335,6 @@ class FloatView(
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         pivotX = w / 2f
         pivotY = h / 2f
-        invalidateOutline()
     }
 
     override fun onDraw(canvas: Canvas) {

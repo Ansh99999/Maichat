@@ -4,6 +4,7 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.widget.FrameLayout
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -26,6 +27,14 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var overlay: FloatOverlayView? = null
     private var floatChannel: MethodChannel? = null
+
+    // Render Flutter into a TextureView, not the default SurfaceView. A native
+    // view (the float overlay) laid over a Flutter SurfaceView pulls the whole
+    // window into GPU composition — which is why even scrolling went laggy once
+    // the overlay was present. A TextureView composites with sibling views the
+    // normal way, so the overlay costs only itself. This is the documented mode
+    // for putting Android views over Flutter.
+    override fun getRenderMode(): RenderMode = RenderMode.texture
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
