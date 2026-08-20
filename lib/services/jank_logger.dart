@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/scheduler.dart';
 import 'package:path_provider/path_provider.dart';
@@ -23,9 +24,13 @@ class JankLogger {
   JankLogger._();
   static final JankLogger instance = JankLogger._();
 
-  /// A frame is "janky" when either phase crosses this. 16.7ms is one frame at
-  /// 60Hz; 16 is a hair conservative.
-  static const double budgetMs = 16.0;
+  /// A frame is "janky" when either phase crosses this — the device's real
+  /// per-frame budget. Set from the display refresh rate on [start] (≈11ms on a
+  /// 90Hz panel, ≈8ms on 120Hz), because a fixed 16ms (60Hz) budget silently
+  /// hid every dropped frame on this high-refresh phone — which is exactly why
+  /// a drag that *felt* laggy looked "clean" in the log. Defaults to 16 until
+  /// the rate is known.
+  static double budgetMs = 16.0;
 
   /// Above this a dropped frame is really a freeze, and is called out on its own.
   static const double freezeMs = 100.0;
@@ -70,6 +75,16 @@ class JankLogger {
     _events.clear();
     _crumbs.clear();
     _framesSeen = 0;
+    // Calibrate the jank threshold to the panel's real refresh rate.
+    try {
+      final views = ui.PlatformDispatcher.instance.views;
+      if (views.isNotEmpty) {
+        final hz = views.first.display.refreshRate;
+        if (hz > 30) budgetMs = 1000.0 / hz;
+      }
+    } catch (_) {
+      // Keep the 16ms default if the rate can't be read.
+    }
     SchedulerBinding.instance.addTimingsCallback(_onTimings);
     _crumb('logging started');
     // Open the backing file lazily; a diagnostic must never throw.
@@ -189,7 +204,8 @@ class JankLogger {
     b.writeln('started: ${_startedAt?.toIso8601String() ?? '-'}');
     b.writeln('generated: ${DateTime.now().toIso8601String()}');
     b.writeln('frames seen: $_framesSeen');
-    b.writeln('budget: ${budgetMs}ms/frame; freeze >= ${freezeMs}ms');
+    b.writeln('budget: ${budgetMs.toStringAsFixed(1)}ms/frame; '
+        'freeze >= ${freezeMs.toStringAsFixed(0)}ms');
     b.writeln('janky frames: ${s.jankyFrames} (freezes: ${s.freezes})');
     b.writeln('worst build: ${s.worstBuildMs.toStringAsFixed(1)}ms  '
         'worst raster: ${s.worstRasterMs.toStringAsFixed(1)}ms  '
