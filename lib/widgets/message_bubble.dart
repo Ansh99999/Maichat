@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/message.dart';
+import '../services/jank_logger.dart';
 import 'character_avatar.dart';
 import 'message_html.dart';
 import 'message_markdown.dart';
@@ -106,6 +107,7 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    JankLogger.instance.noteBubbleBuild();
     final scheme = Theme.of(context).colorScheme;
     final isUser = message.isUser;
     final style = ui.avatarFor(isUser);

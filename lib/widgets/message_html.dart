@@ -1,10 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/text_wrap.dart';
+import '../services/jank_logger.dart';
 
 /// Colours + base size for the HTML renderer, mirroring the ChatInterface text
 /// options so an HTML message matches a plain one. [wraps] carries the user's
@@ -287,18 +289,79 @@ class MessageHtml extends StatefulWidget {
   State<MessageHtml> createState() => _MessageHtmlState();
 }
 
-class _MessageHtmlState extends State<MessageHtml> {
-  Widget? _built;
+/// Caps how many *expensive* flutter_html renders happen in a single frame,
+/// across every message on screen. Opening a chat used to build a whole
+/// screenful of HTML bubbles in one frame — a ~600ms UI-thread freeze on a real
+/// device (measured). Spreading them over a few frames keeps any one frame off
+/// the freeze cliff. Under light load — a single streaming message updating —
+/// the budget is never reached, so that path is unchanged (no placeholder, no
+/// flash, no extra frame).
+class _HtmlFrameBudget {
+  static const int _perFrame = 3;
+  static int _left = _perFrame;
+  static bool _hooked = false;
 
-  @override
-  void didUpdateWidget(MessageHtml old) {
-    super.didUpdateWidget(old);
-    if (old.text != widget.text || old.style != widget.style) _built = null;
+  // Reset the allowance at each frame boundary. A persistent frame callback runs
+  // on every frame that happens but never *schedules* one, so this adds no idle
+  // cost (unlike a game-loop). Registered once, lazily, the first time a budget
+  // is requested.
+  static void _hook() {
+    if (_hooked) return;
+    _hooked = true;
+    SchedulerBinding.instance.addPersistentFrameCallback((_) {
+      _left = _perFrame;
+    });
   }
 
+  static bool take() {
+    _hook();
+    if (_left <= 0) return false;
+    _left--;
+    return true;
+  }
+}
+
+class _MessageHtmlState extends State<MessageHtml> {
+  Widget? _built;
+  String? _builtText;
+  HtmlMessageStyle? _builtStyle;
+  bool _scheduled = false;
+
+  bool get _fresh =>
+      _built != null &&
+      _builtText == widget.text &&
+      _builtStyle == widget.style;
+
   @override
-  Widget build(BuildContext context) =>
-      _built ??= _html(widget.text, widget.style);
+  Widget build(BuildContext context) {
+    if (_fresh) return _built!;
+    if (_HtmlFrameBudget.take()) {
+      JankLogger.instance.noteHtmlParse();
+      _built = _html(widget.text, widget.style);
+      _builtText = widget.text;
+      _builtStyle = widget.style;
+      return _built!;
+    }
+    // Over this frame's budget: try again next frame. Meanwhile show the last
+    // rich render if there is one (so a streaming update never flashes), else a
+    // cheap text stand-in that reserves roughly the right height.
+    if (!_scheduled) {
+      _scheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scheduled = false;
+        if (mounted && !_fresh) setState(() {});
+      });
+    }
+    return _built ??
+        Text(
+          widget.text,
+          style: TextStyle(
+            color: widget.style.base,
+            fontSize: widget.style.fontSize,
+            height: 1.35,
+          ),
+        );
+  }
 }
 
 Widget _html(String text, HtmlMessageStyle s) {

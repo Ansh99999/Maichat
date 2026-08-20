@@ -43,6 +43,21 @@ class JankLogger {
   DateTime? _startedAt;
   int _framesSeen = 0;
 
+  /// Running totals of message-bubble builds and (uncached) flutter_html parses.
+  /// Recorded on each jank event so the *delta* between two events shows how much
+  /// of a spike frame was bubbles building / HTML being parsed — the decisive
+  /// test of whether the chat-open freeze is flutter_html volume or something
+  /// else (an image decode relaying out).
+  int _bubbleBuilds = 0;
+  int _htmlParses = 0;
+  void noteBubbleBuild() {
+    if (_on) _bubbleBuilds++;
+  }
+
+  void noteHtmlParse() {
+    if (_on) _htmlParses++;
+  }
+
   File? _file;
   Timer? _flush;
   bool _dirty = false;
@@ -111,6 +126,8 @@ class JankLogger {
           totalMs: t.totalSpan.inMicroseconds / 1000.0,
           activity: _activity,
           crumb: _crumbs.isEmpty ? '' : _crumbs.last.label,
+          bubbleBuilds: _bubbleBuilds,
+          htmlParses: _htmlParses,
         ));
         if (_events.length > _maxEvents) _events.removeAt(0);
         _dirty = true;
@@ -180,10 +197,13 @@ class JankLogger {
     b.writeln('');
     b.writeln('legend: BUILD = UI thread (widget/layout cost); '
         'RASTER = GPU thread (paint/compositing cost).');
+    b.writeln('bubbles/parses are running totals — the JUMP between two rows is '
+        'how many message bubbles built / HTML strings were parsed in that '
+        'spike. A big parse jump on the freeze row = flutter_html is the cost.');
     b.writeln('');
     b.writeln('# janky frames (oldest first)');
     b.writeln('time                          frame     build   raster    total  '
-        ' what');
+        ' bubbles  parses  what');
     for (final e in _events) {
       final freeze =
           (e.buildMs >= freezeMs || e.rasterMs >= freezeMs) ? '  <== FREEZE' : '';
@@ -191,7 +211,9 @@ class JankLogger {
           '${e.frame.toString().padLeft(7)}  '
           '${e.buildMs.toStringAsFixed(1).padLeft(6)}  '
           '${e.rasterMs.toStringAsFixed(1).padLeft(6)}  '
-          '${e.totalMs.toStringAsFixed(1).padLeft(7)}   '
+          '${e.totalMs.toStringAsFixed(1).padLeft(7)}  '
+          '${e.bubbleBuilds.toString().padLeft(7)}  '
+          '${e.htmlParses.toString().padLeft(6)}  '
           '${e.activity}${e.crumb.isEmpty ? '' : ' | ${e.crumb}'}$freeze');
     }
     b.writeln('');
@@ -213,6 +235,8 @@ class JankEvent {
     required this.totalMs,
     required this.activity,
     required this.crumb,
+    this.bubbleBuilds = 0,
+    this.htmlParses = 0,
   });
 
   final DateTime at;
@@ -222,6 +246,8 @@ class JankEvent {
   final double totalMs;
   final String activity;
   final String crumb;
+  final int bubbleBuilds;
+  final int htmlParses;
 
   bool get isFreeze =>
       buildMs >= JankLogger.freezeMs || rasterMs >= JankLogger.freezeMs;
