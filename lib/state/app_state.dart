@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -26,6 +27,7 @@ import '../services/model_context.dart';
 import '../services/prompt_builder.dart';
 import '../services/reasoning.dart';
 import '../services/storage.dart';
+import '../services/storage_report.dart';
 import '../services/tokenizer.dart';
 import '../services/update_service.dart';
 import '../services/world_info.dart';
@@ -1012,6 +1014,86 @@ class AppState extends ChangeNotifier {
         ...c.floatingImages.map((f) => f.imageRef),
       ],
     ]);
+  }
+
+  /// Where picture files live, once resolved — used by the Storage screen to
+  /// list and size them. Null when the platform never told us where to put them.
+  Directory? get imageDirectory => _avatars?.directory ?? avatarDirectory;
+
+  /// Every picture file on disk with its size and mtime, largest first — the
+  /// raw material behind the Storage screen's Images category and its grid.
+  Future<List<ImageFileStat>> imageFiles() async {
+    final dir = imageDirectory;
+    if (dir == null || !dir.existsSync()) return const [];
+    final files = <ImageFileStat>[];
+    try {
+      for (final entity in dir.listSync()) {
+        if (entity is! File) continue;
+        final stat = entity.statSync();
+        files.add((
+          name: entity.uri.pathSegments.last,
+          bytes: stat.size,
+          modified: stat.modified,
+        ));
+      }
+    } catch (error) {
+      debugPrint('MaiChat: could not list picture files ($error)');
+    }
+    files.sort((a, b) => b.bytes.compareTo(a.bytes));
+    return files;
+  }
+
+  /// The whole storage picture behind Settings ▸ Storage: prefs blobs bucketed
+  /// by category plus the picture files on disk (the bulk, invisible to prefs).
+  Future<StorageReport> storageReport() async {
+    final prefsUsage = await _storage.usage();
+    final images = await imageFiles();
+    return StorageReport.build(
+      prefsUsage: prefsUsage,
+      imageFiles: images,
+      itemCounts: {
+        StorageCategory.chats: _conversations.length,
+        StorageCategory.characters: _characters.length,
+        StorageCategory.lorebooks: _lorebooks.length,
+        StorageCategory.presets: _presets.length,
+        StorageCategory.gallery: _gallery.length,
+      },
+    );
+  }
+
+  /// Deletes the named picture files. This is the escape hatch for a store that
+  /// has grown out of proportion, so it deletes the *file* directly and does not
+  /// chase down references — a chat background or avatar pointing at a deleted
+  /// file simply falls back to nothing, which is exactly what the on-screen
+  /// caution ("May affect your chat history") warns about. A referenced file is
+  /// never removed by the periodic sweep, so this is the only way to reclaim one.
+  Future<void> deleteImageFiles(Iterable<String> names) async {
+    final dir = imageDirectory;
+    if (dir == null || !_writable) return;
+    var removed = false;
+    for (final name in names) {
+      // Never let a name climb out of the pictures directory.
+      if (name.isEmpty || name.contains('/') || name.contains('\\')) continue;
+      final file = File('${dir.path}/$name');
+      try {
+        if (file.existsSync()) {
+          file.deleteSync();
+          removed = true;
+        }
+      } catch (error) {
+        debugPrint('MaiChat: could not delete a picture file ($error)');
+      }
+    }
+    if (removed) notifyListeners();
+  }
+
+  /// Drops the rebuild-from-scratch caches (model lists, Discover state). Safe:
+  /// nothing the user authored is lost.
+  Future<void> clearCaches() async {
+    if (!_writable) return;
+    _modelCache.clear();
+    await _storage.clearCache();
+    notifyListeners();
   }
 
   /// Flips a character's starred flag — the pin-to-top action.

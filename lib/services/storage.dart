@@ -333,6 +333,15 @@ class Storage {
   Future<void> saveModelCache(Map<String, List<String>> cache) async =>
       (await _prefs).setString(_modelCacheKey, jsonEncode(cache));
 
+  /// Drops the entries that are only a performance cache and cost nothing to
+  /// rebuild: the per-provider model lists and the Discover browsing state. The
+  /// "Clear cache" action on the Storage screen calls this.
+  Future<void> clearCache() async {
+    final prefs = await _prefs;
+    await prefs.remove(_modelCacheKey);
+    await prefs.remove(_discoverKey);
+  }
+
   /// The app-wide tokenizer choice (OpenAI / Anthropic / Custom + encoding).
   Future<TokenizerConfig> loadTokenizerConfig() async {
     final raw = (await _prefs).getString(_tokenizerKey);

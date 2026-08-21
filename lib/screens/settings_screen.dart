@@ -7,6 +7,7 @@ import 'settings/appearance_settings_page.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/providers_settings_page.dart';
 import 'settings/setting_anchors.dart';
+import 'settings/storage_settings_page.dart';
 
 /// The settings hub, laid out the Android way: a search bar that jumps to any
 /// individual setting, then a short list of sections you drill into.
@@ -45,9 +46,15 @@ class SettingsScreen extends StatelessWidget {
             onTap: () => _open(context, const ChatInterfaceSettingsPage()),
           ),
           _SectionTile(
+            icon: Icons.sd_storage_outlined,
+            title: 'Storage',
+            subtitle: 'Images, chats and cached data',
+            onTap: () => _open(context, const StorageSettingsPage()),
+          ),
+          _SectionTile(
             icon: Icons.info_outline,
             title: 'About',
-            subtitle: 'Version ${AboutSettingsPage.version} · Storage',
+            subtitle: 'Version ${AboutSettingsPage.version}',
             onTap: () => _open(context, const AboutSettingsPage()),
           ),
         ],
@@ -273,9 +280,10 @@ const List<_SearchEntry> _searchIndex = [
   ),
   _SearchEntry(
     title: 'Storage',
-    section: 'About',
+    section: 'Storage',
     icon: Icons.sd_storage_outlined,
-    keywords: 'data privacy where saved unencrypted',
+    keywords: 'data space usage size images pictures chats cache delete clean '
+        'manage where saved unencrypted privacy',
     builder: _storagePage,
   ),
   _SearchEntry(
@@ -311,8 +319,7 @@ Widget _chatColoursPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
 Widget _groupChatsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.groupChats);
-Widget _storagePage() =>
-    const AboutSettingsPage(highlight: SettingAnchor.storage);
+Widget _storagePage() => const StorageSettingsPage();
 Widget _versionPage() =>
     const AboutSettingsPage(highlight: SettingAnchor.version);
 

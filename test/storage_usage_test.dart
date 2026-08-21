@@ -1,6 +1,4 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:maichat/screens/settings/about_settings_page.dart';
 import 'package:maichat/services/storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,15 +15,17 @@ void main() {
     expect(usage['conversations'], 200);
   });
 
-  testWidgets('About shows what the store is using', (tester) async {
+  test('clearCache drops only the rebuildable cache keys', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
-      'flutter.characters': 'x' * (3 * 1024 * 1024),
+      'flutter.modelCache': '{}',
+      'flutter.discover': '{}',
+      'flutter.conversations': 'keep me',
     });
-    await tester.pumpWidget(
-      const MaterialApp(home: AboutSettingsPage()),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Using 3.0 MB'), findsOneWidget);
-    expect(find.textContaining('characters · 3.0 MB'), findsOneWidget);
+    await Storage().clearCache();
+    final usage = await Storage().usage();
+    expect(usage.containsKey('modelCache'), isFalse);
+    expect(usage.containsKey('discover'), isFalse);
+    expect(usage['conversations'], isNotNull);
   });
 }
+
