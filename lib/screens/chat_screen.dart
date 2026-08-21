@@ -847,16 +847,17 @@ class _ChatBackground extends StatelessWidget {
     if (provider == null) return const SizedBox.shrink();
     return RepaintBoundary(
       // Its own layer, so moving a floating picture over the chat re-records the
-      // body's display list without re-rasterising this background (and its
-      // `Opacity` save-layer) every frame.
+      // body's display list without re-rasterising this background every frame.
       child: IgnorePointer(
-        child: Opacity(
-          opacity: opacity.clamp(0.0, 1.0),
-          child: Image(
-            image: provider,
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => const SizedBox.shrink(),
-          ),
+        // The fade is applied through Image's own `opacity` (a paint-level alpha
+        // on the bitmap), NOT an `Opacity` widget — the widget forces an
+        // offscreen save-layer for the whole full-screen image, which is the
+        // expensive way to fade. Same look, cheaper to draw.
+        child: Image(
+          image: provider,
+          fit: BoxFit.cover,
+          opacity: AlwaysStoppedAnimation<double>(opacity.clamp(0.0, 1.0)),
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
         ),
       ),
     );

@@ -83,14 +83,13 @@ void main() {
 
     final image = find.byType(Image);
     expect(image, findsOneWidget);
-    expect(tester.widget<Image>(image).fit, BoxFit.cover);
+    final widget = tester.widget<Image>(image);
+    expect(widget.fit, BoxFit.cover);
     // The fade is the point: a photograph at full strength behind running text
-    // cannot be read over.
-    final opacity = find.ancestor(
-      of: image,
-      matching: find.byType(Opacity),
-    );
-    expect(tester.widget<Opacity>(opacity.first).opacity, 0.3);
+    // cannot be read over. It is applied through the Image's own `opacity`
+    // (a cheap paint-level alpha), not an `Opacity` widget (which forces an
+    // expensive full-screen save-layer).
+    expect(widget.opacity?.value, 0.3);
   });
 
   testWidgets('no background means no picture layer at all', (tester) async {
