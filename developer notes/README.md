@@ -14,3 +14,15 @@ learned this / do not regress this" layer underneath it.
   floating-picture drag/pinch/scroll lag was diagnosed and fixed on a real
   device. **Read before touching the float layer, the chat background, or
   message rendering.**
+- [prompt-wire-and-storage.md](prompt-wire-and-storage.md) — the
+  one-leading-`system`-message wire rule (verify at the wire), the base64-in-prefs
+  OOM story + `prefs_repair`, pictures-are-files, and render-cost facts.
+- [discover-source-contracts.md](discover-source-contracts.md) — reverse-engineered
+  API contracts for every Discover source, the Cloudflare-clearance replay, and
+  what can't be verified from the dev host.
+- [chat-portability-formats.md](chat-portability-formats.md) — cross-app chat
+  import/export format facts and the one-file-three-apps trick.
+- [feature-notes-and-test-traps.md](feature-notes-and-test-traps.md) — per-feature
+  gotchas (per-chat overrides, lorebooks, group chats, gallery) and the recurring
+  Flutter/test traps.
+
