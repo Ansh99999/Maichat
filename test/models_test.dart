@@ -377,23 +377,29 @@ void main() {
       expect(FloatingImage.normaliseRotation(double.nan), 0);
     });
 
-    test('a chat carries its floats and avatar choices through a fork', () {
+    test('avatar choices persist; floats are ephemeral but copied on a fork',
+        () {
       final original = Conversation.empty()
         ..avatarOverrides['sumire'] = 'local:two.png'
         ..floatingImages.add(FloatingImage(imageId: 'img-1', x: 0.3));
 
+      // Floats live in memory only — deliberately not written to disk, so a
+      // load of the store has none (they vanish when the app is fully closed).
       final restored = Conversation.fromJson(original.toJson());
       expect(restored.avatarOverrides, {'sumire': 'local:two.png'});
-      expect(restored.floatingImages.single.imageId, 'img-1');
+      expect(restored.floatingImages, isEmpty,
+          reason: 'floats are not serialized');
 
-      final fork = restored.copyAs(id: 'fork');
+      // But a fork within the session deep-copies them (copyAs is field-blind,
+      // and a dropped field here has bitten before).
+      final fork = original.copyAs(id: 'fork');
       expect(fork.avatarOverrides, {'sumire': 'local:two.png'});
       expect(fork.floatingImages.single.x, 0.3);
       // Copied, not shared: the two threads must be able to diverge.
       fork.floatingImages.single.x = 0.9;
       fork.avatarOverrides['sumire'] = 'local:three.png';
-      expect(restored.floatingImages.single.x, 0.3);
-      expect(restored.avatarOverrides['sumire'], 'local:two.png');
+      expect(original.floatingImages.single.x, 0.3);
+      expect(original.avatarOverrides['sumire'], 'local:two.png');
     });
 
     test('an empty avatar choice is dropped rather than hiding a picture', () {

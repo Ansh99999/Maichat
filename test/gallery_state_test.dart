@@ -438,7 +438,8 @@ void main() {
       await state.flushPendingSaves();
     });
 
-    test('floats survive a restart and a fork', () async {
+    test('floats are in-memory: dropped on a restart, but carried on a fork',
+        () async {
       final state = await app();
       final image = (await state.addGalleryImages([_png])).single;
       final character = Character(id: 'c', name: 'Sumire', firstMes: 'Hi.');
@@ -449,19 +450,17 @@ void main() {
       await state.settleFloatingImage(
           chat, state.active.floatingImages.single,
           x: 0.4, rotation: 0.2);
-      // A float's position is saved on a debounce (so a manipulation doesn't
-      // re-encode the store mid-gesture); flush it before reopening the store.
-      await state.flushPendingSaves();
 
+      // Floats are not written to disk, so a fresh load of the store has none —
+      // they vanish only when the app is fully closed.
       final reopened = await app();
-      final restored = reopened.conversationById(chat)!.floatingImages.single;
-      expect(restored.imageId, image.id);
-      expect(restored.x, 0.4);
-      expect(restored.rotation, closeTo(0.2, 1e-9));
+      expect(reopened.conversationById(chat)!.floatingImages, isEmpty,
+          reason: 'floats are ephemeral; a restart drops them');
 
-      // copyAs is field-blind, but a dropped field here has happened before.
-      await reopened.forkConversation(chat, 0);
-      final fork = reopened.active;
+      // Within the running session, a fork still carries them (copyAs is
+      // field-blind, and a dropped field here has bitten before).
+      await state.forkConversation(chat, 0);
+      final fork = state.active;
       expect(fork.id, isNot(chat));
       expect(fork.floatingImages.single.imageId, image.id);
       expect(fork.floatingImages.single.x, 0.4);

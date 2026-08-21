@@ -1503,9 +1503,20 @@ class AppState extends ChangeNotifier {
     await _addFloat(conversationId, FloatingImage(imageRef: trimmed));
   }
 
+  /// Mutates a chat's floating pictures and notifies listeners — but never
+  /// saves. Floats are in-memory only (see [Conversation.toJson]); persisting
+  /// them was the whole-store re-save behind the "placing it" hitch, and they
+  /// deliberately vanish when the app is fully closed.
+  void _mutateFloats(String conversationId, void Function(Conversation) change) {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    change(conversation);
+    notifyListeners();
+  }
+
   /// Adds [float] to a chat, or raises the matching one when it is already there.
-  Future<void> _addFloat(String conversationId, FloatingImage float) =>
-      _editConversation(conversationId, (c) {
+  Future<void> _addFloat(String conversationId, FloatingImage float) async =>
+      _mutateFloats(conversationId, (c) {
         final existing =
             c.floatingImages.indexWhere((f) => f.key == float.key);
         if (existing != -1) {
@@ -1522,19 +1533,21 @@ class AppState extends ChangeNotifier {
       });
 
   /// Takes [float] back off the chat.
-  Future<void> unfloatImage(String conversationId, FloatingImage float) =>
-      _editConversation(conversationId,
+  Future<void> unfloatImage(String conversationId, FloatingImage float) async =>
+      _mutateFloats(conversationId,
           (c) => c.floatingImages.removeWhere((f) => f.key == float.key));
 
-  Future<void> clearFloatingImages(String conversationId) =>
-      _editConversation(conversationId, (c) => c.floatingImages.clear());
+  Future<void> clearFloatingImages(String conversationId) async =>
+      _mutateFloats(conversationId, (c) => c.floatingImages.clear());
 
   /// Commits where a float ended up, and optionally brings it to the front.
   ///
-  /// Called when a gesture *finishes* — never while one runs. The layer tracks the
-  /// live transform itself, because this writes the whole conversation store and
-  /// notifies every listener; doing that per pointer-move is what made floats
-  /// unusable in v1.14.0.
+  /// Called when a gesture *finishes* — never while one runs. Updates the
+  /// in-memory geometry only: floats are not persisted (see
+  /// [Conversation.toJson]), so there is nothing to save. Deliberately does
+  /// **not** notifyListeners — the floating layer already tracks the live
+  /// geometry and is showing the settled position, and a notify here would
+  /// rebuild the whole chat for a picture that just moved.
   Future<void> settleFloatingImage(
     String conversationId,
     FloatingImage float, {
@@ -1564,32 +1577,6 @@ class AppState extends ChangeNotifier {
     if (raise && index != conversation.floatingImages.length - 1) {
       conversation.floatingImages.add(conversation.floatingImages.removeAt(index));
     }
-    conversation.updatedAt = DateTime.now();
-    // Deliberately **no** notifyListeners here. An on-device profile (DevTools,
-    // real phone) showed the float lag is a UI-thread *Build* spike (~18 ms),
-    // not the GPU — and its cause is this settle rebuilding the whole ChatScreen,
-    // i.e. re-building every visible message bubble (markdown/HTML) just because
-    // a picture moved. The floating layer already tracks the live geometry
-    // itself and is showing the settled position; the store is updated for
-    // persistence and the next open. So a float settling must not rebuild the
-    // thread. (Adding/removing a float still notifies — see floatImage /
-    // unfloatImage — because the layer must add or drop a child then.)
-    // Persist is **debounced**, not immediate — the one thing a moving float must
-    // not do synchronously. Saving re-encodes the whole conversation store to
-    // JSON, which on a real chat history is a noticeable freeze on the UI thread.
-    // A two-finger manipulation settles several times (the scale recogniser ends
-    // and restarts as fingers land and lift — one of them mid gesture, as the
-    // second finger touches down), so an immediate save meant that cost was paid
-    // *during* the pinch. Coalesced to one save once the hands are off.
-    if (!debounceFloatSaves) {
-      if (_writable) unawaited(_storage.saveConversations(_conversations));
-      return;
-    }
-    _floatPersist?.cancel();
-    _floatPersist = Timer(const Duration(milliseconds: 500), () {
-      JankLogger.instance.breadcrumb('float settle → save all conversations');
-      if (_writable) unawaited(_storage.saveConversations(_conversations));
-    });
   }
 
   /// The floats of [conversation] paired with the picture each one draws, in

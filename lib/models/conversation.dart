@@ -229,8 +229,10 @@ class Conversation {
             (id, character) => MapEntry(id, character.toJson()),
           ),
         if (avatarOverrides.isNotEmpty) 'avatarOverrides': avatarOverrides,
-        if (floatingImages.isNotEmpty)
-          'floatingImages': floatingImages.map((f) => f.toJson()).toList(),
+        // Floating pictures are deliberately NOT written to disk: they live only
+        // in memory for the session and vanish when the app is fully closed.
+        // This removes the whole-store re-save that used to fire every time a
+        // picture was placed (the "placing it" hitch).
         if (variables.isNotEmpty) 'variables': variables,
         if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
         if (participantIds.isNotEmpty) 'participantIds': participantIds,
