@@ -77,15 +77,16 @@ void main() {
 
   /// Taps the avatar on a turn — the bot's by default, the user's with [user].
   ///
-  /// Scoped to the message list on purpose: the composer's impersonate button is
-  /// also a [CharacterAvatar], and it is the *last* one on screen, so a bare
-  /// `find.byType(...).last` opens the impersonation picker instead.
+  /// The list is reversed, so the newest turn is first in the tree. The tests
+  /// that tap a user avatar put the user's turn last in the conversation (so it
+  /// is the newest = tree-first); the bot greeting is oldest = tree-last. A
+  /// single-turn chat has one avatar, so either end resolves to it.
   Future<void> openAvatar(WidgetTester tester, {bool user = false}) async {
     final avatars = find.descendant(
       of: find.byType(MessageBubble),
       matching: find.byType(CharacterAvatar),
     );
-    await tester.tap(user ? avatars.last : avatars.first);
+    await tester.tap(user ? avatars.first : avatars.last);
     await tester.pumpAndSettle();
   }
 
@@ -379,6 +380,28 @@ void main() {
 
       await tester.tap(find.byType(CharacterAvatar).first, warnIfMissed: false);
       await tester.pump();
+    });
+  });
+
+  group('the avatar image holds its frame across a swap', () {
+    testWidgets('CharacterAvatar draws with gaplessPlayback', (tester) async {
+      // Belt to the precache's braces: swapping the provider must never blink to
+      // blank. Guards the flag from being dropped in a refactor. (The precache
+      // itself in `_set` needs a real event loop to decode an image and so is
+      // verified on device, per the project's headless-limits note.)
+      const onePng =
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: CharacterAvatar(
+            character: Character(id: 'a', name: 'Aria', avatar: onePng),
+            size: 56,
+          ),
+        ),
+      ));
+      await tester.pump();
+      final image = tester.widget<Image>(find.byType(Image).first);
+      expect(image.gaplessPlayback, isTrue);
     });
   });
 }

@@ -63,6 +63,23 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
   }
 
   Future<void> _set(AppState state, String ref) async {
+    // Decode the chosen picture *before* leaving, at the exact sizes the chat
+    // draws its avatars, so the thread reveals the new picture already rasterised
+    // rather than repainting its old avatar for a frame while this one decodes —
+    // the "old avatar flashes back" on Set. Both role sizes are warmed because
+    // the sheet doesn't know whether it was opened on the bot or the persona.
+    final conversation = state.conversationById(widget.conversationId);
+    if (conversation != null && mounted) {
+      final ui = state.interfaceFor(conversation);
+      final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+      final sizes = {ui.avatarFor(false).size, ui.avatarFor(true).size};
+      for (final size in sizes) {
+        final provider = avatarImage(ref, displaySize: size, devicePixelRatio: dpr);
+        if (provider != null && mounted) {
+          await precacheImage(provider, context);
+        }
+      }
+    }
     await state.setChatAvatar(widget.conversationId, widget.characterId, ref);
     if (!mounted) return;
     Navigator.of(context).pop();

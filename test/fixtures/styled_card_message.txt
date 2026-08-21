@@ -1,0 +1,17 @@
+<thinking>This is a synthetic fixture mirroring the shape of a real model reply that
+rendered as a "big black section": an Anthropic-style thinking block, then a
+styled card. Key points the renderer must handle:
+- a full-bleed flex wrapper whose near-black background became the black band
+- an inner bordered, fixed-width card that should keep its own palette
+- rem font sizes, box-shadow, text-transform — none of which flutter_html draws
+The thinking blocks below must be stripped from the display entirely.</thinking><antthinking>Private planning the UI should never surface.</antthinking><div style="background-color: #0a0a0a; display: flex; align-items: center; justify-content: center; padding: 40px 0;">
+  <div style="background-color: #1a1010; border: 4px double #4a0000; padding: 30px; width: 300px; text-align: center; color: #cc9999; font-family: 'Times New Roman', serif; box-shadow: 0 0 25px rgba(80,0,0,0.6);">
+    <div style="font-size: 1.4rem; letter-spacing: 0.25em; border-bottom: 2px solid #4a0000; padding-bottom: 12px; margin-bottom: 15px; text-transform: uppercase; font-weight: bold;">Day Ninety-Four</div>
+    <div style="font-size: 1.1rem; margin-bottom: 10px; font-variant: small-caps;">6:12 PM</div>
+    <div style="font-size: 0.9rem; border-top: 1px solid #4a0000; padding-top: 12px; letter-spacing: 0.05em;">Artsia, Artzhushka<br>Consulate Living Room</div>
+  </div>
+</div>
+
+*BOOM.* *The windows rattled. Dust sifted down from the ceiling beams.*
+
+"He didn't wait," *she whispered,* "he never waits."

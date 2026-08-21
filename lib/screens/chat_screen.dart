@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
@@ -50,10 +48,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// The index of the message currently being edited in place, or null.
   int? _editingIndex;
 
-  /// A chat opens pinned to its newest message, not its first — this flips true
-  /// after that initial jump so it happens exactly once per screen.
-  bool _didInitialScroll = false;
-
   /// Whether the "jump to latest" affordance is showing. It appears once the
   /// thread is scrolled a screenful or so above the bottom, so a long scroll
   /// back doesn't have to be undone by hand.
@@ -62,10 +56,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// How far, in logical pixels, the thread must sit above its bottom before
   /// the jump-to-latest button appears.
   static const double _jumpButtonThreshold = 320;
-
-  /// The follow-up jump used when opening a chat (see [_jumpToEndOnOpen]). Held
-  /// so it can be cancelled if the screen is torn down before it fires.
-  Timer? _openJumpTimer;
 
   /// Whether the composer's operations strip (the three-dot symbols) is open.
   bool _showOps = false;
@@ -89,18 +79,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _openJumpTimer?.cancel();
     _scroll.removeListener(_onScroll);
     _input.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  /// Shows or hides the jump-to-latest button as the thread is scrolled.
+  /// Shows or hides the jump-to-latest button as the thread is scrolled. The
+  /// list is reversed, so the newest message sits at offset 0 and scrolling
+  /// *up* into older turns moves [ScrollPosition.pixels] away from it.
   void _onScroll() {
     if (!_scroll.hasClients) return;
-    final position = _scroll.position;
-    final show = position.maxScrollExtent - position.pixels > _jumpButtonThreshold;
+    final show = _scroll.position.pixels > _jumpButtonThreshold;
     if (show != _showJumpToEnd && mounted) {
       setState(() => _showJumpToEnd = show);
     }
@@ -224,34 +214,21 @@ class _ChatScreenState extends State<ChatScreen> {
   void _toast(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
 
-  /// Sticks to the newest message after the frame that added it. [animated]
-  /// glides there (used by the jump-to-latest button); otherwise it snaps,
-  /// which is what streaming and sending want.
+  /// Returns to the newest message. The list is reversed, so "the end" is
+  /// offset 0: [animated] glides there (the jump-to-latest button), otherwise it
+  /// snaps, which is what streaming and sending want.
   void _scrollToEnd({bool animated = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
-      final target = _scroll.position.maxScrollExtent;
       if (animated) {
         _scroll.animateTo(
-          target,
+          0,
           duration: const Duration(milliseconds: 240),
           curve: Curves.easeOut,
         );
       } else {
-        _scroll.jumpTo(target);
+        _scroll.jumpTo(0);
       }
-    });
-  }
-
-  /// The one-time jump that opens a chat at its last message rather than its
-  /// first. It snaps once after layout, then again a beat later: avatars and a
-  /// background image decode asynchronously and grow the extent after the first
-  /// frame, so a single jump can land short of the true bottom.
-  void _jumpToEndOnOpen() {
-    _scrollToEnd();
-    _openJumpTimer?.cancel();
-    _openJumpTimer = Timer(const Duration(milliseconds: 160), () {
-      if (mounted) _scrollToEnd();
     });
   }
 // APPEND-MARKER-1
@@ -262,13 +239,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!state.ready) return const StartupScreen();
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
-    // Open on the newest message, not the oldest. Deferred to here (rather than
-    // initState) so it also fires when the startup gate lifts a frame or two
-    // after the screen is first built.
-    if (!_didInitialScroll && !conversation.isEmpty) {
-      _didInitialScroll = true;
-      _jumpToEndOnOpen();
-    }
     final topInset = MediaQuery.paddingOf(context).top;
     // A chat can carry chat-style settings of its own; otherwise the app-wide
     // ones apply.
@@ -404,20 +374,32 @@ class _ChatScreenState extends State<ChatScreen> {
     final persona = state.impersonationFor(conversation);
     return ListView.builder(
       controller: _scroll,
+      // Reversed so the newest turn sits at the bottom (offset 0) and the list
+      // builds outward from it. A forward list jumped to its bottom forces
+      // RenderSliverList to build *every* message in one pass — a several-second
+      // freeze at 900 turns and an out-of-memory crash past ~3000. Reversed, only
+      // the visible turns are ever built, so a huge chat opens as fast as a small
+      // one. Display index 0 is the last message; map it back to walk forwards.
+      reverse: true,
+      // Let scrolled-past turns be released rather than pinned alive: the
+      // markdown/HTML renderers cache parsed output, so a turn rebuilds cheaply
+      // when it scrolls back on. Keeps a 3000-message thread's memory bounded.
+      addAutomaticKeepAlives: false,
       // Leave room so the first bubble clears the floating hamburger.
       padding: EdgeInsets.fromLTRB(0, top + 56, 0, 8),
       itemCount: conversation.messages.length,
       itemBuilder: (context, index) {
-        final isLast = index == conversation.messages.length - 1;
-        final message = conversation.messages[index];
-        if (index == _editingIndex) {
+        final msgIndex = conversation.messages.length - 1 - index;
+        final isLast = index == 0;
+        final message = conversation.messages[msgIndex];
+        if (msgIndex == _editingIndex) {
           return _InlineMessageEditor(
-            key: ValueKey('edit-${conversation.id}-$index'),
+            key: ValueKey('edit-${conversation.id}-$msgIndex'),
             initial: message.content,
             onCancel: () => setState(() => _editingIndex = null),
             onSave: (text) async {
               setState(() => _editingIndex = null);
-              await state.editMessage(conversation.id, index, text);
+              await state.editMessage(conversation.id, msgIndex, text);
             },
           );
         }
@@ -449,11 +431,11 @@ class _ChatScreenState extends State<ChatScreen> {
           pending: isLast && state.streaming,
           streaming: state.streaming,
           onAction: (action) =>
-              _runMessageAction(state, conversation, index, action),
-          onSwipe: (swipe) => state.setSwipe(conversation.id, index, swipe),
+              _runMessageAction(state, conversation, msgIndex, action),
+          onSwipe: (swipe) => state.setSwipe(conversation.id, msgIndex, swipe),
           onLongPress: message.content.isEmpty
               ? null
-              : () => _showMessageActions(state, conversation, index),
+              : () => _showMessageActions(state, conversation, msgIndex),
         );
       },
     );

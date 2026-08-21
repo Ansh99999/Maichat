@@ -75,8 +75,9 @@ final _quoteSpan = RegExp(r'<[\s\S]*?>|```[\s\S]*?```|`[^`]*`|("[^"]+")');
 /// `q::before`/`::after`, but flutter_html has no generated content, so dropping
 /// them here made every quoted run lose its quotes.
 String messageToHtml(String text, {List<TextWrapRule> wraps = const []}) {
+  final source = stripReasoningWrappers(text);
   final html = md.markdownToHtml(
-    applyWrapRules(text, wraps),
+    applyWrapRules(source, wraps),
     extensionSet: md.ExtensionSet.gitHubWeb,
   );
   final normalized =
@@ -86,7 +87,27 @@ String messageToHtml(String text, {List<TextWrapRule> wraps = const []}) {
     if (quoted == null) return m.group(0)!;
     return '<q>$quoted</q>';
   });
-  return resolveFontFamilies(quoted);
+  return tameRichCss(resolveFontFamilies(quoted));
+}
+
+// --- reasoning wrappers ------------------------------------------------------
+
+/// Model-internal reasoning that leaked into the message body wrapped in
+/// Anthropic-style `<thinking>`/`<antthinking>` tags — distinct from the app's
+/// own `<think>` reasoning tag, which [splitReasoning] has already pulled out
+/// before a live reply is stored. Imported chats (Agnai/ST exports) routinely
+/// carry these blocks inline; rendered verbatim they dump a wall of the model's
+/// planning above every turn, so they are dropped from the *display* only —
+/// [ChatMessage.content] keeps them for prompt-building and export.
+final _reasoningWrapper = RegExp(
+  r'<(thinking|antthinking)\b[^>]*>[\s\S]*?</\1\s*>',
+  caseSensitive: false,
+);
+
+/// [text] with any `<thinking>`/`<antthinking>` block removed.
+String stripReasoningWrappers(String text) {
+  if (!text.contains('<')) return text;
+  return text.replaceAll(_reasoningWrapper, '').trimLeft();
 }
 
 // --- text wrapping ----------------------------------------------------------
@@ -264,6 +285,109 @@ String? resolveFontFamilyList(String value) {
     if (generic != null) return generic;
   }
   return names.first;
+}
+
+// --- taming model CSS --------------------------------------------------------
+
+/// CSS properties `flutter_html` cannot render and that only make a mess if left
+/// in: shadows, filters, transforms and the flexbox family. Dropped outright.
+const Set<String> _dropProps = {
+  'box-shadow', 'text-shadow', 'filter', 'backdrop-filter', 'transform',
+  'transition', 'animation', 'font-variant', 'display', 'justify-content',
+  'align-items', 'align-content', 'flex', 'flex-direction', 'flex-wrap',
+  'gap', 'text-transform',
+};
+
+final _decl = RegExp(r'([-a-zA-Z]+)\s*:\s*([^;]+)');
+final _fontSizeUnit = RegExp(r'([\d.]+)\s*(rem|em)\b', caseSensitive: false);
+
+/// Rewrites the model's inline CSS into what `flutter_html` can actually draw,
+/// so a "designed card" reads as a card instead of a big black slab.
+///
+/// Two things were breaking these messages. A model wraps its card in a
+/// full-bleed centering `<div style="background:#0a0a0a; display:flex; …">`;
+/// `flutter_html` has no flexbox, so the wrapper stayed a full-width near-black
+/// band around a small, uncentred card — the reported "black section". And it
+/// ignores `box-shadow`/`rem`/`text-transform`, so titles came out mis-sized and
+/// un-styled. Here the backdrop's background is stripped (the inner card keeps
+/// its own palette), `rem`/`em` sizes become px, unsupported props are dropped,
+/// and `text-transform` is applied to the text directly.
+String tameRichCss(String html) {
+  if (!html.contains('style')) return html;
+  final transformed = _applyTextTransform(html);
+  return transformed.replaceAllMapped(_styleAttr, (m) {
+    final quote = m.group(1)!;
+    final body = m.group(2)!;
+    final rewritten = _tameStyleBody(body);
+    return rewritten.isEmpty ? '' : 'style=$quote$rewritten$quote';
+  });
+}
+
+String _tameStyleBody(String body) {
+  // A centering/backdrop wrapper: its whole job is flex layout, so its
+  // background is the band we don't want. Inner cards (bordered / fixed width)
+  // are not wrappers and keep their look.
+  final lower = body.toLowerCase();
+  final isWrapper = lower.contains('display') && lower.contains('flex') ||
+      lower.contains('justify-content') ||
+      lower.contains('align-items');
+
+  final kept = <String>[];
+  var centred = false;
+  for (final decl in _decl.allMatches(body)) {
+    final prop = decl.group(1)!.toLowerCase();
+    var value = decl.group(2)!.trim();
+    if (_dropProps.contains(prop)) continue;
+    if (isWrapper && (prop == 'background' || prop == 'background-color')) {
+      continue; // the band — drop it, the inner card keeps its own.
+    }
+    if (isWrapper && (prop == 'padding' || prop == 'margin')) {
+      continue; // collapse the wrapper's spacing so it doesn't tower.
+    }
+    if (prop == 'font-size') {
+      value = value.replaceAllMapped(_fontSizeUnit, (u) {
+        final n = double.tryParse(u.group(1)!) ?? 1;
+        return '${(n * 16).round()}px';
+      });
+    }
+    kept.add('$prop: $value');
+  }
+  if (isWrapper) centred = true;
+  if (centred) kept.add('text-align: center');
+  return kept.join('; ');
+}
+
+/// `text-transform` has no effect in `flutter_html`, so apply it to the element's
+/// own text. Handled for the common case of a leaf element whose content is
+/// plain text (the card's title/label rows), which is all the models emit.
+final _textTransformEl = RegExp(
+  r'''<(div|span|p|h[1-6]|b|strong|em)\b([^>]*\bstyle\s*=\s*["'][^"'>]*text-transform\s*:\s*(uppercase|lowercase|capitalize)[^"'>]*["'][^>]*)>([^<]*)</\1>''',
+  caseSensitive: false,
+);
+
+String _applyTextTransform(String html) {
+  if (!html.toLowerCase().contains('text-transform')) return html;
+  return html.replaceAllMapped(_textTransformEl, (m) {
+    final tag = m.group(1)!;
+    final attrs = m.group(2)!;
+    final kind = m.group(3)!.toLowerCase();
+    final text = m.group(4)!;
+    return '<$tag$attrs>${_transformText(text, kind)}</$tag>';
+  });
+}
+
+String _transformText(String text, String kind) {
+  switch (kind) {
+    case 'uppercase':
+      return text.toUpperCase();
+    case 'lowercase':
+      return text.toLowerCase();
+    case 'capitalize':
+      return text.replaceAllMapped(
+          RegExp(r'\b\w'), (m) => m.group(0)!.toUpperCase());
+    default:
+      return text;
+  }
 }
 // APPEND-HTMLWIDGET
 

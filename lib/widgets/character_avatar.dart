@@ -173,6 +173,10 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
                 width: w,
                 height: h,
                 fit: widget.fit.boxFit,
+                // Hold the current picture until the next one has decoded, so
+                // swapping this thread's avatar (the multi-avatar "Set") never
+                // blinks to blank or flashes the previous frame back mid-swap.
+                gaplessPlayback: true,
                 errorBuilder: (_, _, _) => _monogram(scheme, size),
               ),
       ),
