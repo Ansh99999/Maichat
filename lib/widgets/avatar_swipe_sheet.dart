@@ -63,11 +63,13 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
   }
 
   Future<void> _set(AppState state, String ref) async {
-    // Decode the chosen picture *before* leaving, at the exact sizes the chat
-    // draws its avatars, so the thread reveals the new picture already rasterised
-    // rather than repainting its old avatar for a frame while this one decodes —
-    // the "old avatar flashes back" on Set. Both role sizes are warmed because
-    // the sheet doesn't know whether it was opened on the bot or the persona.
+    // The "old avatar flashes back on Set" has two parts, and both have to be
+    // closed or the flash survives.
+    //
+    // 1. Decode the chosen picture first, at the exact sizes the chat draws its
+    //    avatars, so the thread has the bitmap ready and does not repaint a
+    //    blank/old frame while it decodes. Both role sizes are warmed because the
+    //    sheet doesn't know whether it was opened on the bot or the persona.
     final conversation = state.conversationById(widget.conversationId);
     if (conversation != null && mounted) {
       final ui = state.interfaceFor(conversation);
@@ -81,6 +83,13 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
       }
     }
     await state.setChatAvatar(widget.conversationId, widget.characterId, ref);
+    if (!mounted) return;
+    // 2. `setChatAvatar` only *marks* the covered chat dirty; it still holds the
+    //    old avatar until its next build runs. Popping in the same microtask
+    //    reveals that stale frame for an instant. Wait for the frame that
+    //    rebuilds it (and paints the now-decoded new picture) before leaving, so
+    //    the chat is already showing the new avatar when it is uncovered.
+    await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
     Navigator.of(context).pop();
   }
