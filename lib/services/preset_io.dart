@@ -234,6 +234,22 @@ Preset _importSillyTavern(Map<String, dynamic> json) {
   );
 }
 
+/// Agnai's prompt-order placeholders mapped onto MaiChat/SillyTavern block
+/// identifiers. Agnai's `personality` covers a card's whole persona, so it maps
+/// to both our description and personality blocks. Placeholders with no
+/// equivalent (`chat_embed`, `user_embed`, `preamble`, `post`) are absent and
+/// simply skipped on import.
+const _agnaiPlaceholders = <String, List<String>>{
+  'system_prompt': [PromptId.main],
+  'scenario': [PromptId.scenario],
+  'personality': [PromptId.charDescription, PromptId.charPersonality],
+  'memory': [PromptId.worldInfoBefore],
+  'example_dialogue': [PromptId.dialogueExamples],
+  'history': [PromptId.chatHistory],
+  'impersonating': [PromptId.personaDescription],
+  'ujb': [PromptId.jailbreak],
+};
+
 Preset _importAgnai(Map<String, dynamic> json) {
   final d = Preset.create();
 
@@ -252,20 +268,41 @@ Preset _importAgnai(Map<String, dynamic> json) {
     blockOf(PromptId.jailbreak).content = jailbreak;
   }
 
-  // Map Agnai's placeholder order onto our identifiers where they line up;
-  // otherwise fall back to the default order.
+  // Map Agnai's placeholder order onto our identifiers. Agnai names its prompt
+  // sections differently from SillyTavern (`system_prompt`, `personality`,
+  // `history`, `ujb`, …), so a verbatim match only ever caught `scenario` and
+  // silently dropped every other block — the "only scenario imported" bug. Map
+  // them explicitly; a placeholder with no MaiChat equivalent (chat_embed,
+  // user_embed, preamble, post) is skipped rather than forwarded blind.
   List<PromptOrderEntry>? promptOrder;
   final agnaiOrder = json['promptOrder'];
   if (agnaiOrder is List) {
     final known = {for (final b in prompts) b.identifier};
-    final mapped = <PromptOrderEntry>[
-      for (final e in agnaiOrder.whereType<Map<String, dynamic>>())
-        if (known.contains(e['placeholder']))
-          PromptOrderEntry(
-            identifier: e['placeholder'] as String,
-            enabled: e['enabled'] as bool? ?? true,
-          ),
-    ];
+    final seen = <String>{};
+    final mapped = <PromptOrderEntry>[];
+    for (final e in agnaiOrder.whereType<Map<String, dynamic>>()) {
+      final ids = _agnaiPlaceholders[e['placeholder']];
+      if (ids == null) continue;
+      // Agnai's `system_prompt` toggle gates a variable *inside* the gaslight,
+      // not the gaslight itself; our `main` block is the gaslight and can't be
+      // turned off, so it always stays enabled.
+      final enabled = e['placeholder'] == 'system_prompt'
+          ? true
+          : (e['enabled'] as bool? ?? true);
+      for (final id in ids) {
+        if (known.contains(id) && seen.add(id)) {
+          mapped.add(PromptOrderEntry(identifier: id, enabled: enabled));
+        }
+      }
+    }
+    // Append any built-in block the Agnai order never mentioned, disabled, so
+    // the block list reads complete (like an ST preset) and nothing MaiChat
+    // would normally send silently vanishes — the user can toggle it on.
+    for (final entry in defaultPromptOrder()) {
+      if (seen.add(entry.identifier)) {
+        mapped.add(PromptOrderEntry(identifier: entry.identifier, enabled: false));
+      }
+    }
     if (mapped.isNotEmpty) promptOrder = mapped;
   }
 
@@ -285,6 +322,7 @@ Preset _importAgnai(Map<String, dynamic> json) {
     maxResponseTokens:
         (json['maxTokens'] as num?)?.toInt() ?? d.maxResponseTokens,
     maxContext: (json['maxContextLength'] as num?)?.toInt() ?? d.maxContext,
+    useMaxContext: json['useMaxContext'] as bool? ?? d.useMaxContext,
     topP: (json['topP'] as num?)?.toDouble() ?? d.topP,
     topK: (json['topK'] as num?)?.toInt() ?? d.topK,
     topA: (json['topA'] as num?)?.toInt() ?? d.topA,

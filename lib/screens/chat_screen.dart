@@ -57,9 +57,28 @@ class _ChatScreenState extends State<ChatScreen> {
   /// back doesn't have to be undone by hand.
   bool _showJumpToEnd = false;
 
+  /// Whether new content should keep the view pinned to the newest message.
+  /// True while the reader sits at (or near) the bottom; it flips false the
+  /// instant they scroll up, so a streaming reply never yanks them back down.
+  bool _stick = true;
+
+  /// New turns that landed while the reader was scrolled away — surfaced as a
+  /// count badge on the jump-to-latest button, cleared on return to the bottom.
+  int _unread = 0;
+
+  /// The message count last seen for [_lastConvId], to notice a turn arriving.
+  int _lastMessageCount = 0;
+
+  /// The conversation the counters above belong to; a switch resets them.
+  String? _lastConvId;
+
   /// How far, in logical pixels, the thread must sit above its bottom before
   /// the jump-to-latest button appears.
   static const double _jumpButtonThreshold = 320;
+
+  /// Within this many pixels of the bottom still counts as "at the bottom", so
+  /// a reply keeps following; scroll past it and following stops.
+  static const double _stickThreshold = 48;
 
   /// Whether the composer's operations strip (the three-dot symbols) is open.
   bool _showOps = false;
@@ -89,15 +108,31 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  /// Shows or hides the jump-to-latest button as the thread is scrolled. The
-  /// list is reversed, so the newest message sits at offset 0 and scrolling
-  /// *up* into older turns moves [ScrollPosition.pixels] away from it.
+  /// Shows or hides the jump-to-latest button as the thread is scrolled, and
+  /// tracks whether the reader is at the bottom (so streaming keeps following)
+  /// or has scrolled up (so it stops). The list is reversed, so the newest
+  /// message sits at offset 0 and scrolling *up* into older turns moves
+  /// [ScrollPosition.pixels] away from it.
   void _onScroll() {
     if (!_scroll.hasClients) return;
-    final show = _scroll.position.pixels > _jumpButtonThreshold;
-    if (show != _showJumpToEnd && mounted) {
-      setState(() => _showJumpToEnd = show);
+    final pixels = _scroll.position.pixels;
+    final show = pixels > _jumpButtonThreshold;
+    final stick = pixels <= _stickThreshold;
+    var changed = false;
+    if (show != _showJumpToEnd) {
+      _showJumpToEnd = show;
+      changed = true;
     }
+    if (stick != _stick) {
+      _stick = stick;
+      changed = true;
+    }
+    // Back at the bottom: the reader has caught up, so drop the unread badge.
+    if (stick && _unread != 0) {
+      _unread = 0;
+      changed = true;
+    }
+    if (changed && mounted) setState(() {});
   }
 
   Future<void> _send(AppState state) async {
@@ -108,9 +143,9 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     _input.clear();
-    _scrollToEnd();
+    _stickToLatest();
     await state.send(text);
-    _scrollToEnd();
+    _stickToLatest();
   }
 
   void _openSettings() => Navigator.of(context).push(
@@ -175,7 +210,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (ok) {
       await state.restartConversation();
-      _scrollToEnd();
+      _stickToLatest();
     }
   }
 
@@ -235,6 +270,16 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     });
   }
+
+  /// Re-arms the follow-the-newest behaviour and clears the unread badge, then
+  /// scrolls to the bottom. Used by every action where the reader has asked to
+  /// be at the latest message (sending, regenerating, the jump button, …), as
+  /// opposed to the passive follow that streaming does only while already stuck.
+  void _stickToLatest({bool animated = false}) {
+    _stick = true;
+    _unread = 0;
+    _scrollToEnd(animated: animated);
+  }
 // APPEND-MARKER-1
 
   @override
@@ -253,7 +298,37 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     final conversation = state.active;
-    if (state.streaming) _scrollToEnd();
+    // Follow new content, but only for a reader who is already at the bottom.
+    // Someone scrolled up to re-read stays put; a turn that arrives while they
+    // are away bumps the unread badge on the jump-to-latest button instead of
+    // dragging them down. Reference-only: no setState — this all runs inside a
+    // build already triggered by the state change that grew the thread.
+    final count = conversation.messages.length;
+    if (conversation.id != _lastConvId) {
+      _lastConvId = conversation.id;
+      _lastMessageCount = count;
+      _unread = 0;
+      _stick = true;
+      _scrollToEnd();
+    } else if (count != _lastMessageCount) {
+      final grew = count > _lastMessageCount;
+      _lastMessageCount = count;
+      if (grew) {
+        if (_stick) {
+          _scrollToEnd();
+        } else {
+          _unread += 1;
+        }
+      } else if (_unread != 0) {
+        // Turns were removed (delete/regenerate rollback): the count no longer
+        // maps to anything unread.
+        _unread = 0;
+      }
+    }
+    // Keep pinned to the newest text as a reply streams in — but only while the
+    // reader is at the bottom, so scrolling up during a stream is never undone.
+    if (state.streaming && _stick) _scrollToEnd();
+
     final topInset = MediaQuery.paddingOf(context).top;
     // A chat can carry chat-style settings of its own; otherwise the app-wide
     // ones apply.
@@ -328,8 +403,10 @@ class _ChatScreenState extends State<ChatScreen> {
                               right: 12,
                               bottom: 12,
                               child: _JumpToLatestButton(
-                                visible: _showJumpToEnd,
-                                onTap: () => _scrollToEnd(animated: true),
+                                visible: _showJumpToEnd || _unread > 0,
+                                unread: _unread,
+                                onTap: () =>
+                                    setState(() => _stickToLatest(animated: true)),
                               ),
                             ),
                           ],
@@ -352,7 +429,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           ui: ui,
                           onChip: (id) {
                             state.speakAs(id);
-                            _scrollToEnd();
+                            _stickToLatest();
                           },
                           onUser: () => _openImpersonatePicker(state),
                           onRemove: (id) =>
@@ -481,7 +558,7 @@ class _ChatScreenState extends State<ChatScreen> {
     switch (action) {
       case MessageAction.regenerate:
         state.regenerateMessage(conversation.id, index);
-        _scrollToEnd();
+        _stickToLatest();
       case MessageAction.edit:
         setState(() => _editingIndex = index);
       case MessageAction.delete:
@@ -504,7 +581,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await state.forkConversation(conversation.id, index);
     if (!mounted) return;
     _toast('Forked into a new chat');
-    _scrollToEnd();
+    _stickToLatest();
   }
 
   /// Opens the full assembled prompt behind [index] — exactly what the model
@@ -1202,10 +1279,17 @@ class _TranslucentMenuButton extends StatelessWidget {
 /// above its newest message, so a deep scroll back doesn't have to be undone by
 /// dragging. Tapping it glides straight to the last message.
 class _JumpToLatestButton extends StatelessWidget {
-  const _JumpToLatestButton({required this.visible, required this.onTap});
+  const _JumpToLatestButton({
+    required this.visible,
+    required this.onTap,
+    this.unread = 0,
+  });
 
   final bool visible;
   final VoidCallback onTap;
+
+  /// Turns that arrived while scrolled away; shown as a count badge when > 0.
+  final int unread;
 
   @override
   Widget build(BuildContext context) {
@@ -1219,14 +1303,46 @@ class _JumpToLatestButton extends StatelessWidget {
         child: AnimatedOpacity(
           opacity: visible ? 1 : 0,
           duration: const Duration(milliseconds: 160),
-          child: FloatingActionButton.small(
-            heroTag: null,
-            tooltip: 'Jump to latest',
-            elevation: 2,
-            backgroundColor: scheme.secondaryContainer,
-            foregroundColor: scheme.onSecondaryContainer,
-            onPressed: onTap,
-            child: const Icon(Icons.arrow_downward),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              FloatingActionButton.small(
+                heroTag: null,
+                tooltip: 'Jump to latest',
+                elevation: 2,
+                backgroundColor: scheme.secondaryContainer,
+                foregroundColor: scheme.onSecondaryContainer,
+                onPressed: onTap,
+                child: const Icon(Icons.arrow_downward),
+              ),
+              // A response arrived while the reader was up-thread: a small red
+              // count badge on the button, the familiar chat unread marker.
+              if (unread > 0)
+                Positioned(
+                  top: -4,
+                  right: -4,
+                  child: Container(
+                    constraints:
+                        const BoxConstraints(minWidth: 18, minHeight: 18),
+                    padding: const EdgeInsets.symmetric(horizontal: 5),
+                    decoration: BoxDecoration(
+                      color: scheme.error,
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: scheme.surface, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      unread > 99 ? '99+' : '$unread',
+                      style: TextStyle(
+                        color: scheme.onError,
+                        fontSize: 11,
+                        height: 1,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ),

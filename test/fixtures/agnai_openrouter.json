@@ -1,0 +1,39 @@
+{
+  "kind": "gen-setting",
+  "service": "agnaistic",
+  "name": "OpenRouter - Imported",
+  "presetMode": "advanced",
+  "maxTokens": 6000,
+  "useMaxContext": false,
+  "maxContextLength": 92000,
+  "repetitionPenalty": 1.2,
+  "temp": 1,
+  "topK": 0,
+  "topP": 1,
+  "minP": 0,
+  "frequencyPenalty": 0,
+  "presencePenalty": 0,
+  "gaslight": "<system>{{#if system_prompt}}{{value}}{{else}}Write \"{{char}}'s\" next reply.{{/else}}{{/if}}</system>\n\n\"{{char}}'s\" Persona:\n{{personality}}\n\n{{#if scenario}}The scenario:\n{{scenario}}\n{{/if}}",
+  "ultimeJailbreak": "Stay in character. Write vivid, grounded prose.",
+  "streamResponse": true,
+  "promptOrder": [
+    { "placeholder": "scenario", "enabled": true },
+    { "placeholder": "example_dialogue", "enabled": false },
+    { "placeholder": "impersonating", "enabled": true },
+    { "placeholder": "memory", "enabled": true },
+    { "placeholder": "chat_embed", "enabled": true },
+    { "placeholder": "personality", "enabled": true },
+    { "placeholder": "history", "enabled": true },
+    { "placeholder": "system_prompt", "enabled": false },
+    { "placeholder": "ujb", "enabled": true }
+  ],
+  "reasoning": {
+    "enabled": false,
+    "effort": "custom",
+    "exclude": false,
+    "start": "<thinking>",
+    "end": "</thinking>",
+    "maxTokens": 2000
+  },
+  "stopSequences": ["\\n<|user|>"]
+}

@@ -116,4 +116,41 @@ void main() {
     expect(scroll(tester).pixels, moreOrLessEquals(0, epsilon: 1));
     expect(jumpButtonVisible(tester), isFalse);
   });
+
+  group('following the newest message', () {
+    testWidgets('a turn arriving while scrolled up does not yank the reader '
+        'down, and raises an unread badge', (tester) async {
+      final state = await longChat();
+      await tester.pumpWidget(host(state));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // Scroll well up into older turns.
+      scroll(tester).jumpTo(1000);
+      await tester.pump();
+      final wasAt = scroll(tester).pixels;
+      expect(wasAt, greaterThan(320));
+      // No unread yet.
+      expect(find.text('1'), findsNothing);
+
+      // A new turn lands (as a reply would) while the reader is up-thread.
+      state.active.messages.add(
+        ChatMessage(role: 'assistant', content: 'A brand new reply arrives.'),
+      );
+      await state.renameConversation(state.active.id, 'Renamed thread');
+      await tester.pump();
+
+      // The reader is left where they were — not dragged to the bottom …
+      expect(scroll(tester).pixels, moreOrLessEquals(wasAt, epsilon: 1),
+          reason: 'a reader scrolled up must not be pulled down by a new turn');
+      // … and an unread badge appears on the jump button.
+      expect(find.text('1'), findsOneWidget);
+
+      // Returning to the bottom clears the badge.
+      await tester.tap(find.byIcon(Icons.arrow_downward));
+      await tester.pumpAndSettle();
+      expect(scroll(tester).pixels, moreOrLessEquals(0, epsilon: 1));
+      expect(find.text('1'), findsNothing);
+    });
+  });
 }

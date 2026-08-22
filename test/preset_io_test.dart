@@ -194,6 +194,59 @@ void main() {
       expect(out['gaslight'], 'You are {{char}}.');
       expect(out['presetMode'], 'simple');
     });
+
+    test('maps every prompt-order placeholder, not just scenario', () {
+      // The real "OpenRouter - Imported" preset exported from Agnai. Its order
+      // names sections by Agnai placeholders (system_prompt, personality,
+      // history, ujb, …). A verbatim identifier match only ever caught
+      // `scenario` and dropped the rest — the "only scenario imported" bug.
+      final json = jsonDecode(
+        File('test/fixtures/agnai_openrouter.json').readAsStringSync(),
+      ) as Map<String, dynamic>;
+      expect(detectFormat(json), PresetFormat.agnai);
+
+      final p = importPreset(json);
+      final order = {for (final e in p.promptOrder) e.identifier: e.enabled};
+
+      // The Agnai placeholders resolved to our block identifiers.
+      expect(order.containsKey(PromptId.scenario), isTrue);
+      expect(order.containsKey(PromptId.charPersonality), isTrue);
+      expect(order.containsKey(PromptId.charDescription), isTrue); // personality
+      expect(order.containsKey(PromptId.dialogueExamples), isTrue); // example_dialogue
+      expect(order.containsKey(PromptId.personaDescription), isTrue); // impersonating
+      expect(order.containsKey(PromptId.worldInfoBefore), isTrue); // memory
+      expect(order.containsKey(PromptId.chatHistory), isTrue); // history
+      expect(order.containsKey(PromptId.jailbreak), isTrue); // ujb
+      expect(order.containsKey(PromptId.main), isTrue); // system_prompt
+
+      // Enabled flags carry across.
+      expect(order[PromptId.scenario], isTrue);
+      expect(order[PromptId.dialogueExamples], isFalse); // example_dialogue off
+      // `main` is the gaslight and can't be disabled, so system_prompt: false
+      // does not turn it off.
+      expect(order[PromptId.main], isTrue);
+
+      // Numeric gen settings survive.
+      expect(p.maxContext, 92000);
+      expect(p.useMaxContext, isFalse);
+      expect(p.maxResponseTokens, 6000);
+    });
+
+    test('the block list stays complete after an Agnai import', () {
+      final json = jsonDecode(
+        File('test/fixtures/agnai_openrouter.json').readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final p = importPreset(json);
+
+      // Every built-in block still exists in the library …
+      expect(p.prompts.length, 12);
+      // … and every one appears in the order (blocks the Agnai preset never
+      // named are appended disabled rather than vanishing).
+      final orderIds = {for (final e in p.promptOrder) e.identifier};
+      for (final b in defaultPromptOrder()) {
+        expect(orderIds, contains(b.identifier));
+      }
+    });
   });
 
   group('native round-trip', () {

@@ -39,6 +39,21 @@ class _PresetSliderState extends State<PresetSlider> {
       widget.integer || v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(2);
 
   @override
+  void initState() {
+    super.initState();
+    // Commit whatever is typed the moment the field loses focus. Without this a
+    // value typed into the box (e.g. a context size of 92000) is only committed
+    // by an explicit keyboard "done" (onSubmitted/onEditingComplete); tapping
+    // "Save" elsewhere on the screen just blurs the field, so the typed number
+    // was silently dropped and only slider-dragged values ever persisted.
+    _focus.addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    if (!_focus.hasFocus) _commitField(_field.text);
+  }
+
+  @override
   void didUpdateWidget(PresetSlider old) {
     super.didUpdateWidget(old);
     // Reflect external/slider-driven changes into the field, unless the user is
@@ -50,6 +65,7 @@ class _PresetSliderState extends State<PresetSlider> {
 
   @override
   void dispose() {
+    _focus.removeListener(_onFocusChange);
     _field.dispose();
     _focus.dispose();
     super.dispose();
