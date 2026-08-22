@@ -1,8 +1,10 @@
 name: Build APK
 
-# Builds release APKs on every push and PR to main, on manual dispatch, and
-# on version tags. Pushing a tag like v1.1.0 also attaches the APKs to a
-# GitHub Release.
+# Builds the release APK on pushes and tags to main and on manual dispatch, and
+# attaches it to a GitHub Release on a version tag. Pull requests run analyze +
+# test only (no APK) for fast feedback; the profile APK is built on demand via
+# "Run workflow" (workflow_dispatch), since it is a diagnostic, not a release
+# artifact — building it on every run roughly doubled the wall-clock.
 on:
   push:
     branches: [main]
@@ -10,6 +12,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+# Cancel a superseded run for the same branch/tag when a newer commit lands, so
+# CI never spends minutes finishing a build that is already out of date.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 # Needed so the tag-triggered release step can create a Release and upload to it.
 permissions:
@@ -36,14 +44,29 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Cache Gradle
+        # flutter-action caches the SDK + pub packages, not Gradle. Caching the
+        # Gradle dependency/wrapper store cuts several minutes off the Android
+        # build on a warm cache. Keyed on the Gradle build files so a dependency
+        # change invalidates it; the restore-keys fall back to the newest cache.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Install dependencies
         run: flutter pub get
-
+# APPEND-MARKER
       - name: Set up release signing
         # Decodes the keystore and writes android/key.properties from repo
         # secrets so the release build is signed with the real key (upgradable
         # in place). With no secret present (e.g. a fork), it no-ops and the
-        # Gradle config falls back to debug signing.
+        # Gradle config falls back to debug signing. Skipped on PRs (no APK).
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -70,17 +93,21 @@ jobs:
 
       - name: Build universal APK
         # One APK that installs on any device — no ABI-picking for the user.
+        # Skipped on PRs, where analyze + test are the gate.
+        if: github.event_name != 'pull_request'
         run: flutter build apk --release
 
       - name: Rename to MaiChat-<version>.apk
         # Give the single output a friendly, versioned name so the download is
         # obviously "the app", not app-release.apk.
+        if: github.event_name != 'pull_request'
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
           mv build/app/outputs/flutter-apk/app-release.apk \
              "build/app/outputs/flutter-apk/MaiChat-${VERSION}.apk"
 
       - name: Upload APK as workflow artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: MaiChat-apk
@@ -90,17 +117,20 @@ jobs:
       - name: Build profile APK
         # A profile build keeps the Dart VM Service open so DevTools can attach
         # and record a real performance timeline on-device — at near-release
-        # speed (unlike a debug build). Used to diagnose the floating-picture
-        # pinch on the actual phone.
+        # speed. It is a diagnostic, so it only builds on manual dispatch rather
+        # than on every push/tag (it roughly doubled the build time).
+        if: github.event_name == 'workflow_dispatch'
         run: flutter build apk --profile
 
       - name: Rename profile APK
+        if: github.event_name == 'workflow_dispatch'
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
           mv build/app/outputs/flutter-apk/app-profile.apk \
              "build/app/outputs/flutter-apk/MaiChat-${VERSION}-profile.apk"
 
       - name: Upload profile APK artifact
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: MaiChat-profile-apk
