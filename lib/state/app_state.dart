@@ -76,6 +76,7 @@ class AppState extends ChangeNotifier {
   final Map<String, int> _keyCursor = <String, int>{};
   final Random _random = Random();
   String? _defaultPresetId;
+  String? _defaultPersonaId;
   TokenizerConfig _tokenizerConfig = const TokenizerConfig();
   // The app-wide tokenizer, reading config + active model live so a settings
   // change takes effect without rebuilding the prompt builder.
@@ -289,6 +290,11 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(stored);
     _activeId = await _storage.loadActiveId();
+    // The persona new chats default to. A card the user deleted between runs
+    // leaves a dangling id, which would resolve to nobody — drop it so the
+    // profile shows "just me" rather than a ghost.
+    _defaultPersonaId = await _storage.loadDefaultPersonaId();
+    if (characterById(_defaultPersonaId) == null) _defaultPersonaId = null;
     await _adoptStoredAvatars();
   }
 
@@ -457,6 +463,24 @@ class AppState extends ChangeNotifier {
 
   Preset? get defaultPreset => presetById(_defaultPresetId);
   String? get defaultPresetId => _defaultPresetId;
+
+  /// The persona (a roster [Character]) new chats adopt as the user's identity,
+  /// or null when the user speaks as themselves by default. Mirrors the
+  /// default-preset mechanism: stored as one scalar id, resolved lazily so a
+  /// deleted card simply reads as "just me".
+  Character? get defaultPersona => characterById(_defaultPersonaId);
+  String? get defaultPersonaId => _defaultPersonaId;
+
+  /// Sets (or clears, with a null [id]) the persona new chats start with. Applied
+  /// in [newConversation] and [startChatWithCharacter]; existing threads keep
+  /// whatever persona they already have.
+  Future<void> setDefaultPersona(String? id) async {
+    if (_defaultPersonaId == id) return;
+    _defaultPersonaId = id;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveDefaultPersonaId(id);
+  }
 
   Future<void> addPreset(Preset preset) async {
     _presets.add(preset);
@@ -999,6 +1023,13 @@ class AppState extends ChangeNotifier {
 
   Future<void> deleteCharacter(String id) async {
     _characters.removeWhere((c) => c.id == id);
+    // A deleted card can no longer be the default persona; drop the pointer so
+    // new chats fall back to "just me" instead of resolving to nobody.
+    var personaCleared = false;
+    if (_defaultPersonaId == id) {
+      _defaultPersonaId = null;
+      personaCleared = true;
+    }
     // Their photos are kept, just detached: a picture the user took the trouble
     // to import and tag is worth more than the card it happened to be filed
     // under, and it still shows in the whole-app gallery. (Agnai deletes them
@@ -1019,6 +1050,7 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     await _persistCharacters();
+    if (personaCleared) await _storage.saveDefaultPersonaId(null);
     if (detached) await _persistGallery();
     if (touchedChats) await _saveConversations();
     await _sweepAvatars();
@@ -1884,6 +1916,14 @@ class AppState extends ChangeNotifier {
       ..characterId = character.id
       ..characterName = character.displayName
       ..systemPrompt = character.composedSystemPrompt();
+    // The user's default persona becomes this thread's identity — unless it *is*
+    // the character being chatted with, since nobody impersonates their own
+    // partner.
+    final persona = defaultPersona;
+    if (persona != null && persona.id != character.id) {
+      conversation.impersonateId = persona.id;
+      conversation.impersonateName = persona.displayName;
+    }
     final greetings = _greetingSwipes(character);
     if (greetings.isNotEmpty) {
       conversation.messages
@@ -1908,6 +1948,13 @@ class AppState extends ChangeNotifier {
             );
     final target = existing ?? Conversation.empty();
     if (existing == null) _conversations.insert(0, target);
+    // Seed the default persona onto a genuinely fresh thread. A reused empty
+    // thread that already carries a persona (the user set one by hand) keeps it.
+    final persona = defaultPersona;
+    if (persona != null && target.impersonateId == null) {
+      target.impersonateId = persona.id;
+      target.impersonateName = persona.displayName;
+    }
     _activeId = target.id;
     notifyListeners();
     _saveActiveId(target.id);

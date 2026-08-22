@@ -12,9 +12,11 @@ import '../screens/discover/discover_screen.dart';
 import '../screens/gallery/gallery_screen.dart';
 import '../screens/library/library_screen.dart';
 import '../screens/presets/presets_screen.dart';
+import '../screens/profile_screen.dart';
 import '../screens/section_screen.dart';
 import '../screens/settings/about_settings_page.dart';
 import '../screens/settings_screen.dart';
+import 'character_avatar.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
@@ -132,15 +134,21 @@ class AppDrawer extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(28, 20, 16, 12),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  sites == null ? 'MaiChat' : 'Discover',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        color: scheme.onSurface,
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      sites == null ? 'MaiChat' : 'Discover',
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            color: scheme.onSurface,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ),
+                  // The user's persona sits opposite the app name; tapping it
+                  // opens the profile. Only beside "MaiChat", not in Discover.
+                  if (sites == null) const _PersonaAvatarButton(),
+                ],
               ),
             ),
             Expanded(
@@ -229,6 +237,39 @@ class AppDrawer extends StatelessWidget {
           ),
         ],
       );
+}
+
+/// The persona avatar shown opposite the app name in the drawer header. Draws
+/// the default persona's picture when one is set, otherwise a neutral person
+/// glyph inviting the user to pick one. Tapping opens the profile.
+class _PersonaAvatarButton extends StatelessWidget {
+  const _PersonaAvatarButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final persona = context.watch<AppState>().defaultPersona;
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: persona == null ? 'Profile' : persona.displayName,
+      child: InkResponse(
+        radius: 28,
+        onTap: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const ProfileScreen()),
+          );
+        },
+        child: persona == null
+            ? CircleAvatar(
+                radius: 20,
+                backgroundColor: scheme.secondaryContainer,
+                child: Icon(Icons.person_outline,
+                    color: scheme.onSecondaryContainer),
+              )
+            : CharacterAvatar(character: persona, radius: 20),
+      ),
+    );
+  }
 }
 
 /// A single rounded, pill-shaped destination in the drawer body.

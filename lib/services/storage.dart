@@ -43,6 +43,7 @@ class Storage {
   static const _lorebooksKey = 'lorebooks';
   static const _galleryKey = 'gallery';
   static const _activeKey = 'activeConversation';
+  static const _defaultPersonaKey = 'defaultPersona';
   static const _presetsKey = 'presets';
   static const _globalVarsKey = 'macroGlobals';
   static const _modelCacheKey = 'modelCache';
@@ -183,6 +184,22 @@ class Storage {
 
   Future<void> saveActiveId(String id) async =>
       (await _prefs).setString(_activeKey, id);
+
+  /// The character id new chats adopt as the user's persona ("default persona"),
+  /// or null when the user speaks as themselves by default. Its own scalar entry
+  /// — the same lightweight shape as the active-conversation id — so changing it
+  /// never rewrites the roster or the conversation list.
+  Future<String?> loadDefaultPersonaId() async =>
+      (await _prefs).getString(_defaultPersonaKey);
+
+  Future<void> saveDefaultPersonaId(String? id) async {
+    final prefs = await _prefs;
+    if (id == null) {
+      await prefs.remove(_defaultPersonaKey);
+    } else {
+      await prefs.setString(_defaultPersonaKey, id);
+    }
+  }
 
   Future<List<Character>> loadCharacters() async {
     final raw = (await _prefs).getString(_charactersKey);
