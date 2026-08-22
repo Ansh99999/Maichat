@@ -364,6 +364,7 @@ class Lorebook {
     this.scanDepth,
     this.tokenBudget,
     this.recursive = false,
+    this.vectorized = false,
     this.format = LorebookFormat.manual,
     Map<String, dynamic>? extensions,
     DateTime? createdAt,
@@ -397,6 +398,11 @@ class Lorebook {
 
   /// Whether activated lore is scanned again to activate further entries.
   bool recursive;
+
+  /// Whether this book's entries may be activated **semantically** (by embedding
+  /// similarity) in addition to the keyword scan. Requires the global
+  /// [EmbeddingConfig] to be ready; inert otherwise.
+  bool vectorized;
 
   LorebookFormat format;
 
@@ -474,6 +480,7 @@ class Lorebook {
     int? scanDepth,
     int? tokenBudget,
     bool? recursive,
+    bool? vectorized,
     LorebookFormat? format,
     DateTime? updatedAt,
   }) =>
@@ -489,6 +496,7 @@ class Lorebook {
         scanDepth: scanDepth ?? this.scanDepth,
         tokenBudget: tokenBudget ?? this.tokenBudget,
         recursive: recursive ?? this.recursive,
+        vectorized: vectorized ?? this.vectorized,
         format: format ?? this.format,
         extensions: Map<String, dynamic>.from(extensions),
         createdAt: createdAt,
@@ -506,6 +514,7 @@ class Lorebook {
         if (scanDepth != null) 'scanDepth': scanDepth,
         if (tokenBudget != null) 'tokenBudget': tokenBudget,
         if (recursive) 'recursive': true,
+        if (vectorized) 'vectorized': true,
         if (format != LorebookFormat.manual) 'format': format.name,
         if (extensions.isNotEmpty) 'extensions': extensions,
         'createdAt': createdAt.toIso8601String(),
@@ -525,6 +534,7 @@ class Lorebook {
         scanDepth: _int(json['scanDepth']),
         tokenBudget: _int(json['tokenBudget']),
         recursive: json['recursive'] as bool? ?? false,
+        vectorized: json['vectorized'] as bool? ?? false,
         format: LorebookFormat.fromName(json['format']),
         extensions: json['extensions'] is Map
             ? Map<String, dynamic>.from(json['extensions'] as Map)

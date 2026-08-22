@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'models/appearance.dart';
 import 'screens/home_screen.dart';
 import 'services/avatar_store.dart';
+import 'services/embedding_store.dart';
 import 'state/app_state.dart';
 
 Future<void> main() async {
@@ -17,19 +18,24 @@ Future<void> main() async {
   // Resolved here, once, before anything can be drawn: character pictures are
   // files, and the widget that draws one looks the directory up synchronously.
   final avatars = await AvatarStore.open();
-  runApp(MaiChatApp(avatars: avatars));
+  // Embedding vectors are files too (never in prefs — see EmbeddingStore).
+  final embeddings = await EmbeddingStore.open();
+  runApp(MaiChatApp(avatars: avatars, embeddings: embeddings));
 }
 
 class MaiChatApp extends StatelessWidget {
-  const MaiChatApp({super.key, this.avatars});
+  const MaiChatApp({super.key, this.avatars, this.embeddings});
 
   /// The pictures directory, or null when the platform would not name one.
   final AvatarStore? avatars;
 
+  /// The vectors directory, or null when the platform would not name one.
+  final EmbeddingStore? embeddings;
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<AppState>(
-      create: (_) => AppState(avatars: avatars)..init(),
+      create: (_) => AppState(avatars: avatars, embeddings: embeddings)..init(),
       // Outside the builder so a late palette does not rebuild app state.
       child: DynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {

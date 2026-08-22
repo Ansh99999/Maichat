@@ -7,6 +7,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
+import '../models/embedding.dart';
 import '../models/gallery_image.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
@@ -49,6 +50,8 @@ class Storage {
   static const _modelCacheKey = 'modelCache';
   static const _tokenizerKey = 'tokenizer';
   static const _discoverKey = 'discover';
+  static const _embeddingKey = 'embeddings';
+  static const _documentsKey = 'documents';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -374,6 +377,48 @@ class Storage {
 
   Future<void> saveTokenizerConfig(TokenizerConfig config) async =>
       (await _prefs).setString(_tokenizerKey, jsonEncode(config.toJson()));
+
+  /// The app-wide embedding settings; defaults on a fresh install (feature off).
+  Future<EmbeddingConfig> loadEmbeddingConfig() async {
+    final raw = (await _prefs).getString(_embeddingKey);
+    if (raw != null) {
+      try {
+        final json = jsonDecode(raw);
+        if (json is Map<String, dynamic>) return EmbeddingConfig.fromJson(json);
+      } catch (_) {
+        // Never let bad data wedge the app.
+      }
+    }
+    return const EmbeddingConfig();
+  }
+
+  Future<void> saveEmbeddingConfig(EmbeddingConfig config) async =>
+      (await _prefs).setString(_embeddingKey, jsonEncode(config.toJson()));
+
+  /// The Data Bank documents — records only; each document's chunk text and
+  /// vectors are a file-backed collection (see [EmbeddingStore]), not here.
+  Future<List<EmbeddingDocument>> loadDocuments() async {
+    final raw = (await _prefs).getString(_documentsKey);
+    if (raw == null) return <EmbeddingDocument>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(EmbeddingDocument.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Never let bad data wedge the app.
+    }
+    return <EmbeddingDocument>[];
+  }
+
+  Future<void> saveDocuments(List<EmbeddingDocument> documents) async =>
+      (await _prefs).setString(
+        _documentsKey,
+        jsonEncode(documents.map((d) => d.toJson()).toList()),
+      );
 
   /// What Discover was left set to: the selected catalogue, whether adult
   /// results are allowed, and each section's ordering.

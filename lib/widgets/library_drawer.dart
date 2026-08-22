@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../screens/library/lorebooks_screen.dart';
+import '../screens/library/embeddings_screen.dart';
 import '../screens/library/summaries_screen.dart';
 import '../screens/section_screen.dart';
 
@@ -104,10 +105,7 @@ class LibraryDrawer extends StatelessWidget {
                     onTap: () => _go(
                       context,
                       LibrarySection.embeddings,
-                      const SectionScreen(
-                        title: 'Embeddings',
-                        icon: Icons.hub_outlined,
-                      ),
+                      const EmbeddingsScreen(),
                     ),
                   ),
                 ],

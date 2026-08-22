@@ -122,11 +122,24 @@ class WorldInfoScanner {
     String userName = 'You',
     bool includeNames = true,
     int? budget,
+    Set<String> forceActivate = const <String>{},
   }) {
+    /// The cross-book key an entry is identified by in [forceActivate], set by
+    /// the semantic (embedding) activation pass — `<bookId>#<uid>`.
+    String forceKey(Lorebook book, LorebookEntry entry) =>
+        '${book.id}#${entry.uid}';
+
     final candidates = <_Candidate>[];
     for (final book in books) {
       for (final entry in book.entries) {
-        if (entry.isUsable) candidates.add(_Candidate(book, entry));
+        final forced = forceActivate.contains(forceKey(book, entry));
+        // A semantically-activated entry counts even when it has no keywords —
+        // it matched by meaning, not by a trigger word — so long as it is
+        // switched on and has text.
+        if (entry.isUsable ||
+            (forced && entry.enabled && entry.content.trim().isNotEmpty)) {
+          candidates.add(_Candidate(book, entry));
+        }
       }
     }
     if (candidates.isEmpty) return WorldInfo.none;
@@ -163,9 +176,15 @@ class WorldInfoScanner {
         // Held back until the pass its author asked for.
         if (entry.delayUntilRecursion > pass) continue;
 
-        final hit = _find(candidate, lines, recursionText);
+        // A semantic hit activates on the first pass regardless of keywords,
+        // and skips the probability roll — it was chosen by meaning.
+        final forced =
+            pass == 0 && forceActivate.contains(forceKey(candidate.book, entry));
+        final hit = forced
+            ? const _Hit(0, '(semantic)')
+            : _find(candidate, lines, recursionText);
         if (hit == null) continue;
-        if (!_rollFor(entry)) {
+        if (!forced && !_rollFor(entry)) {
           failedRoll.add(candidate);
           continue;
         }

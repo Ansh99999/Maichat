@@ -7,6 +7,7 @@ import '../../widgets/app_drawer.dart';
 import '../../widgets/avatar_image.dart';
 import '../section_screen.dart';
 import '../summary/summary_edit_screen.dart';
+import 'embeddings_screen.dart';
 import 'lorebook_edit_screen.dart';
 import 'lorebooks_screen.dart';
 import 'summaries_screen.dart';
@@ -123,9 +124,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         child: _SectionCard(
           icon: Icons.hub_outlined,
           title: 'Embeddings',
-          subtitle: 'Long documents, searched as you talk — not built yet',
-          onTap: () => _open(
-              const SectionScreen(title: 'Embeddings', icon: Icons.hub_outlined)),
+          subtitle: 'Semantic recall of past messages, lore and documents',
+          onTap: () => _open(const EmbeddingsScreen()),
         ),
       ),
       if (recent.isNotEmpty) ...[

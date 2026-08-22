@@ -70,10 +70,18 @@ void main() {
     expect(present, isNot(contains(StorageCategory.presets)));
   });
 
-  test('embeddings is always an empty, non-manageable placeholder', () {
-    final report = StorageReport.build(prefsUsage: const {}, imageFiles: const []);
-    expect(report[StorageCategory.embeddings].bytes, 0);
-    expect(StorageCategory.embeddings.manageable, isFalse);
+  test('embeddings counts on-disk vector bytes and is manageable', () {
+    final empty =
+        StorageReport.build(prefsUsage: const {}, imageFiles: const []);
+    expect(empty[StorageCategory.embeddings].bytes, 0);
+    // Vector files live on disk (like images), passed in via vectorBytes.
+    final withVectors = StorageReport.build(
+      prefsUsage: const {},
+      imageFiles: const [],
+      vectorBytes: 2048,
+    );
+    expect(withVectors[StorageCategory.embeddings].bytes, 2048);
+    expect(StorageCategory.embeddings.manageable, isTrue);
     expect(StorageCategory.settings.manageable, isFalse);
     expect(StorageCategory.chats.manageable, isTrue);
   });

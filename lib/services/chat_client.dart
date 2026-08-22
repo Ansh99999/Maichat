@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -403,6 +404,60 @@ class ChatClient {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Embeds [texts] via an OpenAI-compatible `POST /embeddings` (the wire both
+  /// SillyTavern and Agnai use), returning one vector per input in the same
+  /// order. Batches the whole list in a single `input` array and realigns the
+  /// response by its `index` field. Throws [ChatApiException] on any failure so
+  /// the caller can back off on a 429. Not on the streaming send path.
+  Future<List<Float32List>> embed(
+    Provider provider,
+    List<String> texts, {
+    required String model,
+  }) async {
+    if (texts.isEmpty) return const <Float32List>[];
+    final name = model.trim();
+    if (name.isEmpty) throw ChatApiException('No embedding model is set.');
+    final http.Response response;
+    try {
+      response = await http
+          .post(
+            endpoint(provider.baseUrl, '/embeddings'),
+            headers: _headers(provider),
+            body: jsonEncode({'input': texts, 'model': name}),
+          )
+          .timeout(const Duration(seconds: 60));
+    } catch (e) {
+      throw ChatApiException(_describeTransport(e));
+    }
+    if (response.statusCode != 200) {
+      throw ChatApiException(
+        _describeFailure(response.statusCode, response.body),
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    final data = decoded is Map<String, dynamic> ? decoded['data'] : null;
+    if (data is! List) {
+      throw ChatApiException('Unexpected /embeddings response from this host.');
+    }
+    // Pair each embedding with its index, then sort so the order matches [texts]
+    // even if the host returns them shuffled.
+    final indexed = <MapEntry<int, Float32List>>[];
+    for (var i = 0; i < data.length; i++) {
+      final row = data[i];
+      if (row is! Map) continue;
+      final idx = (row['index'] as num?)?.toInt() ?? i;
+      final vec = row['embedding'];
+      if (vec is! List) continue;
+      final floats = Float32List(vec.length);
+      for (var j = 0; j < vec.length; j++) {
+        floats[j] = (vec[j] as num).toDouble();
+      }
+      indexed.add(MapEntry(idx, floats));
+    }
+    indexed.sort((a, b) => a.key.compareTo(b.key));
+    return indexed.map((e) => e.value).toList(growable: false);
   }
 
   /// Fetches selectable model ids from the provider's `/models` endpoint.

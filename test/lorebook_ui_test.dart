@@ -91,6 +91,14 @@ void main() {
     // A new book starts with no entries, so add one and fill it in.
     await tester.tap(find.text('Entry').first);
     await tester.pumpAndSettle();
+    // The editor gained a book-level "Use embeddings" row, so the freshly added
+    // entry card can sit below the fold in the test viewport — scroll it in so
+    // its (lazily built) fields exist before we type into them.
+    await tester.scrollUntilVisible(
+      find.widgetWithText(TextField, 'Name of entry'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.enterText(
         find.widgetWithText(TextField, 'Name of entry'), 'Storms');
     // The entry's own fields are plain TextFields — only the book-level ones are

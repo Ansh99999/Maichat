@@ -39,6 +39,8 @@ class Conversation {
     Map<String, Lorebook>? lorebookOverrides,
     this.summary,
     this.pinned = false,
+    this.embedRecall = false,
+    List<String>? documentIds,
   })  : characterOverrides =
             characterOverrides ?? <String, Character>{},
         avatarOverrides = avatarOverrides ?? <String, String>{},
@@ -46,6 +48,7 @@ class Conversation {
         variables = variables ?? <String, String>{},
         lorebookIds = lorebookIds ?? <String>[],
         participantIds = participantIds ?? <String>[],
+        documentIds = documentIds ?? <String>[],
         lorebookOverrides = lorebookOverrides ?? <String, Lorebook>{};
 
   final String id;
@@ -136,6 +139,16 @@ class Conversation {
   /// separate "Pinned" group on the home screen).
   bool pinned;
 
+  /// Whether this thread uses **semantic recall**: its messages are embedded and
+  /// the most relevant past ones are injected at reply time. Opt-in per chat,
+  /// like [summary]; inert unless the global [EmbeddingConfig] is ready.
+  bool embedRecall;
+
+  /// The **documents** (Data Bank sources) attached to this thread, by
+  /// `EmbeddingDocument.id`. Their chunks are searched semantically alongside the
+  /// chat's own history. Order is the order they were added.
+  final List<String> documentIds;
+
   /// The AI characters taking part in a **group chat**, by [Character.id], in
   /// speaking order — the chips shown in the group bar. Empty (the normal case)
   /// means a one-to-one thread, where [characterId] alone is the character; a
@@ -220,6 +233,8 @@ class Conversation {
         ),
         summary: summary?.clone(),
         pinned: pinned,
+        embedRecall: embedRecall,
+        documentIds: documentIds.toList(),
       );
 
   /// Whether this thread is bound to a saved character.
@@ -268,6 +283,8 @@ class Conversation {
           ),
         if (summary != null) 'summary': summary!.toJson(),
         if (pinned) 'pinned': true,
+        if (embedRecall) 'embedRecall': true,
+        if (documentIds.isNotEmpty) 'documentIds': documentIds,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -323,6 +340,11 @@ class Conversation {
             ? ChatSummary.fromJson(json['summary'] as Map<String, dynamic>)
             : null,
         pinned: json['pinned'] as bool? ?? false,
+        embedRecall: json['embedRecall'] as bool? ?? false,
+        documentIds: (json['documentIds'] as List?)
+            ?.map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList(),
         messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(ChatMessage.fromJson)

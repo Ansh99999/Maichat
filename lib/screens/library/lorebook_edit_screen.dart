@@ -516,6 +516,19 @@ class _LorebookEditScreenState extends State<LorebookEditScreen> {
                 hint: 'What it covers — optional', lines: 3),
             _field(_tags, 'Tags',
                 hint: 'Comma separated — how the shelf filters books'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.scatter_plot_outlined),
+              title: const Text('Use embeddings'),
+              subtitle: const Text(
+                  'Let this book activate by meaning (semantic recall), not '
+                  'only by keyword. Needs Embeddings turned on.'),
+              value: _book.vectorized,
+              onChanged: (v) {
+                setState(() => _book.vectorized = v);
+                _markDirty();
+              },
+            ),
             const SizedBox(height: 14),
             const Divider(height: 1),
           ],

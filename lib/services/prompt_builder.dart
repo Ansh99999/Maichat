@@ -66,6 +66,9 @@ class PromptBuilder {
     Map<String, String Function()>? dynamicMacros,
     String summaryText = '',
     int summaryDepth = 4,
+    String memoryText = '',
+    String docsText = '',
+    int memoryDepth = 2,
   }) {
     final charName = character?.displayName ?? '';
     // The caller may resolve a different window than the preset carries (the
@@ -249,6 +252,27 @@ class PromptBuilder {
         order: 100,
         seq: injections.length,
         part: _Part('Summary (depth $summaryDepth)', msg),
+      ));
+      fixedTokens += cost(msg);
+    }
+
+    // Semantic recall (embeddings): the retrieved past messages and any related
+    // document chunks, already wrapped in their templates by the caller. They
+    // ride the same depth-injection path as lore and the summary, so their
+    // tokens are reserved before history fills the budget and _oneSystemBlock
+    // re-tags them to a user turn — preserving the one-leading-system rule.
+    for (final entry in <(String, String)>[
+      ('Recalled memory', memoryText),
+      ('Related documents', docsText),
+    ]) {
+      final content = entry.$2.trim();
+      if (content.isEmpty) continue;
+      final msg = ChatMessage(role: 'system', content: content);
+      injections.add(_Injection(
+        depth: memoryDepth,
+        order: 90,
+        seq: injections.length,
+        part: _Part('${entry.$1} (depth $memoryDepth)', msg),
       ));
       fixedTokens += cost(msg);
     }

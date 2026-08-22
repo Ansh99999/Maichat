@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/conversation.dart';
+import '../models/embedding.dart';
 import '../models/lorebook.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
+import 'library/embeddings_screen.dart';
 import 'library/lorebook_edit_screen.dart';
 import 'summary/summary_edit_screen.dart';
 
@@ -147,6 +149,8 @@ class _ChatMemoryPanelState extends State<ChatMemoryPanel> {
               ),
               const Divider(height: 1, indent: 16, endIndent: 16),
               _SummarySection(conversation: conversation),
+              const Divider(height: 1, indent: 16, endIndent: 16),
+              _EmbeddingSection(conversation: conversation),
             ],
           ),
         ),
@@ -554,6 +558,122 @@ class _LorebookPickerSheetState extends State<_LorebookPickerSheet> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The Semantic recall section of the Memory panel: a per-chat switch for
+/// recalling past messages by meaning, plus the documents attached to this chat.
+class _EmbeddingSection extends StatelessWidget {
+  const _EmbeddingSection({required this.conversation});
+
+  final Conversation conversation;
+
+  Future<void> _attach(BuildContext context, AppState state) async {
+    final docs = state.documents;
+    if (docs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Add documents in Library ▸ Embeddings first.'),
+      ));
+      return;
+    }
+    final active = conversation.documentIds.toSet();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final d in docs)
+              CheckboxListTile(
+                value: active.contains(d.id),
+                title: Text(d.displayName),
+                subtitle: Text('${d.source.label} · ${d.chunkCount} chunks'),
+                onChanged: (_) {
+                  state.toggleConversationDocument(conversation.id, d.id);
+                  Navigator.of(context).pop();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final theme = Theme.of(context);
+    final ready = state.embeddingReady;
+    final attached = conversation.documentIds
+        .map(state.documentById)
+        .whereType<EmbeddingDocument>()
+        .toList();
+
+    return ExpansionTile(
+      shape: const Border(),
+      collapsedShape: const Border(),
+      leading: const Icon(Icons.scatter_plot_outlined),
+      title: const Text('Semantic recall'),
+      subtitle: Text(!ready
+          ? 'Off — set up in Library ▸ Embeddings'
+          : (conversation.embedRecall ? 'On' : 'Off')),
+      childrenPadding: const EdgeInsets.only(bottom: 8),
+      children: [
+        if (!ready)
+          ListTile(
+            title: const Text('Enable embeddings'),
+            subtitle: const Text(
+                'Turn the feature on and choose a provider to use recall here.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const EmbeddingsScreen())),
+          )
+        else ...[
+          SwitchListTile(
+            title: const Text('Recall past messages'),
+            subtitle: const Text(
+                'Inject the most relevant earlier messages by meaning.'),
+            value: conversation.embedRecall,
+            onChanged: (v) => state.setEmbedRecall(conversation.id, v),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text('Documents',
+                style: theme.textTheme.labelLarge
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          ),
+          if (attached.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text('None attached',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            )
+          else
+            for (final d in attached)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.description_outlined),
+                title: Text(d.displayName),
+                subtitle: Text('${d.chunkCount} chunks'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Detach',
+                  onPressed: () =>
+                      state.toggleConversationDocument(conversation.id, d.id),
+                ),
+              ),
+          ListTile(
+            leading: const Icon(Icons.add),
+            title: const Text('Attach document'),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            onTap: () => _attach(context, state),
+          ),
+        ],
+      ],
     );
   }
 }

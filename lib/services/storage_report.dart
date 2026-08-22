@@ -21,14 +21,16 @@ enum StorageCategory {
   settings;
 
   /// The prefs keys that belong to this category. Empty for [images] (files on
-  /// disk, not a prefs blob) and [embeddings] (no such feature yet — a
-  /// placeholder row) and [settings] (the catch-all for everything else).
+  /// disk, not a prefs blob) and [settings] (the catch-all for everything else).
+  /// [embeddings] owns its small config/records blobs; its bulk is the vector
+  /// files on disk (added via [StorageReport.build]'s `vectorBytes`).
   List<String> get keys => switch (this) {
         StorageCategory.chats => const ['conversations'],
         StorageCategory.characters => const ['characters'],
         StorageCategory.lorebooks => const ['lorebooks'],
         StorageCategory.presets => const ['presets'],
         StorageCategory.gallery => const ['gallery'],
+        StorageCategory.embeddings => const ['embeddings', 'documents'],
         StorageCategory.cache => const ['modelCache', 'discover'],
         _ => const <String>[],
       };
@@ -57,10 +59,10 @@ enum StorageCategory {
         StorageCategory.settings => Icons.settings_outlined,
       };
 
-  /// Whether tapping the row opens a manage screen. Embeddings is a placeholder
-  /// with nothing to manage; Settings is the read-only catch-all.
+  /// Whether tapping the row opens a manage screen. Settings is the read-only
+  /// catch-all.
   bool get manageable => switch (this) {
-        StorageCategory.embeddings || StorageCategory.settings => false,
+        StorageCategory.settings => false,
         _ => true,
       };
 }
@@ -144,6 +146,7 @@ class StorageReport {
     required Map<String, int> prefsUsage,
     required List<ImageFileStat> imageFiles,
     Map<StorageCategory, int> itemCounts = const {},
+    int vectorBytes = 0,
   }) {
     // Which category owns each known prefs key; the rest fall to `settings`.
     final owner = <String, StorageCategory>{};
@@ -164,6 +167,10 @@ class StorageReport {
     // Images live on disk, not in prefs.
     bytes[StorageCategory.images] =
         imageFiles.fold(0, (sum, f) => sum + f.bytes);
+
+    // Embedding vectors live on disk too (files, never in prefs).
+    bytes[StorageCategory.embeddings] =
+        bytes[StorageCategory.embeddings]! + vectorBytes;
 
     final categories = <StorageCategoryUsage>[];
     for (final category in StorageCategory.values) {

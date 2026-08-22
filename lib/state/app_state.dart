@@ -10,6 +10,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
+import '../models/embedding.dart';
 import '../models/floating_image.dart';
 import '../models/gallery_image.dart';
 import '../models/lorebook.dart';
@@ -20,6 +21,9 @@ import '../models/provider.dart';
 import '../models/summary.dart';
 import '../services/chat_client.dart';
 import '../services/avatar_store.dart';
+import '../services/document_sources.dart';
+import '../services/embedding_index.dart';
+import '../services/embedding_store.dart';
 import '../services/gallery_group.dart';
 import '../services/jank_logger.dart';
 import '../services/macro_context.dart';
@@ -41,11 +45,13 @@ class AppState extends ChangeNotifier {
     ChatClient? client,
     UpdateService? updateService,
     AvatarStore? avatars,
+    EmbeddingStore? embeddings,
     this.loadTimeout = const Duration(seconds: 30),
   })  : _storage = storage ?? Storage(),
         _client = client ?? ChatClient(),
         _updateService = updateService ?? UpdateService() {
     _avatars = avatars;
+    _vectors = embeddings;
   }
 
   final Storage _storage;
@@ -93,6 +99,34 @@ class AppState extends ChangeNotifier {
 
   /// Generates chat summaries in the background, off the chat's streaming path.
   final Summarizer _summarizer = Summarizer();
+
+  /// Where embedding vectors are kept (files, like [AvatarStore]); null when the
+  /// platform would not name a directory, in which case embeddings stay off.
+  EmbeddingStore? _vectors;
+
+  /// App-wide embedding settings and the Data Bank documents.
+  EmbeddingConfig _embeddingConfig = const EmbeddingConfig();
+  final List<EmbeddingDocument> _documents = <EmbeddingDocument>[];
+
+  /// The semantic-memory engine, built once the vector store is known. Null when
+  /// there is no store (feature unavailable).
+  EmbeddingIndex? _index;
+
+  /// Per-conversation retrieval results, refreshed just before each send and
+  /// read synchronously by [_assemble]: the recalled chat text, the recalled
+  /// document text, and the lorebook entry keys the semantic pass activated.
+  final Map<String, String> _memoryInjection = <String, String>{};
+  final Map<String, String> _docInjection = <String, String>{};
+  final Map<String, Set<String>> _forcedLore = <String, Set<String>>{};
+
+  /// Collection ids currently being indexed, so a second background pass for the
+  /// same collection is not started while one is in flight.
+  final Set<String> _indexing = <String>{};
+
+  /// A pending in-app notice from embedding work (an indexing/retrieval error),
+  /// and a sequence so a listener shows it once. Mirrors the summary notice.
+  String? _embeddingNotice;
+  int _embeddingNoticeSeq = 0;
 
   /// Chat ids whose summary is being (re)generated right now — guards against
   /// firing a second run for the same chat while one is in flight.
@@ -284,6 +318,16 @@ class AppState extends ChangeNotifier {
       ..addAll(await _storage.loadModelCache());
     _tokenizerConfig = await _storage.loadTokenizerConfig();
     _discoverPrefs = await _storage.loadDiscoverPrefs();
+    _embeddingConfig = await _storage.loadEmbeddingConfig();
+    _documents
+      ..clear()
+      ..addAll(await _storage.loadDocuments());
+    // The semantic-memory engine, once the vector store is known. Embedding
+    // requests use a fresh client each time (see [_embed]).
+    final vectors = _vectors;
+    if (vectors != null) {
+      _index = EmbeddingIndex(store: vectors, embed: _embed);
+    }
     final stored = await _storage.loadConversations()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _conversations
@@ -296,6 +340,8 @@ class AppState extends ChangeNotifier {
     _defaultPersonaId = await _storage.loadDefaultPersonaId();
     if (characterById(_defaultPersonaId) == null) _defaultPersonaId = null;
     await _adoptStoredAvatars();
+    // Clear vector files for anything that no longer exists (best-effort).
+    unawaited(_sweepVectors());
   }
 
   /// Moves any picture still living as base64 in the preferences store into the
@@ -1113,15 +1159,18 @@ class AppState extends ChangeNotifier {
   Future<StorageReport> storageReport() async {
     final prefsUsage = await _storage.usage();
     final images = await imageFiles();
+    final vectorBytes = await _vectors?.sizeBytes() ?? 0;
     return StorageReport.build(
       prefsUsage: prefsUsage,
       imageFiles: images,
+      vectorBytes: vectorBytes,
       itemCounts: {
         StorageCategory.chats: _conversations.length,
         StorageCategory.characters: _characters.length,
         StorageCategory.lorebooks: _lorebooks.length,
         StorageCategory.presets: _presets.length,
         StorageCategory.gallery: _gallery.length,
+        StorageCategory.embeddings: _documents.length,
       },
     );
   }
@@ -1268,6 +1317,7 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     await _persistLorebooks();
+    unawaited(_indexLoreBook(book));
   }
 
   /// Deletes a book and switches it off in every chat that was using it, so no
@@ -1283,6 +1333,7 @@ class AppState extends ChangeNotifier {
     await _persistLorebooks();
     if (touched) await _saveConversations();
     await _sweepAvatars();
+    await _vectors?.delete(EmbeddingIndex.loreCollection(id));
   }
 
   Future<void> toggleLorebookStar(String id) async {
@@ -1357,6 +1408,332 @@ class AppState extends ChangeNotifier {
       conversation.updatedAt = DateTime.now();
       notifyListeners();
       await _saveConversations();
+    }
+  }
+
+  // --- Embeddings (semantic memory + Data Bank) ----------------------------
+
+  EmbeddingConfig get embeddingConfig => _embeddingConfig;
+  List<EmbeddingDocument> get documents => List.unmodifiable(_documents);
+
+  /// Whether embeddings can actually run: enabled, a provider chosen, and a
+  /// vector store available on this platform.
+  bool get embeddingReady => _embeddingConfig.isReady && _index != null;
+
+  EmbeddingDocument? documentById(String? id) {
+    if (id == null) return null;
+    for (final d in _documents) {
+      if (d.id == id) return d;
+    }
+    return null;
+  }
+
+  /// A pending in-app notice from embedding work, shown once by a listener.
+  String? get embeddingNotice => _embeddingNotice;
+  int get embeddingNoticeSeq => _embeddingNoticeSeq;
+  void consumeEmbeddingNotice() => _embeddingNotice = null;
+
+  void _noteEmbedding(String message) {
+    _embeddingNotice = message;
+    _embeddingNoticeSeq++;
+    notifyListeners();
+  }
+
+  Future<void> updateEmbeddingConfig(EmbeddingConfig config) async {
+    final was = _embeddingConfig;
+    _embeddingConfig = config;
+    notifyListeners();
+    if (_writable) await _storage.saveEmbeddingConfig(config);
+    // A model change makes every stored vector stale; the collections re-embed
+    // lazily the next time each is indexed (they key on the stored model).
+    // When the feature has just become usable, index the vectorized books now
+    // so lore recall works without waiting for each to be re-saved.
+    if (config.isReady && (!was.isReady || was.model != config.model)) {
+      unawaited(_indexVectorizedLore());
+    }
+  }
+
+  /// The provider serving `/embeddings`, or null when none is chosen/valid.
+  Provider? _embeddingProvider() {
+    final id = _embeddingConfig.providerId;
+    if (id == null) return null;
+    for (final p in _providers) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  /// The [Embedder] handed to [EmbeddingIndex]: a fresh client per call, its key
+  /// narrowed by the same rotation the chat send uses.
+  Future<List<Float32List>> _embed(List<String> texts, String model) {
+    final base = _embeddingProvider();
+    if (base == null) {
+      throw ChatApiException('Choose an embedding provider in settings.');
+    }
+    return ChatClient().embed(_applyKey(base), texts, model: model);
+  }
+
+  /// The retrieval query: the most recent user/assistant turns, newest first,
+  /// joined — mirrors SillyTavern's `getQueryText`.
+  String _queryText(Conversation conversation) {
+    final parts = <String>[];
+    for (final m in conversation.messages.reversed) {
+      if (m.error || (m.role != 'user' && m.role != 'assistant')) continue;
+      final text = m.content.trim();
+      if (text.isEmpty) continue;
+      parts.add(text);
+      if (parts.length >= _embeddingConfig.queryMessages) break;
+    }
+    return parts.join('\n');
+  }
+
+  /// Refreshes [conversation]'s retrieval caches so the synchronous [_assemble]
+  /// can read them. Best-effort: any failure leaves the caches empty (no recall)
+  /// and never blocks the send. Awaited before each generation.
+  Future<void> _refreshMemory(Conversation conversation) async {
+    _memoryInjection.remove(conversation.id);
+    _docInjection.remove(conversation.id);
+    _forcedLore.remove(conversation.id);
+
+    final index = _index;
+    final cfg = _embeddingConfig;
+    if (index == null || !cfg.isReady) return;
+
+    final wantChat = conversation.embedRecall;
+    final books = lorebooksFor(conversation).where((b) => b.vectorized).toList();
+    final wantLore = cfg.loreActivation && books.isNotEmpty;
+    final docs = conversation.documentIds
+        .map(documentById)
+        .whereType<EmbeddingDocument>()
+        .where((d) => d.isIndexed)
+        .toList();
+    if (!wantChat && !wantLore && docs.isEmpty) return;
+
+    try {
+      final query = _queryText(conversation);
+      final qv = await index
+          .embedQuery(query, model: cfg.model)
+          .timeout(const Duration(seconds: 30));
+      if (qv == null) return;
+
+      if (wantChat) {
+        // The last `protect` messages are already in context, so their chunks
+        // are excluded from what gets recalled.
+        final tail = conversation.messages.length > cfg.protect
+            ? conversation.messages.sublist(
+                conversation.messages.length - cfg.protect)
+            : conversation.messages;
+        final exclude = EmbeddingIndex.chatChunks(tail, cfg.messageChunkSize)
+            .map(EmbeddingIndex.hashText)
+            .toSet();
+        final hits = await index.retrieve(
+          EmbeddingIndex.chatCollection(conversation.id),
+          qv,
+          topK: cfg.insert,
+          threshold: cfg.threshold,
+          model: cfg.model,
+          excludeKeys: exclude,
+        );
+        if (hits.isNotEmpty) {
+          _memoryInjection[conversation.id] = cfg.template.replaceAll(
+              '{{text}}', hits.map((h) => h.text).join('\n\n'));
+        }
+      }
+
+      if (docs.isNotEmpty) {
+        final all = <ScoredChunk>[];
+        for (final d in docs) {
+          all.addAll(await index.retrieve(
+            EmbeddingIndex.docCollection(d.id),
+            qv,
+            topK: cfg.insert,
+            threshold: cfg.threshold,
+            model: cfg.model,
+          ));
+        }
+        all.sort((a, b) => b.score.compareTo(a.score));
+        final top = all.length > cfg.insert ? all.sublist(0, cfg.insert) : all;
+        if (top.isNotEmpty) {
+          _docInjection[conversation.id] = cfg.docTemplate.replaceAll(
+              '{{text}}', top.map((h) => h.text).join('\n\n'));
+        }
+      }
+
+      if (wantLore) {
+        final forced = <String>{};
+        for (final book in books) {
+          final hits = await index.retrieve(
+            EmbeddingIndex.loreCollection(book.id),
+            qv,
+            topK: cfg.insert,
+            threshold: cfg.threshold,
+            model: cfg.model,
+          );
+          for (final h in hits) {
+            // Keys are `<uid>:<hash>`; recover the uid to force-activate it.
+            final uid = h.key.split(':').first;
+            forced.add('${book.id}#$uid');
+          }
+        }
+        if (forced.isNotEmpty) _forcedLore[conversation.id] = forced;
+      }
+    } on ChatApiException catch (e) {
+      _noteEmbedding('Semantic recall unavailable: ${e.message}');
+    } catch (_) {
+      // Any other failure just means no recall this turn.
+    }
+  }
+
+  /// Re-embeds a chat's messages in the background (only when recall is on and
+  /// the feature is ready). Guarded so one pass runs per collection at a time.
+  Future<void> _indexChat(Conversation conversation) async {
+    final index = _index;
+    if (index == null ||
+        !_embeddingConfig.isReady ||
+        !conversation.embedRecall) {
+      return;
+    }
+    final id = EmbeddingIndex.chatCollection(conversation.id);
+    if (!_indexing.add(id)) return;
+    try {
+      await index.indexChat(
+        conversation.id,
+        List<ChatMessage>.of(conversation.messages),
+        model: _embeddingConfig.model,
+        chunkSize: _embeddingConfig.messageChunkSize,
+      );
+    } on ChatApiException catch (e) {
+      _noteEmbedding('Could not index this chat: ${e.message}');
+    } catch (_) {
+      // Leave it for the next send.
+    } finally {
+      _indexing.remove(id);
+    }
+  }
+
+  /// Re-embeds a vectorized lorebook's entries in the background.
+  Future<void> _indexLoreBook(Lorebook book) async {
+    final index = _index;
+    if (index == null || !_embeddingConfig.isReady) return;
+    final id = EmbeddingIndex.loreCollection(book.id);
+    if (!book.vectorized) {
+      await _vectors?.delete(id);
+      return;
+    }
+    if (!_indexing.add(id)) return;
+    try {
+      await index.indexLore(book.id, book.entries,
+          model: _embeddingConfig.model);
+    } on ChatApiException catch (e) {
+      _noteEmbedding('Could not index "${book.displayName}": ${e.message}');
+    } catch (_) {
+      // Retried next time the book is saved.
+    } finally {
+      _indexing.remove(id);
+    }
+  }
+
+  /// Indexes every vectorized book — fired after a lorebook is saved.
+  Future<void> _indexVectorizedLore() async {
+    if (!_embeddingConfig.isReady) return;
+    for (final book in _lorebooks) {
+      if (book.vectorized) await _indexLoreBook(book);
+    }
+  }
+
+  /// Turns [conversation]'s semantic recall on or off, indexing immediately when
+  /// switched on so recall works from the next turn.
+  Future<void> setEmbedRecall(String conversationId, bool on) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null || conversation.embedRecall == on) return;
+    conversation.embedRecall = on;
+    notifyListeners();
+    await _saveConversations();
+    if (on) unawaited(_indexChat(conversation));
+  }
+
+  /// Attaches/detaches a document to a chat (toggles).
+  Future<void> toggleConversationDocument(
+      String conversationId, String docId) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (!conversation.documentIds.remove(docId)) {
+      conversation.documentIds.add(docId);
+    }
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  Future<void> _persistDocuments() async {
+    if (!_writable) return;
+    await _storage.saveDocuments(_documents);
+  }
+
+  /// Ingests a [DocumentText] (already extracted from a file/URL/paste): records
+  /// it, chunks and embeds it into its own collection, and persists. Returns the
+  /// document, or null when embeddings are not ready. Throws on an embed failure.
+  Future<EmbeddingDocument?> importDocument(DocumentText doc) async {
+    final index = _index;
+    if (index == null || !_embeddingConfig.isReady) {
+      _noteEmbedding('Turn embeddings on and pick a provider first.');
+      return null;
+    }
+    final record = EmbeddingDocument(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: doc.name,
+      source: doc.source,
+      origin: doc.origin,
+      model: _embeddingConfig.model,
+    );
+    final count = await index.indexDocument(
+      record.id,
+      doc.text,
+      model: _embeddingConfig.model,
+      chunkSize: _embeddingConfig.docChunkSize,
+      overlapPercent: _embeddingConfig.docOverlapPercent,
+    );
+    record.chunkCount = count;
+    _documents.insert(0, record);
+    notifyListeners();
+    await _persistDocuments();
+    return record;
+  }
+
+  Future<void> renameDocument(String id, String name) async {
+    final index = _documents.indexWhere((d) => d.id == id);
+    if (index == -1) return;
+    _documents[index].name = name.trim();
+    notifyListeners();
+    await _persistDocuments();
+  }
+
+  /// Deletes a document, its vector file, and detaches it from every chat.
+  Future<void> deleteDocument(String id) async {
+    _documents.removeWhere((d) => d.id == id);
+    await _vectors?.delete(EmbeddingIndex.docCollection(id));
+    var touched = false;
+    for (final c in _conversations) {
+      if (c.documentIds.remove(id)) touched = true;
+    }
+    notifyListeners();
+    await _persistDocuments();
+    if (touched) await _saveConversations();
+  }
+
+  /// Removes vector collections for chats, books and documents that no longer
+  /// exist — run once at startup to clear orphaned files.
+  Future<void> _sweepVectors() async {
+    final store = _vectors;
+    if (store == null) return;
+    final keep = <String>{
+      for (final c in _conversations) EmbeddingIndex.chatCollection(c.id),
+      for (final b in _lorebooks) EmbeddingIndex.loreCollection(b.id),
+      for (final d in _documents) EmbeddingIndex.docCollection(d.id),
+    };
+    try {
+      await store.sweep(keep);
+    } catch (_) {
+      // Best-effort cleanup.
     }
   }
 
@@ -2179,6 +2556,10 @@ class AppState extends ChangeNotifier {
         ? (responder ?? nextSpeaker(conversation))
         : responder;
 
+    // Refresh semantic-recall caches before assembling, so the synchronous
+    // [_assemble] can inject what was retrieved. Best-effort and time-boxed.
+    await _refreshMemory(conversation);
+
     final assembled = _assemble(conversation, historyEnd: swipeInto, responder: speaker);
     final history = assembled.messages;
     final params = assembled.params;
@@ -2290,6 +2671,9 @@ class AppState extends ChangeNotifier {
     // the send completes immediately; it runs off the streaming path, saves and
     // notifies itself.
     unawaited(maybeSummarize(conversation));
+    // Re-index this chat's messages for semantic recall (no-op unless recall is
+    // on and embeddings are ready). Off the send path, like the summary.
+    unawaited(_indexChat(conversation));
   }
 
   /// Joins provider-returned thinking with thinking parsed out of the reply
@@ -2730,7 +3114,12 @@ class AppState extends ChangeNotifier {
       history: priorTurns,
       charName: character?.displayName ?? conversation.characterName ?? '',
       userName: userName,
+      forceActivate: _forcedLore[conversation.id] ?? const <String>{},
     );
+
+    // Semantic-recall text, retrieved before this call by [_refreshMemory].
+    final memoryText = _memoryInjection[conversation.id] ?? '';
+    final docsText = _docInjection[conversation.id] ?? '';
 
     // Leading system turns injected by AppState (ahead of the built prompt),
     // each surfaced as its own breakdown section.
@@ -2799,6 +3188,9 @@ class AppState extends ChangeNotifier {
         lore: lore,
         dynamicMacros: {'summary': () => summaryText},
         summaryText: summaryText,
+        memoryText: memoryText,
+        docsText: docsText,
+        memoryDepth: _embeddingConfig.depth,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently
@@ -2869,6 +3261,10 @@ class AppState extends ChangeNotifier {
           ...lore.injections.map((i) => i.text),
         ].where((s) => s.isNotEmpty).join('\n'),
       );
+      // No preset means no depth slots, so recalled memory/documents ride as
+      // leading blocks too rather than being retrieved and then discarded.
+      addPrefix('Recalled memory', memoryText);
+      addPrefix('Related documents', docsText);
       messages = <ChatMessage>[...prefix, ...history];
       if (history.isNotEmpty) {
         sections.add(PromptSection(

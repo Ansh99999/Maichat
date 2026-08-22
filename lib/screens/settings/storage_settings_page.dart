@@ -4,6 +4,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../../services/storage_report.dart';
 import '../../state/app_state.dart';
 import '../../widgets/storage_bar.dart';
+import '../library/embeddings_screen.dart';
 import 'storage_category_screen.dart';
 
 /// Settings ▸ Storage: how much room the app is using, split by category, with a
@@ -27,6 +28,7 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
     final page = switch (category) {
       StorageCategory.images => const StorageImagesScreen(),
       StorageCategory.cache => const StorageCacheScreen(),
+      StorageCategory.embeddings => const EmbeddingsScreen(),
       _ => StorageCategoryScreen(category: category),
     };
     Navigator.of(context)
