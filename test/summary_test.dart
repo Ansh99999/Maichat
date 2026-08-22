@@ -63,6 +63,18 @@ void main() {
       clone.segments.first.content = 'changed';
       expect(original.segments.first.content, 'First part.');
     });
+
+    test('manual segments round-trip and copyWith preserves the flag', () {
+      final seg = SummarySegment(
+          id: 'm1', title: 'Mine', content: 'hand written', manual: true);
+      final back = SummarySegment.fromJson(seg.toJson());
+      expect(back.manual, isTrue);
+      // copyWith without touching `manual` keeps it.
+      expect(seg.copyWith(content: 'edited').manual, isTrue);
+      // A generated segment stays non-manual through JSON.
+      final gen = SummarySegment(id: 'g', content: 'auto');
+      expect(SummarySegment.fromJson(gen.toJson()).manual, isFalse);
+    });
   });
 
   group('Conversation carries summary and lorebook overrides', () {

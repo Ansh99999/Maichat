@@ -1379,11 +1379,12 @@ class AppState extends ChangeNotifier {
   }
 
   /// Wipes the summary and rebuilds it from the start (the "Re-summarise" button).
+  /// The user's own hand-written blocks are kept.
   Future<void> resummarize(String conversationId) async {
     final c = _conversationById(conversationId);
     final cfg = c?.summary;
     if (c == null || cfg == null) return;
-    cfg.segments.clear();
+    cfg.segments.removeWhere((s) => !s.manual);
     cfg.lastSummarizedIndex = 0;
     await _runSummary(c, cfg, force: true);
   }
@@ -2446,6 +2447,8 @@ class AppState extends ChangeNotifier {
       final stamp = DateTime.now().microsecondsSinceEpoch;
       if (cfg.method == SummaryMethod.rolling) {
         final content = ok.map((r) => r.text).join('\n\n');
+        // Keep the user's hand-written blocks; only the generated one is replaced.
+        final manual = cfg.segments.where((s) => s.manual).toList();
         cfg.segments
           ..clear()
           ..add(SummarySegment(
@@ -2455,7 +2458,8 @@ class AppState extends ChangeNotifier {
             startIndex: 0,
             endIndex: ok.last.endIndex,
             tokens: estimateTokens(content),
-          ));
+          ))
+          ..addAll(manual);
       } else {
         for (var i = 0; i < ok.length; i++) {
           final r = ok[i];

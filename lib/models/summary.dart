@@ -37,6 +37,7 @@ class SummarySegment {
     this.endIndex = 0,
     DateTime? createdAt,
     this.tokens = 0,
+    this.manual = false,
   }) : createdAt = createdAt ?? DateTime.now();
 
   final String id;
@@ -54,12 +55,17 @@ class SummarySegment {
   /// Cached token count of [content] under the app tokenizer, for the UI readout.
   int tokens;
 
+  /// Whether the user authored this block by hand (vs. generated). Manual blocks
+  /// are never wiped by a re-summarise — they are the user's own memory.
+  bool manual;
+
   SummarySegment copyWith({
     String? title,
     String? content,
     int? startIndex,
     int? endIndex,
     int? tokens,
+    bool? manual,
   }) =>
       SummarySegment(
         id: id,
@@ -69,6 +75,7 @@ class SummarySegment {
         endIndex: endIndex ?? this.endIndex,
         createdAt: createdAt,
         tokens: tokens ?? this.tokens,
+        manual: manual ?? this.manual,
       );
 
   Map<String, dynamic> toJson() => {
@@ -79,6 +86,7 @@ class SummarySegment {
         'endIndex': endIndex,
         'createdAt': createdAt.toIso8601String(),
         if (tokens > 0) 'tokens': tokens,
+        if (manual) 'manual': true,
       };
 
   factory SummarySegment.fromJson(Map<String, dynamic> json) => SummarySegment(
@@ -90,6 +98,7 @@ class SummarySegment {
         endIndex: (json['endIndex'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
         tokens: (json['tokens'] as num?)?.toInt() ?? 0,
+        manual: json['manual'] as bool? ?? false,
       );
 }
 /// A chat's summary configuration and accumulated text. Lives on the

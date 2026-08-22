@@ -40,6 +40,9 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   final List<TextEditingController> _segTitle = [];
   final List<TextEditingController> _segBody = [];
 
+  /// Which segment indices are currently in edit mode (typing in place).
+  final Set<int> _editing = {};
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +69,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       _segTitle.add(TextEditingController(text: s.title));
       _segBody.add(TextEditingController(text: s.content));
     }
+    _editing.clear();
     _dirty = false;
   }
 
@@ -321,6 +325,24 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       _segTitle.removeAt(i).dispose();
       _segBody.removeAt(i).dispose();
       _segments.removeAt(i);
+      // Indices shifted; simplest correct thing is to drop edit state.
+      _editing.clear();
+      _dirty = true;
+    });
+  }
+
+  /// Adds an empty, hand-written block (the pencil button) and drops straight
+  /// into editing it. It is treated exactly like a generated block, but is never
+  /// wiped by a re-summarise.
+  void _addManual() {
+    setState(() {
+      _segments.add(SummarySegment(
+        id: 'm${DateTime.now().microsecondsSinceEpoch}',
+        manual: true,
+      ));
+      _segTitle.add(TextEditingController());
+      _segBody.add(TextEditingController());
+      _editing.add(_segments.length - 1);
       _dirty = true;
     });
   }
@@ -438,33 +460,55 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   }
 
   Widget _segmentsView(ThemeData theme, ColorScheme scheme) {
-    if (_segments.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: Text('No summary yet — tap “Summarise now”.',
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant)),
-        ),
-      );
-    }
     return Column(
-      key: ValueKey(_segments.length),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (var i = 0; i < _segments.length; i++)
-          Card(
-            elevation: 0,
-            color: scheme.surfaceContainerLow,
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: _addManual,
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Write your own'),
+          ),
+        ),
+        const SizedBox(height: 4),
+        if (_segments.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                'No summary yet — tap “Summarise now”, or write your own.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          )
+        else
+          for (var i = 0; i < _segments.length; i++)
+            _segmentCard(i, theme, scheme),
+      ],
+    );
+  }
+
+  Widget _segmentCard(int i, ThemeData theme, ColorScheme scheme) {
+    final editing = _editing.contains(i);
+    final manual = _segments[i].manual;
+    return Card(
+      key: ValueKey(_segments[i].id),
+      elevation: 0,
+      color: scheme.surfaceContainerLow,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 6, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: editing
+                      ? TextField(
                           controller: _segTitle[i],
                           onChanged: (_) => _markDirty(),
                           style: theme.textTheme.titleSmall,
@@ -473,31 +517,78 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
                             border: InputBorder.none,
                             hintText: 'Title',
                           ),
+                        )
+                      : Text(
+                          _segTitle[i].text.trim().isEmpty
+                              ? (manual ? 'Your note' : 'Summary')
+                              : _segTitle[i].text,
+                          style: theme.textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                ),
+                if (manual)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text('Custom',
+                        style: theme.textTheme.labelSmall
+                            ?.copyWith(color: scheme.primary)),
+                  ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: editing ? 'Done' : 'Edit',
+                  icon: Icon(editing ? Icons.check : Icons.edit_outlined,
+                      size: 20),
+                  onPressed: () => setState(() {
+                    if (editing) {
+                      _editing.remove(i);
+                    } else {
+                      _editing.add(i);
+                    }
+                  }),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Delete',
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: () => _deleteSegment(i),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeInOut,
+              alignment: Alignment.topCenter,
+              child: editing
+                  ? TextField(
+                      controller: _segBody[i],
+                      onChanged: (_) => _markDirty(),
+                      maxLines: null,
+                      minLines: 3,
+                      autofocus: _segBody[i].text.isEmpty,
+                      style: theme.textTheme.bodyMedium,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        hintText: 'Type the memory here, like a prompt.',
+                      ),
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.only(right: 8, bottom: 2),
+                      child: Text(
+                        _segBody[i].text.trim().isEmpty
+                            ? 'Empty — tap the pencil to write.'
+                            : _segBody[i].text,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: _segBody[i].text.trim().isEmpty
+                              ? scheme.onSurfaceVariant
+                              : null,
                         ),
                       ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.delete_outline, size: 20),
-                        onPressed: () => _deleteSegment(i),
-                      ),
-                    ],
-                  ),
-                  TextField(
-                    controller: _segBody[i],
-                    onChanged: (_) => _markDirty(),
-                    maxLines: null,
-                    minLines: 3,
-                    style: theme.textTheme.bodyMedium,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'The summary text — edit it like a prompt.',
                     ),
-                  ),
-                ],
-              ),
             ),
-          ),
-      ],
+          ],
+        ),
+      ),
     );
   }
 // CONFIG-MARKER
