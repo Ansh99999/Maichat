@@ -102,6 +102,11 @@ class AppState extends ChangeNotifier {
   String? _summaryNotice;
   int _summaryNoticeSeq = 0;
 
+  /// The error from the most recent summary run, or null on success — read by the
+  /// summary editor right after it triggers a run (the transient notice can be
+  /// consumed by the chat screen first).
+  String? _lastSummaryError;
+
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
   ChatInterface _chatInterface = const ChatInterface();
@@ -1318,6 +1323,10 @@ class AppState extends ChangeNotifier {
   int get summaryNoticeSeq => _summaryNoticeSeq;
   void consumeSummaryNotice() => _summaryNotice = null;
 
+  /// The error from the last summary run (null on success). For the editor to
+  /// report a failure it triggered directly.
+  String? get lastSummaryError => _lastSummaryError;
+
   /// Whether [conversation] has a summary run in flight.
   bool isSummarizing(Conversation conversation) =>
       _summarizing.contains(conversation.id);
@@ -2422,9 +2431,18 @@ class AppState extends ChangeNotifier {
       final ok = results.where((r) => r.ok).toList()
         ..sort((a, b) => a.startIndex.compareTo(b.startIndex));
       if (ok.isEmpty) {
-        if (cfg.notify) _raiseSummaryNotice('Summary failed — check the provider');
+        // Always surface a failure — the user needs to know why nothing appeared,
+        // regardless of the "notify" preference.
+        final err = results
+            .map((r) => r.error)
+            .firstWhere((e) => e != null && e.isNotEmpty, orElse: () => null);
+        _lastSummaryError = err ?? 'The summariser returned nothing.';
+        _raiseSummaryNotice(err == null
+            ? 'The summariser returned nothing.'
+            : 'Summary failed: $err');
         return;
       }
+      _lastSummaryError = null;
       final stamp = DateTime.now().microsecondsSinceEpoch;
       if (cfg.method == SummaryMethod.rolling) {
         final content = ok.map((r) => r.text).join('\n\n');

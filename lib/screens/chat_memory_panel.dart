@@ -275,74 +275,93 @@ class _SummarySection extends StatelessWidget {
       ),
       childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       children: [
-        if (!enabled)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Turn on to keep a running memory of this chat that is fed back '
-              'into the prompt as it grows.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          )
-        else ...[
-          Row(
-            children: [
-              Icon(Icons.token_outlined, size: 16, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  busy
-                      ? 'Summarising…'
-                      : '${cfg!.totalTokens} tokens · summarised to message '
-                          '${cfg.lastSummarizedIndex}',
-                  style: theme.textTheme.labelMedium
-                      ?.copyWith(color: scheme.onSurfaceVariant),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Stack(
-            children: [
-              Container(
-                height: 140,
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(12, 12, 40, 12),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: SingleChildScrollView(
-                  child: Text(
-                    (cfg?.hasText ?? false)
-                        ? cfg!.combinedText
-                        : 'No summary yet. One is made every '
-                            '${cfg?.interval ?? 0} messages, or tap the '
-                            'fullscreen button to summarise now.',
-                    style: theme.textTheme.bodySmall,
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOut,
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: !enabled
+                ? Align(
+                    key: const ValueKey('off'),
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Turn on to keep a running memory of this chat that is fed '
+                      'back into the prompt as it grows.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  )
+                : Column(
+                    key: const ValueKey('on'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.token_outlined,
+                              size: 16, color: scheme.onSurfaceVariant),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              busy
+                                  ? 'Summarising…'
+                                  : '${cfg!.totalTokens} tokens · to message '
+                                      '${cfg.lastSummarizedIndex}',
+                              style: theme.textTheme.labelMedium
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Stack(
+                        children: [
+                          InkWell(
+                            onTap: () => _openFull(context),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              height: 140,
+                              width: double.infinity,
+                              padding: const EdgeInsets.fromLTRB(12, 12, 40, 12),
+                              decoration: BoxDecoration(
+                                color: scheme.surfaceContainerHigh,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: SingleChildScrollView(
+                                child: Text(
+                                  (cfg?.hasText ?? false)
+                                      ? cfg!.combinedText
+                                      : 'No summary yet. One is made every '
+                                          '${cfg?.interval ?? 0} messages — or '
+                                          'tap to open and summarise now.',
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            child: IconButton(
+                              tooltip: 'Open full memory',
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(Icons.fullscreen, size: 20),
+                              onPressed: () => _openFull(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ),
-              ),
-              Positioned(
-                top: 2,
-                right: 2,
-                child: IconButton(
-                  tooltip: 'Open full memory',
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.fullscreen, size: 20),
-                  onPressed: () => _openFull(context),
-                ),
-              ),
-            ],
           ),
-        ],
+        ),
       ],
     );
   }
 }
 
-/// How much a book holds, in one line. Entries that are switched off are called/// out because they do not activate — a book showing "12 entries" that injects
+/// How much a book holds, in one line. Entries that are switched off are called
+/// out because they do not activate — a book showing "12 entries" that injects
 /// nothing would otherwise look broken.
 String _entryCountLabel(Lorebook book) {
   final total = book.entries.length;

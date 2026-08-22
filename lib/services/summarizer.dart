@@ -97,22 +97,28 @@ class Summarizer {
     for (var attempt = 0;; attempt++) {
       final client = _newClient();
       final buf = StringBuffer();
+      final reasoning = StringBuffer();
       try {
+        // Stream, like the chat itself does. A non-streaming round trip failed
+        // silently on providers/gateways that only support SSE (the summary came
+        // back empty), so mirror the path we already know works for this device.
         await for (final d in client.streamChat(
           provider: provider,
           history: messages,
-          params: GenParams(
-            stream: false,
-            maxTokens: maxTokens,
-            temperature: 0.3,
-          ),
+          params: GenParams(maxTokens: maxTokens, temperature: 0.3),
         )) {
-          buf.write(d.text);
+          if (d.text.isNotEmpty) buf.write(d.text);
+          if (d.reasoning.isNotEmpty) reasoning.write(d.reasoning);
         }
+        // Prefer the answer; if a reasoning-only model returned no answer text,
+        // fall back to its thinking so the summary is never silently empty.
+        final text = buf.toString().trim().isNotEmpty
+            ? buf.toString().trim()
+            : reasoning.toString().trim();
         return SummaryResult(
           startIndex: req.startIndex,
           endIndex: req.endIndex,
-          text: buf.toString().trim(),
+          text: text,
         );
       } on ChatApiException catch (e) {
         final rateLimited = e.message.contains('429') ||
