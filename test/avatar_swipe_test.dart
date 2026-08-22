@@ -383,6 +383,40 @@ void main() {
     });
   });
 
+  group('the swipe pages do not reshuffle when a picture is chosen', () {
+    // The real "original avatar flashes back on Set": avatarPoolIn lists the
+    // thread's current pick first, so setting an override reorders the pool. If
+    // the PageView read the live pool it would slide a different picture under
+    // the page you're on the instant you tapped Set. The pool is frozen for the
+    // sheet's life, so the page you chose keeps showing what you chose.
+    testWidgets('choosing a picture leaves the viewed page unchanged',
+        (tester) async {
+      final state = await chatWith();
+      await pumpChat(tester, state);
+      await openAvatar(tester);
+
+      // Swipe to the second picture.
+      await tester.drag(find.byType(PageView), const Offset(-400, 0));
+      await tester.pumpAndSettle();
+      expect(find.text('2 / 2'), findsOneWidget);
+
+      double centreX(String ref) =>
+          tester.getCenter(find.byKey(ValueKey('avatar-page-$ref'))).dx;
+      // The second picture is the one centred in the viewport now.
+      expect(centreX('local:two.png'), moreOrLessEquals(200, epsilon: 8));
+
+      // Apply it as the thread's avatar — the state change Set makes — without
+      // leaving, so we can inspect the page that would flash.
+      await state.setChatAvatar(state.active.id, 'aria', 'local:two.png');
+      await tester.pump();
+
+      // With the pool frozen, the viewed page still shows the chosen picture;
+      // the live-pool bug slid picture one (now first) under it.
+      expect(centreX('local:two.png'), moreOrLessEquals(200, epsilon: 8),
+          reason: 'the chosen picture must stay put, not flash the original');
+    });
+  });
+
   group('the avatar image holds its frame across a swap', () {
     testWidgets('CharacterAvatar draws with gaplessPlayback', (tester) async {
       // Belt to the precache's braces: swapping the provider must never blink to

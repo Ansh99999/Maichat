@@ -56,6 +56,12 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
   /// should show what you are looking at, not the start of the list.
   bool _aimed = false;
 
+  /// The pictures to swipe, captured once. Frozen on purpose: [avatarPoolIn]
+  /// lists the thread's *current* pick first, so tapping Set reorders it — the
+  /// live pool would slide a different picture under the page you're on the
+  /// instant you choose one, which is the "original avatar flashes back" on Set.
+  List<String>? _pool;
+
   @override
   void dispose() {
     _pages?.dispose();
@@ -131,7 +137,9 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
       );
     }
 
-    final pool = state.avatarPoolIn(conversation, widget.characterId);
+    // Captured once and reused: the pool must not reshuffle under the PageView
+    // when Set changes the override (see [_pool]).
+    final pool = _pool ??= state.avatarPoolIn(conversation, widget.characterId);
     final current = state.avatarRefFor(conversation, character);
     if (!_aimed) {
       _aimed = true;
@@ -172,7 +180,8 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
                   controller: _pages,
                   itemCount: pool.length,
                   onPageChanged: (i) => setState(() => _index = i),
-                  itemBuilder: (context, i) => _AvatarPage(ref: pool[i]),
+                  itemBuilder: (context, i) =>
+                      _AvatarPage(key: ValueKey('avatar-page-${pool[i]}'), ref: pool[i]),
                 ),
                 Positioned(
                   left: 0,
@@ -196,7 +205,7 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
 /// One picture in the swipe run, zoomable so a detail can be checked before
 /// choosing it.
 class _AvatarPage extends StatelessWidget {
-  const _AvatarPage({required this.ref});
+  const _AvatarPage({super.key, required this.ref});
 
   final String ref;
 
