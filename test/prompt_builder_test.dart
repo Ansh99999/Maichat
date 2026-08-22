@@ -142,4 +142,45 @@ void main() {
     final sum = built.sections.fold<int>(0, (a, s) => a + s.tokens);
     expect(sum, built.estimatedTokens);
   });
+
+  test('auto-injects the summary as a user turn at a depth', () {
+    final built = builder.build(
+      preset: Preset.create(),
+      character: _alice(),
+      history: _history(4),
+      summaryText: 'They are old friends.',
+      summaryDepth: 2,
+    );
+    final joined = built.messages.map((m) => m.content).join('\n');
+    expect(joined, contains('<past_events>'));
+    expect(joined, contains('They are old friends.'));
+
+    // The one-leading-system invariant holds: system messages form a leading run
+    // only, and the injected summary (landing inside the history) is not system.
+    var seenNonSystem = false;
+    for (final m in built.messages) {
+      if (m.role != 'system') {
+        seenNonSystem = true;
+      } else {
+        expect(seenNonSystem, isFalse,
+            reason: 'a system message appeared after the conversation started');
+      }
+    }
+    final summaryTurn =
+        built.messages.firstWhere((m) => m.content.contains('<past_events>'));
+    expect(summaryTurn.role, isNot('system'));
+  });
+
+  test('does not auto-inject when the preset already uses {{summary}}', () {
+    final preset = Preset.create();
+    preset.blockById(PromptId.main)!.content += '\n{{summary}}';
+    final built = builder.build(
+      preset: preset,
+      character: _alice(),
+      history: _history(2),
+      summaryText: 'Should not be wrapped.',
+    );
+    final joined = built.messages.map((m) => m.content).join('\n');
+    expect(joined.contains('<past_events>'), isFalse);
+  });
 }

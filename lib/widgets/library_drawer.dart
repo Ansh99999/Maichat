@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../screens/library/lorebooks_screen.dart';
+import '../screens/library/summaries_screen.dart';
 import '../screens/section_screen.dart';
 
 /// Which Library destination is currently on screen, so the drawer can show it
 /// selected.
-enum LibrarySection { home, lorebooks, scenarios, embeddings }
+enum LibrarySection { home, lorebooks, summaries, scenarios, embeddings }
 
 /// The navigation drawer for the Library area (lorebooks, scenarios,
 /// embeddings).
@@ -75,6 +76,13 @@ class LibraryDrawer extends StatelessWidget {
                     selected: selected == LibrarySection.lorebooks,
                     onTap: () => _go(context, LibrarySection.lorebooks,
                         const LorebooksScreen()),
+                  ),
+                  _NavItem(
+                    icon: Icons.summarize_outlined,
+                    label: 'Summary',
+                    selected: selected == LibrarySection.summaries,
+                    onTap: () => _go(context, LibrarySection.summaries,
+                        const SummariesScreen()),
                   ),
                   _NavItem(
                     icon: Icons.theater_comedy_outlined,

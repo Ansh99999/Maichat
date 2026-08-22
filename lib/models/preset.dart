@@ -52,6 +52,8 @@ class Preset {
     this.thinkingBudget = 0,
     this.thinkStartTag = '<think>',
     this.thinkEndTag = '</think>',
+    // Summary
+    this.summaryBudget = 512,
     // Prompt blocks
     List<PromptBlock>? prompts,
     List<PromptOrderEntry>? promptOrder,
@@ -138,6 +140,11 @@ class Preset {
   String thinkStartTag;
   String thinkEndTag;
 
+  // --- Summary -------------------------------------------------------------
+  /// Default max-tokens budget for a chat summary request, used when a chat's
+  /// own `ChatSummary.budget` is null. MaiChat-only; not emitted to ST/Agnai.
+  int summaryBudget;
+
   // --- Prompt blocks -------------------------------------------------------
   final List<PromptBlock> prompts;
   final List<PromptOrderEntry> promptOrder;
@@ -189,6 +196,7 @@ class Preset {
         thinkingBudget: thinkingBudget,
         thinkStartTag: thinkStartTag,
         thinkEndTag: thinkEndTag,
+        summaryBudget: summaryBudget,
         prompts: prompts.map((b) => b.copy()).toList(),
         promptOrder: promptOrder.map((e) => e.copy()).toList(),
         extensions: Map<String, dynamic>.from(extensions),
@@ -229,6 +237,7 @@ class Preset {
         'thinkingBudget': thinkingBudget,
         'thinkStartTag': thinkStartTag,
         'thinkEndTag': thinkEndTag,
+        'summaryBudget': summaryBudget,
         'prompts': prompts.map((b) => b.toJson()).toList(),
         'promptOrder': promptOrder.map((e) => e.toJson()).toList(),
         if (extensions.isNotEmpty) 'extensions': extensions,
@@ -297,6 +306,7 @@ class Preset {
       // feature up.
       thinkStartTag: json['thinkStartTag'] as String? ?? '<think>',
       thinkEndTag: json['thinkEndTag'] as String? ?? '</think>',
+      summaryBudget: (json['summaryBudget'] as num?)?.toInt() ?? 512,
       prompts: blocks(),
       promptOrder: order(),
       extensions: (json['extensions'] as Map?)?.cast<String, dynamic>(),

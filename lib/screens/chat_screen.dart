@@ -48,6 +48,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// The index of the message currently being edited in place, or null.
   int? _editingIndex;
 
+  /// The last summary-notice sequence shown, so a completed background summary
+  /// toasts exactly once (see [AppState.summaryNoticeSeq]).
+  int _lastSummarySeq = 0;
+
   /// Whether the "jump to latest" affordance is showing. It appears once the
   /// thread is scrolled a screenful or so above the bottom, so a long scroll
   /// back doesn't have to be undone by hand.
@@ -237,6 +241,17 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     if (!state.ready) return const StartupScreen();
+    // A background summary finished with notifications on: toast it once.
+    if (state.summaryNoticeSeq != _lastSummarySeq) {
+      _lastSummarySeq = state.summaryNoticeSeq;
+      final notice = state.summaryNotice;
+      if (notice != null) {
+        state.consumeSummaryNotice();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _toast(notice);
+        });
+      }
+    }
     final conversation = state.active;
     if (state.streaming) _scrollToEnd();
     final topInset = MediaQuery.paddingOf(context).top;

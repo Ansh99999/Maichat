@@ -40,9 +40,13 @@ enum _EntrySort {
 /// and keying by index would hand one entry's controller to another. Nothing is
 /// written into the model until Save.
 class LorebookEditScreen extends StatefulWidget {
-  const LorebookEditScreen({super.key, this.book});
+  const LorebookEditScreen({super.key, this.book, this.conversationId});
 
   final Lorebook? book;
+
+  /// When set, the editor was opened inside a chat: saving offers "this chat
+  /// only" (a per-chat override) as well as "global". Null means library-only.
+  final String? conversationId;
 
   @override
   State<LorebookEditScreen> createState() => _LorebookEditScreenState();
@@ -323,6 +327,51 @@ class _LorebookEditScreenState extends State<LorebookEditScreen> {
 
     final state = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
+
+    // Opened inside a chat: let the user keep the edit local to this thread or
+    // push it to the shared library (mirrors the per-chat preset editor).
+    final conversationId = widget.conversationId;
+    if (conversationId != null) {
+      final scope = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Save lorebook'),
+          content: const Text(
+            'Apply your changes to just this chat, or to the whole lorebook '
+            '(everywhere it is used)?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('chat'),
+              child: const Text('This chat only'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('all'),
+              child: const Text('Global'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      );
+      if (scope == null || !mounted) return;
+      if (scope == 'chat') {
+        await state.saveChatLorebookOverride(conversationId, _book);
+      } else {
+        await state.saveLorebook(_book);
+      }
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text(scope == 'chat'
+            ? 'Saved "${_book.displayName}" for this chat.'
+            : 'Saved "${_book.displayName}".'),
+      ));
+      Navigator.of(context).pop(_book);
+      return;
+    }
+
     await state.saveLorebook(_book);
     if (!mounted) return;
     messenger.showSnackBar(SnackBar(

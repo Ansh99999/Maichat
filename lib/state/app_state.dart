@@ -17,6 +17,7 @@ import '../models/message.dart';
 import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
+import '../models/summary.dart';
 import '../services/chat_client.dart';
 import '../services/avatar_store.dart';
 import '../services/gallery_group.dart';
@@ -28,6 +29,7 @@ import '../services/prompt_builder.dart';
 import '../services/reasoning.dart';
 import '../services/storage.dart';
 import '../services/storage_report.dart';
+import '../services/summarizer.dart';
 import '../services/tokenizer.dart';
 import '../services/update_service.dart';
 import '../services/world_info.dart';
@@ -87,6 +89,19 @@ class AppState extends ChangeNotifier {
   /// Decides which lorebook entries each request carries. Shares the app's
   /// tokenizer so the lore budget is measured the same way the prompt budget is.
   late final WorldInfoScanner _world = WorldInfoScanner(tokens: _tokenizer);
+
+  /// Generates chat summaries in the background, off the chat's streaming path.
+  final Summarizer _summarizer = Summarizer();
+
+  /// Chat ids whose summary is being (re)generated right now — guards against
+  /// firing a second run for the same chat while one is in flight.
+  final Set<String> _summarizing = <String>{};
+
+  /// A pending in-app notice from a completed summary, and a monotonically
+  /// increasing sequence so a listener can show it exactly once.
+  String? _summaryNotice;
+  int _summaryNoticeSeq = 0;
+
   String? _activeProviderId;
   Appearance _appearance = const Appearance();
   ChatInterface _chatInterface = const ChatInterface();
@@ -1131,6 +1146,22 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  /// The lorebook [id] resolves to *inside* [conversation]: the chat's own
+  /// override copy when one is stored, otherwise the global library book. The
+  /// single resolution point (mirrors [characterFor]) so a per-chat override is
+  /// impossible to apply in one place and forget in another.
+  Lorebook? lorebookFor(Conversation? conversation, String id) {
+    if (conversation != null) {
+      final override = conversation.lorebookOverrides[id];
+      if (override != null) return override;
+    }
+    return lorebookById(id);
+  }
+
+  /// Whether [conversation] carries a per-chat override copy of book [id].
+  bool hasLorebookOverride(Conversation conversation, String id) =>
+      conversation.lorebookOverrides.containsKey(id);
+
   /// The books switched on for [conversation], in the order they were added.
   /// Ids that no longer resolve are skipped rather than reported: a book the
   /// user deleted should not break sending a message. A repeated id is counted
@@ -1141,7 +1172,7 @@ class AppState extends ChangeNotifier {
     final seen = <String>{};
     for (final id in conversation.lorebookIds) {
       if (!seen.add(id)) continue;
-      final book = lorebookById(id);
+      final book = lorebookFor(conversation, id);
       if (book != null) out.add(book);
     }
     return out;
@@ -1196,6 +1227,7 @@ class AppState extends ChangeNotifier {
     var touched = false;
     for (final conversation in _conversations) {
       if (conversation.lorebookIds.remove(id)) touched = true;
+      if (conversation.lorebookOverrides.remove(id) != null) touched = true;
     }
     notifyListeners();
     await _persistLorebooks();
@@ -1245,6 +1277,124 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     await _saveConversations();
   }
+
+  /// Saves [book] as a per-chat override for [conversationId] — the "save for
+  /// this chat only" path from the lorebook editor opened inside a chat. The
+  /// global library book is untouched; other chats keep seeing the shared copy.
+  /// The chat is switched on for the book if it was not already.
+  Future<void> saveChatLorebookOverride(
+      String conversationId, Lorebook book) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    book.updatedAt = DateTime.now();
+    await _storeThumbnail(book);
+    conversation.lorebookOverrides[book.id] = book;
+    if (!conversation.lorebookIds.contains(book.id)) {
+      conversation.lorebookIds.add(book.id);
+    }
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Drops [conversationId]'s override copy of book [id], so it falls back to the
+  /// shared library version again.
+  Future<void> clearChatLorebookOverride(
+      String conversationId, String id) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (conversation.lorebookOverrides.remove(id) != null) {
+      conversation.updatedAt = DateTime.now();
+      notifyListeners();
+      await _saveConversations();
+    }
+  }
+
+  // --- Summary -------------------------------------------------------------
+
+  /// A pending in-app notice from the last completed summary (null once shown),
+  /// with a sequence number so a listener can react to it exactly once.
+  String? get summaryNotice => _summaryNotice;
+  int get summaryNoticeSeq => _summaryNoticeSeq;
+  void consumeSummaryNotice() => _summaryNotice = null;
+
+  /// Whether [conversation] has a summary run in flight.
+  bool isSummarizing(Conversation conversation) =>
+      _summarizing.contains(conversation.id);
+
+  /// Turns the summary feature on/off for a chat, creating the config on first
+  /// enable. Does not itself summarise — that happens on the next send (or via
+  /// [summarizeNow]).
+  Future<void> setSummaryEnabled(String conversationId, bool enabled) async {
+    final c = _conversationById(conversationId);
+    if (c == null) return;
+    final cfg = c.summary ?? ChatSummary();
+    cfg.enabled = enabled;
+    if (cfg.title.trim().isEmpty) cfg.title = c.title;
+    c.summary = cfg;
+    c.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Replaces a chat's whole [ChatSummary] (config edits, manual segment edits,
+  /// or an imported summary).
+  Future<void> setSummary(String conversationId, ChatSummary summary) async {
+    final c = _conversationById(conversationId);
+    if (c == null) return;
+    c.summary = summary;
+    c.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Called after every reply: summarises when the interval has elapsed. Fire and
+  /// forget — it runs in the background and saves itself.
+  Future<void> maybeSummarize(Conversation conversation) async {
+    final cfg = conversation.summary;
+    if (cfg == null || !cfg.enabled || cfg.interval <= 0) return;
+    if (_summarizing.contains(conversation.id)) return;
+    if (conversation.messages.length - cfg.lastSummarizedIndex < cfg.interval) {
+      return;
+    }
+    await _runSummary(conversation, cfg, force: false);
+  }
+
+  /// Summarises the messages since the last run right now, even if the interval
+  /// has not elapsed (the "Summarise now" button).
+  Future<void> summarizeNow(String conversationId) async {
+    final c = _conversationById(conversationId);
+    final cfg = c?.summary;
+    if (c == null || cfg == null) return;
+    await _runSummary(c, cfg, force: true);
+  }
+
+  /// Wipes the summary and rebuilds it from the start (the "Re-summarise" button).
+  Future<void> resummarize(String conversationId) async {
+    final c = _conversationById(conversationId);
+    final cfg = c?.summary;
+    if (c == null || cfg == null) return;
+    cfg.segments.clear();
+    cfg.lastSummarizedIndex = 0;
+    await _runSummary(c, cfg, force: true);
+  }
+
+  /// Removes a chat's summary entirely (the full-screen "delete" action).
+  Future<void> deleteSummary(String conversationId) async {
+    final c = _conversationById(conversationId);
+    if (c == null || c.summary == null) return;
+    c.summary = null;
+    c.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Every chat that currently has a summary, newest-updated first — the source
+  /// for the Library's global "Summary" section.
+  List<Conversation> get conversationsWithSummary => [
+        for (final c in _conversations)
+          if (c.summary != null) c,
+      ];
 
   // --- Gallery -------------------------------------------------------------
 
@@ -2055,6 +2205,10 @@ class AppState extends ChangeNotifier {
       // full rewrite of the entire preferences store after every single reply —
       // on Android each write rewrites the whole file, avatars included.
     }
+    // Kick off a background summary if this chat is due one. Fire-and-forget so
+    // the send completes immediately; it runs off the streaming path, saves and
+    // notifies itself.
+    unawaited(maybeSummarize(conversation));
   }
 
   /// Joins provider-returned thinking with thinking parsed out of the reply
@@ -2175,8 +2329,147 @@ class AppState extends ChangeNotifier {
   /// nothing is actively selected (or the provider names no model). Previously
   /// a preset's binding silently overrode the picker, so switching provider or
   /// model "did nothing" and the old one lived on.
-  Provider? _resolveProvider(Preset? preset) {
-    Provider? base = activeProvider;
+  /// The message ranges still to summarise given the method, interval and how far
+  /// the chat was last summarised. Rolling yields a single `[0, count)` range;
+  /// incremental yields one range per full interval window since the last run.
+  /// When [force] (manual "summarise now") a trailing partial window is included.
+  List<(int, int)> _pendingRanges(ChatSummary cfg, int count,
+      {required bool force}) {
+    if (cfg.interval <= 0 || count <= 0) return const <(int, int)>[];
+    if (cfg.method == SummaryMethod.rolling) {
+      if (!force && count - cfg.lastSummarizedIndex < cfg.interval) {
+        return const <(int, int)>[];
+      }
+      return <(int, int)>[(0, count)];
+    }
+    final out = <(int, int)>[];
+    var s = cfg.lastSummarizedIndex.clamp(0, count);
+    while (count - s >= cfg.interval) {
+      out.add((s, s + cfg.interval));
+      s += cfg.interval;
+    }
+    if (force && s < count) out.add((s, count));
+    return out;
+  }
+
+  /// A plain-text transcript of messages `[start, end)` for the summarizer.
+  String _summaryTranscript(Conversation c, int start, int end) {
+    final userName = impersonationFor(c)?.displayName ?? 'User';
+    final charName = characterFor(c, c.characterId)?.displayName ??
+        c.characterName ??
+        'Character';
+    final msgs = c.messages;
+    final lo = start.clamp(0, msgs.length);
+    final hi = end.clamp(0, msgs.length);
+    final buf = StringBuffer();
+    for (var i = lo; i < hi; i++) {
+      final m = msgs[i];
+      if (m.error || m.content.trim().isEmpty) continue;
+      final name = m.speakerName ?? (m.isUser ? userName : charName);
+      buf.writeln('$name: ${m.content.trim()}');
+      buf.writeln();
+    }
+    return buf.toString().trim();
+  }
+
+  /// The provider+model+key a chat's summary should use: its own override, else
+  /// the chat's current provider ("same as current").
+  Provider? _summaryProvider(ChatSummary cfg, Conversation c) {
+    Provider? base;
+    if (cfg.providerId != null) {
+      for (final p in _providers) {
+        if (p.id == cfg.providerId) {
+          base = p;
+          break;
+        }
+      }
+    }
+    base ??= _resolveProvider(presetFor(c));
+    if (base == null) return null;
+    final model = cfg.model?.trim() ?? '';
+    final resolved = model.isNotEmpty ? base.copyWith(model: model) : base;
+    return _applyKey(resolved);
+  }
+
+  Future<void> _runSummary(Conversation c, ChatSummary cfg,
+      {required bool force}) async {
+    if (_summarizing.contains(c.id)) return;
+    final provider = _summaryProvider(cfg, c);
+    if (provider == null) return;
+    final count = c.messages.length;
+    final ranges = _pendingRanges(cfg, count, force: force);
+    if (ranges.isEmpty) return;
+
+    final requests = <SummaryRequest>[];
+    for (final r in ranges) {
+      final transcript = _summaryTranscript(c, r.$1, r.$2);
+      if (transcript.isEmpty) continue;
+      requests.add(SummaryRequest(
+          startIndex: r.$1, endIndex: r.$2, transcript: transcript));
+    }
+    if (requests.isEmpty) return;
+
+    _summarizing.add(c.id);
+    notifyListeners();
+    try {
+      final budget = cfg.budget ?? presetFor(c)?.summaryBudget ?? 512;
+      final results = await _summarizer.run(
+        provider: provider,
+        systemPrompt: cfg.effectivePrompt,
+        maxTokens: budget,
+        requests: requests,
+      );
+      final ok = results.where((r) => r.ok).toList()
+        ..sort((a, b) => a.startIndex.compareTo(b.startIndex));
+      if (ok.isEmpty) {
+        if (cfg.notify) _raiseSummaryNotice('Summary failed — check the provider');
+        return;
+      }
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      if (cfg.method == SummaryMethod.rolling) {
+        final content = ok.map((r) => r.text).join('\n\n');
+        cfg.segments
+          ..clear()
+          ..add(SummarySegment(
+            id: '$stamp',
+            title: 'Summary through message ${ok.last.endIndex}',
+            content: content,
+            startIndex: 0,
+            endIndex: ok.last.endIndex,
+            tokens: estimateTokens(content),
+          ));
+      } else {
+        for (var i = 0; i < ok.length; i++) {
+          final r = ok[i];
+          cfg.segments.add(SummarySegment(
+            id: '$stamp-$i',
+            title: 'Messages ${r.startIndex + 1}–${r.endIndex}',
+            content: r.text,
+            startIndex: r.startIndex,
+            endIndex: r.endIndex,
+            tokens: estimateTokens(r.text),
+          ));
+        }
+      }
+      cfg.lastSummarizedIndex = ok.last.endIndex;
+      if (cfg.title.trim().isEmpty) cfg.title = c.title;
+      c.updatedAt = DateTime.now();
+      if (cfg.notify) {
+        _raiseSummaryNotice('Memory updated · ${cfg.totalTokens} tokens');
+      }
+    } finally {
+      _summarizing.remove(c.id);
+      notifyListeners();
+      await _saveConversations();
+    }
+  }
+
+  void _raiseSummaryNotice(String message) {
+    _summaryNotice = message;
+    _summaryNoticeSeq++;
+  }
+
+  Provider? _resolveProvider(Preset? preset) {    Provider? base = activeProvider;
     // Fall back to the preset's bound provider only when there is no active one.
     if (base == null && preset?.providerId != null) {
       for (final p in _providers) {
@@ -2389,6 +2682,13 @@ class AppState extends ChangeNotifier {
     List<ChatMessage> messages;
     var params = const GenParams();
 
+    // The running summary, when enabled, feeds both the {{summary}} macro and the
+    // auto-injection fallback (used when the preset places no {{summary}}).
+    final chatSummary = conversation.summary;
+    final summaryText = (chatSummary != null && chatSummary.enabled)
+        ? chatSummary.combinedText
+        : '';
+
     if (preset != null) {
       final built = _prompts.build(
         preset: preset,
@@ -2404,6 +2704,8 @@ class AppState extends ChangeNotifier {
         ),
         input: input,
         lore: lore,
+        dynamicMacros: {'summary': () => summaryText},
+        summaryText: summaryText,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently

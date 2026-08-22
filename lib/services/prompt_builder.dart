@@ -63,6 +63,9 @@ class PromptBuilder {
     String input = '',
     int? maxContext,
     WorldInfo? lore,
+    Map<String, String Function()>? dynamicMacros,
+    String summaryText = '',
+    int summaryDepth = 4,
   }) {
     final charName = character?.displayName ?? '';
     // The caller may resolve a different window than the preset carries (the
@@ -103,6 +106,7 @@ class PromptBuilder {
       maxPrompt: budget,
       input: input,
       variables: variables ?? MacroVariables(),
+      dynamicMacros: dynamicMacros,
     );
 
     // Resolve the content each marker stands in for (macros applied later).
@@ -230,7 +234,26 @@ class PromptBuilder {
       fixedTokens += cost(msg);
     }
 
-    // Chat history greedily fills the remaining budget, newest first.
+    // Auto-inject the chat summary ("running memory") when one is supplied and
+    // the preset does not already place it via a {{summary}} macro. It rides the
+    // same depth-injection path as lore, so its tokens are reserved before
+    // history fills the budget and _oneSystemBlock re-tags it to a user turn when
+    // it lands inside the conversation — preserving the one-leading-system rule.
+    if (summaryText.trim().isNotEmpty && !_presetUsesSummary(preset, character)) {
+      final msg = ChatMessage(
+        role: 'system',
+        content: '<past_events>\n${summaryText.trim()}\n</past_events>',
+      );
+      injections.add(_Injection(
+        depth: summaryDepth,
+        order: 100,
+        seq: injections.length,
+        part: _Part('Summary (depth $summaryDepth)', msg),
+      ));
+      fixedTokens += cost(msg);
+    }
+
+
     //
     // A heavy preset frame plus a large character sheet can consume the entire
     // budget on its own — a real, common case: a 4095-token preset (SillyTavern's
@@ -304,6 +327,21 @@ class PromptBuilder {
     final sections = _sectionsFrom(parts, cost);
     final total = parts.fold<int>(0, (sum, p) => sum + cost(p.msg));
     return BuiltPrompt(messages, total, sections);
+  }
+
+  /// Whether the preset (or the character fields that override its main/jailbreak
+  /// blocks) already references {{summary}} — in which case the macro places the
+  /// summary and the builder must not also auto-inject it.
+  static bool _presetUsesSummary(Preset preset, Character? character) {
+    bool has(String s) => s.toLowerCase().contains('{{summary');
+    for (final b in preset.prompts) {
+      if (has(b.content)) return true;
+    }
+    if (character != null &&
+        (has(character.systemPrompt) || has(character.postHistoryInstructions))) {
+      return true;
+    }
+    return false;
   }
 
   /// Keeps `system` for the leading run only; any system block that would land

@@ -1,8 +1,10 @@
 import 'character.dart';
 import 'chat_interface.dart';
 import 'floating_image.dart';
+import 'lorebook.dart';
 import 'message.dart';
 import 'preset.dart';
+import 'summary.dart';
 
 /// The [Conversation.groupResponder] value meaning "a random member replies to
 /// each send". Any other non-null value is a member's [Character.id]; null means
@@ -34,13 +36,16 @@ class Conversation {
     Map<String, String>? variables,
     List<String>? lorebookIds,
     List<String>? participantIds,
+    Map<String, Lorebook>? lorebookOverrides,
+    this.summary,
   })  : characterOverrides =
             characterOverrides ?? <String, Character>{},
         avatarOverrides = avatarOverrides ?? <String, String>{},
         floatingImages = floatingImages ?? <FloatingImage>[],
         variables = variables ?? <String, String>{},
         lorebookIds = lorebookIds ?? <String>[],
-        participantIds = participantIds ?? <String>[];
+        participantIds = participantIds ?? <String>[],
+        lorebookOverrides = lorebookOverrides ?? <String, Lorebook>{};
 
   final String id;
   String title;
@@ -114,6 +119,17 @@ class Conversation {
   /// assembled. Order is the order they were added, which only matters as a
   /// tiebreaker between two entries of equal weight.
   final List<String> lorebookIds;
+
+  /// Per-chat lorebook content overrides, by [Lorebook.id] — the "save for this
+  /// chat only" copies from the lorebook editor when it is opened inside a chat.
+  /// Read through `AppState.lorebookFor`, never directly, so the fallback to the
+  /// global library book happens in exactly one place. A chat still has to switch
+  /// the book on via [lorebookIds]; this only changes *which* content it sees.
+  final Map<String, Lorebook> lorebookOverrides;
+
+  /// This chat's rolling summary ("running memory"): its configuration and the
+  /// condensed text. Null until the user first enables the feature.
+  ChatSummary? summary;
 
   /// The AI characters taking part in a **group chat**, by [Character.id], in
   /// speaking order — the chips shown in the group bar. Empty (the normal case)
@@ -194,6 +210,10 @@ class Conversation {
         variables: Map<String, String>.of(variables),
         lorebookIds: lorebookIds.toList(),
         participantIds: participantIds.toList(),
+        lorebookOverrides: lorebookOverrides.map(
+          (id, book) => MapEntry(id, Lorebook.fromJson(book.toJson())),
+        ),
+        summary: summary?.clone(),
       );
 
   /// Whether this thread is bound to a saved character.
@@ -236,6 +256,11 @@ class Conversation {
         if (variables.isNotEmpty) 'variables': variables,
         if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
         if (participantIds.isNotEmpty) 'participantIds': participantIds,
+        if (lorebookOverrides.isNotEmpty)
+          'lorebookOverrides': lorebookOverrides.map(
+            (id, book) => MapEntry(id, book.toJson()),
+          ),
+        if (summary != null) 'summary': summary!.toJson(),
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -286,6 +311,10 @@ class Conversation {
             ?.map((e) => e.toString())
             .where((s) => s.isNotEmpty)
             .toList(),
+        lorebookOverrides: _lorebookMap(json['lorebookOverrides']),
+        summary: json['summary'] is Map<String, dynamic>
+            ? ChatSummary.fromJson(json['summary'] as Map<String, dynamic>)
+            : null,
         messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(ChatMessage.fromJson)
@@ -305,6 +334,20 @@ class Conversation {
       }
     }
     return overrides;
+  }
+
+  /// Reads the per-chat lorebook overrides, skipping anything that is not a
+  /// lorebook map. Null (rather than empty) when there are none.
+  static Map<String, Lorebook>? _lorebookMap(Object? value) {
+    if (value is! Map) return null;
+    final out = <String, Lorebook>{};
+    for (final entry in value.entries) {
+      final book = entry.value;
+      if (book is Map<String, dynamic>) {
+        out[entry.key.toString()] = Lorebook.fromJson(book);
+      }
+    }
+    return out;
   }
 
   /// Reads the per-chat avatar choices, dropping any entry that does not name a

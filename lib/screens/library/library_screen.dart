@@ -6,8 +6,10 @@ import '../../state/app_state.dart';
 import '../../widgets/app_drawer.dart';
 import '../../widgets/avatar_image.dart';
 import '../section_screen.dart';
+import '../summary/summary_edit_screen.dart';
 import 'lorebook_edit_screen.dart';
 import 'lorebooks_screen.dart';
+import 'summaries_screen.dart';
 
 /// The Library: the shelf everything the user *writes* rather than chats with
 /// lives on — lorebooks today, scenarios and embeddings once they exist.
@@ -84,6 +86,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// The resting state: what the library holds, one card per shelf.
   List<Widget> _sections(BuildContext context, List<Lorebook> books) {
     final entries = books.fold<int>(0, (sum, b) => sum + b.entries.length);
+    final summaries = context.read<AppState>().conversationsWithSummary.length;
     final recent = [...books]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return [
@@ -95,6 +98,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ? 'Facts the model is told when the chat mentions them'
               : '${_count(books.length, 'book')} · ${_count(entries, 'entry', 'entries')}',
           onTap: () => _open(const LorebooksScreen()),
+        ),
+      ),
+      SliverToBoxAdapter(
+        child: _SectionCard(
+          icon: Icons.summarize_outlined,
+          title: 'Summary',
+          subtitle: summaries == 0
+              ? 'Running memories your chats keep of themselves'
+              : '${_count(summaries, 'chat')} with a summary',
+          onTap: () => _open(const SummariesScreen()),
         ),
       ),
       SliverToBoxAdapter(
@@ -148,8 +161,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
         for (final entry in book.entries)
           if (entryMatches(entry)) (book, entry),
     ];
+    final matchedSummaries = [
+      for (final c in context.read<AppState>().conversationsWithSummary)
+        if ((c.summary!.title.toLowerCase().contains(q)) ||
+            c.summary!.combinedText.toLowerCase().contains(q) ||
+            c.title.toLowerCase().contains(q))
+          c,
+    ];
 
-    if (matchedBooks.isEmpty && matchedEntries.isEmpty) {
+    if (matchedBooks.isEmpty &&
+        matchedEntries.isEmpty &&
+        matchedSummaries.isEmpty) {
       return [
         SliverToBoxAdapter(
           child: _Nothing(query: _query.trim()),
@@ -166,6 +188,29 @@ class _LibraryScreenState extends State<LibraryScreen> {
             book: matchedBooks[i],
             onTap: () => _open(LorebookEditScreen(book: matchedBooks[i])),
           ),
+        ),
+      ],
+      if (matchedSummaries.isNotEmpty) ...[
+        _header(context, 'Summaries'),
+        SliverList.builder(
+          itemCount: matchedSummaries.length,
+          itemBuilder: (context, i) {
+            final c = matchedSummaries[i];
+            return ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              leading: Icon(Icons.summarize_outlined,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+              title: Text(
+                  c.summary!.title.trim().isEmpty ? c.title : c.summary!.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+              subtitle: Text(c.title,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () =>
+                  _open(SummaryEditScreen(conversationId: c.id)),
+            );
+          },
         ),
       ],
       if (matchedEntries.isNotEmpty) ...[
@@ -357,7 +402,7 @@ class _Nothing extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Only lorebooks are searchable so far — scenarios and embeddings '
+            'Lorebooks and summaries are searchable — scenarios and embeddings '
             'are not built yet.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(

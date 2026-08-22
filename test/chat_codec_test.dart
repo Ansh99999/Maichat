@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
+import 'package:maichat/models/summary.dart';
 import 'package:maichat/services/chat_codec.dart';
 
 /// A SillyTavern chat file: the header line SillyTavern's own importer checks
@@ -479,6 +480,65 @@ void main() {
         // `characterId: 'imported'` is the marker Agnai swaps for the real
         // character on the way in.
         expect(messages.first['characterId'], 'imported');
+      }
+    });
+  });
+
+  group('summary portability', () {
+    Conversation chatWithSummary() => Conversation(
+          id: 'c-sum',
+          title: 'Long tale',
+          updatedAt: DateTime.parse('2026-08-16T12:00:00.000Z'),
+          characterName: 'Mai',
+          messages: [
+            ChatMessage(role: 'user', content: 'Hi.'),
+            ChatMessage(role: 'assistant', content: 'Hello there.'),
+          ],
+          summary: ChatSummary(
+            enabled: true,
+            interval: 10,
+            title: 'The story so far',
+            segments: [
+              SummarySegment(
+                id: 's1',
+                title: 'Opening',
+                content: 'They met over tea and became friends.',
+                startIndex: 0,
+                endIndex: 2,
+                tokens: 9,
+              ),
+            ],
+            lastSummarizedIndex: 2,
+          ),
+        );
+
+    test('native export carries the summary and it round-trips', () {
+      final source = chatWithSummary();
+      final imported = ChatCodec.parse(
+        ChatExportFormat.native.write(source),
+        fileName: 'ignored',
+      ).single.conversation;
+      final s = imported.summary;
+      expect(s, isNotNull);
+      expect(s!.enabled, isTrue);
+      expect(s.title, 'The story so far');
+      expect(s.lastSummarizedIndex, 2);
+      expect(s.segments.single.content,
+          'They met over tea and became friends.');
+    });
+
+    test('ST, Agnai and text exports drop the summary', () {
+      final source = chatWithSummary();
+      for (final format in [
+        ChatExportFormat.sillyTavern,
+        ChatExportFormat.agnai,
+        ChatExportFormat.text,
+      ]) {
+        final out = format.write(source, characterName: 'Mai');
+        expect(out.contains('became friends'), isFalse,
+            reason: '${format.name} leaked summary content');
+        expect(out.toLowerCase().contains('"summary"'), isFalse,
+            reason: '${format.name} emitted a summary field');
       }
     });
   });

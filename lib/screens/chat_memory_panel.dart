@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/conversation.dart';
 import '../models/lorebook.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
+import 'library/lorebook_edit_screen.dart';
+import 'summary/summary_edit_screen.dart';
 
 /// The in-sidebar Memory experience for the chat screen: which lorebooks are
 /// switched on for *this* chat, with a way to switch one off and a searchable
@@ -64,6 +67,16 @@ class _ChatMemoryPanelState extends State<ChatMemoryPanel> {
     );
   }
 
+  /// Opens the lorebook editor for [book] in this chat's context, so saving can
+  /// offer "this chat only" as well as "global".
+  Future<void> _editBook(AppState state, Lorebook book) async {
+    final conversationId = state.active.id;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) =>
+          LorebookEditScreen(book: book, conversationId: conversationId),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -76,54 +89,64 @@ class _ChatMemoryPanelState extends State<ChatMemoryPanel> {
     return Column(
       children: [
         _PanelHeader(title: 'Memory', onBack: widget.onBack),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Text(
-            'Lorebooks active in this chat. Their entries are injected when the '
-            'conversation mentions their keywords.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-        ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
             children: [
-              if (books.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 32),
-                  child: Center(
+              ExpansionTile(
+                initiallyExpanded: true,
+                shape: const Border(),
+                collapsedShape: const Border(),
+                leading: const Icon(Icons.auto_stories_outlined),
+                title: const Text('Lorebooks'),
+                subtitle: Text(books.isEmpty ? 'None active' : '${books.length} active'),
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                     child: Text(
-                      'No lorebooks active in this chat',
-                      style: theme.textTheme.bodyMedium
+                      'Entries are injected when the conversation mentions their '
+                      'keywords.',
+                      style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
                   ),
-                )
-              else
-                for (final book in books)
-                  _ActiveBookRow(
-                    book: book,
-                    onTap: () => _describe(book),
-                    // Toggling is switching the book off *for this chat only* —
-                    // the book itself is untouched.
-                    onRemove: () => state.toggleConversationLorebook(
-                      conversation.id,
-                      book.id,
+                  if (books.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      child: Center(
+                        child: Text(
+                          'No lorebooks active in this chat',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                      ),
+                    )
+                  else
+                    for (final book in books)
+                      _ActiveBookRow(
+                        book: book,
+                        overridden:
+                            state.hasLorebookOverride(conversation, book.id),
+                        onTap: () => _describe(book),
+                        onEdit: () => _editBook(state, book),
+                        onRemove: () => state.toggleConversationLorebook(
+                          conversation.id,
+                          book.id,
+                        ),
+                      ),
+                  ListTile(
+                    leading: const Icon(Icons.add),
+                    title: const Text('Add lorebook'),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
                     ),
+                    onTap: () => _addBook(state),
                   ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: Divider(height: 1),
+                ],
               ),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('Add lorebook'),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                onTap: () => _addBook(state),
-              ),
+              const Divider(height: 1, indent: 16, endIndent: 16),
+              _SummarySection(conversation: conversation),
             ],
           ),
         ),
@@ -137,12 +160,18 @@ class _ChatMemoryPanelState extends State<ChatMemoryPanel> {
 class _ActiveBookRow extends StatelessWidget {
   const _ActiveBookRow({
     required this.book,
+    required this.overridden,
     required this.onTap,
+    required this.onEdit,
     required this.onRemove,
   });
 
   final Lorebook book;
+
+  /// Whether this chat carries its own edited copy of the book.
+  final bool overridden;
   final VoidCallback onTap;
+  final VoidCallback onEdit;
   final VoidCallback onRemove;
 
   @override
@@ -168,19 +197,152 @@ class _ActiveBookRow extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        subtitle: Text(_entryCountLabel(book)),
-        trailing: IconButton(
-          tooltip: 'Remove from this chat',
-          icon: const Icon(Icons.close),
-          onPressed: onRemove,
+        subtitle: Text(
+          overridden
+              ? '${_entryCountLabel(book)} · this-chat copy'
+              : _entryCountLabel(book),
+        ),
+        trailing: PopupMenuButton<String>(
+          tooltip: 'Actions',
+          icon: const Icon(Icons.more_vert),
+          onSelected: (value) {
+            switch (value) {
+              case 'edit':
+                onEdit();
+              case 'remove':
+                onRemove();
+            }
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(
+              value: 'edit',
+              child: ListTile(
+                leading: Icon(Icons.edit_outlined),
+                title: Text('Edit'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'remove',
+              child: ListTile(
+                leading: Icon(Icons.close),
+                title: Text('Remove from chat'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-/// How much a book holds, in one line. Entries that are switched off are called
-/// out because they do not activate — a book showing "12 entries" that injects
+/// The Summary section of the Memory panel: a per-chat toggle, a token readout,
+/// a small preview window and a button into the full-screen memory page.
+class _SummarySection extends StatelessWidget {
+  const _SummarySection({required this.conversation});
+
+  final Conversation conversation;
+
+  Future<void> _openFull(BuildContext context) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SummaryEditScreen(conversationId: conversation.id),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final cfg = conversation.summary;
+    final enabled = cfg?.enabled ?? false;
+    final busy = state.isSummarizing(conversation);
+
+    return ExpansionTile(
+      initiallyExpanded: enabled,
+      shape: const Border(),
+      collapsedShape: const Border(),
+      leading: const Icon(Icons.summarize_outlined),
+      title: Row(
+        children: [
+          const Expanded(child: Text('Summary')),
+          Switch(
+            value: enabled,
+            onChanged: (v) => state.setSummaryEnabled(conversation.id, v),
+          ),
+        ],
+      ),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      children: [
+        if (!enabled)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Turn on to keep a running memory of this chat that is fed back '
+              'into the prompt as it grows.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          )
+        else ...[
+          Row(
+            children: [
+              Icon(Icons.token_outlined, size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  busy
+                      ? 'Summarising…'
+                      : '${cfg!.totalTokens} tokens · summarised to message '
+                          '${cfg.lastSummarizedIndex}',
+                  style: theme.textTheme.labelMedium
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Stack(
+            children: [
+              Container(
+                height: 140,
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(12, 12, 40, 12),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    (cfg?.hasText ?? false)
+                        ? cfg!.combinedText
+                        : 'No summary yet. One is made every '
+                            '${cfg?.interval ?? 0} messages, or tap the '
+                            'fullscreen button to summarise now.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 2,
+                right: 2,
+                child: IconButton(
+                  tooltip: 'Open full memory',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.fullscreen, size: 20),
+                  onPressed: () => _openFull(context),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// How much a book holds, in one line. Entries that are switched off are called/// out because they do not activate — a book showing "12 entries" that injects
 /// nothing would otherwise look broken.
 String _entryCountLabel(Lorebook book) {
   final total = book.entries.length;

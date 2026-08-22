@@ -52,9 +52,13 @@ void main() {
 
     // The resting state: one card per shelf, with the lorebook count on it.
     expect(find.text('Lorebooks'), findsWidgets);
+    expect(find.text('Summary'), findsOneWidget);
     expect(find.text('Scenarios'), findsOneWidget);
-    expect(find.text('Embeddings'), findsOneWidget);
     expect(find.textContaining('1 book'), findsOneWidget);
+    // Embeddings sits below the fold now that Summary was added.
+    await tester.scrollUntilVisible(find.text('Embeddings'), 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(find.text('Embeddings'), findsOneWidget);
 
     await tester.tap(find.text('Lorebooks').first);
     await tester.pumpAndSettle();
@@ -129,8 +133,10 @@ void main() {
     expect(find.text('Kingdom'), findsOneWidget);
     expect(find.textContaining('1 entry'), findsOneWidget);
 
-    // And off again, from the row itself.
-    await tester.tap(find.byTooltip('Remove from this chat'));
+    // And off again, from the row's action menu.
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from chat'));
     await tester.pumpAndSettle();
     expect(state.active.lorebookIds, isEmpty);
   });
