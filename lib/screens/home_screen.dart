@@ -44,7 +44,8 @@ class HomeScreen extends StatelessWidget {
     if (!state.ready) return const StartupScreen();
     // Brand-new, never-sent threads stay hidden until they hold a message.
     final chats = state.conversations.where((c) => !c.isEmpty).toList();
-    final recent = chats.take(3).toList();
+    final pinned = chats.where((c) => c.pinned).toList();
+    final recent = chats.where((c) => !c.pinned).take(3).toList();
     final bottom = MediaQuery.paddingOf(context).bottom;
     final loadError = state.loadError;
 
@@ -74,37 +75,60 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ),
-          if (recent.isEmpty)
+          if (chats.isEmpty)
             SliverFillRemaining(
               hasScrollBody: false,
               child: _WelcomeHome(configured: state.isConfigured),
             )
           else ...[
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 8, 0),
-              sliver: SliverToBoxAdapter(
-                child: Row(
-                  children: [
-                    const Expanded(child: _SectionHeader('Recent chats')),
-                    TextButton(
-                      onPressed: () => _openChats(context),
-                      child: const Text('See all'),
-                    ),
-                  ],
+            if (pinned.isNotEmpty) ...[
+              const SliverPadding(
+                padding: EdgeInsets.fromLTRB(20, 12, 8, 0),
+                sliver: SliverToBoxAdapter(child: _SectionHeader('Pinned')),
+              ),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                sliver: SliverList.builder(
+                  itemCount: pinned.length,
+                  itemBuilder: (context, index) => ChatCard(
+                    conversation: pinned[index],
+                    onTap: () => _openChat(context, state, pinned[index].id),
+                    onDelete: () =>
+                        _confirmDelete(context, state, pinned[index]),
+                    onTogglePin: () => state.togglePinned(pinned[index].id),
+                  ),
                 ),
               ),
-            ),
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(12, 0, 12, 96 + bottom),
-              sliver: SliverList.builder(
-                itemCount: recent.length,
-                itemBuilder: (context, index) => ChatCard(
-                  conversation: recent[index],
-                  onTap: () => _openChat(context, state, recent[index].id),
-                  onDelete: () => _confirmDelete(context, state, recent[index]),
+            ],
+            if (recent.isNotEmpty) ...[
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 8, 0),
+                sliver: SliverToBoxAdapter(
+                  child: Row(
+                    children: [
+                      const Expanded(child: _SectionHeader('Recent chats')),
+                      TextButton(
+                        onPressed: () => _openChats(context),
+                        child: const Text('See all'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(12, 0, 12, 96 + bottom),
+                sliver: SliverList.builder(
+                  itemCount: recent.length,
+                  itemBuilder: (context, index) => ChatCard(
+                    conversation: recent[index],
+                    onTap: () => _openChat(context, state, recent[index].id),
+                    onDelete: () =>
+                        _confirmDelete(context, state, recent[index]),
+                    onTogglePin: () => state.togglePinned(recent[index].id),
+                  ),
+                ),
+              ),
+            ],
           ],
         ],
       ),

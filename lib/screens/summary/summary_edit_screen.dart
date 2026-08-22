@@ -27,6 +27,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   final _budget = TextEditingController();
   final _prompt = TextEditingController();
   final _model = TextEditingController();
+  final _title = TextEditingController();
 
   String? _providerId;
   SummaryMethod _method = SummaryMethod.rolling;
@@ -43,6 +44,9 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   /// Which segment indices are currently in edit mode (typing in place).
   final Set<int> _editing = {};
 
+  /// Which segment indices are collapsed (body hidden — the dropdown behaviour).
+  final Set<int> _collapsed = {};
+
   @override
   void initState() {
     super.initState();
@@ -53,6 +57,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   }
 
   void _loadFrom(ChatSummary cfg) {
+    _title.text = cfg.title;
     _interval.text = '${cfg.interval}';
     _budget.text = cfg.budget?.toString() ?? '';
     _prompt.text = cfg.prompt ?? '';
@@ -70,6 +75,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       _segBody.add(TextEditingController(text: s.content));
     }
     _editing.clear();
+    _collapsed.clear();
     _dirty = false;
   }
 
@@ -90,6 +96,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     _budget.dispose();
     _prompt.dispose();
     _model.dispose();
+    _title.dispose();
     _disposeSegments();
     super.dispose();
   }
@@ -101,8 +108,8 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   /// Builds a [ChatSummary] from the current draft, preserving the live progress
   /// (lastSummarizedIndex, enabled, title) from the stored config.
   ChatSummary _draftSummary(AppState state) {
-    final current = state.conversationById(widget.conversationId)?.summary ??
-        ChatSummary(enabled: true);
+    final c = state.conversationById(widget.conversationId);
+    final current = c?.summary ?? ChatSummary(enabled: true);
     final segs = <SummarySegment>[
       for (var i = 0; i < _segments.length; i++)
         _segments[i].copyWith(
@@ -111,7 +118,11 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
           tokens: state.estimateTokens(_segBody[i].text.trim()),
         ),
     ];
+    final title = _title.text.trim().isEmpty
+        ? '${c?.title ?? 'Chat'} summary'
+        : _title.text.trim();
     return current.copyWith(
+      title: title,
       interval: int.tryParse(_interval.text.trim()) ?? current.interval,
       budget:
           _budget.text.trim().isEmpty ? null : int.tryParse(_budget.text.trim()),
@@ -325,8 +336,9 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       _segTitle.removeAt(i).dispose();
       _segBody.removeAt(i).dispose();
       _segments.removeAt(i);
-      // Indices shifted; simplest correct thing is to drop edit state.
+      // Indices shifted; simplest correct thing is to drop edit/collapse state.
       _editing.clear();
+      _collapsed.clear();
       _dirty = true;
     });
   }
@@ -416,6 +428,16 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
             : ListView(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
                 children: [
+                  TextField(
+                    controller: _title,
+                    onChanged: (_) => _markDirty(),
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      labelText: 'Summary title',
+                      hintText: '${c.title} summary',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   _configPanel(state),
                   const SizedBox(height: 8),
                   const Divider(height: 1),
@@ -494,18 +516,32 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   Widget _segmentCard(int i, ThemeData theme, ColorScheme scheme) {
     final editing = _editing.contains(i);
     final manual = _segments[i].manual;
+    final collapsed = _collapsed.contains(i) && !editing;
+    void toggleCollapse() => setState(() {
+          if (!_collapsed.remove(i)) _collapsed.add(i);
+        });
     return Card(
       key: ValueKey(_segments[i].id),
       elevation: 0,
       color: scheme.surfaceContainerLow,
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 8, 6, 12),
+        padding: const EdgeInsets.fromLTRB(4, 8, 6, 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: collapsed ? 'Expand' : 'Collapse',
+                  icon: AnimatedRotation(
+                    turns: collapsed ? -0.25 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: const Icon(Icons.expand_more, size: 22),
+                  ),
+                  onPressed: editing ? null : toggleCollapse,
+                ),
                 Expanded(
                   child: editing
                       ? TextField(
@@ -518,12 +554,18 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
                             hintText: 'Title',
                           ),
                         )
-                      : Text(
-                          _segTitle[i].text.trim().isEmpty
-                              ? (manual ? 'Your note' : 'Summary')
-                              : _segTitle[i].text,
-                          style: theme.textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                      : InkWell(
+                          onTap: toggleCollapse,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(
+                              _segTitle[i].text.trim().isEmpty
+                                  ? (manual ? 'Your note' : 'Summary')
+                                  : _segTitle[i].text,
+                              style: theme.textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          ),
                         ),
                 ),
                 if (manual)
@@ -573,11 +615,14 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
                       ),
                     )
                   : Padding(
-                      padding: const EdgeInsets.only(right: 8, bottom: 2),
+                      padding: const EdgeInsets.only(left: 12, right: 8, bottom: 2),
                       child: Text(
                         _segBody[i].text.trim().isEmpty
                             ? 'Empty — tap the pencil to write.'
                             : _segBody[i].text,
+                        maxLines: collapsed ? 1 : null,
+                        overflow:
+                            collapsed ? TextOverflow.ellipsis : TextOverflow.clip,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: _segBody[i].text.trim().isEmpty
                               ? scheme.onSurfaceVariant

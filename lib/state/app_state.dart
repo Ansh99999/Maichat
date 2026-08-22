@@ -924,6 +924,19 @@ class AppState extends ChangeNotifier {
     await _storage.saveConversations(_conversations);
   }
 
+  Timer? _convSaveTimer;
+
+  /// Persists conversations shortly after the current interaction instead of
+  /// on this frame. Used by animation-sensitive toggles (e.g. enabling summary)
+  /// so the whole-store rewrite never competes with the toggle's animation.
+  void _saveConversationsSoon() {
+    _convSaveTimer?.cancel();
+    _convSaveTimer = Timer(const Duration(milliseconds: 400), () {
+      _convSaveTimer = null;
+      _saveConversations();
+    });
+  }
+
   Future<void> _saveActiveId(String id) async {
     if (!_writable) return;
     await _storage.saveActiveId(id);
@@ -1339,11 +1352,12 @@ class AppState extends ChangeNotifier {
     if (c == null) return;
     final cfg = c.summary ?? ChatSummary();
     cfg.enabled = enabled;
-    if (cfg.title.trim().isEmpty) cfg.title = c.title;
+    if (cfg.title.trim().isEmpty) cfg.title = '${c.title} summary';
     c.summary = cfg;
     c.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    // Defer the heavy whole-store write so the sidebar toggle animates smoothly.
+    _saveConversationsSoon();
   }
 
   /// Replaces a chat's whole [ChatSummary] (config edits, manual segment edits,
@@ -1920,6 +1934,16 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  /// Pins or unpins a chat. Pinned chats sort to the top of the chat lists and
+  /// appear in a separate group on the home screen.
+  Future<void> togglePinned(String id) async {
+    final conversation = _conversationById(id);
+    if (conversation == null) return;
+    conversation.pinned = !conversation.pinned;
+    notifyListeners();
+    await _saveConversations();
+  }
+
   /// Empties the active thread but keeps it around — the "restart chat"
   /// action. Any in-flight reply is aborted first.
   Future<void> restartConversation() async {
@@ -2474,7 +2498,7 @@ class AppState extends ChangeNotifier {
         }
       }
       cfg.lastSummarizedIndex = ok.last.endIndex;
-      if (cfg.title.trim().isEmpty) cfg.title = c.title;
+      if (cfg.title.trim().isEmpty) cfg.title = '${c.title} summary';
       c.updatedAt = DateTime.now();
       if (cfg.notify) {
         _raiseSummaryNotice('Memory updated · ${cfg.totalTokens} tokens');

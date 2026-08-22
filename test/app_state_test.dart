@@ -494,4 +494,21 @@ void main() {
     expect(reloaded.conversations.first.title, 'From a file');
     expect(reloaded.conversations.first.characterId, persona.id);
   });
+
+  test('togglePinned flips and persists the pin flag', () async {
+    final state = await _state(FakeClient(deltas: ['ok']));
+    await state.send('hi');
+    final id = state.active.id;
+
+    expect(state.active.pinned, isFalse);
+    await state.togglePinned(id);
+    expect(state.active.pinned, isTrue);
+
+    final reloaded = AppState(client: FakeClient());
+    await reloaded.init();
+    expect(reloaded.conversationById(id)?.pinned, isTrue);
+
+    await state.togglePinned(id);
+    expect(state.active.pinned, isFalse);
+  });
 }

@@ -176,20 +176,8 @@ class _SummariesScreenState extends State<SummariesScreen> {
     final target = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(title: Text('Attach summary to which chat?')),
-            for (final c in state.conversations)
-              ListTile(
-                title: Text(c.title,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                onTap: () => Navigator.of(context).pop(c.id),
-              ),
-          ],
-        ),
-      ),
+      isScrollControlled: true,
+      builder: (context) => _ChatPickerSheet(chats: state.conversations),
     );
     if (target == null) return;
     await state.setSummary(target, imported);
@@ -253,6 +241,78 @@ class _SummaryRow extends StatelessWidget {
             PopupMenuItem(value: 'export', child: Text('Export')),
             PopupMenuItem(value: 'delete', child: Text('Delete')),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A searchable chat picker for attaching an imported summary.
+class _ChatPickerSheet extends StatefulWidget {
+  const _ChatPickerSheet({required this.chats});
+
+  final List<Conversation> chats;
+
+  @override
+  State<_ChatPickerSheet> createState() => _ChatPickerSheetState();
+}
+
+class _ChatPickerSheetState extends State<_ChatPickerSheet> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final q = _query.trim().toLowerCase();
+    final matches = [
+      for (final c in widget.chats)
+        if (q.isEmpty || c.title.toLowerCase().contains(q)) c,
+    ];
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.6,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Attach summary to which chat?',
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: SearchBar(
+                  hintText: 'Search chats',
+                  leading: const Icon(Icons.search, size: 20),
+                  onChanged: (v) => setState(() => _query = v),
+                ),
+              ),
+              Expanded(
+                child: matches.isEmpty
+                    ? Center(
+                        child: Text('No chats match',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant)),
+                      )
+                    : ListView(
+                        children: [
+                          for (final c in matches)
+                            ListTile(
+                              title: Text(c.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                              onTap: () => Navigator.of(context).pop(c.id),
+                            ),
+                        ],
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

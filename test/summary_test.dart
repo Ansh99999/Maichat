@@ -113,5 +113,13 @@ void main() {
       expect(source.summary!.segments.single.content, 'body');
       expect(source.lorebookOverrides['lore-1']?.name, 'Local copy');
     });
+
+    test('pinned round-trips and copyAs carries it', () {
+      final c = rich()..pinned = true;
+      expect(Conversation.fromJson(c.toJson()).pinned, isTrue);
+      expect(c.copyAs(id: 'c3').pinned, isTrue);
+      // Default is false and omitted from JSON.
+      expect(rich().toJson().containsKey('pinned'), isFalse);
+    });
   });
 }

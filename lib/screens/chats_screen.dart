@@ -115,22 +115,73 @@ class _ChatsScreenState extends State<ChatsScreen> {
               hasScrollBody: false,
               child: _NoChatMatches(),
             )
-          else
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(12, 4, 12, 96 + bottom),
-              sliver: SliverList.builder(
-                itemCount: chats.length,
-                itemBuilder: (context, index) => ChatCard(
-                  conversation: chats[index],
-                  onTap: () => _openChat(context, state, chats[index].id),
-                  onDelete: () => _confirmDelete(context, state, chats[index]),
-                ),
-              ),
-            ),
+          else ...[
+            for (final sliver in _chatSlivers(context, state, chats, bottom))
+              sliver,
+          ],
         ],
       ),
     );
   }
+
+  /// Builds the chat list slivers, grouping pinned chats into their own section
+  /// at the top when there are any.
+  List<Widget> _chatSlivers(BuildContext context, AppState state,
+      List<Conversation> chats, double bottom) {
+    final pinned = chats.where((c) => c.pinned).toList();
+    final others = chats.where((c) => !c.pinned).toList();
+
+    Widget card(Conversation c) => ChatCard(
+          conversation: c,
+          onTap: () => _openChat(context, state, c.id),
+          onDelete: () => _confirmDelete(context, state, c),
+          onTogglePin: () => state.togglePinned(c.id),
+        );
+
+    if (pinned.isEmpty) {
+      return [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(12, 4, 12, 96 + bottom),
+          sliver: SliverList.builder(
+            itemCount: others.length,
+            itemBuilder: (context, i) => card(others[i]),
+          ),
+        ),
+      ];
+    }
+    return [
+      _sectionHeader(context, 'Pinned'),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+        sliver: SliverList.builder(
+          itemCount: pinned.length,
+          itemBuilder: (context, i) => card(pinned[i]),
+        ),
+      ),
+      _sectionHeader(context, 'All chats'),
+      SliverPadding(
+        padding: EdgeInsets.fromLTRB(12, 0, 12, 96 + bottom),
+        sliver: SliverList.builder(
+          itemCount: others.length,
+          itemBuilder: (context, i) => card(others[i]),
+        ),
+      ),
+    ];
+  }
+
+  Widget _sectionHeader(BuildContext context, String label) =>
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ),
+      );
 
   Widget _searchBar() => Padding(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
@@ -252,11 +303,15 @@ class ChatCard extends StatelessWidget {
     required this.conversation,
     required this.onTap,
     required this.onDelete,
+    this.onTogglePin,
   });
 
   final Conversation conversation;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+
+  /// Pins/unpins the chat; when null the pin action is hidden.
+  final VoidCallback? onTogglePin;
 
   @override
   Widget build(BuildContext context) {
@@ -281,10 +336,21 @@ class ChatCard extends StatelessWidget {
             size: 20,
           ),
         ),
-        title: Text(
-          conversation.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        title: Row(
+          children: [
+            if (conversation.pinned)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Icon(Icons.push_pin, size: 14, color: scheme.primary),
+              ),
+            Expanded(
+              child: Text(
+                conversation.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -310,9 +376,21 @@ class ChatCard extends StatelessWidget {
           onSelected: (value) {
             if (value == 'delete') onDelete();
             if (value == 'export') exportChat(context, conversation);
+            if (value == 'pin') onTogglePin?.call();
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem<String>(
+          itemBuilder: (context) => [
+            if (onTogglePin != null)
+              PopupMenuItem<String>(
+                value: 'pin',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(conversation.pinned
+                      ? Icons.push_pin
+                      : Icons.push_pin_outlined),
+                  title: Text(conversation.pinned ? 'Unpin' : 'Pin'),
+                ),
+              ),
+            const PopupMenuItem<String>(
               value: 'export',
               child: ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -320,7 +398,7 @@ class ChatCard extends StatelessWidget {
                 title: Text('Export'),
               ),
             ),
-            PopupMenuItem<String>(
+            const PopupMenuItem<String>(
               value: 'delete',
               child: ListTile(
                 contentPadding: EdgeInsets.zero,

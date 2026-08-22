@@ -38,6 +38,7 @@ class Conversation {
     List<String>? participantIds,
     Map<String, Lorebook>? lorebookOverrides,
     this.summary,
+    this.pinned = false,
   })  : characterOverrides =
             characterOverrides ?? <String, Character>{},
         avatarOverrides = avatarOverrides ?? <String, String>{},
@@ -131,6 +132,10 @@ class Conversation {
   /// condensed text. Null until the user first enables the feature.
   ChatSummary? summary;
 
+  /// Whether this chat is pinned to the top of the chat lists (and surfaced in a
+  /// separate "Pinned" group on the home screen).
+  bool pinned;
+
   /// The AI characters taking part in a **group chat**, by [Character.id], in
   /// speaking order — the chips shown in the group bar. Empty (the normal case)
   /// means a one-to-one thread, where [characterId] alone is the character; a
@@ -214,6 +219,7 @@ class Conversation {
           (id, book) => MapEntry(id, Lorebook.fromJson(book.toJson())),
         ),
         summary: summary?.clone(),
+        pinned: pinned,
       );
 
   /// Whether this thread is bound to a saved character.
@@ -261,6 +267,7 @@ class Conversation {
             (id, book) => MapEntry(id, book.toJson()),
           ),
         if (summary != null) 'summary': summary!.toJson(),
+        if (pinned) 'pinned': true,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -315,6 +322,7 @@ class Conversation {
         summary: json['summary'] is Map<String, dynamic>
             ? ChatSummary.fromJson(json['summary'] as Map<String, dynamic>)
             : null,
+        pinned: json['pinned'] as bool? ?? false,
         messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(ChatMessage.fromJson)
