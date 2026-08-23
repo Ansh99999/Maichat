@@ -11,10 +11,20 @@ import '../models/embedding.dart';
 /// [model], the collection is stale and should be rebuilt (mixing vectors from
 /// two models makes cosine similarity meaningless).
 class VectorCollection {
-  const VectorCollection({required this.model, required this.records});
+  const VectorCollection({
+    required this.model,
+    required this.records,
+    this.sourceText = '',
+  });
 
   final String model;
   final List<VectorRecord> records;
+
+  /// The original, un-chunked text a document was built from — kept so a
+  /// document can be re-opened and edited exactly, without the overlap that
+  /// joining chunks back together would duplicate. Empty for chat/lore
+  /// collections (they have no single source text).
+  final String sourceText;
 
   static const VectorCollection empty =
       VectorCollection(model: '', records: <VectorRecord>[]);
@@ -77,6 +87,7 @@ class EmbeddingStore {
         return VectorCollection(
           model: json['model'] as String? ?? '',
           records: records,
+          sourceText: json['sourceText'] as String? ?? '',
         );
       }
     } catch (error) {
@@ -86,12 +97,14 @@ class EmbeddingStore {
   }
 
   /// Writes [records] for [collectionId], stamped with [model]. An empty list
-  /// deletes the file rather than leaving an empty husk behind.
+  /// deletes the file rather than leaving an empty husk behind. [sourceText] is
+  /// the document's original text, kept for exact re-editing.
   Future<void> write(
     String collectionId,
     String model,
-    List<VectorRecord> records,
-  ) async {
+    List<VectorRecord> records, {
+    String sourceText = '',
+  }) async {
     if (records.isEmpty) {
       await delete(collectionId);
       return;
@@ -101,6 +114,7 @@ class EmbeddingStore {
       jsonEncode({
         'model': model,
         'dims': records.first.vector.length,
+        if (sourceText.isNotEmpty) 'sourceText': sourceText,
         'records': records.map((r) => r.toJson()).toList(),
       }),
       flush: true,

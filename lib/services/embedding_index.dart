@@ -110,8 +110,9 @@ class EmbeddingIndex {
   Future<int> _sync(
     String id,
     String model,
-    Map<String, String> desired,
-  ) async {
+    Map<String, String> desired, {
+    String sourceText = '',
+  }) async {
     final existing = await store.read(id);
     final fresh = model == existing.model;
     final kept = <String, VectorRecord>{};
@@ -140,7 +141,7 @@ class EmbeddingIndex {
       for (final key in desired.keys)
         if (kept.containsKey(key)) kept[key]!,
     ];
-    await store.write(id, model, records);
+    await store.write(id, model, records, sourceText: sourceText);
     return records.length;
   }
 
@@ -202,7 +203,7 @@ class EmbeddingIndex {
     final desired = <String, String>{
       for (var i = 0; i < chunks.length; i++) '$docId#$i': chunks[i],
     };
-    return _sync(docCollection(docId), model, desired);
+    return _sync(docCollection(docId), model, desired, sourceText: text);
   }
 
   /// Embeds a single query string; null when it is empty.

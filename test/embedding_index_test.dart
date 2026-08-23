@@ -192,6 +192,16 @@ void main() {
       );
       expect(hits, isNotEmpty);
     });
+
+    test('stores the exact source text for re-editing (overlap not duplicated)',
+        () async {
+      final index = _index(dir);
+      final text = List.generate(30, (i) => 'Sentence number $i.').join(' ');
+      await index.indexDocument('d2', text,
+          model: 'm', chunkSize: 80, overlapPercent: 20);
+      final col = await EmbeddingStore(dir).read(EmbeddingIndex.docCollection('d2'));
+      expect(col.sourceText, text); // exact, not the overlapped chunk join
+    });
   });
 
   group('indexLore + activation keys', () {

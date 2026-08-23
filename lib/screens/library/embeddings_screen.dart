@@ -296,34 +296,13 @@ class _EmbeddingsScreenState extends State<EmbeddingsScreen> {
 
   Future<void> _open(EmbeddingDocument doc) async {
     final state = context.read<AppState>();
-    // Text documents open in the editor pre-filled; file/URL documents only
-    // offer a rename + retag (their source isn't re-editable here).
-    if (doc.source == DocSource.paste) {
-      _say('Loading…');
-      final text = await state.documentText(doc.id);
-      if (!mounted) return;
-      await Navigator.of(context).push(MaterialPageRoute<void>(
-          builder: (_) => DocumentEditScreen(document: doc, initialText: text)));
-    } else {
-      await _rename(doc);
-    }
-  }
-
-  Future<void> _rename(EmbeddingDocument doc) async {
-    final name = await _askText('Rename document', 'Title', initial: doc.name);
-    if (name == null) return;
-    final tags = await _askText('Tags', 'Comma separated',
-        initial: doc.tags.join(', '));
+    // Every document opens in the same editor: you can see its text, change the
+    // title and tags in one place, and (for a text/edited doc) re-index on save.
+    _say('Loading…');
+    final text = await state.documentText(doc.id);
     if (!mounted) return;
-    await context.read<AppState>().updateDocumentMeta(
-          doc.id,
-          name: name.trim().isEmpty ? doc.name : name.trim(),
-          tags: tags
-              ?.split(',')
-              .map((t) => t.trim())
-              .where((t) => t.isNotEmpty)
-              .toList(),
-        );
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => DocumentEditScreen(document: doc, initialText: text)));
   }
 
   Future<void> _delete(EmbeddingDocument doc) async {
@@ -483,7 +462,6 @@ class _EmbeddingsScreenState extends State<EmbeddingsScreen> {
                 itemBuilder: (context, i) => _DocCard(
                   doc: visible[i],
                   onTap: () => _open(visible[i]),
-                  onRename: () => _rename(visible[i]),
                   onDelete: () => _delete(visible[i]),
                 ),
               ),
@@ -576,13 +554,11 @@ class _DocCard extends StatelessWidget {
   const _DocCard({
     required this.doc,
     required this.onTap,
-    required this.onRename,
     required this.onDelete,
   });
 
   final EmbeddingDocument doc;
   final VoidCallback onTap;
-  final VoidCallback onRename;
   final VoidCallback onDelete;
 
   @override
@@ -600,6 +576,7 @@ class _DocCard extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ListTile(
         onTap: onTap,
+        isThreeLine: doc.tags.isNotEmpty,
         leading: CircleAvatar(
           backgroundColor: scheme.secondaryContainer,
           foregroundColor: scheme.onSecondaryContainer,
@@ -612,6 +589,7 @@ class _DocCard extends StatelessWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const SizedBox(height: 2),
             Text(
               '${doc.source.label} · ${doc.chunkCount} chunk'
               '${doc.chunkCount == 1 ? '' : 's'}'
@@ -623,20 +601,11 @@ class _DocCard extends StatelessWidget {
             ),
             if (doc.tags.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(top: 4),
+                padding: const EdgeInsets.only(top: 6),
                 child: Wrap(
-                  spacing: 4,
-                  runSpacing: -8,
-                  children: [
-                    for (final t in doc.tags)
-                      Chip(
-                        label: Text(t),
-                        visualDensity: VisualDensity.compact,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
-                        labelStyle: Theme.of(context).textTheme.labelSmall,
-                      ),
-                  ],
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [for (final t in doc.tags) _TagPill(label: t)],
                 ),
               ),
           ],
@@ -645,21 +614,19 @@ class _DocCard extends StatelessWidget {
           icon: const Icon(Icons.more_vert),
           onSelected: (v) => switch (v) {
             'edit' => onTap(),
-            'rename' => onRename(),
             'delete' => onDelete(),
             _ => null,
           },
-          itemBuilder: (context) => [
+          itemBuilder: (context) => const [
             PopupMenuItem(
-                value: doc.source == DocSource.paste ? 'edit' : 'rename',
+                value: 'edit',
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
                   dense: true,
-                  leading: const Icon(Icons.edit_outlined),
-                  title: Text(
-                      doc.source == DocSource.paste ? 'Edit' : 'Rename & tags'),
+                  leading: Icon(Icons.edit_outlined),
+                  title: Text('Open & edit'),
                 )),
-            const PopupMenuItem(
+            PopupMenuItem(
                 value: 'delete',
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -673,6 +640,32 @@ class _DocCard extends StatelessWidget {
     );
   }
 }
+
+/// A small, tidy tag pill (Material's Chip is too tall/bulky for a list row).
+class _TagPill extends StatelessWidget {
+  const _TagPill({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context)
+            .textTheme
+            .labelSmall
+            ?.copyWith(color: scheme.onSecondaryContainer),
+      ),
+    );
+  }
+}
+
 
 /// Shown above the shelf when the feature is not yet ready to use.
 class _SetupBanner extends StatelessWidget {

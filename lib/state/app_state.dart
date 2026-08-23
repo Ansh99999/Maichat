@@ -1704,13 +1704,15 @@ class AppState extends ChangeNotifier {
     return record;
   }
 
-  /// The reconstructed source text of document [id] — its stored chunks joined
-  /// back together, so a text document can be re-opened and edited.
+  /// The reconstructed source text of document [id] — its original text when it
+  /// was stored (exact), falling back to its stored chunks joined back together.
   Future<String> documentText(String id) async {
     final store = _vectors;
     if (store == null) return '';
     final col = await store.read(EmbeddingIndex.docCollection(id));
-    // Records are written in `docId#n` order, so joining preserves the text.
+    if (col.sourceText.isNotEmpty) return col.sourceText;
+    // Older documents (or a rebuild) may have no stored source — join the chunks
+    // in `docId#n` order as a best effort.
     final ordered = col.records.toList()
       ..sort((a, b) {
         int n(String k) => int.tryParse(k.split('#').last) ?? 0;
