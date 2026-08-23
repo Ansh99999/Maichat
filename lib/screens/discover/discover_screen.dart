@@ -7,6 +7,7 @@ import '../../models/discover.dart';
 import '../../services/discover/discover_sources.dart';
 import '../../state/app_state.dart';
 import '../../widgets/app_drawer.dart';
+import '../../widgets/brand_mark.dart';
 import 'discover_card.dart';
 import 'discover_controller.dart';
 import 'discover_filter_sheet.dart';
@@ -461,7 +462,7 @@ class _Message extends StatelessWidget {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
-            Text(
+            BrandedText(
               body,
               textAlign: TextAlign.center,
               style: Theme.of(context)

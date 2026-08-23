@@ -17,6 +17,7 @@ import '../screens/section_screen.dart';
 import '../screens/settings/about_settings_page.dart';
 import '../screens/settings_screen.dart';
 import 'character_avatar.dart';
+import 'brand_mark.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
@@ -137,8 +138,16 @@ class AppDrawer extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      sites == null ? 'MaiChat' : 'Discover',
+                    // The drawer header is where the app introduces itself, so
+                    // it is the one place the mark is unmissable. Inside
+                    // Discover the header names the thing being browsed, not
+                    // the app, so BrandedText finds nothing to mark and renders
+                    // it plainly.
+                    child: BrandedText(
+                      sites == null ? kMaiChatName : 'Discover',
+                      // A shade under the default: at headline size the mark is
+                      // already the biggest thing in the row.
+                      markScale: 1.15,
                       style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                             color: scheme.onSurface,
                             fontWeight: FontWeight.w600,

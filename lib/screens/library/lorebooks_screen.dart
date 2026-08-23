@@ -9,6 +9,7 @@ import '../../models/lorebook.dart';
 import '../../services/lorebook_codec.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
+import '../../widgets/brand_mark.dart';
 import '../../widgets/library_drawer.dart';
 import '../../widgets/tag_filter_sheet.dart';
 import 'lorebook_edit_screen.dart';
@@ -200,8 +201,8 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
             ListTile(
               leading: const Icon(Icons.insert_drive_file_outlined),
               title: const Text('A .json file'),
-              subtitle: const Text('SillyTavern world info, an Agnai memory '
-                  'book, a character card, or a MaiChat export'),
+              subtitle: const BrandedText('SillyTavern world info, an Agnai '
+                  'memory book, a character card, or a MaiChat export'),
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 _importFile();
@@ -370,11 +371,15 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
           children: [
             for (final f in LoreExportFormat.values)
               ListTile(
-                leading: Icon(switch (f) {
-                  LoreExportFormat.native => Icons.data_object_outlined,
-                  LoreExportFormat.sillyTavern => Icons.public_outlined,
-                  LoreExportFormat.agnai => Icons.smart_toy_outlined,
-                }),
+                // Our own format wears the app's mark; the others keep a
+                // generic glyph in the same slot, so the rows stay aligned.
+                leading: f == LoreExportFormat.native
+                    ? const MaiChatMark()
+                    : Icon(switch (f) {
+                        LoreExportFormat.native => Icons.data_object_outlined,
+                        LoreExportFormat.sillyTavern => Icons.public_outlined,
+                        LoreExportFormat.agnai => Icons.smart_toy_outlined,
+                      }),
                 title: Text(f.label),
                 subtitle: Text(f.blurb),
                 onTap: () => Navigator.of(context).pop(f),
@@ -1152,7 +1157,9 @@ Future<void> _offerExport(
           ListTile(
             leading: const Icon(Icons.save_alt_outlined),
             title: const Text('Save as .json file'),
-            subtitle: Text(subtitle),
+            // The subtitle names the format, so it carries the mark when the
+            // format is ours.
+            subtitle: BrandedText(subtitle),
             onTap: () => Navigator.of(context).pop('file'),
           ),
           ListTile(

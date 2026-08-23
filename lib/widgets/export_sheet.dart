@@ -4,6 +4,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'brand_mark.dart';
+
 /// The two permission-free ways to get an export off the device: write it with
 /// the system's own save dialog, or put it on the clipboard.
 ///
@@ -30,7 +32,9 @@ Future<void> offerExport(
           ListTile(
             leading: const Icon(Icons.save_alt_outlined),
             title: Text('Save as .${extensions.first} file'),
-            subtitle: Text(subtitle),
+            // The subtitle is the chosen format's name, so it carries the mark
+            // when that format is ours.
+            subtitle: BrandedText(subtitle),
             onTap: () => Navigator.of(context).pop('file'),
           ),
           ListTile(

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/summary.dart';
 import '../../state/app_state.dart';
+import '../../widgets/brand_mark.dart';
 import '../../widgets/export_sheet.dart';
 
 /// The full-screen memory page for one chat's summary: its configuration, the
@@ -359,8 +360,10 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     });
   }
 
+  /// A snackbar. [BrandedText] so "not a MaiChat summary" carries the mark, the
+  /// same as the export sheet that wrote the file.
   void _toast(String message) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(message)));
+      .showSnackBar(SnackBar(content: BrandedText(message)));
 
   static String _safe(String s) => s
       .replaceAll(RegExp(r'[^A-Za-z0-9 _-]'), '')

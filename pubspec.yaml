@@ -60,6 +60,10 @@ dependencies:
   # after a challenge is served. Android/iOS only — the desktop builds have no
   # implementation, so every use site checks the platform first.
   webview_flutter: 4.14.1
+  # Drawing the MaiChat brand mark. The logo ships as one SVG and is tinted at
+  # runtime so it follows the Material You scheme, which rules out a PNG.
+  # Pure Dart (vector_graphics), so no AGP-9 native-plugin concern.
+  flutter_svg: 2.3.0
   # Extracting text from PDF documents for the embeddings "Data Bank". Pure Dart
   # (no platform channels), so no AGP-9 native-plugin concern; only reads
   # text-based PDFs (a scanned/image PDF has no text to extract).
@@ -91,6 +95,8 @@ flutter:
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/brand/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

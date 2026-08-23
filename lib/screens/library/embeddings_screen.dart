@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../models/embedding.dart';
 import '../../services/document_sources.dart';
 import '../../state/app_state.dart';
+import '../../widgets/brand_mark.dart';
 import '../../widgets/library_drawer.dart';
 import '../../widgets/tag_filter_sheet.dart';
 import 'document_edit_screen.dart';
@@ -79,11 +80,13 @@ class _EmbeddingsScreenState extends State<EmbeddingsScreen> {
     return result;
   }
 
+  /// A snackbar. [BrandedText] so the "not a MaiChat documents file" message
+  /// carries the mark like the import tile that produced it.
   void _say(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(content: BrandedText(message)));
   }
 
   // --- import --------------------------------------------------------------
@@ -100,15 +103,20 @@ class _EmbeddingsScreenState extends State<EmbeddingsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _importTile(sheetContext, Icons.link_outlined, 'Web or Wikipedia link',
+            _importTile(sheetContext, const Icon(Icons.link_outlined),
+                'Web or Wikipedia link',
                 'Fetch a page and remember its text', _addUrl),
-            _importTile(sheetContext, Icons.upload_file_outlined,
+            _importTile(sheetContext, const Icon(Icons.upload_file_outlined),
                 'File (text, markdown or PDF)', 'Pick a document from your device',
                 _addFile),
-            _importTile(sheetContext, Icons.edit_note_outlined, 'Type or paste text',
+            _importTile(sheetContext, const Icon(Icons.edit_note_outlined),
+                'Type or paste text',
                 'Open an editor for the title, tags and text', _addText),
             const Divider(height: 1),
-            _importTile(sheetContext, Icons.folder_zip_outlined,
+            // Below the divider because this one is our own format, not a
+            // source of new content — so it wears the app's mark in the slot
+            // the other three use for a subject icon.
+            _importTile(sheetContext, const MaiChatMark(),
                 'Import a MaiChat documents file', 'A .json bundle exported here',
                 _importBundle),
             const SizedBox(height: 8),
@@ -118,10 +126,10 @@ class _EmbeddingsScreenState extends State<EmbeddingsScreen> {
     );
   }
 
-  Widget _importTile(BuildContext sheetContext, IconData icon, String title,
+  Widget _importTile(BuildContext sheetContext, Widget leading, String title,
       String subtitle, VoidCallback action) {
     return ListTile(
-      leading: Icon(icon),
+      leading: leading,
       title: Text(title),
       subtitle: Text(subtitle),
       onTap: () {

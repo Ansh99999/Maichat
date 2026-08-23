@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../models/character.dart';
 import '../services/chat_codec.dart';
 import '../state/app_state.dart';
+import '../widgets/brand_mark.dart';
 
 /// Brings chats in from the other apps: pick one or more files (or paste), see
 /// what was recognised, choose which character the thread belongs to, and file
@@ -45,8 +46,8 @@ Future<void> importChats(
           ListTile(
             leading: const Icon(Icons.insert_drive_file_outlined),
             title: const Text('A chat file'),
-            subtitle: const Text('A SillyTavern .jsonl, an Agnai export, a '
-                'MaiChat chat, or a log from Risu, Kobold, ooba or CAI Tools'),
+            subtitle: const BrandedText('A SillyTavern .jsonl, an Agnai export, '
+                'a MaiChat chat, or a log from Risu, Kobold, ooba or CAI Tools'),
             onTap: () => Navigator.of(sheetContext).pop('file'),
           ),
           ListTile(
@@ -297,7 +298,7 @@ class _ImportDialogState extends State<_ImportDialog> {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
-                    Text(
+                    BrandedText(
                       '${chat.messageCount} '
                       '${chat.messageCount == 1 ? 'message' : 'messages'} · '
                       '${chat.format.label}',

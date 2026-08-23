@@ -9,6 +9,7 @@ import '../../models/preset.dart';
 import '../../services/preset_io.dart';
 import '../../state/app_state.dart';
 import '../../widgets/app_drawer.dart';
+import '../../widgets/brand_mark.dart';
 import 'preset_edit_screen.dart';
 
 /// The Presets area: a search bar, New/Import actions, and the preset list.
@@ -299,7 +300,9 @@ class _PresetTile extends StatelessWidget {
               onTap: () => Navigator.of(context).pop(PresetFormat.agnai),
             ),
             ListTile(
-              leading: const Icon(Icons.data_object_outlined),
+              // Our own format wears the app's mark where the other two wear a
+              // generic glyph, in the same leading slot.
+              leading: const MaiChatMark(),
               title: const Text('MaiChat (native)'),
               subtitle: const Text('lossless superset'),
               onTap: () => Navigator.of(context).pop(PresetFormat.native),
@@ -370,8 +373,13 @@ String _formatLabel(PresetFormat f) => switch (f) {
       PresetFormat.unknown => 'unknown',
     };
 
+/// A snackbar. [BrandedText] so a message that names the app — the import
+/// read-back says which format the file was — shows the mark there too.
 void _toast(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+    SnackBar(
+      content: BrandedText(message),
+      duration: const Duration(seconds: 4),
+    ),
   );
 }

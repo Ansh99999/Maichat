@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../models/conversation.dart';
 import '../../models/summary.dart';
 import '../../state/app_state.dart';
+import '../../widgets/brand_mark.dart';
 import '../../widgets/export_sheet.dart';
 import '../../widgets/library_drawer.dart';
 import '../summary/summary_edit_screen.dart';
@@ -169,8 +170,8 @@ class _SummariesScreenState extends State<SummariesScreen> {
       imported = ChatSummary.fromJson(
           jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>);
     } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('That file is not a MaiChat summary.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: BrandedText('That file is not a MaiChat summary.')));
       return;
     }
     final target = await showModalBottomSheet<String>(

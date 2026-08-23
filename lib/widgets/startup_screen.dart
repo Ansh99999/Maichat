@@ -6,6 +6,7 @@ import 'package:provider/provider.dart' hide Provider;
 
 import '../services/prefs_repair.dart';
 import '../state/app_state.dart';
+import 'brand_mark.dart';
 
 /// What the app shows before its stored data has been read.
 ///
@@ -173,7 +174,7 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
         title: Text(moved == 0
             ? 'Store repaired'
             : '$moved ${moved == 1 ? 'picture' : 'pictures'} moved to files'),
-        content: Text(
+        content: BrandedText(
           [
             'The settings store went from ${_size(done.bytesBefore)} to '
                 '${_size(done.bytesAfter)}; the '
@@ -196,6 +197,8 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
               // long as the process lives, so the process itself has to go.
               exit(0);
             },
+            // The paragraph above already carries the mark; a second one on the
+            // button would put the logo twice inside one small dialog.
             child: const Text('Close MaiChat'),
           ),
         ],

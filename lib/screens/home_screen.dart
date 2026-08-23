@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/chat_graph.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
+import '../widgets/brand_mark.dart';
 import '../widgets/startup_screen.dart';
 import 'chat_graph_screen.dart';
 import 'chat_screen.dart';
@@ -312,9 +313,12 @@ class _WelcomeHome extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.waving_hand_outlined, size: 56, color: scheme.outline),
+            // The mark is the illustration here, so the text below stays plain
+            // Text — a second mark inline would put the logo on screen twice in
+            // the same 80 px.
+            MaiChatMark(size: 64, color: scheme.outline),
             const SizedBox(height: 16),
-            Text('Welcome to MaiChat',
+            Text('Welcome to $kMaiChatName',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(

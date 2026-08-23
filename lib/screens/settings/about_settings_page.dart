@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app_info.dart';
+import '../../widgets/brand_mark.dart';
 import 'setting_anchors.dart';
 import 'setting_highlight.dart';
 
@@ -31,8 +32,10 @@ class AboutSettingsPage extends StatelessWidget {
           SettingHighlight(
             active: highlight == SettingAnchor.version,
             child: const ListTile(
-              leading: Icon(Icons.info_outline),
-              title: Text('MaiChat'),
+              // The row that *is* the app's identity card: the mark stands in
+              // for the generic info glyph.
+              leading: MaiChatMark(),
+              title: Text(kMaiChatName),
               subtitle: Text('A minimal OpenAI-compatible chat client.'),
               trailing: Text(version),
             ),
