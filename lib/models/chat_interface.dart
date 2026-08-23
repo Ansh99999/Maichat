@@ -285,7 +285,9 @@ enum MessageAction {
   edit('Edit', Icons.edit_outlined),
   delete('Delete', Icons.delete_outline),
   copy('Copy', Icons.copy_outlined),
-  fork('Fork', Icons.call_split),
+  // The enum *name* stays `fork` — it is the persisted json key — while the
+  // label reads "Branch", which is what the Chat Graph calls the result.
+  fork('Branch', Icons.call_split),
   prompt('View prompt', Icons.terminal),
   info('Info', Icons.info_outline);
 

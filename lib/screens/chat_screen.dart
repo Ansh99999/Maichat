@@ -7,6 +7,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
+import '../services/chat_graph.dart';
 import '../services/jank_logger.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
@@ -18,6 +19,7 @@ import '../widgets/message_info_sheet.dart';
 import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
 import 'chat_export.dart';
+import 'chat_graph_screen.dart';
 import 'chat_memory_panel.dart';
 import 'chat_settings_screen.dart';
 import 'chats_screen.dart';
@@ -155,6 +157,15 @@ class _ChatScreenState extends State<ChatScreen> {
   void _openSection(String title, IconData icon) => Navigator.of(context).push(
         MaterialPageRoute<void>(
             builder: (_) => SectionScreen(title: title, icon: icon)),
+      );
+
+  /// The fork tree this chat belongs to. Selecting a branch there pops back
+  /// here, and this screen already rebuilds off the active chat, so it shows
+  /// the branch that was picked.
+  void _openChatGraph(String conversationId) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatGraphScreen(conversationId: conversationId),
+        ),
       );
 
   void _openCharacters() => Navigator.of(context).push(
@@ -343,8 +354,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onChats: _goChats,
         onGallery: () => openChatGallery(context, conversation.id),
         onEditChat: () => _editChat(state),
-        onChatGraph: () =>
-            _openSection('Chat Graph', Icons.account_tree_outlined),
+        onChatGraph: () => _openChatGraph(conversation.id),
         onProviderModel: _openQuickSettings,
         onSettings: _openSettings,
         onImageGen: () =>
@@ -580,7 +590,9 @@ class _ChatScreenState extends State<ChatScreen> {
       AppState state, Conversation conversation, int index) async {
     await state.forkConversation(conversation.id, index);
     if (!mounted) return;
-    _toast('Forked into a new chat');
+    // The fork joins this chat's tree rather than becoming a separate row in the
+    // lists, so the toast points at where it can be found.
+    _toast('Branched — see Chat Graph');
     _stickToLatest();
   }
 
@@ -665,12 +677,12 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ListTile(
               leading: const Icon(Icons.call_split),
-              title: const Text('Fork from here'),
-              subtitle: const Text('Copy the chat up to this turn'),
+              title: const Text('Branch from here'),
+              subtitle: const Text('Carry on differently, in this chat\'s graph'),
               onTap: () async {
                 Navigator.of(sheet).pop();
                 await state.forkConversation(conversation.id, index);
-                _toast('Forked into a new chat');
+                _toast('Branched — see Chat Graph');
                 _scrollToEnd();
               },
             ),
@@ -1443,6 +1455,14 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     final memoryCount = state.lorebooksFor(conversation).length;
     final memorySubtitle =
         memoryCount == 0 ? 'None' : '$memoryCount active';
+    // How many chats are in this one's fork tree, so the drawer says whether
+    // there is a graph worth opening before the user taps.
+    final treeSize =
+        buildFamilyTree(state.conversations, conversation.id)?.subtreeSize ?? 1;
+    final graphSubtitle = treeSize <= 1
+        ? 'No branches'
+        : '$treeSize chats · ${treeSize - 1} '
+            '${treeSize == 2 ? 'branch' : 'branches'}';
 
     return Drawer(
       child: SafeArea(
@@ -1531,6 +1551,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                   _ChatNavItem(
                     icon: Icons.account_tree_outlined,
                     label: 'Chat Graph',
+                    subtitle: graphSubtitle,
                     onTap: () => _close(context, widget.onChatGraph),
                   ),
                   const SizedBox(height: 4),

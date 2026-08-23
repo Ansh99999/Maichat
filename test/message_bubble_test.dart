@@ -151,7 +151,7 @@ void main() {
       await tester.tap(find.byIcon(Icons.more_vert));
       await tester.pumpAndSettle();
       expect(find.text('Copy'), findsOneWidget);
-      expect(find.text('Fork'), findsOneWidget);
+      expect(find.text('Branch'), findsOneWidget);
       expect(find.text('View prompt'), findsOneWidget);
       expect(find.text('Info'), findsOneWidget);
 

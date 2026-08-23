@@ -40,6 +40,8 @@ class Conversation {
     this.summary,
     this.pinned = false,
     this.embedRecall = false,
+    this.parentId,
+    this.forkIndex,
     List<String>? documentIds,
   })  : characterOverrides =
             characterOverrides ?? <String, Character>{},
@@ -148,6 +150,16 @@ class Conversation {
   /// `EmbeddingDocument.id`. Their chunks are searched semantically alongside the
   /// chat's own history. Order is the order they were added.
   final List<String> documentIds;
+
+  /// The thread this one was **forked from**, by [Conversation.id], and the
+  /// index of the message in that parent where the split happened. Set only by
+  /// [AppState.forkConversation] — a chat started fresh or imported has neither,
+  /// so it is a root of the Chat Graph. Deliberately *not* carried by [copyAs]:
+  /// a fork's parent is its immediate source, set explicitly, and a renumbered
+  /// import must not inherit a now-dangling link. If the parent is later deleted
+  /// the link simply dangles and the child reads as a root (no cascade delete).
+  String? parentId;
+  int? forkIndex;
 
   /// The AI characters taking part in a **group chat**, by [Character.id], in
   /// speaking order — the chips shown in the group bar. Empty (the normal case)
@@ -285,6 +297,8 @@ class Conversation {
         if (pinned) 'pinned': true,
         if (embedRecall) 'embedRecall': true,
         if (documentIds.isNotEmpty) 'documentIds': documentIds,
+        if (parentId != null) 'parentId': parentId,
+        if (forkIndex != null) 'forkIndex': forkIndex,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -341,6 +355,10 @@ class Conversation {
             : null,
         pinned: json['pinned'] as bool? ?? false,
         embedRecall: json['embedRecall'] as bool? ?? false,
+        parentId: (json['parentId'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['parentId'] as String).trim(),
+        forkIndex: (json['forkIndex'] as num?)?.toInt(),
         documentIds: (json['documentIds'] as List?)
             ?.map((e) => e.toString())
             .where((s) => s.isNotEmpty)

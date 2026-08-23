@@ -359,10 +359,58 @@ void main() {
     expect(state.active.id, forkId);
     // Copied messages [0..1] only, and diverged from the source.
     expect(state.active.messages, hasLength(2));
-    expect(state.active.title, endsWith('(fork)'));
+    expect(state.active.title, 'one · Branch 1');
     state.active.messages[0] =
         state.active.messages[0].copyWith(content: 'changed');
     expect(source.messages[0].content, 'one');
+  });
+
+  test('forkConversation records the lineage the Chat Graph draws', () async {
+    final state = await _state(FakeClient(deltas: ['a']));
+    await state.send('one');
+    await state.send('two');
+    final source = state.active;
+
+    final forkId = await state.forkConversation(source.id, 1);
+    final fork = state.conversationById(forkId)!;
+    expect(fork.parentId, source.id);
+    expect(fork.forkIndex, 1);
+    // The chat it came from stays a root.
+    expect(source.parentId, isNull);
+
+    // A fork of a fork points at the fork, not the original root.
+    final deepId = await state.forkConversation(forkId, 0);
+    final deep = state.conversationById(deepId)!;
+    expect(deep.parentId, forkId);
+    expect(deep.forkIndex, 0);
+
+    // Lineage survives a save/reload round trip.
+    final reloaded = Conversation.fromJson(fork.toJson());
+    expect(reloaded.parentId, source.id);
+    expect(reloaded.forkIndex, 1);
+  });
+
+  test('branches are named after the tree root and numbered across it',
+      () async {
+    final state = await _state(FakeClient(deltas: ['a']));
+    await state.send('one');
+    await state.send('two');
+    final source = state.active;
+    // The thread is auto-titled from its first message.
+    expect(source.title, 'one');
+
+    final first = state.conversationById(
+        await state.forkConversation(source.id, 1))!;
+    final second = state.conversationById(
+        await state.forkConversation(source.id, 3))!;
+    expect(first.title, 'one · Branch 1');
+    expect(second.title, 'one · Branch 2');
+    // A branch of a branch keeps counting within the same family, and still
+    // points at the branch it actually split from.
+    final nested = state.conversationById(
+        await state.forkConversation(first.id, 0))!;
+    expect(nested.title, 'one · Branch 3');
+    expect(nested.parentId, first.id);
   });
 
   test('regenerateMessage retries an assistant turn from prior history',

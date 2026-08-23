@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/conversation.dart';
+import '../services/chat_graph.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/startup_screen.dart';
+import 'chat_graph_screen.dart';
 import 'chat_screen.dart';
 import 'chats_screen.dart';
 import 'settings_screen.dart';
@@ -42,10 +43,13 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     if (!state.ready) return const StartupScreen();
-    // Brand-new, never-sent threads stay hidden until they hold a message.
+    // Brand-new, never-sent threads stay hidden until they hold a message. Each
+    // row is a fork tree (a chat plus everything forked from it), matching the
+    // Chats list — branches live in the Chat Graph, not in this list.
     final chats = state.conversations.where((c) => !c.isEmpty).toList();
-    final pinned = chats.where((c) => c.pinned).toList();
-    final recent = chats.where((c) => !c.pinned).take(3).toList();
+    final trees = collapseForks(chats);
+    final pinned = trees.where((t) => t.pinned).toList();
+    final recent = trees.where((t) => !t.pinned).take(3).toList();
     final bottom = MediaQuery.paddingOf(context).bottom;
     final loadError = state.loadError;
 
@@ -90,12 +94,10 @@ class HomeScreen extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
                 sliver: SliverList.builder(
                   itemCount: pinned.length,
-                  itemBuilder: (context, index) => ChatCard(
-                    conversation: pinned[index],
-                    onTap: () => _openChat(context, state, pinned[index].id),
-                    onDelete: () =>
-                        _confirmDelete(context, state, pinned[index]),
-                    onTogglePin: () => state.togglePinned(pinned[index].id),
+                  itemBuilder: (context, index) => _treeCard(
+                    context,
+                    state,
+                    pinned[index],
                   ),
                 ),
               ),
@@ -119,12 +121,10 @@ class HomeScreen extends StatelessWidget {
                 padding: EdgeInsets.fromLTRB(12, 0, 12, 96 + bottom),
                 sliver: SliverList.builder(
                   itemCount: recent.length,
-                  itemBuilder: (context, index) => ChatCard(
-                    conversation: recent[index],
-                    onTap: () => _openChat(context, state, recent[index].id),
-                    onDelete: () =>
-                        _confirmDelete(context, state, recent[index]),
-                    onTogglePin: () => state.togglePinned(recent[index].id),
+                  itemBuilder: (context, index) => _treeCard(
+                    context,
+                    state,
+                    recent[index],
                   ),
                 ),
               ),
@@ -135,16 +135,41 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
+  /// One fork tree as a card: named after its root, resuming the branch it was
+  /// last left in.
+  Widget _treeCard(BuildContext context, AppState state, ChatTreeEntry tree) =>
+      ChatCard(
+        conversation: tree.root,
+        tree: tree,
+        onTap: () => _openChat(context, state, tree.latest.id),
+        onDelete: () => _confirmDelete(context, state, tree),
+        onTogglePin: () => state.togglePinnedTree(tree.root.id),
+        onGraph: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChatGraphScreen(conversationId: tree.root.id),
+          ),
+        ),
+      );
+
+  /// Deletes a whole fork tree — the row stands for the family, so every branch
+  /// goes with it.
   Future<void> _confirmDelete(
     BuildContext context,
     AppState state,
-    Conversation c,
+    ChatTreeEntry tree,
   ) async {
+    final n = tree.members.length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete chat?'),
-        content: Text('"${c.title}" will be removed permanently.'),
+        title: Text(n == 1 ? 'Delete chat?' : 'Delete $n chats?'),
+        content: Text(
+          n == 1
+              ? '"${tree.root.title}" will be removed permanently.'
+              : '"${tree.root.title}" and its ${tree.branchCount} '
+                  '${tree.branchCount == 1 ? 'branch' : 'branches'} will be '
+                  'removed permanently.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -157,7 +182,11 @@ class HomeScreen extends StatelessWidget {
         ],
       ),
     );
-    if (confirmed ?? false) await state.deleteConversation(c.id);
+    if (confirmed ?? false) {
+      for (final c in tree.members) {
+        await state.deleteConversation(c.id);
+      }
+    }
   }
 }
 // APPEND-MARKER

@@ -20,6 +20,7 @@ import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../models/summary.dart';
 import '../services/chat_client.dart';
+import '../services/chat_graph.dart';
 import '../services/avatar_store.dart';
 import '../services/document_sources.dart';
 import '../services/embedding_index.dart';
@@ -2432,6 +2433,24 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  /// Pins or unpins a whole **fork tree**. A row in the chat lists stands for
+  /// the family, so the pin has to move with all of it; any member pinned makes
+  /// the tree read as pinned, so unpinning clears every member. Used by the
+  /// lists; [togglePinned] still pins one chat on its own.
+  Future<void> togglePinnedTree(String id) async {
+    final rootId = rootIdOf(_conversations, id);
+    final members = _conversations
+        .where((c) => rootIdOf(_conversations, c.id) == rootId)
+        .toList();
+    if (members.isEmpty) return;
+    final pinned = members.any((c) => c.pinned);
+    for (final c in members) {
+      c.pinned = !pinned;
+    }
+    notifyListeners();
+    await _saveConversations();
+  }
+
   /// Empties the active thread but keeps it around — the "restart chat"
   /// action. Any in-flight reply is aborted first.
   Future<void> restartConversation() async {
@@ -2787,8 +2806,13 @@ class AppState extends ChangeNotifier {
   }
 
   /// Copies messages [0..index] (inclusive) into a NEW thread, makes it active,
-  /// and returns its id — the "fork from here" action. Messages are deep-copied
-  /// so the fork and its source diverge independently.
+  /// and returns its id — the "branch from here" action. Messages are
+  /// deep-copied so the branch and its source diverge independently.
+  ///
+  /// The branch is not a loose new chat: [Conversation.parentId] and
+  /// [Conversation.forkIndex] record where it split, which is what lets the
+  /// Chat Graph draw the family and the chat lists show the whole tree as one
+  /// row.
   Future<String> forkConversation(String conversationId, int index) async {
     final source = _conversationById(conversationId);
     if (source == null) return '';
@@ -2800,16 +2824,37 @@ class AppState extends ChangeNotifier {
     ];
     final fork = source.copyAs(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      title: '${source.title} (fork)',
+      // Branches are named after the tree's root rather than piling up
+      // "(fork) (fork)" suffixes: the graph already says where each split, and
+      // the root's title is what the chat lists show.
+      title: _branchTitle(source),
       messages: copied,
       updatedAt: DateTime.now(),
     );
+    // Record where this branch split from, so the Chat Graph can draw the
+    // family tree. The parent is the immediate source (a branch of a branch
+    // points at the branch it came from, not the original root).
+    fork.parentId = source.id;
+    fork.forkIndex = end;
     _conversations.insert(0, fork);
     _activeId = fork.id;
     notifyListeners();
     await _saveActiveId(fork.id);
     await _saveConversations();
     return fork.id;
+  }
+
+  /// "Tavern · Branch 3" — named after the tree's **root** and numbered across
+  /// the whole tree, so a branch of a branch does not pile up suffixes and no
+  /// two branches in one family read alike. The graph row says which chat it
+  /// actually split from, so the title does not have to.
+  String _branchTitle(Conversation source) {
+    final rootId = rootIdOf(_conversations, source.id);
+    final root = _conversationById(rootId) ?? source;
+    final inTree = _conversations
+        .where((c) => c.id != rootId && rootIdOf(_conversations, c.id) == rootId)
+        .length;
+    return '${root.title} · Branch ${inTree + 1}';
   }
 
   /// Regenerates the assistant turn at [index]: keeps the existing reply as a

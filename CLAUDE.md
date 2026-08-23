@@ -138,6 +138,13 @@ the code are the source of truth — verify file:line claims before relying on t
 - **Chat UI:** `screens/chat_screen.dart`, `widgets/message_bubble.dart`
   (swipes/variants, per-message action bar, name placement), `widgets/thinking_block.dart`,
   per-chat settings screen, `screens/prompt_view_screen.dart` (View prompt inspector).
+- **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
+  source by `Conversation.parentId` + `forkIndex` (set only by
+  `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over
+  that: `buildFamilyTree`/`flattenGraph` for `screens/chat_graph_screen.dart`,
+  and `collapseForks` → `ChatTreeEntry`, which is why a tree is **one row** in
+  the Chats/Home lists (named after its root, previewing its freshest branch).
+  A missing parent degrades to a root — no cascade delete, no dangling tree.
 
 ## Can't be verified from a headless host
 

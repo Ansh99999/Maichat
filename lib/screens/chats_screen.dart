@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/conversation.dart';
+import '../services/chat_graph.dart';
 import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
 import 'chat_export.dart';
+import 'chat_graph_screen.dart';
 import 'chat_import.dart';
 import 'chat_screen.dart';
 
@@ -126,16 +128,26 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   /// Builds the chat list slivers, grouping pinned chats into their own section
   /// at the top when there are any.
+  ///
+  /// Each row is a **fork tree**, not a single chat: a chat and everything
+  /// forked from it collapse into one entry, reached through the Chat Graph.
+  /// Trees are formed after filtering, so a search still shows the branch that
+  /// matched rather than hiding it under a parent that didn't.
   List<Widget> _chatSlivers(BuildContext context, AppState state,
       List<Conversation> chats, double bottom) {
-    final pinned = chats.where((c) => c.pinned).toList();
-    final others = chats.where((c) => !c.pinned).toList();
+    final trees = collapseForks(chats);
+    final pinned = trees.where((t) => t.pinned).toList();
+    final others = trees.where((t) => !t.pinned).toList();
 
-    Widget card(Conversation c) => ChatCard(
-          conversation: c,
-          onTap: () => _openChat(context, state, c.id),
-          onDelete: () => _confirmDelete(context, state, c),
-          onTogglePin: () => state.togglePinned(c.id),
+    Widget card(ChatTreeEntry tree) => ChatCard(
+          conversation: tree.root,
+          tree: tree,
+          // Opening a tree resumes the branch it was left in, which is the chat
+          // the preview and timestamp already describe.
+          onTap: () => _openChat(context, state, tree.latest.id),
+          onDelete: () => _confirmDelete(context, state, tree),
+          onTogglePin: () => state.togglePinnedTree(tree.root.id),
+          onGraph: () => _openGraph(context, tree.root.id),
         );
 
     if (pinned.isEmpty) {
@@ -168,6 +180,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
       ),
     ];
   }
+
+  void _openGraph(BuildContext context, String id) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatGraphScreen(conversationId: id),
+        ),
+      );
 
   Widget _sectionHeader(BuildContext context, String label) =>
       SliverToBoxAdapter(
@@ -206,16 +224,26 @@ class _ChatsScreenState extends State<ChatsScreen> {
         ),
       );
 
+  /// Deletes a whole fork tree — the row stands for the family, so removing it
+  /// removes every branch. The dialog says how many, because a row's title only
+  /// names the root.
   Future<void> _confirmDelete(
     BuildContext context,
     AppState state,
-    Conversation c,
+    ChatTreeEntry tree,
   ) async {
+    final n = tree.members.length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete chat?'),
-        content: Text('"${c.title}" will be removed permanently.'),
+        title: Text(n == 1 ? 'Delete chat?' : 'Delete $n chats?'),
+        content: Text(
+          n == 1
+              ? '"${tree.root.title}" will be removed permanently.'
+              : '"${tree.root.title}" and its ${tree.branchCount} '
+                  '${tree.branchCount == 1 ? 'branch' : 'branches'} will be '
+                  'removed permanently.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -228,7 +256,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
         ],
       ),
     );
-    if (confirmed ?? false) await state.deleteConversation(c.id);
+    if (confirmed ?? false) {
+      for (final c in tree.members) {
+        await state.deleteConversation(c.id);
+      }
+    }
   }
 }
 
@@ -294,9 +326,16 @@ class _HeadlineAction extends StatelessWidget {
   }
 }
 
-/// One conversation in the recent list: title, a preview of the last turn, how
-/// long ago it was touched, and an overflow menu to export or delete it. Shared
-/// by the Chats list and the Home dashboard preview.
+/// One row in the recent list: title, a preview of the last turn, how long ago
+/// it was touched, and an overflow menu to export or delete it. Shared by the
+/// Chats list and the Home dashboard preview.
+///
+/// When [tree] is given the row stands for a whole **fork tree** rather than one
+/// chat: it is named after the tree's root but previews and dates its most
+/// recently touched branch, counts the branches, and offers the Chat Graph. This
+/// is what keeps a chat and everything forked from it as a single entry in the
+/// lists — the branches are reached through the graph, not by scrolling past
+/// near-identical rows.
 class ChatCard extends StatelessWidget {
   const ChatCard({
     super.key,
@@ -304,8 +343,11 @@ class ChatCard extends StatelessWidget {
     required this.onTap,
     required this.onDelete,
     this.onTogglePin,
+    this.tree,
+    this.onGraph,
   });
 
+  /// The chat this row is named after — the tree's root when [tree] is set.
   final Conversation conversation;
   final VoidCallback onTap;
   final VoidCallback onDelete;
@@ -313,12 +355,25 @@ class ChatCard extends StatelessWidget {
   /// Pins/unpins the chat; when null the pin action is hidden.
   final VoidCallback? onTogglePin;
 
+  /// The fork tree this row collapses, when it collapses one.
+  final ChatTreeEntry? tree;
+
+  /// Opens the Chat Graph for this tree; when null the action is hidden.
+  final VoidCallback? onGraph;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final preview = conversation.messages.isEmpty
+    final branches = tree?.branchCount ?? 0;
+    // A row stands for the whole tree, so the pin state is the tree's.
+    final pinned = tree?.pinned ?? conversation.pinned;
+    // A tree row reads off its freshest branch: that is the chat the reader was
+    // last in, so its last turn is the useful preview and its timestamp is the
+    // one that should place the row in a newest-first list.
+    final shown = tree?.latest ?? conversation;
+    final preview = shown.messages.isEmpty
         ? 'Empty'
-        : conversation.messages.last.content
+        : shown.messages.last.content
             .replaceAll(RegExp(r'\s+'), ' ')
             .trim();
     return Card(
@@ -331,14 +386,14 @@ class ChatCard extends StatelessWidget {
         leading: CircleAvatar(
           backgroundColor: scheme.secondaryContainer,
           child: Icon(
-            Icons.chat_bubble_outline,
+            branches > 0 ? Icons.account_tree_outlined : Icons.chat_bubble_outline,
             color: scheme.onSecondaryContainer,
             size: 20,
           ),
         ),
         title: Row(
           children: [
-            if (conversation.pinned)
+            if (pinned)
               Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: Icon(Icons.push_pin, size: 14, color: scheme.primary),
@@ -350,6 +405,11 @@ class ChatCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (branches > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: _BranchBadge(count: branches),
+              ),
           ],
         ),
         subtitle: Column(
@@ -362,7 +422,11 @@ class ChatCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              relativeTime(conversation.updatedAt),
+              branches > 0
+                  ? '${relativeTime(shown.updatedAt)} · in "${shown.title}"'
+                  : relativeTime(shown.updatedAt),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
@@ -377,17 +441,26 @@ class ChatCard extends StatelessWidget {
             if (value == 'delete') onDelete();
             if (value == 'export') exportChat(context, conversation);
             if (value == 'pin') onTogglePin?.call();
+            if (value == 'graph') onGraph?.call();
           },
           itemBuilder: (context) => [
+            if (onGraph != null && branches > 0)
+              const PopupMenuItem<String>(
+                value: 'graph',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.account_tree_outlined),
+                  title: Text('Chat Graph'),
+                ),
+              ),
             if (onTogglePin != null)
               PopupMenuItem<String>(
                 value: 'pin',
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(conversation.pinned
-                      ? Icons.push_pin
-                      : Icons.push_pin_outlined),
-                  title: Text(conversation.pinned ? 'Unpin' : 'Pin'),
+                  leading: Icon(
+                      pinned ? Icons.push_pin : Icons.push_pin_outlined),
+                  title: Text(pinned ? 'Unpin' : 'Pin'),
                 ),
               ),
             const PopupMenuItem<String>(
@@ -408,6 +481,38 @@ class ChatCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The "N branches" pill on a collapsed fork-tree row.
+class _BranchBadge extends StatelessWidget {
+  const _BranchBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.call_split, size: 12, color: scheme.onSecondaryContainer),
+          const SizedBox(width: 4),
+          Text(
+            '$count',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSecondaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ],
       ),
     );
   }
