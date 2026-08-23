@@ -77,6 +77,11 @@ void main() {
 
   /// How far the picture on screen is zoomed, read off the transform the surface
   /// actually paints with.
+  ///
+  /// `storage[0]` rather than `getMaxScaleOnAxis()`: the latter takes the largest
+  /// scale on *any* axis and so reads 1.0 for a picture squeezed below fitted (the
+  /// z axis stays 1), which is exactly the state a "stuck small" bug leaves behind
+  /// — it must be visible here.
   double scaleOf(WidgetTester tester) {
     final transform = tester.widget<Transform>(find
         .descendant(
@@ -84,7 +89,7 @@ void main() {
           matching: find.byType(Transform),
         )
         .first);
-    return transform.transform.getMaxScaleOnAxis();
+    return transform.transform.storage[0];
   }
 
   double pageOf(WidgetTester tester) =>
@@ -246,6 +251,59 @@ void main() {
       expect(scaleOf(tester), closeTo(1, 0.001));
       // A squeeze that only undoes a zoom must not also close the picture.
       expect(stillOpen(tester), isTrue);
+    });
+
+    testWidgets('a squeeze from rest never shrinks the picture at all',
+        (tester) async {
+      // v1.15.10 let a squeeze go to 0.6 as "elastic give", and read a release
+      // below 0.82 as "put it away". Two things went wrong on a real hand: the
+      // dimming made an ordinary pinch-in look like the screen was closing, and
+      // when both fingers lifted *without moving first* the scale recogniser
+      // reconfigured instead of ending — no settle ever ran, and the picture was
+      // left small and stuck over the gallery with no way back. Fitted is now the
+      // floor, so there is nothing to get stuck in.
+      await open(tester);
+      final centre = centreOf(tester);
+      final left = await tester.startGesture(centre - const Offset(140, 0));
+      final right = await tester.startGesture(centre + const Offset(140, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 12; i++) {
+        await left.moveBy(const Offset(10, 0));
+        await right.moveBy(const Offset(-10, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(scaleOf(tester), closeTo(1, 0.001),
+            reason: 'mid-squeeze, step $i');
+      }
+      // Lifted a beat apart with no move in between — the shape that stuck.
+      await left.up();
+      await tester.pump(const Duration(milliseconds: 20));
+      await right.up();
+      await tester.pumpAndSettle();
+      expect(scaleOf(tester), closeTo(1, 0.001));
+      expect(stillOpen(tester), isTrue,
+          reason: 'a squeeze is a zoom, not a way out');
+    });
+
+    testWidgets('a zoom held to the last finger still settles', (tester) async {
+      // Same reconfigure-instead-of-end path as above, from a zoom: the settle
+      // now runs off raw pointer counts, so the picture cannot be left mid-flight.
+      await open(tester);
+      final centre = centreOf(tester);
+      final left = await tester.startGesture(centre - const Offset(40, 0));
+      final right = await tester.startGesture(centre + const Offset(40, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 10; i++) {
+        await left.moveBy(const Offset(-10, 0));
+        await right.moveBy(const Offset(10, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await left.up();
+      await tester.pump(const Duration(milliseconds: 20));
+      await right.up();
+      await tester.pumpAndSettle();
+      expect(scaleOf(tester), greaterThan(2),
+          reason: 'a zoom survives the hand leaving');
+      expect(scaleOf(tester), lessThanOrEqualTo(6));
     });
   });
 

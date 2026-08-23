@@ -6,19 +6,16 @@ import 'package:flutter/material.dart';
 /// How far the transform must be from rest before the picture counts as zoomed.
 const double _kZoomedAt = 1.01;
 
-/// How far a squeeze may go past rest before it springs back — a little give,
-/// so pinching in reads as elastic rather than as hitting a wall.
-const double _kSqueezeFloor = 0.6;
-
-/// Released below this, a squeeze is read as "put it away" rather than as a
-/// zoom that undershot.
-const double _kSqueezeToClose = 0.82;
-
 /// Logical pixels per second that count as a flick rather than a drag.
 const double _kFlickVelocity = 620;
 
 /// Where a double tap lands.
 const double _kDoubleTapScale = 2.5;
+
+/// The tag that ties a picture's tile in a grid to the same picture full screen,
+/// so opening one grows it out of where it was tapped instead of fading a new
+/// screen in over the top.
+String photoHeroTag(String id) => 'photo-$id';
 
 /// A picture you can pinch, pan, double tap, and throw away.
 ///
@@ -103,6 +100,20 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   Offset? _doubleTapAt;
   bool _zoomed = false;
 
+  /// Fingers currently on the surface, counted from raw pointer events.
+  int _fingers = 0;
+
+  /// Whether the current touch has already been settled.
+  bool _settled = true;
+
+  /// The vertical velocity the recogniser last reported.
+  ///
+  /// Kept because it does not report one on the segment that matters: a pinch ends
+  /// and restarts every time a finger changes, and the *last* lift often
+  /// reconfigures rather than ending, so `onEnd` with an empty hand cannot be
+  /// relied on. Settling runs off the raw finger count ([_settle]) and reads this.
+  double _lastVelocity = 0;
+
   @override
   void initState() {
     super.initState();
@@ -136,14 +147,15 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   }
 
   /// 0 at rest, 1 when letting go now would put the picture away.
+  ///
+  /// Only the drag counts. A squeeze used to feed this too, so pinching in dimmed
+  /// the screen as if the picture were leaving and then — if the hand lifted in a
+  /// way that never reported an empty hand — left it small over the gallery with
+  /// no way back. Zoom is zoom; leaving is a drag.
   double _closeness(PhotoGeometry geometry) {
     final distance = _dismissDistance;
-    final byDrag = distance <= 0
-        ? 0.0
-        : (geometry.drag.dy.abs() / distance).clamp(0.0, 1.0);
-    final bySqueeze =
-        ((1 - geometry.scale) / (1 - _kSqueezeToClose)).clamp(0.0, 1.0);
-    return math.max(byDrag, bySqueeze);
+    if (distance <= 0) return 0;
+    return (geometry.drag.dy.abs() / distance).clamp(0.0, 1.0);
   }
 
   Offset get _centre => Offset(_viewport.width / 2, _viewport.height / 2);
@@ -174,11 +186,13 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     // Split by fingers, not by scale: a mode that flips partway through a pinch
     // makes the picture jump at the moment the squeeze crosses rest.
     if (details.pointerCount >= 2) {
-      // A pinch. Whatever is under the fingers stays under the fingers —
-      // measured from the *previous* focal point, not the gesture's start, so a
-      // pinch that walks across the picture tracks it instead of drifting.
-      final scale =
-          (_startScale * details.scale).clamp(_kSqueezeFloor, widget.maxScale);
+      // A pinch. Never below 1: fitted is as far out as a photo goes, so
+      // squeezing past it simply stops rather than shrinking the picture into a
+      // stamp floating over the gallery. Whatever is under the fingers stays
+      // under the fingers — measured from the *previous* focal point, not the
+      // gesture's start, so a pinch that walks across the picture tracks it
+      // instead of drifting.
+      final scale = (_startScale * details.scale).clamp(1.0, widget.maxScale);
       final step = scale / geometry.scale;
       final anchored =
           (focal - _centre) - (_focal - _centre - geometry.offset) * step;
@@ -205,19 +219,36 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     _focal = focal;
   }
 
+  /// Records the velocity of each segment and settles once the hand is empty.
+  ///
+  /// The empty-hand case is belt to [_settle]'s braces: it is reached from the raw
+  /// finger count too, whichever arrives first.
   void _onEnd(ScaleEndDetails details) {
-    // A pinch ends and restarts every time a finger changes, so this fires
-    // mid-gesture with fingers still down. Only the empty hand means the end.
-    if (details.pointerCount > 0) return;
+    _lastVelocity = details.velocity.pixelsPerSecond.dy;
+    if (details.pointerCount == 0) _settle();
+  }
+
+  /// Puts the picture where it belongs now the hand has gone: away if it was
+  /// thrown, back to fitted otherwise.
+  ///
+  /// Idempotent, because both the recogniser's end and the raw last-finger-up can
+  /// reach it and either may be first.
+  void _settle() {
+    if (_settled) return;
+    _settled = true;
 
     final geometry = _geometry.value;
-    final velocity = details.velocity.pixelsPerSecond.dy;
+    final velocity = _lastVelocity;
     final flicked = geometry.drag.dy != 0 &&
         velocity.abs() > _kFlickVelocity &&
         velocity.sign == geometry.drag.dy.sign;
-    final thrown = geometry.drag.dy.abs() > _dismissDistance || flicked;
-    if (_canDismiss && (thrown || geometry.scale < _kSqueezeToClose)) {
-      _throwOut(geometry, flicked ? velocity : 0);
+    if (_canDismiss && (geometry.drag.dy.abs() > _dismissDistance || flicked)) {
+      // Nothing to animate here on purpose. The picture is left exactly where the
+      // hand put it — part-way down and part-way shrunk — and closing the route
+      // hands it to the Hero flight, which carries it from there back into the
+      // tile it came from. A throw animation of our own would be a second thing
+      // moving the same picture at the same time.
+      widget.onDismiss!();
       return;
     }
 
@@ -227,32 +258,6 @@ class _PhotoSurfaceState extends State<PhotoSurface>
       offset: _clampPan(geometry.offset, settled),
     );
     if (target != geometry) _springTo(target);
-  }
-
-  /// Lets the picture keep going the way it was thrown while the route fades out
-  /// behind it. Asks to be closed straight away rather than after the animation:
-  /// the fade and the throw then run together, which is what makes it read as one
-  /// movement instead of a pause and then a screen closing.
-  void _throwOut(PhotoGeometry from, double velocity) {
-    widget.dismissProgress?.value = 1;
-    widget.onDismiss!();
-    if (from.drag == Offset.zero) {
-      // Squeezed shut rather than thrown: it shrinks away where it stands.
-      _springTo(
-        PhotoGeometry(scale: from.scale * 0.7, offset: from.offset),
-        duration: const Duration(milliseconds: 180),
-      );
-      return;
-    }
-    final direction = velocity != 0 ? velocity.sign : from.drag.dy.sign;
-    _springTo(
-      PhotoGeometry(
-        scale: from.scale,
-        offset: from.offset,
-        drag: Offset(from.drag.dx, direction * _viewport.height),
-      ),
-      duration: const Duration(milliseconds: 180),
-    );
   }
 
   void _onTap() => widget.onTap?.call();
@@ -305,52 +310,79 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, constraints) {
           _viewport = constraints.biggest;
-          return RawGestureDetector(
-            // The letterbox around a contained picture is part of the surface:
-            // a pinch that starts on the black bars is still a pinch.
-            behavior: HitTestBehavior.opaque,
-            gestures: <Type, GestureRecognizerFactory>{
-              PhotoGestureRecognizer:
-                  GestureRecognizerFactoryWithHandlers<PhotoGestureRecognizer>(
-                () => PhotoGestureRecognizer(
-                  debugOwner: this,
-                  claimSingleFinger: () => _geometry.value.scale > _kZoomedAt,
-                  claimVerticalDrag: () =>
-                      _canDismiss && _geometry.value.scale <= _kZoomedAt,
-                ),
-                (instance) => instance
-                  ..onStart = _onStart
-                  ..onUpdate = _onUpdate
-                  ..onEnd = _onEnd,
-              ),
-              TapGestureRecognizer:
-                  GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-                () => TapGestureRecognizer(debugOwner: this),
-                (instance) => instance.onTap = _onTap,
-              ),
-              DoubleTapGestureRecognizer: GestureRecognizerFactoryWithHandlers<
-                  DoubleTapGestureRecognizer>(
-                () => DoubleTapGestureRecognizer(debugOwner: this),
-                (instance) => instance
-                  ..onDoubleTapDown =
-                      ((details) => _doubleTapAt = details.localPosition)
-                  ..onDoubleTap = _onDoubleTap,
-              ),
+          // Counts fingers from raw pointer events, which survive the scale
+          // recogniser ending and restarting itself as fingers change. The
+          // recogniser's own `onEnd` cannot be trusted to report the empty hand:
+          // when the last finger lifts without moving first, it *reconfigures*
+          // instead of ending, so `onEnd` arrives saying one finger is still down
+          // and never comes again. That is exactly how a squeezed picture used to
+          // be left small and stuck over the gallery.
+          return Listener(
+            onPointerDown: (_) {
+              if (_fingers == 0) {
+                // A fresh touch: the last one's velocity must not decide this
+                // one's fate. A slow drag after a hard flick would otherwise be
+                // read as a flick itself.
+                _lastVelocity = 0;
+                _settled = false;
+              }
+              _fingers += 1;
             },
-            child: ValueListenableBuilder<PhotoGeometry>(
-              valueListenable: _geometry,
-              // The picture is passed as `child`, so a frame of a gesture costs
-              // one transform and no rebuild of the image at all.
-              child: widget.child,
-              builder: (context, geometry, child) => Transform(
-                transform: geometry.matrixFor(_viewport),
-                alignment: Alignment.center,
-                child: child,
+            onPointerUp: _liftFinger,
+            onPointerCancel: _liftFinger,
+            child: RawGestureDetector(
+              // The letterbox around a contained picture is part of the surface:
+              // a pinch that starts on the black bars is still a pinch.
+              behavior: HitTestBehavior.opaque,
+              gestures: <Type, GestureRecognizerFactory>{
+                PhotoGestureRecognizer: GestureRecognizerFactoryWithHandlers<
+                    PhotoGestureRecognizer>(
+                  () => PhotoGestureRecognizer(
+                    debugOwner: this,
+                    claimSingleFinger: () => _geometry.value.scale > _kZoomedAt,
+                    claimVerticalDrag: () =>
+                        _canDismiss && _geometry.value.scale <= _kZoomedAt,
+                  ),
+                  (instance) => instance
+                    ..onStart = _onStart
+                    ..onUpdate = _onUpdate
+                    ..onEnd = _onEnd,
+                ),
+                TapGestureRecognizer:
+                    GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                  () => TapGestureRecognizer(debugOwner: this),
+                  (instance) => instance.onTap = _onTap,
+                ),
+                DoubleTapGestureRecognizer:
+                    GestureRecognizerFactoryWithHandlers<
+                        DoubleTapGestureRecognizer>(
+                  () => DoubleTapGestureRecognizer(debugOwner: this),
+                  (instance) => instance
+                    ..onDoubleTapDown =
+                        ((details) => _doubleTapAt = details.localPosition)
+                    ..onDoubleTap = _onDoubleTap,
+                ),
+              },
+              child: ValueListenableBuilder<PhotoGeometry>(
+                valueListenable: _geometry,
+                // The picture is passed as `child`, so a frame of a gesture costs
+                // one transform and no rebuild of the image at all.
+                child: widget.child,
+                builder: (context, geometry, child) => Transform(
+                  transform: geometry.matrixFor(_viewport),
+                  alignment: Alignment.center,
+                  child: child,
+                ),
               ),
             ),
           );
         },
       );
+
+  void _liftFinger(PointerEvent event) {
+    _fingers = math.max(0, _fingers - 1);
+    if (_fingers == 0) _settle();
+  }
 }
 
 /// Where the picture is: how far zoomed, panned within itself, and how far it has
@@ -463,17 +495,52 @@ class PhotoGestureRecognizer extends ScaleGestureRecognizer {
 /// See-through, so the gallery underneath shows while the photo is dragged out of
 /// the way and the backdrop fades — that is what makes a flick read as putting
 /// the picture back where it came from rather than as a screen closing.
+///
+/// The picture itself arrives by [Hero] flight, growing out of the tile that was
+/// tapped, so this route only has to bring the black and the chrome with it. That
+/// is why the fade is **fast** and starts from a third rather than from nothing: a
+/// full cross-fade over the length of a flight is the "takes a full second to
+/// open" the first cut of this had.
 PageRoute<T> photoRoute<T>(WidgetBuilder builder) => PageRouteBuilder<T>(
       opaque: false,
       barrierColor: null,
-      transitionDuration: const Duration(milliseconds: 260),
-      reverseTransitionDuration: const Duration(milliseconds: 220),
+      transitionDuration: const Duration(milliseconds: 180),
+      reverseTransitionDuration: const Duration(milliseconds: 160),
       pageBuilder: (context, _, _) => builder(context),
       transitionsBuilder: (context, animation, _, child) => FadeTransition(
-        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+        opacity: Tween<double>(begin: 0.35, end: 1).animate(
+          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+        ),
         child: child,
       ),
     );
+
+/// The picture, ready to fly between a grid tile and the full-screen viewer.
+///
+/// [tag] is null for a picture that has nowhere to fly from — an avatar that was
+/// never a gallery record, say — and it then simply appears.
+class PhotoHero extends StatelessWidget {
+  const PhotoHero({super.key, required this.tag, required this.child});
+
+  final String? tag;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final tag = this.tag;
+    if (tag == null) return child;
+    return Hero(
+      tag: tag,
+      // A tile is a cropped square and the viewer shows the whole picture, so the
+      // two ends draw the image differently. Flying the *destination's* widget
+      // the whole way keeps one bitmap on screen: without this the shuttle
+      // cross-fades two Images and the picture visibly double-exposes.
+      flightShuttleBuilder: (_, _, _, _, toContext) =>
+          (toContext.widget as Hero).child,
+      child: child,
+    );
+  }
+}
 
 /// Fades [child] out as the picture is dragged towards being let go of.
 ///

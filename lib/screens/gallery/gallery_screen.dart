@@ -7,6 +7,7 @@ import '../../services/gallery_group.dart';
 import '../../state/app_state.dart';
 import '../../widgets/app_drawer.dart';
 import '../../widgets/avatar_image.dart';
+import '../../widgets/photo_surface.dart';
 import '../../widgets/tag_filter_sheet.dart';
 import 'gallery_actions.dart';
 import 'gallery_upload_sheet.dart';
@@ -615,12 +616,18 @@ class _ImageTile extends StatelessWidget {
                     color: scheme.outline, size: 20),
               )
             else
-              Image(
-                image: provider,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Center(
-                  child: Icon(Icons.broken_image_outlined,
-                      color: scheme.outline, size: 20),
+              // Tagged so tapping the tile *grows this picture* into the viewer
+              // instead of fading a whole screen in over the grid. The flight is
+              // what makes opening a photo feel instant.
+              PhotoHero(
+                tag: photoHeroTag(image.id),
+                child: Image(
+                  image: provider,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Center(
+                    child: Icon(Icons.broken_image_outlined,
+                        color: scheme.outline, size: 20),
+                  ),
                 ),
               ),
             if (image.starred)

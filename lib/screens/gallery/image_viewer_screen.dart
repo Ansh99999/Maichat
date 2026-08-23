@@ -265,6 +265,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   key: ValueKey('zoom-${image.id}'),
                   image: image,
                   leaving: _leaving,
+                  // Only the page on screen flies, so the tag is unique: it is
+                  // the one that grew out of its tile on the way in, and the one
+                  // that shrinks back into a tile on the way out — even after
+                  // swiping to a different picture.
+                  flies: i == _index,
                   onTap: () => setState(() => _chrome = !_chrome),
                   onDismiss: () => Navigator.of(context).maybePop(image.id),
                   onZoomChanged: (zoomed) {
@@ -347,6 +352,7 @@ class _ZoomablePicture extends StatelessWidget {
     super.key,
     required this.image,
     required this.leaving,
+    required this.flies,
     required this.onTap,
     required this.onDismiss,
     required this.onZoomChanged,
@@ -356,6 +362,11 @@ class _ZoomablePicture extends StatelessWidget {
 
   /// Shared with the screen, so the backdrop and chrome fade with this picture.
   final ValueNotifier<double> leaving;
+
+  /// Whether this page is the one that flew in from the grid. Only the picture
+  /// that was tapped may carry the hero tag — two of them under one tag is an
+  /// error, and the pages either side are built before a swipe reaches them.
+  final bool flies;
 
   final VoidCallback onTap;
   final VoidCallback onDismiss;
@@ -380,20 +391,31 @@ class _ZoomablePicture extends StatelessWidget {
       onDismiss: onDismiss,
       dismissProgress: leaving,
       onZoomChanged: onZoomChanged,
-      child: Center(
-        child: provider == null
-            ? const Icon(Icons.broken_image_outlined,
-                color: Colors.white38, size: 48)
-            : Image(
-                image: provider,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                errorBuilder: (_, _, _) => const Icon(
-                    Icons.broken_image_outlined,
-                    color: Colors.white38,
-                    size: 48),
+      child: provider == null
+          ? const Center(
+              child: Icon(Icons.broken_image_outlined,
+                  color: Colors.white38, size: 48),
+            )
+          : PhotoHero(
+              tag: flies ? photoHeroTag(image.id) : null,
+              // Fills the surface rather than shrink-wrapping the bitmap: a
+              // `Hero` measures where it is flying *to*, and an `Image` that has
+              // not decoded yet has no size at all under loose constraints — so
+              // wrapping the bare image made the picture fly into a point at the
+              // middle of the screen and vanish. The box is known before the
+              // first byte is read; `contain` still letterboxes inside it.
+              child: SizedBox.expand(
+                child: Image(
+                  image: provider,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const Center(
+                    child: Icon(Icons.broken_image_outlined,
+                        color: Colors.white38, size: 48),
+                  ),
+                ),
               ),
-      ),
+            ),
     );
   }
 }
