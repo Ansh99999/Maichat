@@ -5,6 +5,7 @@ import '../../models/gallery_image.dart';
 import '../../state/app_state.dart';
 import '../../services/jank_logger.dart';
 import '../../widgets/avatar_image.dart';
+import '../../widgets/photo_surface.dart';
 import 'gallery_actions.dart';
 
 /// What a viewer offers beyond looking, chosen by where it was opened from.
@@ -28,10 +29,11 @@ Future<String?> openImageViewer(
   String? conversationId,
 }) =>
     Navigator.of(context).push<String>(
-      MaterialPageRoute<String>(
-        // Opaque black rather than a translucent scrim: a photo is judged
-        // against nothing, not against a dimmed list.
-        builder: (_) => ImageViewerScreen(
+      // See-through, and the black comes from the screen's own backdrop: a
+      // picture flicked away has to leave the gallery visible behind it as it
+      // goes, which an opaque route cannot do.
+      photoRoute<String>(
+        (_) => ImageViewerScreen(
           imageIds: images.map((i) => i.id).toList(),
           initialIndex: index,
           extra: extra,
@@ -79,16 +81,30 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
   /// Whether the picture on screen is zoomed in.
   ///
-  /// This is what stops the pinch feeling "funky": at rest, paging owns
-  /// horizontal drags and the picture ignores them; once zoomed, the picture owns
-  /// them so it can be panned around, and paging is switched off. Without that
-  /// split the two fight over every drag, and a pinch that starts with the
-  /// slightest sideways movement gets stolen by the page view.
+  /// Paging is switched off while it is, so a drag pans the picture instead of
+  /// half-turning the page. The pinch itself no longer depends on this — the
+  /// [PhotoSurface] claims the pointer the moment a second finger lands — but a
+  /// zoomed picture and a pager still cannot both own one-finger drags.
   bool _zoomed = false;
+
+  /// How near the picture is to being let go of, 0 → 1. Drives the backdrop and
+  /// the chrome only; a notifier rather than state so a drag does not rebuild the
+  /// picture, the page view or the action strip on every frame.
+  final ValueNotifier<double> _leaving = ValueNotifier<double>(0);
+
+  /// This screen's own messenger.
+  ///
+  /// The route is see-through, so the gallery underneath stays on screen and its
+  /// `Scaffold` is still registered with the app's messenger — a snack bar shown
+  /// through that one is drawn twice, once per scaffold, stacked exactly on top of
+  /// itself. Its own messenger keeps a confirmation to the screen that raised it.
+  final GlobalKey<ScaffoldMessengerState> _messenger =
+      GlobalKey<ScaffoldMessengerState>();
 
   @override
   void dispose() {
     _pages.dispose();
+    _leaving.dispose();
     super.dispose();
   }
 
@@ -183,15 +199,18 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
   void _say(String message) {
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context)..clearSnackBars();
-    messenger.showSnackBar(SnackBar(
-      content: Text(message),
-      behavior: SnackBarBehavior.floating,
-      // Clear of the action strip, so the confirmation does not cover the
-      // control that produced it.
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
-      duration: const Duration(seconds: 3),
-    ));
+    final messenger = _messenger.currentState;
+    if (messenger == null) return;
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        // Clear of the action strip, so the confirmation does not cover the
+        // control that produced it.
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+        duration: const Duration(seconds: 3),
+      ));
   }
 
   @override
@@ -199,85 +218,88 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final state = context.watch<AppState>();
     final current = _imageAt(state, _index);
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: _chrome
-          ? AppBar(
-              backgroundColor: Colors.black.withValues(alpha: 0.35),
-              foregroundColor: Colors.white,
-              elevation: 0,
-              title: Text(
-                current?.displayTitle ?? 'Picture',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              actions: [
-                if (_ids.length > 1)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Center(
-                      child: Text(
-                        '${_index + 1} / ${_ids.length}',
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ),
+    return ScaffoldMessenger(
+      key: _messenger,
+      child: Scaffold(
+        // The black is painted inside, by [PhotoBackdrop], so it can fade as the
+        // picture is dragged away and let the gallery show through.
+        backgroundColor: Colors.transparent,
+        extendBodyBehindAppBar: true,
+        appBar: _chrome
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(kToolbarHeight),
+                child: PhotoFade(
+                  leaving: _leaving,
+                  child: _ViewerBar(
+                    title: current?.displayTitle ?? 'Picture',
+                    counter: _ids.length > 1
+                        ? '${_index + 1} / ${_ids.length}'
+                        : null,
                   ),
-              ],
-            )
-          : null,
-      body: Stack(
-        children: [
-          PageView.builder(
-            controller: _pages,
-            // Paging is off while a picture is zoomed in, so dragging moves the
-            // picture instead of half-turning the page.
-            physics: _zoomed
-                ? const NeverScrollableScrollPhysics()
-                : const PageScrollPhysics(),
-            itemCount: _ids.length,
-            onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) {
-              final image = _imageAt(state, i);
-              if (image == null) {
-                return const Center(
-                  child: Icon(Icons.broken_image_outlined,
-                      color: Colors.white38, size: 48),
+                ),
+              )
+            : null,
+        body: Stack(
+          children: [
+            Positioned.fill(child: PhotoBackdrop(leaving: _leaving)),
+            PageView.builder(
+              controller: _pages,
+              // Paging is off while a picture is zoomed in, so dragging moves
+              // the picture instead of half-turning the page.
+              physics: _zoomed
+                  ? const NeverScrollableScrollPhysics()
+                  : const PageScrollPhysics(),
+              itemCount: _ids.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (context, i) {
+                final image = _imageAt(state, i);
+                if (image == null) {
+                  return const Center(
+                    child: Icon(Icons.broken_image_outlined,
+                        color: Colors.white38, size: 48),
+                  );
+                }
+                return _ZoomablePicture(
+                  // Per picture, so zooming one and paging away leaves the next
+                  // at rest rather than inheriting a transform.
+                  key: ValueKey('zoom-${image.id}'),
+                  image: image,
+                  leaving: _leaving,
+                  onTap: () => setState(() => _chrome = !_chrome),
+                  onDismiss: () => Navigator.of(context).maybePop(image.id),
+                  onZoomChanged: (zoomed) {
+                    if (_zoomed != zoomed) setState(() => _zoomed = zoomed);
+                  },
                 );
-              }
-              return _ZoomablePicture(
-                // Per picture, so zooming one and paging away leaves the next at
-                // rest rather than inheriting a transform.
-                key: ValueKey('zoom-${image.id}'),
-                image: image,
-                onTap: () => setState(() => _chrome = !_chrome),
-                onZoomChanged: (zoomed) {
-                  if (_zoomed != zoomed) setState(() => _zoomed = zoomed);
-                },
-              );
-            },
-          ),
-          if (_chrome && current != null)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _ActionBar(
-                image: current,
-                isAvatar: _isAvatar(state, current),
-                canBeAvatar: current.characterId != null,
-                extra: widget.extra,
-                onExport: () => exportGalleryImage(context, current),
-                onEdit: () async {
-                  await showGalleryEditSheet(context, current);
-                },
-                onStar: () => state.toggleGalleryStar(current.id),
-                onAvatar: () => _toggleAvatar(state, current),
-                onSend: () => _sendToChat(state, current),
-                onDelete: () => _delete(state, current),
-              ),
+              },
             ),
-        ],
+            if (_chrome && current != null)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                // Fades with the picture as it is dragged away: controls left
+                // hanging over a photo that is leaving look like a stuck screen.
+                child: PhotoFade(
+                  leaving: _leaving,
+                  child: _ActionBar(
+                    image: current,
+                    isAvatar: _isAvatar(state, current),
+                    canBeAvatar: current.characterId != null,
+                    extra: widget.extra,
+                    onExport: () => exportGalleryImage(context, current),
+                    onEdit: () async {
+                      await showGalleryEditSheet(context, current);
+                    },
+                    onStar: () => state.toggleGalleryStar(current.id),
+                    onAvatar: () => _toggleAvatar(state, current),
+                    onSend: () => _sendToChat(state, current),
+                    onDelete: () => _delete(state, current),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -288,89 +310,59 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 }
 
-/// One page: the picture, pinch-zoomable, centred on black.
-class _ZoomablePicture extends StatefulWidget {
+/// The black a photo is judged against — which thins out as the picture is
+/// dragged away, so the gallery it came from shows through behind it.
+
+/// The bar over a picture: its title, and where in the run it is.
+class _ViewerBar extends StatelessWidget {
+  const _ViewerBar({required this.title, this.counter});
+
+  final String title;
+  final String? counter;
+
+  @override
+  Widget build(BuildContext context) => AppBar(
+        backgroundColor: Colors.black.withValues(alpha: 0.35),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        actions: [
+          if (counter != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  counter!,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            ),
+        ],
+      );
+}
+
+/// One page: the picture, pinch-zoomable and flick-dismissable, on black.
+class _ZoomablePicture extends StatelessWidget {
   const _ZoomablePicture({
     super.key,
     required this.image,
+    required this.leaving,
     required this.onTap,
+    required this.onDismiss,
     required this.onZoomChanged,
   });
 
   final GalleryImage image;
+
+  /// Shared with the screen, so the backdrop and chrome fade with this picture.
+  final ValueNotifier<double> leaving;
+
   final VoidCallback onTap;
+  final VoidCallback onDismiss;
 
   /// Reports whether this picture is zoomed in, so the pager can get out of the
   /// way.
   final ValueChanged<bool> onZoomChanged;
-
-  @override
-  State<_ZoomablePicture> createState() => _ZoomablePictureState();
-}
-
-class _ZoomablePictureState extends State<_ZoomablePicture>
-    with SingleTickerProviderStateMixin {
-  final TransformationController _transform = TransformationController();
-
-  /// Drives the double-tap zoom, so it eases in and out rather than snapping.
-  AnimationController? _animation;
-
-  bool _zoomed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _transform.addListener(_onTransform);
-  }
-
-  @override
-  void dispose() {
-    _transform.removeListener(_onTransform);
-    _animation?.dispose();
-    _transform.dispose();
-    super.dispose();
-  }
-
-  void _onTransform() {
-    final zoomed = _transform.value.getMaxScaleOnAxis() > 1.01;
-    if (zoomed == _zoomed) return;
-    _zoomed = zoomed;
-    widget.onZoomChanged(zoomed);
-  }
-
-  /// Animates the transform to [target].
-  void _animateTo(Matrix4 target) {
-    _animation?.dispose();
-    final controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 220),
-    );
-    final tween = Matrix4Tween(begin: _transform.value, end: target).animate(
-      CurvedAnimation(parent: controller, curve: Curves.easeOutCubic),
-    );
-    tween.addListener(() => _transform.value = tween.value);
-    _animation = controller;
-    controller.forward();
-  }
-
-  /// A double tap zooms to 2.5× on the spot touched, and back out again — the
-  /// gesture every photo viewer has.
-  void _doubleTap(TapDownDetails details) {
-    if (_transform.value.getMaxScaleOnAxis() > 1.01) {
-      _animateTo(Matrix4.identity());
-      return;
-    }
-    const scale = 2.5;
-    final point = details.localPosition;
-    _animateTo(Matrix4.identity()
-      ..translateByDouble(
-        -point.dx * (scale - 1),
-        -point.dy * (scale - 1),
-        0,
-        1,
-      )
-      ..scaleByDouble(scale, scale, scale, 1));
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -378,43 +370,29 @@ class _ZoomablePictureState extends State<_ZoomablePicture>
     // Decoded for the screen, through the shared cache — a full-resolution photo
     // held per page is what makes a viewer stutter and then run out of memory.
     final provider = avatarImage(
-      widget.image.image,
+      image.image,
       displaySize: media.size.longestSide,
       devicePixelRatio: media.devicePixelRatio,
     );
 
-    return GestureDetector(
-      onTap: widget.onTap,
-      onDoubleTapDown: _doubleTap,
-      // Without this the double tap has nothing to fire on once the first tap
-      // has been claimed.
-      onDoubleTap: () {},
-      child: InteractiveViewer(
-        transformationController: _transform,
-        minScale: 1,
-        maxScale: 6,
-        // Panning only once zoomed in. At rest the page view owns horizontal
-        // drags, so a swipe pages cleanly instead of being fought over — that
-        // fight is what made pinching feel jumpy.
-        panEnabled: _zoomed,
-        // Keeps a zoomed picture from being dragged off into empty space, which
-        // is the other half of "funky": you could lose the photo entirely.
-        boundaryMargin: EdgeInsets.zero,
-        clipBehavior: Clip.none,
-        child: Center(
-          child: provider == null
-              ? const Icon(Icons.broken_image_outlined,
-                  color: Colors.white38, size: 48)
-              : Image(
-                  image: provider,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  errorBuilder: (_, _, _) => const Icon(
-                      Icons.broken_image_outlined,
-                      color: Colors.white38,
-                      size: 48),
-                ),
-        ),
+    return PhotoSurface(
+      onTap: onTap,
+      onDismiss: onDismiss,
+      dismissProgress: leaving,
+      onZoomChanged: onZoomChanged,
+      child: Center(
+        child: provider == null
+            ? const Icon(Icons.broken_image_outlined,
+                color: Colors.white38, size: 48)
+            : Image(
+                image: provider,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white38,
+                    size: 48),
+              ),
       ),
     );
   }

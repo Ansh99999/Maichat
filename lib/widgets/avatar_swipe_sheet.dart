@@ -6,6 +6,7 @@ import '../models/conversation.dart';
 import '../services/jank_logger.dart';
 import '../state/app_state.dart';
 import 'avatar_image.dart';
+import 'photo_surface.dart';
 
 /// Opens a character's pictures full screen, to look through and to choose from.
 ///
@@ -24,13 +25,16 @@ Future<void> showAvatarSwipeSheet(
   required Character character,
   required String conversationId,
 }) {
-  return Navigator.of(context).push(MaterialPageRoute<void>(
-    fullscreenDialog: true,
-    builder: (_) => AvatarSwipeScreen(
-      characterId: character.id,
-      conversationId: conversationId,
+  return Navigator.of(context).push(
+    // The same see-through route the gallery viewer uses, so a picture flicked
+    // away here leaves the chat visible behind it as it goes.
+    photoRoute<void>(
+      (_) => AvatarSwipeScreen(
+        characterId: character.id,
+        conversationId: conversationId,
+      ),
     ),
-  ));
+  );
 }
 
 class AvatarSwipeScreen extends StatefulWidget {
@@ -62,9 +66,17 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
   /// instant you choose one, which is the "original avatar flashes back" on Set.
   List<String>? _pool;
 
+  /// Whether the picture on screen is zoomed in, so paging can get out of the way
+  /// of a one-finger pan.
+  bool _zoomed = false;
+
+  /// How near the picture is to being flicked away, 0 → 1.
+  final ValueNotifier<double> _leaving = ValueNotifier<double>(0);
+
   @override
   void dispose() {
     _pages?.dispose();
+    _leaving.dispose();
     super.dispose();
   }
 
@@ -136,7 +148,6 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
         ),
       );
     }
-
     // Captured once and reused: the pool must not reshuffle under the PageView
     // when Set changes the override (see [_pool]).
     final pool = _pool ??= state.avatarPoolIn(conversation, widget.characterId);
@@ -152,62 +163,95 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
         false;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      // Painted by [PhotoBackdrop] instead, so it thins out as a picture is
+      // flicked away and the chat shows through behind it.
+      backgroundColor: Colors.transparent,
       extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.35),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Text(character.displayName),
-        actions: [
-          if (pool.length > 1)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Center(
-                child: Text(
-                  '${_index + 1} / ${pool.length}',
-                  style: const TextStyle(color: Colors.white70),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: PhotoFade(
+          leaving: _leaving,
+          child: AppBar(
+            backgroundColor: Colors.black.withValues(alpha: 0.35),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            title: Text(character.displayName),
+            actions: [
+              if (pool.length > 1)
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Center(
+                    child: Text(
+                      '${_index + 1} / ${pool.length}',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      body: Stack(
+        children: [
+          Positioned.fill(child: PhotoBackdrop(leaving: _leaving)),
+          if (pool.isEmpty)
+            _NoPictures(character: character)
+          else ...[
+            PageView.builder(
+              controller: _pages,
+              physics: _zoomed
+                  ? const NeverScrollableScrollPhysics()
+                  : const PageScrollPhysics(),
+              itemCount: pool.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (context, i) => _AvatarPage(
+                key: ValueKey('avatar-page-${pool[i]}'),
+                ref: pool[i],
+                leaving: _leaving,
+                onDismiss: () => Navigator.of(context).maybePop(),
+                onZoomChanged: (zoomed) {
+                  if (_zoomed != zoomed) setState(() => _zoomed = zoomed);
+                },
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: PhotoFade(
+                leaving: _leaving,
+                child: _AvatarActions(
+                  isCurrent: pool[_index] == current,
+                  canReset: overridden,
+                  onSet: () => _set(state, pool[_index]),
+                  onDefault: () => _setDefault(state, pool[_index]),
+                  onReset: () => _reset(state),
+                  onFloat: () => _float(state, pool[_index]),
                 ),
               ),
             ),
+          ],
         ],
       ),
-      body: pool.isEmpty
-          ? _NoPictures(character: character)
-          : Stack(
-              children: [
-                PageView.builder(
-                  controller: _pages,
-                  itemCount: pool.length,
-                  onPageChanged: (i) => setState(() => _index = i),
-                  itemBuilder: (context, i) =>
-                      _AvatarPage(key: ValueKey('avatar-page-${pool[i]}'), ref: pool[i]),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: _AvatarActions(
-                    isCurrent: pool[_index] == current,
-                    canReset: overridden,
-                    onSet: () => _set(state, pool[_index]),
-                    onDefault: () => _setDefault(state, pool[_index]),
-                    onReset: () => _reset(state),
-                    onFloat: () => _float(state, pool[_index]),
-                  ),
-                ),
-              ],
-            ),
     );
   }
 }
 
-/// One picture in the swipe run, zoomable so a detail can be checked before
-/// choosing it.
+/// One picture in the swipe run: pinchable so a detail can be checked before
+/// choosing it, and flickable so it can be put away without reaching for Back.
 class _AvatarPage extends StatelessWidget {
-  const _AvatarPage({super.key, required this.ref});
+  const _AvatarPage({
+    super.key,
+    required this.ref,
+    required this.leaving,
+    required this.onDismiss,
+    required this.onZoomChanged,
+  });
 
   final String ref;
+  final ValueNotifier<double> leaving;
+  final VoidCallback onDismiss;
+  final ValueChanged<bool> onZoomChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -217,9 +261,10 @@ class _AvatarPage extends StatelessWidget {
       displaySize: media.size.longestSide,
       devicePixelRatio: media.devicePixelRatio,
     );
-    return InteractiveViewer(
-      minScale: 1,
-      maxScale: 5,
+    return PhotoSurface(
+      dismissProgress: leaving,
+      onDismiss: onDismiss,
+      onZoomChanged: onZoomChanged,
       child: Center(
         child: provider == null
             ? const Icon(Icons.person_outline, color: Colors.white38, size: 64)

@@ -450,7 +450,14 @@ void main() {
       await tester.pumpAndSettle();
 
       // The title rides the viewer's bar, and the position pill counts the run.
-      expect(find.text('Opened'), findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(AppBar), matching: find.text('Opened')),
+        findsOneWidget,
+      );
+      // Two of them, because the viewer's route is deliberately see-through: the
+      // gallery it was opened from is still built and still on screen behind it,
+      // which is what lets a flicked-away picture reveal where it came from.
+      expect(find.text('Opened'), findsNWidgets(2));
       expect(find.text('1 / 2'), findsOneWidget);
       expect(find.text('beach'), findsOneWidget, reason: 'tags are shown');
       for (final action in [

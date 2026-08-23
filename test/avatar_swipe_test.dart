@@ -9,6 +9,7 @@ import 'package:maichat/state/app_state.dart';
 import 'package:maichat/widgets/avatar_swipe_sheet.dart';
 import 'package:maichat/widgets/character_avatar.dart';
 import 'package:maichat/widgets/message_bubble.dart';
+import 'package:maichat/widgets/photo_surface.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -263,6 +264,70 @@ void main() {
       await tester.tap(find.text('Set'));
       await tester.pumpAndSettle();
       expect(impersonating.active.avatarOverrides['kai'], 'local:kai2.png');
+    });
+  });
+
+  /// The swipe viewer draws its pictures on the same [PhotoSurface] the gallery
+  /// viewer does, so a character's avatars pinch and flick away identically.
+  /// These pin the wiring, since the gesture itself is covered in depth by
+  /// `photo_viewer_gesture_test.dart`.
+  group('the swipe viewer handles a picture like the gallery does', () {
+    testWidgets('a thumb-anchored pinch zooms', (tester) async {
+      final state = await chatWith();
+      await pumpChat(tester, state);
+      await openAvatar(tester);
+
+      final surface = find.byType(PhotoSurface).first;
+      double scale() => tester
+          .widget<Transform>(find
+              .descendant(of: surface, matching: find.byType(Transform))
+              .first)
+          .transform
+          .getMaxScaleOnAxis();
+      expect(scale(), 1);
+
+      // The asymmetric shape that the old `InteractiveViewer` lost to the pager.
+      final centre = tester.getCenter(surface);
+      final thumb = await tester.startGesture(centre - const Offset(30, 30));
+      final finger = await tester.startGesture(centre + const Offset(30, 30));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 12; i++) {
+        await finger.moveBy(const Offset(10, 10));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(scale(), greaterThan(2));
+      await thumb.up();
+      await finger.up();
+      await tester.pumpAndSettle();
+      expect(scale(), greaterThan(2));
+      expect(find.byType(AvatarSwipeScreen), findsOneWidget);
+    });
+
+    testWidgets('a hard flick down closes it', (tester) async {
+      final state = await chatWith();
+      await pumpChat(tester, state);
+      await openAvatar(tester);
+      expect(find.byType(AvatarSwipeScreen), findsOneWidget);
+
+      await tester.fling(
+          find.byType(PhotoSurface).first, const Offset(0, 300), 1200);
+      await tester.pumpAndSettle();
+      expect(find.byType(AvatarSwipeScreen), findsNothing);
+      // Nothing was chosen on the way out — a flick is "put it back", not "Set".
+      expect(state.active.avatarOverrides, isEmpty);
+    });
+
+    testWidgets('a sideways swipe still turns the page', (tester) async {
+      final state = await chatWith();
+      await pumpChat(tester, state);
+      await openAvatar(tester);
+      expect(find.text('1 / 2'), findsOneWidget);
+
+      await tester.fling(
+          find.byType(PhotoSurface).first, const Offset(-320, 0), 900);
+      await tester.pumpAndSettle();
+      expect(find.text('2 / 2'), findsOneWidget);
+      expect(find.byType(AvatarSwipeScreen), findsOneWidget);
     });
   });
 
