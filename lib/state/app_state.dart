@@ -1672,7 +1672,10 @@ class AppState extends ChangeNotifier {
   /// Ingests a [DocumentText] (already extracted from a file/URL/paste): records
   /// it, chunks and embeds it into its own collection, and persists. Returns the
   /// document, or null when embeddings are not ready. Throws on an embed failure.
-  Future<EmbeddingDocument?> importDocument(DocumentText doc) async {
+  Future<EmbeddingDocument?> importDocument(
+    DocumentText doc, {
+    List<String> tags = const <String>[],
+  }) async {
     final index = _index;
     if (index == null || !_embeddingConfig.isReady) {
       _noteEmbedding('Turn embeddings on and pick a provider first.');
@@ -1683,6 +1686,8 @@ class AppState extends ChangeNotifier {
       name: doc.name,
       source: doc.source,
       origin: doc.origin,
+      tags: tags,
+      tokens: estimateTokens(doc.text),
       model: _embeddingConfig.model,
     );
     final count = await index.indexDocument(
@@ -1697,6 +1702,63 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     await _persistDocuments();
     return record;
+  }
+
+  /// The reconstructed source text of document [id] — its stored chunks joined
+  /// back together, so a text document can be re-opened and edited.
+  Future<String> documentText(String id) async {
+    final store = _vectors;
+    if (store == null) return '';
+    final col = await store.read(EmbeddingIndex.docCollection(id));
+    // Records are written in `docId#n` order, so joining preserves the text.
+    final ordered = col.records.toList()
+      ..sort((a, b) {
+        int n(String k) => int.tryParse(k.split('#').last) ?? 0;
+        return n(a.key).compareTo(n(b.key));
+      });
+    return ordered.map((r) => r.text).join('\n');
+  }
+
+  /// Updates a document's name and tags (no re-embedding).
+  Future<void> updateDocumentMeta(String id,
+      {String? name, List<String>? tags}) async {
+    final i = _documents.indexWhere((d) => d.id == id);
+    if (i == -1) return;
+    _documents[i] = _documents[i].copyWith(name: name, tags: tags);
+    notifyListeners();
+    await _persistDocuments();
+  }
+
+  /// Replaces document [id]'s text (a text-document edit or a re-fetch),
+  /// re-embedding it. Metadata is updated alongside. Throws on an embed failure.
+  Future<void> reindexDocument(
+    String id, {
+    required String text,
+    String? name,
+    List<String>? tags,
+  }) async {
+    final index = _index;
+    final i = _documents.indexWhere((d) => d.id == id);
+    if (index == null || i == -1 || !_embeddingConfig.isReady) {
+      _noteEmbedding('Turn embeddings on and pick a provider first.');
+      return;
+    }
+    final count = await index.indexDocument(
+      id,
+      text,
+      model: _embeddingConfig.model,
+      chunkSize: _embeddingConfig.docChunkSize,
+      overlapPercent: _embeddingConfig.docOverlapPercent,
+    );
+    _documents[i] = _documents[i].copyWith(
+      name: name,
+      tags: tags,
+      chunkCount: count,
+      tokens: estimateTokens(text),
+      model: _embeddingConfig.model,
+    );
+    notifyListeners();
+    await _persistDocuments();
   }
 
   Future<void> renameDocument(String id, String name) async {

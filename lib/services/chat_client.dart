@@ -406,6 +406,29 @@ class ChatClient {
     }
   }
 
+  /// The `/embeddings` URL for [baseUrl]. Tolerates a base that already points at
+  /// a chat endpoint: a user commonly pastes the full `.../v1/chat/completions`
+  /// URL (chat still works because [endpoint] detects that suffix), but naively
+  /// appending `/embeddings` to it would 404. So strip a trailing chat suffix
+  /// first, then append.
+  static Uri embeddingsUri(String baseUrl) {
+    var base = baseUrl.trim();
+    while (base.endsWith('/')) {
+      base = base.substring(0, base.length - 1);
+    }
+    for (final suffix in const [
+      '/chat/completions',
+      '/completions',
+      '/messages',
+    ]) {
+      if (base.endsWith(suffix)) {
+        base = base.substring(0, base.length - suffix.length);
+        break;
+      }
+    }
+    return endpoint(base, '/embeddings');
+  }
+
   /// Embeds [texts] via an OpenAI-compatible `POST /embeddings` (the wire both
   /// SillyTavern and Agnai use), returning one vector per input in the same
   /// order. Batches the whole list in a single `input` array and realigns the
@@ -423,7 +446,7 @@ class ChatClient {
     try {
       response = await http
           .post(
-            endpoint(provider.baseUrl, '/embeddings'),
+            embeddingsUri(provider.baseUrl),
             headers: _headers(provider),
             body: jsonEncode({'input': texts, 'model': name}),
           )
@@ -432,6 +455,16 @@ class ChatClient {
       throw ChatApiException(_describeTransport(e));
     }
     if (response.statusCode != 200) {
+      // A 404 on /embeddings usually means this provider has no embeddings
+      // endpoint at all, rather than a wrong base URL — say so plainly.
+      if (response.statusCode == 404) {
+        throw ChatApiException(
+          "This provider's embeddings endpoint was not found (HTTP 404). It may "
+          'not support embeddings, or the base URL is wrong (it usually ends in '
+          '/v1). Try a provider/model that offers embeddings, e.g. OpenAI '
+          'text-embedding-3-small.',
+        );
+      }
       throw ChatApiException(
         _describeFailure(response.statusCode, response.body),
       );

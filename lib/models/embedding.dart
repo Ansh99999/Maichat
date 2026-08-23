@@ -192,9 +192,12 @@ class EmbeddingDocument {
     required this.source,
     this.origin = '',
     this.chunkCount = 0,
+    this.tokens = 0,
     this.model = kDefaultEmbeddingModel,
+    List<String>? tags,
     DateTime? addedAt,
-  }) : addedAt = addedAt ?? DateTime.now();
+  })  : tags = tags ?? <String>[],
+        addedAt = addedAt ?? DateTime.now();
 
   final String id;
   String name;
@@ -208,6 +211,12 @@ class EmbeddingDocument {
   /// How many chunks were embedded — 0 means it has not been indexed yet.
   int chunkCount;
 
+  /// Approximate token count of the source text (for the size readout).
+  int tokens;
+
+  /// Free-form tags for filtering the document shelf.
+  List<String> tags;
+
   /// The embedding model its vectors were built with; a change forces a reindex.
   String model;
 
@@ -217,9 +226,20 @@ class EmbeddingDocument {
 
   bool get isIndexed => chunkCount > 0;
 
+  /// Whether [query] matches this document by name, tag or source.
+  bool matches(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return name.toLowerCase().contains(q) ||
+        origin.toLowerCase().contains(q) ||
+        tags.any((t) => t.toLowerCase().contains(q));
+  }
+
   EmbeddingDocument copyWith({
     String? name,
     int? chunkCount,
+    int? tokens,
+    List<String>? tags,
     String? model,
   }) =>
       EmbeddingDocument(
@@ -228,6 +248,8 @@ class EmbeddingDocument {
         source: source,
         origin: origin,
         chunkCount: chunkCount ?? this.chunkCount,
+        tokens: tokens ?? this.tokens,
+        tags: tags ?? List<String>.from(this.tags),
         model: model ?? this.model,
         addedAt: addedAt,
       );
@@ -238,6 +260,8 @@ class EmbeddingDocument {
         'source': source.name,
         if (origin.isNotEmpty) 'origin': origin,
         'chunkCount': chunkCount,
+        if (tokens > 0) 'tokens': tokens,
+        if (tags.isNotEmpty) 'tags': tags,
         'model': model,
         'addedAt': addedAt.toIso8601String(),
       };
@@ -250,6 +274,11 @@ class EmbeddingDocument {
         source: DocSource.fromName(json['source']),
         origin: json['origin'] as String? ?? '',
         chunkCount: (json['chunkCount'] as num?)?.toInt() ?? 0,
+        tokens: (json['tokens'] as num?)?.toInt() ?? 0,
+        tags: (json['tags'] as List?)
+            ?.map((e) => e.toString().trim())
+            .where((s) => s.isNotEmpty)
+            .toList(),
         model: (json['model'] as String?)?.trim().isNotEmpty ?? false
             ? (json['model'] as String).trim()
             : kDefaultEmbeddingModel,
