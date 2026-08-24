@@ -101,6 +101,29 @@ void main() {
   Offset centreOf(WidgetTester tester) =>
       tester.getCenter(find.byType(PhotoSurface).first);
 
+  /// A sideways swipe of [distance] pixels delivered over [frames] frames of 16ms.
+  ///
+  /// Timestamps are passed explicitly, and that is not incidental: `moveBy`
+  /// defaults to `Duration.zero`, so without them every event shares one instant,
+  /// any velocity tracker reads exactly zero, and a test of a *flick* silently
+  /// becomes a test of a motionless drag. Velocity comes out of the timing here the
+  /// way it does from a hand.
+  Future<void> swipeSideways(
+    WidgetTester tester, {
+    required double distance,
+    required int frames,
+  }) async {
+    var at = Duration.zero;
+    final gesture = await tester.startGesture(centreOf(tester));
+    for (var i = 0; i < frames; i++) {
+      at += const Duration(milliseconds: 16);
+      await gesture.moveBy(Offset(distance / frames, 0), timeStamp: at);
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await gesture.up(timeStamp: at);
+    await tester.pumpAndSettle();
+  }
+
   group('pinch to zoom — the shapes a hand makes', () {
     testWidgets('both fingers spread evenly', (tester) async {
       await open(tester);
@@ -371,6 +394,81 @@ void main() {
     });
   });
 
+  /// Swiping between pictures, at the sizes and speeds a hand actually produces.
+  ///
+  /// Every case here is small. That is the point: the earlier tests all swiped
+  /// 320px on a 400px-wide screen, which is past half the width, so they landed on
+  /// the next picture **on distance alone** and passed while velocity was being
+  /// dropped entirely. A real swipe is 40–80px and relies on being quick.
+  group('swiping between pictures the way a hand does', () {
+    testWidgets('a quick little flick turns the page', (tester) async {
+      await open(tester);
+      // 80px in 64ms ≈ 1250px/s. Nowhere near half the screen.
+      await swipeSideways(tester, distance: -80, frames: 4);
+      expect(pageOf(tester), 1);
+    });
+
+    testWidgets('a gentle flick turns the page too', (tester) async {
+      await open(tester);
+      // 60px in 96ms ≈ 625px/s.
+      await swipeSideways(tester, distance: -60, frames: 6);
+      expect(pageOf(tester), 1);
+    });
+
+    testWidgets('even a lazy one, if it is a flick at all', (tester) async {
+      await open(tester);
+      // 50px in 128ms ≈ 390px/s — just over the threshold.
+      await swipeSideways(tester, distance: -50, frames: 8);
+      expect(pageOf(tester), 1);
+    });
+
+    testWidgets('a slow drag a quarter of the way across still turns',
+        (tester) async {
+      await open(tester);
+      // 120px of a 400px screen in 480ms — 250px/s, well under a flick, but the
+      // hand plainly meant it. Half a width was too much to ask.
+      await swipeSideways(tester, distance: -120, frames: 30);
+      expect(pageOf(tester), 1);
+    });
+
+    testWidgets('a small slow drag falls back to the picture it was on',
+        (tester) async {
+      await open(tester);
+      // 40px in 160ms: neither fast enough nor far enough to mean anything.
+      await swipeSideways(tester, distance: -40, frames: 10);
+      expect(pageOf(tester), 0);
+    });
+
+    testWidgets('a flick backwards goes back a picture', (tester) async {
+      await open(tester);
+      await swipeSideways(tester, distance: -80, frames: 4);
+      expect(pageOf(tester), 1);
+      await swipeSideways(tester, distance: 80, frames: 4);
+      expect(pageOf(tester), 0);
+    });
+
+    testWidgets('a decisive swipe moves exactly one picture, never two',
+        (tester) async {
+      await open(tester);
+      // 260px is 65% of the width *and* a flick. Rounding to the nearest page
+      // before adding the flick's page took this two along, skipping a picture.
+      await swipeSideways(tester, distance: -260, frames: 8);
+      expect(pageOf(tester), 1);
+    });
+
+    testWidgets('flicks in a row walk the run one picture at a time',
+        (tester) async {
+      await open(tester);
+      for (final expected in [1, 2]) {
+        await swipeSideways(tester, distance: -80, frames: 4);
+        expect(pageOf(tester), expected);
+      }
+      // And the last picture is the end of it.
+      await swipeSideways(tester, distance: -80, frames: 4);
+      expect(pageOf(tester), 2);
+    });
+  });
+
   group('what the other gestures still do', () {
     testWidgets('a sideways swipe pages', (tester) async {
       await open(tester);
@@ -393,20 +491,6 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
       expect(pageOf(tester), 0);
-    });
-
-    testWidgets('a slow drag past half way lands on the next picture',
-        (tester) async {
-      await open(tester);
-      // No flick velocity at all — it is the distance that carries it.
-      final gesture = await tester.startGesture(centreOf(tester));
-      for (var i = 0; i < 12; i++) {
-        await gesture.moveBy(const Offset(-20, 0));
-        await tester.pump(const Duration(milliseconds: 60));
-      }
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(pageOf(tester), 1);
     });
 
     testWidgets('a swipe at the first picture cannot go back past it',

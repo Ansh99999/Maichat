@@ -17,8 +17,13 @@ const double _kDecideAt = 4;
 const double _kFlickVelocity = 620;
 
 /// Horizontal pixels per second that carry the picture on to the next page even
-/// when the finger stopped short of half way. Used by [PhotoPager].
-const double _kPageVelocity = 380;
+/// when the finger stopped short. Used by [PhotoPager].
+const double _kPageVelocity = 300;
+
+/// How much of a picture's width a slow drag must cover to count as a page turn.
+/// A quarter rather than a half, because a hand that has taken a photo a quarter
+/// of the way across has already said what it wants.
+const double _kPageShare = 0.25;
 
 /// Where a double tap lands.
 const double _kDoubleTapScale = 2.5;
@@ -130,11 +135,20 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   /// Whether the current touch has already been settled.
   bool _settled = true;
 
-  /// The velocity the recogniser last reported, kept because it does not report
-  /// one on the segment that matters: a pinch ends and restarts every time a
-  /// finger changes, and the last lift often *reconfigures* rather than ending, so
-  /// `onEnd` with an empty hand cannot be relied on.
-  Velocity _lastVelocity = Velocity.zero;
+  /// How fast each finger is moving, measured here rather than taken from the
+  /// recogniser.
+  ///
+  /// This is not belt and braces, it is the only working source. Raw
+  /// `PointerUpEvent` is delivered to a [Listener] **before** the gesture arena
+  /// sweeps, so the recogniser's `onEnd` — which carries its velocity — arrives
+  /// *after* the settle it was supposed to inform. Measured: on an 80px flick, the
+  /// settle saw `Offset(0.0, 0.0)` and `onEnd` reported `Offset(-1000.0, 0.0)` one
+  /// step later. Every swipe therefore looked motionless and fell back to the
+  /// picture it started on, and a short hard flick down never closed.
+  final Map<int, VelocityTracker> _trackers = <int, VelocityTracker>{};
+
+  /// The velocity of the finger that left last, in logical pixels per second.
+  Offset _parting = Offset.zero;
 
   @override
   void initState() {
@@ -268,12 +282,11 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     _focal = focal;
   }
 
-  /// Records the velocity of each segment and settles once the hand is empty.
+  /// The recogniser's own end, which only matters as a second chance to settle.
   ///
-  /// The empty-hand case is belt to [_settle]'s braces: it is reached from the raw
-  /// finger count too, whichever arrives first.
+  /// Its velocity is deliberately ignored — see [_trackers] for why it arrives too
+  /// late to be of any use.
   void _onEnd(ScaleEndDetails details) {
-    _lastVelocity = details.velocity;
     if (details.pointerCount == 0) _settle();
   }
 
@@ -287,7 +300,7 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     _settled = true;
 
     final geometry = _geometry.value;
-    final velocity = _lastVelocity.pixelsPerSecond;
+    final velocity = _parting;
 
     if (_doing == _Doing.page) {
       widget.onPageSettle?.call(velocity.dx);
@@ -367,13 +380,25 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   void _pressFinger(PointerDownEvent event) {
     if (_fingers == 0) {
       // A fresh touch: the last one's velocity must not decide this one's fate.
-      _lastVelocity = Velocity.zero;
+      _parting = Offset.zero;
       _settled = false;
     }
     _fingers += 1;
+    _trackers[event.pointer] = VelocityTracker.withKind(event.kind)
+      ..addPosition(event.timeStamp, event.position);
+  }
+
+  void _moveFinger(PointerMoveEvent event) {
+    _trackers[event.pointer]?.addPosition(event.timeStamp, event.position);
   }
 
   void _liftFinger(PointerEvent event) {
+    final tracker = _trackers.remove(event.pointer);
+    if (tracker != null) {
+      // Kept before the settle below, because this *is* the velocity the settle
+      // will read — the recogniser's own does not arrive until afterwards.
+      _parting = tracker.getVelocity().pixelsPerSecond;
+    }
     _fingers = math.max(0, _fingers - 1);
     if (_fingers == 0) _settle();
   }
@@ -382,14 +407,18 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, constraints) {
           _viewport = constraints.biggest;
-          // Fingers are counted from raw pointer events, which survive the scale
-          // recogniser ending and restarting itself as fingers change. Its own
-          // `onEnd` cannot be trusted to report the empty hand: when the last
-          // finger lifts without moving first it *reconfigures* instead of ending,
-          // so `onEnd` arrives saying one finger is still down and never comes
-          // again. That is how a squeezed picture was once left stuck small.
+          // Fingers are counted, and their speed measured, from raw pointer
+          // events. Two separate reasons, both learned the hard way:
+          //
+          // * the recogniser's `onEnd` cannot be trusted to report the empty hand
+          //   — when the last finger lifts without moving first it *reconfigures*
+          //   instead of ending, so `onEnd` says one finger is still down and never
+          //   comes again (that is how a squeezed picture was left stuck small);
+          // * and `onEnd` arrives **after** this `Listener`, so its velocity is too
+          //   late to decide anything (that is how every swipe bounced back).
           return Listener(
             onPointerDown: _pressFinger,
+            onPointerMove: _moveFinger,
             onPointerUp: _liftFinger,
             onPointerCancel: _liftFinger,
             child: RawGestureDetector(
@@ -545,8 +574,11 @@ class PhotoPager {
   /// How many pages there are, so a drag cannot be carried off either end.
   int pageCount;
 
-  /// The page the last settle aimed at, so a second flick during the animation
-  /// counts from where it is going rather than where it started.
+  /// The page the current drag set off from, and the page the last settle aimed
+  /// at. Both are needed: the origin decides which way the hand went and which
+  /// page it may reach, and a second flick during the animation has to count from
+  /// where the run is *going* rather than where it happens to be passing.
+  int? _origin;
   int? _aiming;
 
   double get _width => controller.position.viewportDimension;
@@ -555,6 +587,7 @@ class PhotoPager {
   void drag(double delta) {
     final position = controller.position;
     if (!position.hasPixels || _width <= 0) return;
+    _origin ??= _aiming ?? (position.pixels / _width).round();
     // One pixel of picture per pixel of finger, and no rubber band past the ends:
     // a photo run that bounces reads as broken rather than as elastic.
     final limit = math.max(0.0, (pageCount - 1) * _width);
@@ -565,13 +598,23 @@ class PhotoPager {
   void settle(double velocity) {
     final position = controller.position;
     if (!position.hasPixels || _width <= 0) return;
+
     final at = position.pixels / _width;
-    final from = _aiming ?? at.round();
-    // A flick carries one page, whatever distance it covered; otherwise the
-    // nearest page wins, which is the "past half way" rule without the arithmetic.
-    final target = velocity.abs() > _kPageVelocity
-        ? (velocity < 0 ? from + 1 : from - 1)
-        : at.round();
+    // Where the hand started, not the nearest page. Rounding to the nearest was
+    // what made a decisive swipe skip a picture: drag 55% of the way across and
+    // the "nearest" is already the next one, so a flick carried it two along.
+    final from = _origin ?? at.round();
+    _origin = null;
+
+    final moved = at - from;
+    // Either a flick, or far enough that letting go plainly meant to turn. A
+    // quarter of a width, not a half: a gallery that will not commit until the
+    // picture is dragged past the middle is the "simple swipe bounces back".
+    final flicked = velocity.abs() > _kPageVelocity;
+    final forward = flicked ? velocity < 0 : moved > 0;
+    final turn = flicked || moved.abs() > _kPageShare;
+    final target = turn ? (forward ? from + 1 : from - 1) : from;
+
     final landing = target.clamp(0, math.max(0, pageCount - 1)).toInt();
     _aiming = landing;
     controller
