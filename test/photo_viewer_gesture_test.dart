@@ -305,6 +305,70 @@ void main() {
           reason: 'a zoom survives the hand leaving');
       expect(scaleOf(tester), lessThanOrEqualTo(6));
     });
+
+    testWidgets('a hand that slides on its way in still pinches',
+        (tester) async {
+      // The one that "wasn't zoomable" on the phone. Reaching in with a thumb,
+      // the hand slides 30 logical pixels before the second finger touches down —
+      // nothing at all on a real screen. When the surface shared its arena with a
+      // scrollable `PageView`, that drift crossed the pager's [kTouchSlop] of 18,
+      // the pager won, and the surface was dropped from the arena: the second
+      // finger was *never delivered*, so no pinch existed. Measured against a bare
+      // `ScaleGestureRecognizer` inside a `PageView`: the recogniser was never
+      // even started and the scale stayed at exactly 1.0.
+      await open(tester);
+      final centre = centreOf(tester);
+
+      final first = await tester.startGesture(centre - const Offset(40, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 6; i++) {
+        await first.moveBy(const Offset(-5, 1));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      // Only now does the second finger arrive.
+      final second = await tester.startGesture(centre + const Offset(40, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 12; i++) {
+        await first.moveBy(const Offset(-9, 0));
+        await second.moveBy(const Offset(9, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(scaleOf(tester), greaterThan(2));
+      await first.up();
+      await second.up();
+      await tester.pumpAndSettle();
+      expect(scaleOf(tester), greaterThan(2));
+      // And the drift did not carry the run on to another picture on the way.
+      expect(pageOf(tester), 0);
+    });
+
+    testWidgets('a pinch that begins as a sideways drag becomes a pinch',
+        (tester) async {
+      // The drag is committed to paging, then a second finger lands. The touch has
+      // to change its mind mid-flight, because a hand does.
+      await open(tester);
+      final centre = centreOf(tester);
+
+      final first = await tester.startGesture(centre - const Offset(40, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 5; i++) {
+        await first.moveBy(const Offset(-10, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final second = await tester.startGesture(centre + const Offset(40, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+      for (var i = 0; i < 12; i++) {
+        await first.moveBy(const Offset(-9, 0));
+        await second.moveBy(const Offset(9, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(scaleOf(tester), greaterThan(2), reason: 'it turned into a pinch');
+      await first.up();
+      await second.up();
+      await tester.pumpAndSettle();
+      expect(scaleOf(tester), greaterThan(2));
+      expect(pageOf(tester), 0, reason: 'and did not also turn the page');
+    });
   });
 
   group('what the other gestures still do', () {
@@ -315,6 +379,60 @@ void main() {
       await tester.pumpAndSettle();
       expect(pageOf(tester), 1);
       expect(stillOpen(tester), isTrue);
+    });
+
+    testWidgets('a short sideways drag falls back to the picture it was on',
+        (tester) async {
+      await open(tester);
+      // Twenty pixels is a change of mind, not a page turn.
+      final gesture = await tester.startGesture(centreOf(tester));
+      for (var i = 0; i < 4; i++) {
+        await gesture.moveBy(const Offset(-5, 0));
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(pageOf(tester), 0);
+    });
+
+    testWidgets('a slow drag past half way lands on the next picture',
+        (tester) async {
+      await open(tester);
+      // No flick velocity at all — it is the distance that carries it.
+      final gesture = await tester.startGesture(centreOf(tester));
+      for (var i = 0; i < 12; i++) {
+        await gesture.moveBy(const Offset(-20, 0));
+        await tester.pump(const Duration(milliseconds: 60));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(pageOf(tester), 1);
+    });
+
+    testWidgets('a swipe at the first picture cannot go back past it',
+        (tester) async {
+      await open(tester);
+      await tester.fling(
+          find.byType(PhotoSurface).first, const Offset(320, 0), 900);
+      await tester.pumpAndSettle();
+      // No rubber band, no blank page: it simply stays.
+      expect(pageOf(tester), 0);
+      expect(stillOpen(tester), isTrue);
+    });
+
+    testWidgets('a swipe at the last picture cannot go on past it',
+        (tester) async {
+      await open(tester);
+      for (var i = 0; i < 2; i++) {
+        await tester.fling(
+            find.byType(PhotoSurface).first, const Offset(-320, 0), 900);
+        await tester.pumpAndSettle();
+      }
+      expect(pageOf(tester), 2, reason: 'three pictures, so this is the last');
+      await tester.fling(
+          find.byType(PhotoSurface).first, const Offset(-320, 0), 900);
+      await tester.pumpAndSettle();
+      expect(pageOf(tester), 2);
     });
 
     testWidgets('a zoomed picture pans instead of paging', (tester) async {

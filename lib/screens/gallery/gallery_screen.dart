@@ -150,11 +150,17 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 
+  /// Opens the run at [index], full screen.
+  ///
+  /// The route goes first and the bookkeeping follows. `touchGalleryImage`
+  /// re-encodes the whole gallery and writes it to `SharedPreferences`, and it used
+  /// to be **awaited before the push** — so every tap paid a JSON encode of every
+  /// picture before anything moved. That is the stutter between the tap and the
+  /// photo. Nothing on screen depends on the write, so it happens after.
   Future<void> _open(List<GalleryImage> images, int index) async {
     final state = context.read<AppState>();
-    await state.touchGalleryImage(images[index].id);
-    if (!mounted) return;
-    await openImageViewer(
+    final id = images[index].id;
+    final opened = openImageViewer(
       context,
       images: images,
       index: index,
@@ -165,7 +171,12 @@ class _GalleryScreenState extends State<GalleryScreen> {
           ? ViewerExtra.none
           : ViewerExtra.sendToChat,
       conversationId: widget.conversationId,
+      // So the viewer can draw the bitmap this grid has already decoded rather
+      // than showing black while a bigger one decodes.
+      openedAt: MediaQuery.sizeOf(context).width / _zoom.columns,
     );
+    await state.touchGalleryImage(id);
+    await opened;
   }
 
   void _toggleSelect(String id) => setState(() {
@@ -607,6 +618,12 @@ class _ImageTile extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
+        // No ripple on a photograph. Material's splash animates for 640ms, which
+        // outlasts the flight into the viewer three times over and is drawn over
+        // the picture as it leaves — the "choppy" part of opening one. A photo that
+        // grows under the finger is its own feedback.
+        splashFactory: NoSplash.splashFactory,
+        highlightColor: Colors.transparent,
         child: Stack(
           fit: StackFit.expand,
           children: [

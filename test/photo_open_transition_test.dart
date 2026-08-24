@@ -186,7 +186,6 @@ void main() {
     await openGrid(tester);
     await tester.tap(find.text('Pic a'));
     await tester.pumpAndSettle();
-
     // Two pages along, so the tag that flies home is not the one that flew in —
     // only the page on screen may carry it, or two heroes share one tag.
     await tester.fling(
@@ -199,5 +198,90 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(ImageViewerScreen), findsNothing);
     expect(find.byType(Image), findsNWidgets(3));
+  });
+
+  testWidgets('the viewer draws the bitmap the grid already decoded',
+      (tester) async {
+    // The "black blink". The viewer asks for a screen-sized decode of the file
+    // while the grid tile holds a much smaller one — a *different*
+    // `ImageProvider`, so opening a picture starts a decode from scratch and paints
+    // nothing until it lands. The viewer is now told how wide the tile was and
+    // draws that already-decoded bitmap underneath, with the sharp one over it.
+    await openGrid(tester);
+    final tileProvider = tester.widget<Image>(find.byType(Image).first).image;
+
+    await tester.tap(find.text('Pic a'));
+    await tester.pumpAndSettle();
+
+    final inViewer = find.descendant(
+      of: find.byType(PhotoSurface),
+      matching: find.byType(Image),
+    );
+    // Two layers: the soft one that needs no work to paint, and the sharp one.
+    expect(inViewer, findsNWidgets(2));
+    expect(tester.widgetList<Image>(inViewer).first.image, same(tileProvider),
+        reason: 'the very same provider the grid is already showing, so the '
+            'first frame has a picture on it rather than black');
+  });
+
+  testWidgets('the two layers are a small decode under a full-size one',
+      (tester) async {
+    // Stated against an explicit `MediaQuery`, because the two decodes only differ
+    // when the tile and the screen fall in different size buckets — and the test
+    // binding's default logical size happens to put both in the top one, which
+    // would let this pass for the wrong reason.
+    await tester.binding.setSurfaceSize(const Size(400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final state = await seeded();
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(size: Size(400, 900), devicePixelRatio: 3),
+          child: ImageViewerScreen(
+            imageIds: ['a', 'b', 'c'],
+            initialIndex: 0,
+            // A tile in a two-across grid on this screen.
+            openedAt: 100,
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final layers = tester
+        .widgetList<Image>(find.descendant(
+          of: find.byType(PhotoSurface),
+          matching: find.byType(Image),
+        ))
+        .toList();
+    expect(layers, hasLength(2));
+    final under = layers.first.image as ResizeImage;
+    final over = layers.last.image as ResizeImage;
+    expect(under.width, lessThan(over.width!),
+        reason: 'the one underneath is the cheap decode the grid already has');
+    expect(under.imageProvider, over.imageProvider,
+        reason: 'and both are the same file, so no second read from disk');
+  });
+
+  testWidgets('a picture with no tile behind it still opens', (tester) async {
+    // Opened without an `openedAt` — from a chat's avatar sheet, say. There is
+    // then no smaller bitmap to draw first, and the viewer must simply show the
+    // one picture rather than an empty stack.
+    await tester.binding.setSurfaceSize(const Size(400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final state = await seeded();
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(
+        home: ImageViewerScreen(imageIds: ['a', 'b', 'c'], initialIndex: 0),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+          of: find.byType(PhotoSurface), matching: find.byType(Image)),
+      findsOneWidget,
+    );
   });
 }

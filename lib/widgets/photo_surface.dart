@@ -6,8 +6,19 @@ import 'package:flutter/material.dart';
 /// How far the transform must be from rest before the picture counts as zoomed.
 const double _kZoomedAt = 1.01;
 
+/// How far a touch must travel before it is committed to being a pinch, a page
+/// turn or a throw. Deliberately small — a fifth of [kTouchSlop] — because this
+/// surface owns every touch on it and so has nobody to lose a race to. The old
+/// 18 pixels was the pager's threshold, and waiting for it is what made zooming
+/// feel like it "wasn't there".
+const double _kDecideAt = 4;
+
 /// Logical pixels per second that count as a flick rather than a drag.
 const double _kFlickVelocity = 620;
+
+/// Horizontal pixels per second that carry the picture on to the next page even
+/// when the finger stopped short of half way. Used by [PhotoPager].
+const double _kPageVelocity = 380;
 
 /// Where a double tap lands.
 const double _kDoubleTapScale = 2.5;
@@ -17,31 +28,32 @@ const double _kDoubleTapScale = 2.5;
 /// screen in over the top.
 String photoHeroTag(String id) => 'photo-$id';
 
-/// A picture you can pinch, pan, double tap, and throw away.
+/// What a touch on a [PhotoSurface] turned out to be.
 ///
-/// ## Why this is not an `InteractiveViewer`
+/// Decided once per touch and then kept, so a diagonal drag does not page and
+/// dismiss at the same time, and a pinch that wanders sideways does not turn into
+/// a page turn half way through.
+enum _Doing { undecided, pinch, pan, page, dismiss }
+
+/// A picture you can pinch, pan, double tap, page and throw away.
 ///
-/// `InteractiveViewer` builds its own `GestureDetector`, so its scale recogniser
-/// competes on equal terms with whatever else wants the pointer — inside a
-/// `PageView`, that is the pager's horizontal drag. The drag accepts after
-/// [kTouchSlop] (18 logical pixels) of sideways travel; the scale recogniser
-/// waits for [kScaleSlop] (18) of *span* change or [kPanSlop] (36) of focal
-/// travel. A real pinch is never symmetric — one finger anchors, or both slide
-/// as they spread — so the sideways component crosses 18 first, the pager wins
-/// the arena, and the pinch is discarded for the whole touch. Measured: a
-/// drifting or thumb-anchored pinch left the scale at exactly 1.0, which is the
-/// "I can't zoom in at all" this replaces.
+/// ## Why this owns every touch on it
 ///
-/// So the gesture is one recogniser that **claims the arena the moment a second
-/// finger lands**, before any drag has its 18 pixels. A single finger is left to
-/// the pager unless the picture is zoomed (then a drag pans it) or the movement
-/// is clearly vertical (then it is the flick that closes the picture) — the same
-/// directional race a nested vertical scrollable would run.
+/// The first cut of this put the surface inside a scrollable `PageView` and tried
+/// to share: two fingers went to the pinch, a sideways drag to the pager. That
+/// cannot be made to work, and the reason is worth keeping. A `PageView`'s
+/// horizontal drag accepts after [kTouchSlop] — 18 logical pixels — and a hand
+/// reaching in to pinch *slides before the second finger lands*. Thirty pixels of
+/// drift is nothing on a real screen. Once the pager has won the arena the surface
+/// is dropped from it, and it never sees the second finger at all: the pinch
+/// simply does not exist. Measured, with a bare `ScaleGestureRecognizer` inside a
+/// `PageView`: after 30px of drift the scale recogniser was **never even started**,
+/// and the scale stayed at exactly 1.0. That is the "not zoomable" this replaces.
 ///
-/// Deliberately one recogniser rather than a scale plus a vertical drag: a pinch
-/// that begins as a one-finger drag then adds a finger stays with the same
-/// recogniser, so it turns into a pinch instead of being stranded behind a drag
-/// that already owns the pointer.
+/// So the pager is switched off ([NeverScrollableScrollPhysics], no recognisers at
+/// all) and this surface drives it through [onPageDrag] / [onPageSettle]. Every
+/// touch belongs here, nothing competes, and a gesture can therefore be read from
+/// its first few pixels ([_kDecideAt]) rather than after somebody else's slop.
 class PhotoSurface extends StatefulWidget {
   const PhotoSurface({
     super.key,
@@ -50,6 +62,8 @@ class PhotoSurface extends StatefulWidget {
     this.onZoomChanged,
     this.onDismiss,
     this.dismissProgress,
+    this.onPageDrag,
+    this.onPageSettle,
     this.maxScale = 6,
   });
 
@@ -58,17 +72,23 @@ class PhotoSurface extends StatefulWidget {
 
   final VoidCallback? onTap;
 
-  /// Reports whether the picture is zoomed in, so a pager can get out of the way.
+  /// Reports whether the picture is zoomed in. A zoomed picture cannot be paged
+  /// off or thrown away — a drag pans it instead.
   final ValueChanged<bool>? onZoomChanged;
 
-  /// Called when a flick, a long drag or a hard squeeze asks for the picture to
-  /// be let go of. Null leaves the picture un-dismissable — a one-finger drag
-  /// then belongs entirely to whatever is around it.
+  /// Called when a flick or a long drag asks for the picture to be let go of.
   final VoidCallback? onDismiss;
 
   /// Driven 0 (at rest) → 1 (released now, it goes away), so the screen can fade
   /// its backdrop and chrome without rebuilding the picture every frame.
   final ValueNotifier<double>? dismissProgress;
+
+  /// A sideways drag, in logical pixels of finger movement. Null leaves the
+  /// picture unpageable, and a sideways drag then does nothing.
+  final ValueChanged<double>? onPageDrag;
+
+  /// The hand has left a sideways drag, at this horizontal velocity.
+  final ValueChanged<double>? onPageSettle;
 
   final double maxScale;
 
@@ -78,8 +98,8 @@ class PhotoSurface extends StatefulWidget {
 
 class _PhotoSurfaceState extends State<PhotoSurface>
     // Several tickers over a lifetime, one at a time: every settle (spring-back,
-    // double-tap zoom, throw-out) makes its own, so `Single` would assert the
-    // second time a picture is double-tapped.
+    // double-tap zoom) makes its own, so `Single` would assert the second time a
+    // picture is double-tapped.
     with TickerProviderStateMixin {
   /// Live geometry. A notifier, not `setState`: the picture is one `Image` that
   /// must not be rebuilt sixty times a second — only the `Transform` above it.
@@ -97,22 +117,24 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   Offset _focal = Offset.zero;
   double _startScale = 1;
 
+  /// Where this touch began and what it has turned out to be.
+  Offset _from = Offset.zero;
+  _Doing _doing = _Doing.undecided;
+
   Offset? _doubleTapAt;
   bool _zoomed = false;
 
-  /// Fingers currently on the surface, counted from raw pointer events.
+  /// Fingers on the surface, counted from raw pointer events.
   int _fingers = 0;
 
   /// Whether the current touch has already been settled.
   bool _settled = true;
 
-  /// The vertical velocity the recogniser last reported.
-  ///
-  /// Kept because it does not report one on the segment that matters: a pinch ends
-  /// and restarts every time a finger changes, and the *last* lift often
-  /// reconfigures rather than ending, so `onEnd` with an empty hand cannot be
-  /// relied on. Settling runs off the raw finger count ([_settle]) and reads this.
-  double _lastVelocity = 0;
+  /// The velocity the recogniser last reported, kept because it does not report
+  /// one on the segment that matters: a pinch ends and restarts every time a
+  /// finger changes, and the last lift often *reconfigures* rather than ending, so
+  /// `onEnd` with an empty hand cannot be relied on.
+  Velocity _lastVelocity = Velocity.zero;
 
   @override
   void initState() {
@@ -135,6 +157,7 @@ class _PhotoSurfaceState extends State<PhotoSurface>
       math.min(_viewport.height * 0.18, 150).toDouble();
 
   bool get _canDismiss => widget.onDismiss != null;
+  bool get _canPage => widget.onPageDrag != null;
 
   void _report() {
     final geometry = _geometry.value;
@@ -149,9 +172,7 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   /// 0 at rest, 1 when letting go now would put the picture away.
   ///
   /// Only the drag counts. A squeeze used to feed this too, so pinching in dimmed
-  /// the screen as if the picture were leaving and then — if the hand lifted in a
-  /// way that never reported an empty hand — left it small over the gallery with
-  /// no way back. Zoom is zoom; leaving is a drag.
+  /// the screen as if the picture were leaving. Zoom is zoom; leaving is a drag.
   double _closeness(PhotoGeometry geometry) {
     final distance = _dismissDistance;
     if (distance <= 0) return 0;
@@ -177,44 +198,72 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     _stopSpring();
     _startScale = _geometry.value.scale;
     _focal = details.localFocalPoint;
+    _from = details.localFocalPoint;
+    // A second finger already down is a pinch before it has moved at all.
+    _doing = details.pointerCount >= 2
+        ? _Doing.pinch
+        : _geometry.value.scale > _kZoomedAt
+            ? _Doing.pan
+            : _Doing.undecided;
   }
 
   void _onUpdate(ScaleUpdateDetails details) {
     final geometry = _geometry.value;
     final focal = details.localFocalPoint;
 
-    // Split by fingers, not by scale: a mode that flips partway through a pinch
-    // makes the picture jump at the moment the squeeze crosses rest.
-    if (details.pointerCount >= 2) {
-      // A pinch. Never below 1: fitted is as far out as a photo goes, so
-      // squeezing past it simply stops rather than shrinking the picture into a
-      // stamp floating over the gallery. Whatever is under the fingers stays
-      // under the fingers — measured from the *previous* focal point, not the
-      // gesture's start, so a pinch that walks across the picture tracks it
-      // instead of drifting.
-      final scale = (_startScale * details.scale).clamp(1.0, widget.maxScale);
-      final step = scale / geometry.scale;
-      final anchored =
-          (focal - _centre) - (_focal - _centre - geometry.offset) * step;
-      _geometry.value = PhotoGeometry(
-        scale: scale,
-        offset: _clampPan(anchored, scale),
-        drag: geometry.drag,
-      );
-    } else if (geometry.scale > _kZoomedAt) {
-      // One finger on a zoomed picture pans it.
-      _geometry.value = PhotoGeometry(
-        scale: geometry.scale,
-        offset: _clampPan(geometry.offset + (focal - _focal), geometry.scale),
-        drag: geometry.drag,
-      );
-    } else if (_canDismiss) {
-      // One finger at rest: the picture follows the hand, ready to be thrown
-      // away. Both axes, because a photo that only moves down feels pinned.
-      _geometry.value = PhotoGeometry(
-        scale: geometry.scale,
-        drag: geometry.drag + (focal - _focal),
-      );
+    // A second finger turns anything into a pinch, at once — this is the whole
+    // point of owning the touch, and it is why a hand that slides on its way in
+    // still zooms.
+    if (details.pointerCount >= 2) _doing = _Doing.pinch;
+
+    if (_doing == _Doing.undecided) {
+      final moved = focal - _from;
+      if (moved.distance < _kDecideAt) {
+        _focal = focal;
+        return;
+      }
+      // Committed by direction, once, on the first few pixels.
+      _doing = moved.dx.abs() > moved.dy.abs()
+          ? (_canPage ? _Doing.page : _Doing.undecided)
+          : (_canDismiss ? _Doing.dismiss : _Doing.undecided);
+      if (_doing == _Doing.undecided) {
+        _focal = focal;
+        return;
+      }
+    }
+
+    switch (_doing) {
+      case _Doing.pinch:
+        // Never below 1: fitted is as far out as a photo goes, so squeezing past
+        // it simply stops rather than shrinking the picture into a stamp floating
+        // over the gallery. Whatever is under the fingers stays under the fingers
+        // — measured from the *previous* focal point, not the gesture's start, so
+        // a pinch that walks across the picture tracks it instead of drifting.
+        final scale = (_startScale * details.scale).clamp(1.0, widget.maxScale);
+        final step = scale / geometry.scale;
+        final anchored =
+            (focal - _centre) - (_focal - _centre - geometry.offset) * step;
+        _geometry.value = PhotoGeometry(
+          scale: scale,
+          offset: _clampPan(anchored, scale),
+        );
+      case _Doing.pan:
+        _geometry.value = PhotoGeometry(
+          scale: geometry.scale,
+          offset: _clampPan(geometry.offset + (focal - _focal), geometry.scale),
+        );
+      case _Doing.page:
+        // Straight to the pager, one pixel of picture per pixel of finger.
+        widget.onPageDrag!(focal.dx - _focal.dx);
+      case _Doing.dismiss:
+        // The picture follows the hand, ready to be thrown away. Both axes,
+        // because a photo that only moves down feels pinned.
+        _geometry.value = PhotoGeometry(
+          scale: geometry.scale,
+          drag: geometry.drag + (focal - _focal),
+        );
+      case _Doing.undecided:
+        break;
     }
     _focal = focal;
   }
@@ -224,12 +273,12 @@ class _PhotoSurfaceState extends State<PhotoSurface>
   /// The empty-hand case is belt to [_settle]'s braces: it is reached from the raw
   /// finger count too, whichever arrives first.
   void _onEnd(ScaleEndDetails details) {
-    _lastVelocity = details.velocity.pixelsPerSecond.dy;
+    _lastVelocity = details.velocity;
     if (details.pointerCount == 0) _settle();
   }
 
   /// Puts the picture where it belongs now the hand has gone: away if it was
-  /// thrown, back to fitted otherwise.
+  /// thrown, on to the next page if it was swiped, back to fitted otherwise.
   ///
   /// Idempotent, because both the recogniser's end and the raw last-finger-up can
   /// reach it and either may be first.
@@ -238,20 +287,29 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     _settled = true;
 
     final geometry = _geometry.value;
-    final velocity = _lastVelocity;
-    final flicked = geometry.drag.dy != 0 &&
-        velocity.abs() > _kFlickVelocity &&
-        velocity.sign == geometry.drag.dy.sign;
-    if (_canDismiss && (geometry.drag.dy.abs() > _dismissDistance || flicked)) {
-      // Nothing to animate here on purpose. The picture is left exactly where the
-      // hand put it — part-way down and part-way shrunk — and closing the route
-      // hands it to the Hero flight, which carries it from there back into the
-      // tile it came from. A throw animation of our own would be a second thing
-      // moving the same picture at the same time.
-      widget.onDismiss!();
+    final velocity = _lastVelocity.pixelsPerSecond;
+
+    if (_doing == _Doing.page) {
+      widget.onPageSettle?.call(velocity.dx);
+      _doing = _Doing.undecided;
       return;
     }
 
+    if (_doing == _Doing.dismiss) {
+      final flicked = geometry.drag.dy != 0 &&
+          velocity.dy.abs() > _kFlickVelocity &&
+          velocity.dy.sign == geometry.drag.dy.sign;
+      if (geometry.drag.dy.abs() > _dismissDistance || flicked) {
+        // Nothing to animate here on purpose. The picture is left exactly where
+        // the hand put it and closing the route hands it to the Hero flight,
+        // which carries it from there back into the tile it came from. An
+        // animation of our own would be a second thing moving one picture.
+        widget.onDismiss!();
+        return;
+      }
+    }
+
+    _doing = _Doing.undecided;
     final settled = geometry.scale.clamp(1.0, widget.maxScale);
     final target = PhotoGeometry(
       scale: settled,
@@ -288,11 +346,11 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     _spring = null;
   }
 
-  /// Eases the geometry to [target] — the spring back from a squeeze, from an
-  /// abandoned drag, or the double-tap zoom.
+  /// Eases the geometry to [target] — the spring back from an abandoned drag, or
+  /// the double-tap zoom.
   void _springTo(
     PhotoGeometry target, {
-    Duration duration = const Duration(milliseconds: 240),
+    Duration duration = const Duration(milliseconds: 200),
   }) {
     final from = _geometry.value;
     _stopSpring();
@@ -306,28 +364,32 @@ class _PhotoSurfaceState extends State<PhotoSurface>
     controller.forward();
   }
 
+  void _pressFinger(PointerDownEvent event) {
+    if (_fingers == 0) {
+      // A fresh touch: the last one's velocity must not decide this one's fate.
+      _lastVelocity = Velocity.zero;
+      _settled = false;
+    }
+    _fingers += 1;
+  }
+
+  void _liftFinger(PointerEvent event) {
+    _fingers = math.max(0, _fingers - 1);
+    if (_fingers == 0) _settle();
+  }
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, constraints) {
           _viewport = constraints.biggest;
-          // Counts fingers from raw pointer events, which survive the scale
-          // recogniser ending and restarting itself as fingers change. The
-          // recogniser's own `onEnd` cannot be trusted to report the empty hand:
-          // when the last finger lifts without moving first, it *reconfigures*
-          // instead of ending, so `onEnd` arrives saying one finger is still down
-          // and never comes again. That is exactly how a squeezed picture used to
-          // be left small and stuck over the gallery.
+          // Fingers are counted from raw pointer events, which survive the scale
+          // recogniser ending and restarting itself as fingers change. Its own
+          // `onEnd` cannot be trusted to report the empty hand: when the last
+          // finger lifts without moving first it *reconfigures* instead of ending,
+          // so `onEnd` arrives saying one finger is still down and never comes
+          // again. That is how a squeezed picture was once left stuck small.
           return Listener(
-            onPointerDown: (_) {
-              if (_fingers == 0) {
-                // A fresh touch: the last one's velocity must not decide this
-                // one's fate. A slow drag after a hard flick would otherwise be
-                // read as a flick itself.
-                _lastVelocity = 0;
-                _settled = false;
-              }
-              _fingers += 1;
-            },
+            onPointerDown: _pressFinger,
             onPointerUp: _liftFinger,
             onPointerCancel: _liftFinger,
             child: RawGestureDetector(
@@ -337,12 +399,7 @@ class _PhotoSurfaceState extends State<PhotoSurface>
               gestures: <Type, GestureRecognizerFactory>{
                 PhotoGestureRecognizer: GestureRecognizerFactoryWithHandlers<
                     PhotoGestureRecognizer>(
-                  () => PhotoGestureRecognizer(
-                    debugOwner: this,
-                    claimSingleFinger: () => _geometry.value.scale > _kZoomedAt,
-                    claimVerticalDrag: () =>
-                        _canDismiss && _geometry.value.scale <= _kZoomedAt,
-                  ),
+                  () => PhotoGestureRecognizer(debugOwner: this),
                   (instance) => instance
                     ..onStart = _onStart
                     ..onUpdate = _onUpdate
@@ -378,11 +435,6 @@ class _PhotoSurfaceState extends State<PhotoSurface>
           );
         },
       );
-
-  void _liftFinger(PointerEvent event) {
-    _fingers = math.max(0, _fingers - 1);
-    if (_fingers == 0) _settle();
-  }
 }
 
 /// Where the picture is: how far zoomed, panned within itself, and how far it has
@@ -439,21 +491,15 @@ class PhotoGeometry {
 
 /// The one recogniser a [PhotoSurface] runs on.
 ///
-/// Claims the arena outright as soon as a second finger is down — before any
-/// drag has travelled its slop — because two fingers on a photo are never
-/// anything but a pinch. A lone finger is claimed only when the picture is
-/// zoomed (a drag pans it) or when the movement is plainly vertical (the flick
-/// that closes it); anything else is left to whatever surrounds the picture, so
-/// a sideways swipe still turns the page.
+/// Claims the arena as soon as a second finger lands, or as soon as one finger has
+/// travelled [_kDecideAt]. Both thresholds are this low because nothing else on
+/// this surface wants the touch: the pager it sits in is switched off and driven by
+/// hand, so the only other recognisers are the tap and the double tap, and a tap
+/// does not move four pixels. That is what makes a pinch survive a hand that slides
+/// on its way in — the pager's eighteen-pixel drag used to win that race and the
+/// second finger was then never delivered here at all.
 class PhotoGestureRecognizer extends ScaleGestureRecognizer {
-  PhotoGestureRecognizer({
-    required this.claimSingleFinger,
-    required this.claimVerticalDrag,
-    super.debugOwner,
-  });
-
-  final bool Function() claimSingleFinger;
-  final bool Function() claimVerticalDrag;
+  PhotoGestureRecognizer({super.debugOwner});
 
   /// Where the first finger of this sequence landed, in global coordinates.
   Offset? _origin;
@@ -467,27 +513,77 @@ class PhotoGestureRecognizer extends ScaleGestureRecognizer {
   @override
   void handleEvent(PointerEvent event) {
     super.handleEvent(event);
+    // Two fingers on a photo are never anything but a pinch, and waiting for them
+    // to move first is what a shared arena forced.
     if (pointerCount >= 2) {
       resolve(GestureDisposition.accepted);
       return;
     }
-    if (event is! PointerMoveEvent) return;
-    if (claimSingleFinger()) {
-      resolve(GestureDisposition.accepted);
-      return;
-    }
     final origin = _origin;
-    if (origin == null || !claimVerticalDrag()) return;
-    // The same race a nested vertical scrollable runs: ours if it is going up or
-    // down, theirs if it is going sideways.
-    final moved = event.position - origin;
-    if (moved.dy.abs() > kTouchSlop && moved.dy.abs() > moved.dx.abs()) {
+    if (event is! PointerMoveEvent || origin == null) return;
+    if ((event.position - origin).distance > _kDecideAt) {
       resolve(GestureDisposition.accepted);
     }
   }
 
   @override
   String get debugDescription => 'photo';
+}
+
+/// Turns the pages of a run of pictures, driven entirely by hand.
+///
+/// The `PageView` inside has **no gesture recognisers of its own**
+/// ([NeverScrollableScrollPhysics]); each page's [PhotoSurface] reports sideways
+/// drags here through [drag] and [settle]. That is the whole reason pinching works
+/// — see [PhotoSurface]'s note — and it costs only what a pager does anyway: a
+/// controller offset per frame.
+class PhotoPager {
+  PhotoPager({required this.controller, required this.pageCount});
+
+  final PageController controller;
+
+  /// How many pages there are, so a drag cannot be carried off either end.
+  int pageCount;
+
+  /// The page the last settle aimed at, so a second flick during the animation
+  /// counts from where it is going rather than where it started.
+  int? _aiming;
+
+  double get _width => controller.position.viewportDimension;
+
+  /// Moves the run by [delta] logical pixels of finger.
+  void drag(double delta) {
+    final position = controller.position;
+    if (!position.hasPixels || _width <= 0) return;
+    // One pixel of picture per pixel of finger, and no rubber band past the ends:
+    // a photo run that bounces reads as broken rather than as elastic.
+    final limit = math.max(0.0, (pageCount - 1) * _width);
+    position.jumpTo((position.pixels - delta).clamp(0.0, limit));
+  }
+
+  /// The hand has gone at [velocity] logical pixels per second sideways.
+  void settle(double velocity) {
+    final position = controller.position;
+    if (!position.hasPixels || _width <= 0) return;
+    final at = position.pixels / _width;
+    final from = _aiming ?? at.round();
+    // A flick carries one page, whatever distance it covered; otherwise the
+    // nearest page wins, which is the "past half way" rule without the arithmetic.
+    final target = velocity.abs() > _kPageVelocity
+        ? (velocity < 0 ? from + 1 : from - 1)
+        : at.round();
+    final landing = target.clamp(0, math.max(0, pageCount - 1)).toInt();
+    _aiming = landing;
+    controller
+        .animateToPage(
+          landing,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() {
+      if (_aiming == landing) _aiming = null;
+    });
+  }
 }
 
 /// A route for a picture that can be thrown away.
@@ -500,7 +596,7 @@ class PhotoGestureRecognizer extends ScaleGestureRecognizer {
 /// tapped, so this route only has to bring the black and the chrome with it. That
 /// is why the fade is **fast** and starts from a third rather than from nothing: a
 /// full cross-fade over the length of a flight is the "takes a full second to
-/// open" the first cut of this had.
+/// open" this replaced.
 PageRoute<T> photoRoute<T>(WidgetBuilder builder) => PageRouteBuilder<T>(
       opaque: false,
       barrierColor: null,

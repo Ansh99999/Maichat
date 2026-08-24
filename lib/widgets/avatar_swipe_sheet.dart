@@ -66,9 +66,10 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
   /// instant you choose one, which is the "original avatar flashes back" on Set.
   List<String>? _pool;
 
-  /// Whether the picture on screen is zoomed in, so paging can get out of the way
-  /// of a one-finger pan.
-  bool _zoomed = false;
+  /// Turns the pages, because the `PageView` is switched off and each picture's
+  /// surface owns every touch on it. Built with the controller, once the pool is
+  /// known.
+  PhotoPager? _pager;
 
   /// How near the picture is to being flicked away, 0 → 1.
   final ValueNotifier<double> _leaving = ValueNotifier<double>(0);
@@ -156,7 +157,9 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
       _aimed = true;
       final at = pool.indexOf(current);
       _index = at < 0 ? 0 : at;
-      _pages = PageController(initialPage: _index);
+      final pages = PageController(initialPage: _index);
+      _pages = pages;
+      _pager = PhotoPager(controller: pages, pageCount: pool.length);
     }
     final overridden = conversation?.avatarOverrides
             .containsKey(widget.characterId) ??
@@ -199,9 +202,9 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
           else ...[
             PageView.builder(
               controller: _pages,
-              physics: _zoomed
-                  ? const NeverScrollableScrollPhysics()
-                  : const PageScrollPhysics(),
+              // Switched off and driven by hand, so the picture's own surface owns
+              // every touch — see [PhotoSurface].
+              physics: const NeverScrollableScrollPhysics(),
               itemCount: pool.length,
               onPageChanged: (i) => setState(() => _index = i),
               itemBuilder: (context, i) => _AvatarPage(
@@ -209,9 +212,8 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
                 ref: pool[i],
                 leaving: _leaving,
                 onDismiss: () => Navigator.of(context).maybePop(),
-                onZoomChanged: (zoomed) {
-                  if (_zoomed != zoomed) setState(() => _zoomed = zoomed);
-                },
+                onPageDrag: pool.length > 1 ? _pager?.drag : null,
+                onPageSettle: _pager?.settle,
               ),
             ),
             Positioned(
@@ -245,13 +247,15 @@ class _AvatarPage extends StatelessWidget {
     required this.ref,
     required this.leaving,
     required this.onDismiss,
-    required this.onZoomChanged,
+    this.onPageDrag,
+    this.onPageSettle,
   });
 
   final String ref;
   final ValueNotifier<double> leaving;
   final VoidCallback onDismiss;
-  final ValueChanged<bool> onZoomChanged;
+  final ValueChanged<double>? onPageDrag;
+  final ValueChanged<double>? onPageSettle;
 
   @override
   Widget build(BuildContext context) {
@@ -264,7 +268,8 @@ class _AvatarPage extends StatelessWidget {
     return PhotoSurface(
       dismissProgress: leaving,
       onDismiss: onDismiss,
-      onZoomChanged: onZoomChanged,
+      onPageDrag: onPageDrag,
+      onPageSettle: onPageSettle,
       child: Center(
         child: provider == null
             ? const Icon(Icons.person_outline, color: Colors.white38, size: 64)

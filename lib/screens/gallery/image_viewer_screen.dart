@@ -19,6 +19,12 @@ enum ViewerExtra {
 
 /// Opens the picture at [index] of [images] full screen.
 ///
+/// [openedAt] is how wide the tile that was tapped is, in logical pixels. The
+/// viewer draws *that* bitmap first — it is already decoded, so it paints on the
+/// first frame — and lets the sharp one arrive over the top. Without it the
+/// full-screen picture starts decoding from scratch and the screen is black until
+/// it lands: the "black blink".
+///
 /// Pops with the id of the picture that was on screen when it closed, so a caller
 /// can scroll to wherever the user ended up.
 Future<String?> openImageViewer(
@@ -27,6 +33,7 @@ Future<String?> openImageViewer(
   required int index,
   ViewerExtra extra = ViewerExtra.none,
   String? conversationId,
+  double? openedAt,
 }) =>
     Navigator.of(context).push<String>(
       // See-through, and the black comes from the screen's own backdrop: a
@@ -38,6 +45,7 @@ Future<String?> openImageViewer(
           initialIndex: index,
           extra: extra,
           conversationId: conversationId,
+          openedAt: openedAt,
         ),
       ),
     );
@@ -54,12 +62,17 @@ class ImageViewerScreen extends StatefulWidget {
     required this.initialIndex,
     this.extra = ViewerExtra.none,
     this.conversationId,
+    this.openedAt,
   });
 
   final List<String> imageIds;
   final int initialIndex;
   final ViewerExtra extra;
   final String? conversationId;
+
+  /// The width of the tile this was opened from, for the already-decoded bitmap
+  /// to draw under the sharp one. See [openImageViewer].
+  final double? openedAt;
 
   @override
   State<ImageViewerScreen> createState() => _ImageViewerScreenState();
@@ -68,6 +81,12 @@ class ImageViewerScreen extends StatefulWidget {
 class _ImageViewerScreenState extends State<ImageViewerScreen> {
   late final PageController _pages =
       PageController(initialPage: widget.initialIndex);
+
+  /// Turns the pages, because the `PageView` itself is switched off: every touch
+  /// belongs to the picture's own surface, which reports sideways drags here. See
+  /// [PhotoSurface] for why sharing the touch with a scrollable cannot work.
+  late final PhotoPager _pager =
+      PhotoPager(controller: _pages, pageCount: _ids.length);
 
   /// The ids still being shown. Local so a delete can take one out without the
   /// page view losing its place or the route closing under the user.
@@ -78,14 +97,6 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   /// Whether the chrome is showing. A tap on the picture hides it, because the
   /// point of opening a photo is the photo.
   bool _chrome = true;
-
-  /// Whether the picture on screen is zoomed in.
-  ///
-  /// Paging is switched off while it is, so a drag pans the picture instead of
-  /// half-turning the page. The pinch itself no longer depends on this — the
-  /// [PhotoSurface] claims the pointer the moment a second finger lands — but a
-  /// zoomed picture and a pager still cannot both own one-finger drags.
-  bool _zoomed = false;
 
   /// How near the picture is to being let go of, 0 → 1. Drives the backdrop and
   /// the chrome only; a notifier rather than state so a drag does not rebuild the
@@ -141,6 +152,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       _ids.remove(image.id);
       if (_ids.isEmpty) return;
       _index = _index.clamp(0, _ids.length - 1);
+      _pager.pageCount = _ids.length;
     });
     if (_ids.isEmpty) {
       Navigator.of(context).pop(null);
@@ -244,11 +256,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             Positioned.fill(child: PhotoBackdrop(leaving: _leaving)),
             PageView.builder(
               controller: _pages,
-              // Paging is off while a picture is zoomed in, so dragging moves
-              // the picture instead of half-turning the page.
-              physics: _zoomed
-                  ? const NeverScrollableScrollPhysics()
-                  : const PageScrollPhysics(),
+              // No recognisers at all: the picture's own surface owns every touch
+              // on it and turns the pages through [_pager]. Sharing the touch with
+              // a scrollable is what made pinching impossible — see [PhotoSurface].
+              physics: const NeverScrollableScrollPhysics(),
               itemCount: _ids.length,
               onPageChanged: (i) => setState(() => _index = i),
               itemBuilder: (context, i) {
@@ -265,6 +276,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   key: ValueKey('zoom-${image.id}'),
                   image: image,
                   leaving: _leaving,
+                  openedAt: widget.openedAt,
                   // Only the page on screen flies, so the tag is unique: it is
                   // the one that grew out of its tile on the way in, and the one
                   // that shrinks back into a tile on the way out — even after
@@ -272,9 +284,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   flies: i == _index,
                   onTap: () => setState(() => _chrome = !_chrome),
                   onDismiss: () => Navigator.of(context).maybePop(image.id),
-                  onZoomChanged: (zoomed) {
-                    if (_zoomed != zoomed) setState(() => _zoomed = zoomed);
-                  },
+                  onPageDrag: _ids.length > 1 ? _pager.drag : null,
+                  onPageSettle: _pager.settle,
                 );
               },
             ),
@@ -355,7 +366,9 @@ class _ZoomablePicture extends StatelessWidget {
     required this.flies,
     required this.onTap,
     required this.onDismiss,
-    required this.onZoomChanged,
+    this.openedAt,
+    this.onPageDrag,
+    this.onPageSettle,
   });
 
   final GalleryImage image;
@@ -371,9 +384,12 @@ class _ZoomablePicture extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDismiss;
 
-  /// Reports whether this picture is zoomed in, so the pager can get out of the
-  /// way.
-  final ValueChanged<bool> onZoomChanged;
+  /// The width of the tile this was opened from, for the bitmap that is already
+  /// decoded. See [openImageViewer].
+  final double? openedAt;
+
+  final ValueChanged<double>? onPageDrag;
+  final ValueChanged<double>? onPageSettle;
 
   @override
   Widget build(BuildContext context) {
@@ -385,12 +401,22 @@ class _ZoomablePicture extends StatelessWidget {
       displaySize: media.size.longestSide,
       devicePixelRatio: media.devicePixelRatio,
     );
+    // The grid's bitmap: a different, smaller decode of the same file, and one
+    // that is already in memory because the tile is on screen.
+    final decoded = openedAt == null
+        ? null
+        : avatarImage(
+            image.image,
+            displaySize: openedAt,
+            devicePixelRatio: media.devicePixelRatio,
+          );
 
     return PhotoSurface(
       onTap: onTap,
       onDismiss: onDismiss,
       dismissProgress: leaving,
-      onZoomChanged: onZoomChanged,
+      onPageDrag: onPageDrag,
+      onPageSettle: onPageSettle,
       child: provider == null
           ? const Center(
               child: Icon(Icons.broken_image_outlined,
@@ -405,14 +431,40 @@ class _ZoomablePicture extends StatelessWidget {
               // middle of the screen and vanish. The box is known before the
               // first byte is read; `contain` still letterboxes inside it.
               child: SizedBox.expand(
-                child: Image(
-                  image: provider,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  errorBuilder: (_, _, _) => const Center(
-                    child: Icon(Icons.broken_image_outlined,
-                        color: Colors.white38, size: 48),
-                  ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Underneath: the tile's own decode, which needs no work to
+                    // paint. Without it the screen is black until the full-size
+                    // bitmap has decoded — the blink. Soft for a frame or two
+                    // beats absent for a frame or two.
+                    if (decoded != null)
+                      Image(
+                        image: decoded,
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    Image(
+                      image: provider,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      // Only the sharp one fades, and only over the blurry one
+                      // already in place — never over black.
+                      frameBuilder: (_, child, frame, wasSynchronous) =>
+                          wasSynchronous || decoded == null
+                              ? child
+                              : AnimatedOpacity(
+                                  opacity: frame == null ? 0 : 1,
+                                  duration: const Duration(milliseconds: 120),
+                                  child: child,
+                                ),
+                      errorBuilder: (_, _, _) => const Center(
+                        child: Icon(Icons.broken_image_outlined,
+                            color: Colors.white38, size: 48),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
