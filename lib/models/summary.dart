@@ -38,6 +38,7 @@ class SummarySegment {
     DateTime? createdAt,
     this.tokens = 0,
     this.manual = false,
+    this.collapsed = false,
   }) : createdAt = createdAt ?? DateTime.now();
 
   final String id;
@@ -59,6 +60,11 @@ class SummarySegment {
   /// are never wiped by a re-summarise — they are the user's own memory.
   bool manual;
 
+  /// Whether this block is shown collapsed (body hidden) in the memory editor.
+  /// A view preference, not content — persisted so the folded/unfolded layout
+  /// the user left the page in comes back the same way.
+  bool collapsed;
+
   SummarySegment copyWith({
     String? title,
     String? content,
@@ -66,6 +72,7 @@ class SummarySegment {
     int? endIndex,
     int? tokens,
     bool? manual,
+    bool? collapsed,
   }) =>
       SummarySegment(
         id: id,
@@ -76,6 +83,7 @@ class SummarySegment {
         createdAt: createdAt,
         tokens: tokens ?? this.tokens,
         manual: manual ?? this.manual,
+        collapsed: collapsed ?? this.collapsed,
       );
 
   Map<String, dynamic> toJson() => {
@@ -87,6 +95,7 @@ class SummarySegment {
         'createdAt': createdAt.toIso8601String(),
         if (tokens > 0) 'tokens': tokens,
         if (manual) 'manual': true,
+        if (collapsed) 'collapsed': true,
       };
 
   factory SummarySegment.fromJson(Map<String, dynamic> json) => SummarySegment(
@@ -99,6 +108,7 @@ class SummarySegment {
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
         tokens: (json['tokens'] as num?)?.toInt() ?? 0,
         manual: json['manual'] as bool? ?? false,
+        collapsed: json['collapsed'] as bool? ?? false,
       );
 }
 /// A chat's summary configuration and accumulated text. Lives on the
@@ -176,6 +186,46 @@ class ChatSummary {
       sum += s.tokens;
     }
     return sum;
+  }
+
+  /// The highest message index actually covered by a *generated* segment (0 if
+  /// none). Unlike [lastSummarizedIndex] — a running high-water mark that a run
+  /// advances — this is recomputed from the segments that still exist, so
+  /// deleting a block un-covers its range. It is what a manual "Summarise now"
+  /// works from, which is why deleting a memory block and re-summarising refills
+  /// exactly that gap.
+  int coveredIndex(int count) {
+    var covered = 0;
+    for (final s in segments) {
+      if (s.manual) continue;
+      if (s.endIndex > covered) covered = s.endIndex;
+    }
+    return covered.clamp(0, count);
+  }
+
+  /// The message ranges a summary run should condense, as `[start, end)` pairs.
+  ///
+  /// A [force]d run (the manual "Summarise now" button) ignores the interval
+  /// threshold and works from [coveredIndex] rather than [lastSummarizedIndex],
+  /// so it always picks up whatever is not already in the memory — even a single
+  /// new message, or the gap left by a deleted block. An automatic run only
+  /// fires once a full [interval] of new messages has accrued.
+  List<(int, int)> pendingRanges(int count, {required bool force}) {
+    if (interval <= 0 || count <= 0) return const <(int, int)>[];
+    if (method == SummaryMethod.rolling) {
+      if (!force && count - lastSummarizedIndex < interval) {
+        return const <(int, int)>[];
+      }
+      return <(int, int)>[(0, count)];
+    }
+    final out = <(int, int)>[];
+    var s = (force ? coveredIndex(count) : lastSummarizedIndex).clamp(0, count);
+    while (count - s >= interval) {
+      out.add((s, s + interval));
+      s += interval;
+    }
+    if (force && s < count) out.add((s, count));
+    return out;
   }
 
   ChatSummary copyWith({

@@ -3,6 +3,7 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
+import 'package:maichat/models/summary.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/services/tokenizer.dart';
 import 'package:maichat/state/app_state.dart';
@@ -558,5 +559,35 @@ void main() {
 
     await state.togglePinned(id);
     expect(state.active.pinned, isFalse);
+  });
+
+  test('setSummarySegmentCollapsed persists a fold without touching content',
+      () async {
+    final state = await _state(FakeClient(deltas: ['ok']));
+    await state.send('hi');
+    final id = state.active.id;
+    await state.setSummary(
+      id,
+      ChatSummary(
+        enabled: true,
+        segments: [
+          SummarySegment(id: 'a', content: 'body-a'),
+          SummarySegment(id: 'b', content: 'body-b'),
+        ],
+      ),
+    );
+
+    state.setSummarySegmentCollapsed(id, 'a', true);
+    expect(state.conversationById(id)!.summary!.segments[0].collapsed, isTrue);
+    expect(state.conversationById(id)!.summary!.segments[1].collapsed, isFalse);
+    // Content is untouched, and an unknown id is a no-op.
+    expect(state.conversationById(id)!.summary!.segments[0].content, 'body-a');
+    state.setSummarySegmentCollapsed(id, 'ghost', true);
+
+    // The fold survives a reload (persisted via the deferred whole-store write).
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    final reloaded = AppState(client: FakeClient());
+    await reloaded.init();
+    expect(reloaded.conversationById(id)!.summary!.segments[0].collapsed, isTrue);
   });
 }

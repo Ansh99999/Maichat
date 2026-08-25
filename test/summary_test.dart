@@ -75,6 +75,99 @@ void main() {
       final gen = SummarySegment(id: 'g', content: 'auto');
       expect(SummarySegment.fromJson(gen.toJson()).manual, isFalse);
     });
+
+    test('collapsed round-trips, is omitted when false, and copyWith keeps it',
+        () {
+      final open = SummarySegment(id: 'o', content: 'x');
+      expect(open.toJson().containsKey('collapsed'), isFalse);
+      final folded = SummarySegment(id: 'f', content: 'y', collapsed: true);
+      expect(folded.toJson()['collapsed'], isTrue);
+      expect(SummarySegment.fromJson(folded.toJson()).collapsed, isTrue);
+      // copyWith without touching `collapsed` keeps it.
+      expect(folded.copyWith(content: 'z').collapsed, isTrue);
+    });
+
+    group('coverage and pending ranges (the manual "Summarise now" path)', () {
+      ChatSummary incremental({
+        int interval = 10,
+        int lastSummarizedIndex = 0,
+        List<SummarySegment>? segments,
+      }) =>
+          ChatSummary(
+            enabled: true,
+            method: SummaryMethod.incremental,
+            interval: interval,
+            lastSummarizedIndex: lastSummarizedIndex,
+            segments: segments,
+          );
+
+      test('coveredIndex tracks the generated segments, not the high-water mark',
+          () {
+        final cfg = incremental(
+          lastSummarizedIndex: 60,
+          segments: [
+            SummarySegment(id: 'a', startIndex: 0, endIndex: 50),
+            SummarySegment(id: 'b', startIndex: 50, endIndex: 60),
+          ],
+        );
+        expect(cfg.coveredIndex(60), 60);
+        // Delete the 51–60 block: coverage falls back to the earlier segment,
+        // even though lastSummarizedIndex still reads 60.
+        cfg.segments.removeWhere((s) => s.id == 'b');
+        expect(cfg.coveredIndex(60), 50);
+        // Manual (hand-written) blocks never count towards coverage.
+        cfg.segments.add(SummarySegment(
+            id: 'm', startIndex: 0, endIndex: 999, manual: true));
+        expect(cfg.coveredIndex(60), 50);
+      });
+
+      test('a forced run re-covers the gap left by a deleted block', () {
+        final cfg = incremental(
+          lastSummarizedIndex: 60,
+          segments: [
+            SummarySegment(id: 'a', startIndex: 0, endIndex: 50),
+          ],
+        );
+        // Nothing is pending automatically (60 - 60 < interval)…
+        expect(cfg.pendingRanges(60, force: false), isEmpty);
+        // …but forcing works from coverage (50) and refills 50–60.
+        expect(cfg.pendingRanges(60, force: true), [(50, 60)]);
+      });
+
+      test('a forced run summarises a single new message, ignoring the interval',
+          () {
+        final cfg = incremental(
+          lastSummarizedIndex: 60,
+          segments: [
+            SummarySegment(id: 'a', startIndex: 0, endIndex: 60),
+          ],
+        );
+        // 61 messages now; one past the covered 60.
+        expect(cfg.pendingRanges(61, force: false), isEmpty);
+        expect(cfg.pendingRanges(61, force: true), [(60, 61)]);
+      });
+
+      test('nothing pending when the memory already covers every message', () {
+        final cfg = incremental(
+          lastSummarizedIndex: 60,
+          segments: [
+            SummarySegment(id: 'a', startIndex: 0, endIndex: 60),
+          ],
+        );
+        expect(cfg.pendingRanges(60, force: true), isEmpty);
+      });
+
+      test('rolling always re-condenses the whole chat when forced', () {
+        final cfg = ChatSummary(
+          enabled: true,
+          interval: 10,
+          lastSummarizedIndex: 40,
+          segments: [SummarySegment(id: 'a', startIndex: 0, endIndex: 40)],
+        );
+        expect(cfg.pendingRanges(42, force: false), isEmpty);
+        expect(cfg.pendingRanges(42, force: true), [(0, 42)]);
+      });
+    });
   });
 
   group('Conversation carries summary and lorebook overrides', () {

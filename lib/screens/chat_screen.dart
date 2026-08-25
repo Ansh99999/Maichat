@@ -1408,6 +1408,10 @@ class _ChatDrawer extends StatefulWidget {
 class _ChatDrawerState extends State<_ChatDrawer> {
   _DrawerPanel _panel = _DrawerPanel.menu;
 
+  /// Which way the last panel change drilled — into a sub-panel (true) or back
+  /// to the menu (false) — so the switch slides in the matching direction.
+  bool _forward = true;
+
   /// Runs [action] after the drawer has closed, so the drawer does not sit
   /// open behind whatever the action pushes or shows.
   void _close(BuildContext context, VoidCallback action) {
@@ -1415,31 +1419,61 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     action();
   }
 
-  void _show(_DrawerPanel panel) => setState(() => _panel = panel);
+  void _show(_DrawerPanel panel) => setState(() {
+        _forward = panel != _DrawerPanel.menu;
+        _panel = panel;
+      });
 
   @override
   Widget build(BuildContext context) {
+    final Widget body;
     switch (_panel) {
       case _DrawerPanel.presets:
-        return Drawer(
-          child: SafeArea(
-            child: ChatPresetPanel(
-              onBack: () => _show(_DrawerPanel.menu),
-            ),
-          ),
-        );
+        body = ChatPresetPanel(onBack: () => _show(_DrawerPanel.menu));
       case _DrawerPanel.memory:
-        return Drawer(
-          child: SafeArea(
-            child: ChatMemoryPanel(
-              onBack: () => _show(_DrawerPanel.menu),
-            ),
-          ),
-        );
+        body = ChatMemoryPanel(onBack: () => _show(_DrawerPanel.menu));
       case _DrawerPanel.menu:
-        break;
+        body = _menu(context);
     }
 
+    // Slide + fade between the menu and a sub-panel so drilling in/out reads as
+    // one fluid movement instead of a hard cut. StackFit.expand hands each child
+    // the drawer's full, bounded size — the panels are Columns with Expanded, so
+    // an unconstrained Stack child would otherwise overflow.
+    return Drawer(
+      child: SafeArea(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final incoming = child.key == ValueKey(_panel);
+            final dir = _forward ? 1.0 : -1.0;
+            final begin = Offset((incoming ? dir : -dir) * 0.12, 0);
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(begin: begin, end: Offset.zero)
+                    .animate(animation),
+                child: child,
+              ),
+            );
+          },
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.topCenter,
+            children: [
+              ...previousChildren,
+              ?currentChild,
+            ],
+          ),
+          child: KeyedSubtree(key: ValueKey(_panel), child: body),
+        ),
+      ),
+    );
+  }
+
+  Widget _menu(BuildContext context) {
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final conversation = state.active;
@@ -1464,9 +1498,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         : '$treeSize chats · ${treeSize - 1} '
             '${treeSize == 2 ? 'branch' : 'branches'}';
 
-    return Drawer(
-      child: SafeArea(
-        child: Column(
+    return Column(
           children: [
             // Editable chat title, like agnai's "edit character" header.
             Padding(
@@ -1574,9 +1606,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               onNotifications: () => _close(context, widget.onNotifications),
             ),
           ],
-        ),
-      ),
-    );
+        );
   }
 }
 // APPEND-MARKER-3

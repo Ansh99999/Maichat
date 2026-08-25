@@ -1887,6 +1887,36 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  /// The highest message index a chat's memory actually covers right now,
+  /// recomputed from the segments that still exist (so a deleted block is no
+  /// longer counted). The memory editor uses this to describe, and gate, a
+  /// manual "Summarise now".
+  int summaryCoverage(String conversationId) {
+    final c = _conversationById(conversationId);
+    final cfg = c?.summary;
+    if (c == null || cfg == null) return 0;
+    return cfg.coveredIndex(c.messages.length);
+  }
+
+  /// Persists the folded/unfolded state of a single memory block without going
+  /// through the editor's save/dirty flow — collapse is a view preference, so it
+  /// should stick even when the user leaves without saving content edits. Only
+  /// the stored segment's [SummarySegment.collapsed] flag is touched, so any
+  /// unsaved draft edits are left alone.
+  void setSummarySegmentCollapsed(
+      String conversationId, String segmentId, bool collapsed) {
+    final cfg = _conversationById(conversationId)?.summary;
+    if (cfg == null) return;
+    for (final s in cfg.segments) {
+      if (s.id == segmentId) {
+        if (s.collapsed == collapsed) return;
+        s.collapsed = collapsed;
+        _saveConversationsSoon();
+        return;
+      }
+    }
+  }
+
   /// Every chat that currently has a summary, newest-updated first — the source
   /// for the Library's global "Summary" section.
   List<Conversation> get conversationsWithSummary => [
@@ -2907,25 +2937,6 @@ class AppState extends ChangeNotifier {
   /// the chat was last summarised. Rolling yields a single `[0, count)` range;
   /// incremental yields one range per full interval window since the last run.
   /// When [force] (manual "summarise now") a trailing partial window is included.
-  List<(int, int)> _pendingRanges(ChatSummary cfg, int count,
-      {required bool force}) {
-    if (cfg.interval <= 0 || count <= 0) return const <(int, int)>[];
-    if (cfg.method == SummaryMethod.rolling) {
-      if (!force && count - cfg.lastSummarizedIndex < cfg.interval) {
-        return const <(int, int)>[];
-      }
-      return <(int, int)>[(0, count)];
-    }
-    final out = <(int, int)>[];
-    var s = cfg.lastSummarizedIndex.clamp(0, count);
-    while (count - s >= cfg.interval) {
-      out.add((s, s + cfg.interval));
-      s += cfg.interval;
-    }
-    if (force && s < count) out.add((s, count));
-    return out;
-  }
-
   /// A plain-text transcript of messages `[start, end)` for the summarizer.
   String _summaryTranscript(Conversation c, int start, int end) {
     final userName = impersonationFor(c)?.displayName ?? 'User';
@@ -2971,7 +2982,7 @@ class AppState extends ChangeNotifier {
     final provider = _summaryProvider(cfg, c);
     if (provider == null) return;
     final count = c.messages.length;
-    final ranges = _pendingRanges(cfg, count, force: force);
+    final ranges = cfg.pendingRanges(count, force: force);
     if (ranges.isEmpty) return;
 
     final requests = <SummaryRequest>[];

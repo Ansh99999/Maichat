@@ -77,6 +77,9 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     }
     _editing.clear();
     _collapsed.clear();
+    for (var i = 0; i < _segments.length; i++) {
+      if (_segments[i].collapsed) _collapsed.add(i);
+    }
     _dirty = false;
   }
 
@@ -153,10 +156,15 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     final c = state.conversationById(widget.conversationId);
     final cfg = c?.summary;
     if (c == null || cfg == null) return;
-    final from = cfg.lastSummarizedIndex;
+    // Work from what the memory actually covers now — not the stored high-water
+    // mark — so deleting a block (or adding a single message) leaves something to
+    // do. A manual run ignores the "every N messages" threshold on purpose.
+    final from = cfg.method == SummaryMethod.incremental
+        ? state.summaryCoverage(c.id)
+        : 0;
     final to = c.messages.length;
-    if (to <= from && cfg.method == SummaryMethod.incremental) {
-      _toast('Nothing new to summarise yet.');
+    if (cfg.method == SummaryMethod.incremental && to <= from) {
+      _toast('The memory already covers every message.');
       return;
     }
     final ok = await showDialog<bool>(
@@ -337,9 +345,13 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       _segTitle.removeAt(i).dispose();
       _segBody.removeAt(i).dispose();
       _segments.removeAt(i);
-      // Indices shifted; simplest correct thing is to drop edit/collapse state.
+      // Indices shifted; rebuild the edit/collapse sets from the segments that
+      // remain (collapse rides on the segment itself, so it is preserved).
       _editing.clear();
       _collapsed.clear();
+      for (var j = 0; j < _segments.length; j++) {
+        if (_segments[j].collapsed) _collapsed.add(j);
+      }
       _dirty = true;
     });
   }
@@ -520,9 +532,23 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     final editing = _editing.contains(i);
     final manual = _segments[i].manual;
     final collapsed = _collapsed.contains(i) && !editing;
-    void toggleCollapse() => setState(() {
-          if (!_collapsed.remove(i)) _collapsed.add(i);
-        });
+    void toggleCollapse() {
+      final next = !_collapsed.contains(i);
+      setState(() {
+        if (next) {
+          _collapsed.add(i);
+        } else {
+          _collapsed.remove(i);
+        }
+        // Keep the draft segment in step so a later Save carries the state too.
+        _segments[i].collapsed = next;
+      });
+      // Persist the fold immediately, independent of the Save button — it is a
+      // view preference, so it should survive leaving the page without saving.
+      context
+          .read<AppState>()
+          .setSummarySegmentCollapsed(widget.conversationId, _segments[i].id, next);
+    }
     return Card(
       key: ValueKey(_segments[i].id),
       elevation: 0,
