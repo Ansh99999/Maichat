@@ -104,29 +104,44 @@ class ChatClient {
 
   /// Auth and content headers for [provider], keyed by its wire format:
   /// Anthropic wants `x-api-key` + a version header; Gemini wants
-  /// `x-goog-api-key`; OpenAI wants a bearer.
+  /// `x-goog-api-key`; the OpenAI dialects want a bearer.
+  ///
+  /// [Provider.customHeaders] is merged last so a user can deliberately override
+  /// anything above — including the auth header — which is the point of it.
   Map<String, String> _headers(Provider provider, {bool stream = false}) {
     final key = provider.apiKey.trim();
     return {
       'Content-Type': 'application/json',
       if (stream) 'Accept': 'text/event-stream',
-      if (provider.kind == ProviderKind.anthropic)
+      if (provider.wire == WireFormat.anthropic)
         'anthropic-version': '2023-06-01',
       if (key.isNotEmpty)
-        ...switch (provider.kind) {
-          ProviderKind.anthropic => {'x-api-key': key},
-          ProviderKind.gemini => {'x-goog-api-key': key},
-          ProviderKind.openai => {'Authorization': 'Bearer $key'},
+        ...switch (provider.wire) {
+          WireFormat.anthropic => {'x-api-key': key},
+          WireFormat.gemini => {'x-goog-api-key': key},
+          WireFormat.openaiChat ||
+          WireFormat.openaiResponses =>
+            {'Authorization': 'Bearer $key'},
         },
+      if (provider.claudeCodeHeaders) ..._claudeCodeHeaders,
+      ...provider.customHeaders,
     };
   }
+
+  /// The headers Claude Code sends to identify itself. Kept in one place so the
+  /// set is auditable rather than scattered through the request builder.
+  static const Map<String, String> _claudeCodeHeaders = <String, String>{
+    'x-app': 'cli',
+    'user-agent': 'claude-cli/2.1.0 (external, cli)',
+    'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+  };
 
   /// The request body for a chat turn, shaped for the provider's format and
   /// carrying the preset's [GenParams].
   Object _body(Provider provider, List<ChatMessage> history, GenParams params) {
     final model = provider.model.trim();
     final stop = params.stop.where((s) => s.trim().isNotEmpty).toList();
-    if (provider.kind == ProviderKind.gemini) {
+    if (provider.wire == WireFormat.gemini) {
       // Gemini carries the system prompt as `systemInstruction`, names the
       // assistant role "model", and wraps text in `parts`. The model id travels
       // in the URL, not the body.
@@ -171,7 +186,7 @@ class ChatClient {
         if (gen.isNotEmpty) 'generationConfig': gen,
       };
     }
-    if (provider.kind == ProviderKind.anthropic) {
+    if (provider.wire == WireFormat.anthropic) {
       // Anthropic carries the system prompt separately and requires a token
       // ceiling; only user/assistant turns go in `messages`.
       final system = history
@@ -209,6 +224,43 @@ class ChatClient {
           'top_p': params.topP,
         if (thinking == null && (params.topK ?? 0) > 0) 'top_k': params.topK,
         if (stop.isNotEmpty) 'stop_sequences': stop,
+      };
+    }
+    if (provider.wire == WireFormat.openaiResponses) {
+      // The Responses API renames nearly every field: the system prompt is
+      // `instructions`, turns are `input` items whose content is a typed list,
+      // and the ceiling is `max_output_tokens`. Thinking is an object rather
+      // than a flat effort string.
+      final system = history
+          .where((m) => m.role == 'system')
+          .map((m) => m.content)
+          .join('\n')
+          .trim();
+      final input = history
+          .where((m) => m.role != 'system')
+          .map((m) => {
+                'role': m.role,
+                'content': [
+                  {
+                    // The content type is named from the speaker's side; a host
+                    // rejects `input_text` on an assistant turn and vice versa.
+                    'type':
+                        m.role == 'assistant' ? 'output_text' : 'input_text',
+                    'text': m.content,
+                  }
+                ],
+              })
+          .toList(growable: false);
+      return {
+        'model': model,
+        'stream': params.stream,
+        if (system.isNotEmpty) 'instructions': system,
+        'input': input,
+        if (params.temperature != null) 'temperature': params.temperature,
+        if ((params.maxTokens ?? 0) > 0) 'max_output_tokens': params.maxTokens,
+        if (params.topP != null && params.topP != 1.0) 'top_p': params.topP,
+        if (params.thinking && params.reasoningEffort.isNotEmpty)
+          'reasoning': <String, dynamic>{'effort': params.reasoningEffort},
       };
     }
     return {
@@ -260,29 +312,45 @@ class ChatClient {
         '$body';
   }
 
+  /// Whether a header carries a credential and so must never reach the request
+  /// preview (which is copyable, and ends up on clipboards and in bug reports).
+  ///
+  /// Deliberately broad: on top of the three the app itself sends, anything
+  /// whose name reads like a secret is redacted, because a user can now add
+  /// arbitrary custom headers and a gateway's bespoke auth header should not be
+  /// the one thing that leaks.
   static bool _isSecretHeader(String name) {
     final lower = name.toLowerCase();
     return lower == 'authorization' ||
         lower == 'x-api-key' ||
-        lower == 'x-goog-api-key';
+        lower == 'x-goog-api-key' ||
+        lower == 'proxy-authorization' ||
+        lower == 'cookie' ||
+        lower == 'set-cookie' ||
+        _secretish.hasMatch(lower);
   }
 
-  /// The endpoint a chat turn is POSTed to, by provider format. Gemini puts the
+  /// Names that read like a credential: `x-gateway-token`, `api_secret`, …
+  static final RegExp _secretish = RegExp(r'key|token|secret|auth|password');
+
+  /// The endpoint a chat turn is POSTed to, by wire format. Gemini puts the
   /// choice between streaming and a single response in the URL (a different
-  /// method plus the `alt=sse` transport), where the other two formats carry it
-  /// as a body field.
+  /// method plus the `alt=sse` transport), where the other formats carry it as a
+  /// body field.
   static Uri requestUri(Provider provider, {bool stream = true}) {
-    switch (provider.kind) {
-      case ProviderKind.gemini:
+    switch (provider.wire) {
+      case WireFormat.gemini:
         final uri = endpoint(
           provider.baseUrl,
           '/models/${Uri.encodeComponent(provider.model.trim())}'
               '${stream ? ':streamGenerateContent' : ':generateContent'}',
         );
         return stream ? uri.replace(queryParameters: {'alt': 'sse'}) : uri;
-      case ProviderKind.anthropic:
+      case WireFormat.anthropic:
         return endpoint(provider.baseUrl, '/messages');
-      case ProviderKind.openai:
+      case WireFormat.openaiResponses:
+        return endpoint(provider.baseUrl, '/responses');
+      case WireFormat.openaiChat:
         return endpoint(provider.baseUrl, '/chat/completions');
     }
   }
@@ -301,8 +369,9 @@ class ChatClient {
     if (provider.model.trim().isEmpty) {
       throw ChatApiException('Pick a model in Settings first.');
     }
-    final anthropic = provider.kind == ProviderKind.anthropic;
-    final gemini = provider.kind == ProviderKind.gemini;
+    final anthropic = provider.wire == WireFormat.anthropic;
+    final gemini = provider.wire == WireFormat.gemini;
+    final responses = provider.wire == WireFormat.openaiResponses;
     final uri = requestUri(provider, stream: params.stream);
     final client = http.Client();
     _active = client;
@@ -341,6 +410,11 @@ class ChatClient {
           if (event.stop) break;
           final delta = event.delta;
           if (delta != null && !delta.isEmpty) yield delta;
+        } else if (responses) {
+          final event = _extractResponsesDelta(payload);
+          if (event.stop) break;
+          final delta = event.delta;
+          if (delta != null && !delta.isEmpty) yield delta;
         } else {
           if (payload == '[DONE]') break;
           final delta = _extractDelta(payload);
@@ -368,7 +442,7 @@ class ChatClient {
   /// provider, a missing model/key, or any transport/HTTP failure — it is a
   /// best-effort display aid, never on the send path.
   Future<int?> countTokens(Provider provider, List<ChatMessage> history) async {
-    if (provider.kind != ProviderKind.anthropic) return null;
+    if (provider.wire != WireFormat.anthropic) return null;
     final model = provider.model.trim();
     if (model.isEmpty || provider.apiKey.isEmpty) return null;
     try {
@@ -496,7 +570,7 @@ class ChatClient {
   /// Fetches selectable model ids from the provider's `/models` endpoint.
   Future<List<String>> listModels(Provider provider) async {
     final uri = endpoint(provider.baseUrl, '/models');
-    final gemini = provider.kind == ProviderKind.gemini;
+    final gemini = provider.wire == WireFormat.gemini;
     try {
       final response =
           await http.get(uri, headers: _headers(provider)).timeout(
@@ -657,6 +731,70 @@ class ChatClient {
     }
   }
 
+  /// One event from the Responses API stream. Unlike the chat dialect every
+  /// event is typed, so text, thinking, completion and failure are told apart by
+  /// name rather than by which field happens to be present.
+  static ({ChatDelta? delta, bool stop}) _extractResponsesDelta(String payload) {
+    try {
+      final json = jsonDecode(payload);
+      if (json is! Map<String, dynamic>) return (delta: null, stop: false);
+      final type = json['type'];
+      if (type == 'error' || type == 'response.failed') {
+        throw ChatApiException(_describeErrorBody(json));
+      }
+      if (type == 'response.completed' || type == 'response.incomplete') {
+        return (delta: null, stop: true);
+      }
+      if (type == 'response.output_text.delta' && json['delta'] is String) {
+        return (
+          delta: ChatDelta(text: json['delta'] as String),
+          stop: false,
+        );
+      }
+      // Reasoning summaries are the only thinking the API exposes; the raw
+      // chain is never sent.
+      if ((type == 'response.reasoning_summary_text.delta' ||
+              type == 'response.reasoning_text.delta') &&
+          json['delta'] is String) {
+        return (
+          delta: ChatDelta(reasoning: json['delta'] as String),
+          stop: false,
+        );
+      }
+      return (delta: null, stop: false);
+    } on ChatApiException {
+      rethrow;
+    } catch (_) {
+      return (delta: null, stop: false);
+    }
+  }
+
+  /// A non-streamed Responses body. The reply lives in `output`, a list of
+  /// items whose `message` entries hold the `output_text` parts.
+  static ChatDelta _responsesWhole(Map<String, dynamic> json) {
+    // Hosts that implement the convenience field make this trivial.
+    if (json['output_text'] is String) {
+      return ChatDelta(text: json['output_text'] as String);
+    }
+    final output = json['output'];
+    if (output is! List) return const ChatDelta();
+    final text = StringBuffer();
+    final thoughts = StringBuffer();
+    for (final item in output) {
+      if (item is! Map<String, dynamic>) continue;
+      final content = item['content'];
+      if (content is! List) continue;
+      final isReasoning = item['type'] == 'reasoning';
+      for (final part in content) {
+        if (part is! Map<String, dynamic>) continue;
+        final value = part['text'];
+        if (value is! String) continue;
+        (isReasoning ? thoughts : text).write(value);
+      }
+    }
+    return ChatDelta(text: text.toString(), reasoning: thoughts.toString());
+  }
+
   /// Reads a whole (non-streamed) response body into one delta, by provider
   /// format. Used when streaming is switched off, where there are no SSE events
   /// to parse — just one JSON document.
@@ -673,8 +811,8 @@ class ChatClient {
     if (json['error'] != null) {
       throw ChatApiException(_describeErrorBody(json));
     }
-    switch (provider.kind) {
-      case ProviderKind.gemini:
+    switch (provider.wire) {
+      case WireFormat.gemini:
         final candidates = json['candidates'];
         if (candidates is List && candidates.isNotEmpty) {
           final first = candidates.first;
@@ -684,7 +822,7 @@ class ChatClient {
           }
         }
         return const ChatDelta();
-      case ProviderKind.anthropic:
+      case WireFormat.anthropic:
         // `content` is a list of blocks: `thinking` ones first, then `text`.
         final blocks = json['content'];
         if (blocks is! List) return const ChatDelta();
@@ -699,7 +837,9 @@ class ChatClient {
           }
         }
         return ChatDelta(text: text.toString(), reasoning: thoughts.toString());
-      case ProviderKind.openai:
+      case WireFormat.openaiResponses:
+        return _responsesWhole(json);
+      case WireFormat.openaiChat:
         final choices = json['choices'];
         if (choices is! List || choices.isEmpty) return const ChatDelta();
         final choice = choices.first;

@@ -225,11 +225,7 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
     );
   }
 
-  String get _baseHelper => switch (_kind) {
-        ProviderKind.anthropic => 'Anthropic API root, usually ending in /v1',
-        ProviderKind.gemini => 'Gemini API root (…/v1beta)',
-        ProviderKind.openai => 'OpenAI-compatible root, usually ending in /v1',
-      };
+  String get _baseHelper => _kind.baseUrlHelper;
 
   /// A compact dropdown for the API format — discrete, unlike a full-width
   /// segmented button, while still offering all three custom formats.
@@ -356,11 +352,7 @@ class _ProviderSettingsPageState extends State<ProviderSettingsPage> {
       onTap: _pickModel,
       decoration: InputDecoration(
         labelText: 'Model',
-        hintText: switch (_kind) {
-          ProviderKind.anthropic => 'claude-sonnet-4-5',
-          ProviderKind.gemini => 'gemini-2.5-flash',
-          ProviderKind.openai => 'gpt-4o-mini',
-        },
+        hintText: _kind.modelHint,
         helperText: 'Tap to pick; refresh inside to fetch the latest list',
         prefixIcon: const Icon(Icons.memory_outlined),
         suffixIcon: IconButton(
