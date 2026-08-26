@@ -110,7 +110,7 @@ const Map<String, int> _windows = <String, int>{
 /// this table knows — in which case the caller keeps the preset's own number
 /// rather than guessing.
 int? knownMaxContext(String model) {
-  final id = _normalise(model);
+  final id = normaliseModelId(model);
   if (id.isEmpty) return null;
 
   // A window stated in the id wins: it describes this specific deployment.
@@ -133,7 +133,10 @@ int? knownMaxContext(String model) {
 
 /// Lowercases [model] and drops a gateway's vendor prefix and any `:free` /
 /// `:nitro` style routing suffix, so `OpenAI/GPT-4o:free` looks like `gpt-4o`.
-String _normalise(String model) {
+///
+/// Public because pricing matches model ids by the same rule, and two copies of
+/// it would drift apart.
+String normaliseModelId(String model) {
   var id = model.trim().toLowerCase();
   id = id.replaceFirst(_vendorPrefix, '');
   for (final suffix in const <String>['free', 'nitro', 'beta', 'floor', 'extended']) {

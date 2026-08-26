@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.15.13+87
+version: 1.16.0+88
 
 environment:
   sdk: ^3.12.2
@@ -68,6 +68,10 @@ dependencies:
   # (no platform channels), so no AGP-9 native-plugin concern; only reads
   # text-based PDFs (a scanned/image PDF has no text to extract).
   syncfusion_flutter_pdf: 34.2.4
+  # Usage and cost charts on a provider's Costs tab. Pure Dart underneath
+  # (equatable + vector_math only), so no platform channels and no AGP-9
+  # native-plugin concern.
+  fl_chart: 1.2.0
 
 dev_dependencies:
   flutter_test:

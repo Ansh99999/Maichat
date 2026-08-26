@@ -13,6 +13,7 @@ import '../screens/gallery/gallery_screen.dart';
 import '../screens/library/library_screen.dart';
 import '../screens/presets/presets_screen.dart';
 import '../screens/profile_screen.dart';
+import '../screens/providers/providers_screen.dart';
 import '../screens/section_screen.dart';
 import '../screens/settings/about_settings_page.dart';
 import '../screens/settings_screen.dart';
@@ -21,7 +22,7 @@ import 'brand_mark.dart';
 
 /// Which top-level destination is currently on screen, so the drawer can show
 /// it selected.
-enum DrawerSection { home, chats, characters, discover, library, gallery, presets }
+enum DrawerSection { home, chats, characters, discover, library, gallery, providers, presets }
 
 /// The navigation drawer shared by the top-level sections (Home and Chats).
 ///
@@ -113,6 +114,15 @@ class AppDrawer extends StatelessWidget {
     if (selected != DrawerSection.gallery) {
       Navigator.of(context)
           .push(MaterialPageRoute<void>(builder: (_) => const GalleryScreen()));
+    }
+  }
+
+  /// Opens the Providers section, unless it is already the host screen.
+  void _goProviders(BuildContext context) {
+    Navigator.of(context).pop();
+    if (selected != DrawerSection.providers) {
+      Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const ProvidersScreen()));
     }
   }
 
@@ -237,6 +247,12 @@ class AppDrawer extends StatelessWidget {
             label: 'Gallery',
             selected: selected == DrawerSection.gallery,
             onTap: () => _goGallery(context),
+          ),
+          _NavItem(
+            icon: Icons.cloud_outlined,
+            label: 'Providers',
+            selected: selected == DrawerSection.providers,
+            onTap: () => _goProviders(context),
           ),
           _NavItem(
             icon: Icons.tune_outlined,

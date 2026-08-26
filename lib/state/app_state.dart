@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../app_info.dart';
 import '../models/appearance.dart';
+import '../models/budget.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
@@ -19,6 +20,7 @@ import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../models/summary.dart';
+import '../models/usage.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
 import '../services/avatar_store.dart';
@@ -37,6 +39,7 @@ import '../services/storage_report.dart';
 import '../services/summarizer.dart';
 import '../services/tokenizer.dart';
 import '../services/update_service.dart';
+import '../services/usage_ledger.dart';
 import '../services/world_info.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
@@ -78,6 +81,9 @@ class AppState extends ChangeNotifier {
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
   final Map<String, List<String>> _modelCache = <String, List<String>>{};
+
+  /// What has been spent, by provider and model. Replaced wholesale on load.
+  UsageLedger _usage = UsageLedger();
   // Per-provider cursor into its key pool, used by round-robin (advances every
   // request) and error-based (advances only when a request fails).
   final Map<String, int> _keyCursor = <String, int>{};
@@ -288,6 +294,19 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       // Best-effort, non-blocking: surfaces an update affordance if one exists.
       unawaited(checkForUpdates());
+      // Building a BPE vocabulary is ~100k entries of work and the encoder cache
+      // is static, so the first caller pays for the whole process. Left on the
+      // build path it landed on whichever screen happened to ask first, as a
+      // visible hitch. Pay it here instead, in a microtask — off init's await
+      // chain, and no timer for a widget test to trip over.
+      scheduleMicrotask(() {
+        try {
+          _tokenizer.estimate('warm');
+        } catch (_) {
+          // The tokenizer already falls back to a heuristic on its own; a failed
+          // warm-up must not take the launch with it.
+        }
+      });
     }
   }
 
@@ -318,6 +337,10 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(await _storage.loadModelCache());
     _tokenizerConfig = await _storage.loadTokenizerConfig();
+    _usage = UsageLedger.decode(await _storage.loadUsage());
+    // Folding stale hours down is cheap and only worth persisting when it
+    // actually changed something.
+    if (_usage.prune()) await _persistUsage();
     _discoverPrefs = await _storage.loadDiscoverPrefs();
     _embeddingConfig = await _storage.loadEmbeddingConfig();
     _documents
@@ -443,6 +466,136 @@ class AppState extends ChangeNotifier {
     _activeProviderId = id;
     notifyListeners();
     await _persistProviders();
+  }
+
+  /// The stored provider with [id], or null. The provider editor reads through
+  /// this rather than holding the object it was opened with, so its Costs tab
+  /// sees saved state instead of the draft being typed.
+  Provider? providerById(String? id) {
+    if (id == null) return null;
+    for (final provider in _providers) {
+      if (provider.id == id) return provider;
+    }
+    return null;
+  }
+
+  /// Tries one credential against [provider]'s host. Goes through the client so
+  /// tests use the same headers, URL handling and error wording a real request
+  /// would — a test that passes where a send fails is worse than no test.
+  Future<KeyTestResult> testProviderKey(Provider provider, String key) =>
+      _client.testKey(provider, key);
+
+  // --- Providers: pricing, usage, budgets ---
+  //
+  // Kept in one block so this feature's footprint in a 3700-line file is
+  // reviewable, and so a merge lands here rather than scattered.
+
+  /// Read-only view of the ledger, for the Costs tab.
+  UsageLedger get usage => _usage;
+
+  Future<void> _persistUsage() async {
+    if (!_writable) return;
+    await _storage.saveUsage(_usage.encode());
+  }
+
+  /// Records what one reply cost, pricing it against the provider's own table.
+  ///
+  /// Does not persist: the caller writes once, alongside the conversation save it
+  /// is already doing, so a reply costs one extra `setString` rather than a
+  /// debounce timer that could lose the last few seconds of spend on a crash.
+  void recordUsage(Provider provider, String model, TokenUsage tokens) {
+    if (tokens.isEmpty) return;
+    _usage.record(
+      providerId: provider.id,
+      model: model,
+      usage: tokens,
+      price: provider.priceOf(model),
+    );
+  }
+
+  /// What [budget] has been used up so far, in whatever unit it counts.
+  double budgetSpend(Provider provider, Budget budget) {
+    final bucket = _usage.totals(
+      provider.id,
+      model: budget.isProviderWide ? null : budget.model,
+      since: _periodStart(budget.period),
+    );
+    return switch (budget.metric) {
+      BudgetMetric.cost => bucket.totalCost,
+      BudgetMetric.tokens => bucket.totalTokens.toDouble(),
+      BudgetMetric.requests => bucket.requests.toDouble(),
+    };
+  }
+
+  /// When the current window began, or null for an all-time budget.
+  static DateTime? _periodStart(BudgetPeriod period) {
+    final now = DateTime.now();
+    return switch (period) {
+      BudgetPeriod.daily => DateTime(now.year, now.month, now.day),
+      BudgetPeriod.weekly => DateTime(now.year, now.month, now.day)
+          .subtract(Duration(days: now.weekday - 1)),
+      BudgetPeriod.monthly => DateTime(now.year, now.month),
+      BudgetPeriod.total => null,
+    };
+  }
+
+  /// The blocking budget that stands in the way of sending to [model] on
+  /// [provider], or null when nothing does.
+  ///
+  /// Only budgets with [Budget.block] set can refuse a send; the rest are
+  /// warnings the Costs tab colours. A budget with no limit is ignored, since a
+  /// limit of nothing would block everything.
+  Budget? blockingBudget(Provider provider, String model) {
+    for (final budget in provider.budgets) {
+      if (!budget.block || !budget.isSet) continue;
+      if (!budget.isProviderWide && budget.model.trim() != model.trim()) {
+        continue;
+      }
+      if (budget.isExceededBy(budgetSpend(provider, budget))) return budget;
+    }
+    return null;
+  }
+
+  /// Forgets a provider's recorded usage, and persists straight away rather than
+  /// on the coalescing timer — a deletion the user asked for should not be
+  /// waiting in a buffer.
+  Future<void> forgetProviderUsage(String providerId) async {
+    if (!_usage.forget(providerId)) return;
+    notifyListeners();
+    await _persistUsage();
+  }
+
+  /// Adds or replaces a budget on [provider].
+  Future<void> saveBudget(Provider provider, Budget budget) async {
+    final budgets = List<Budget>.of(provider.budgets);
+    final index = budgets.indexWhere((b) => b.id == budget.id);
+    if (index == -1) {
+      budgets.add(budget);
+    } else {
+      budgets[index] = budget;
+    }
+    await updateProvider(provider.copyWith(budgets: budgets));
+  }
+
+  Future<void> deleteBudget(Provider provider, String budgetId) async {
+    final budgets =
+        provider.budgets.where((b) => b.id != budgetId).toList(growable: false);
+    if (budgets.length == provider.budgets.length) return;
+    await updateProvider(provider.copyWith(budgets: budgets));
+  }
+
+  /// How a refused send is explained. Written as a sentence because it lands in
+  /// the chat as an error turn, where a user is owed a reason and a way out.
+  static String describeBudgetBlock(Budget budget) {
+    final scope = budget.isProviderWide ? 'this provider' : budget.model;
+    final limit = switch (budget.metric) {
+      BudgetMetric.cost => '\$${budget.limit.toStringAsFixed(2)}',
+      BudgetMetric.tokens => '${budget.limit.toStringAsFixed(0)} tokens',
+      BudgetMetric.requests => '${budget.limit.toStringAsFixed(0)} requests',
+    };
+    return 'Budget reached: $scope has hit its '
+        '${budget.period.label.toLowerCase()} limit of $limit. '
+        'Raise or remove the budget in the provider’s Costs tab to continue.';
   }
 
   /// Sets the model on the active provider — the quick-switch path.
@@ -2663,6 +2816,15 @@ class AppState extends ChangeNotifier {
     final base = _resolveProvider(preset);
     if (base == null) return;
 
+    // A blocking budget refuses the send before anything is spent. Reported as an
+    // error turn in the chat rather than a silent no-op: a reply that never comes
+    // with no explanation is the worst version of this feature.
+    final blocked = blockingBudget(base, base.model);
+    if (blocked != null) {
+      _appendErrorTurn(conversation, describeBudgetBlock(blocked));
+      return;
+    }
+
     // In a group chat every reply is spoken by one member. When the caller did
     // not name one (a plain send), round-robin picks who is up next.
     final speaker = conversation.isGroup
@@ -2713,6 +2875,9 @@ class AppState extends ChangeNotifier {
     int? thinkingMs;
     var answer = '';
     var thinking = '';
+    // The last usage the host reported. Every dialect sends it at most once per
+    // reply, but Gemini re-sends a running total, so the newest wins.
+    TokenUsage? reported;
 
     // Narrow the key pool to the one this request should use.
     final provider = _applyKey(base);
@@ -2720,6 +2885,7 @@ class AppState extends ChangeNotifier {
       final deltas =
           _client.streamChat(provider: provider, history: history, params: params);
       await for (final delta in deltas) {
+        if (delta.usage != null) reported = delta.usage;
         if (delta.reasoning.isNotEmpty) thoughts.write(delta.reasoning);
         if (delta.text.isNotEmpty) raw.write(delta.text);
         final split = splitReasoning(raw.toString(), tags);
@@ -2773,8 +2939,23 @@ class AppState extends ChangeNotifier {
       _stopRequested = false;
       JankLogger.instance.activity('idle');
       conversation.updatedAt = DateTime.now();
+      // Record what this reply used. A host that reported nothing gets an
+      // estimate from the app's own tokenizer, marked as one — a missing number
+      // would quietly under-report the bill, which is the worse failure.
+      recordUsage(
+        base,
+        provider.model,
+        reported ??
+            TokenUsage(
+              inputTokens: assembled.totalTokens,
+              outputTokens: _tokenizer.estimate(answer) +
+                  _tokenizer.estimate(thinking),
+              estimated: true,
+            ),
+      );
       notifyListeners();
       await _saveConversations();
+      await _persistUsage();
       // Deliberately *not* saving the macro scopes here. The engine never
       // touches MacroVariables (grep macro_engine.dart), so this was a second
       // full rewrite of the entire preferences store after every single reply —
@@ -2787,6 +2968,19 @@ class AppState extends ChangeNotifier {
     // Re-index this chat's messages for semantic recall (no-op unless recall is
     // on and embeddings are ready). Off the send path, like the summary.
     unawaited(_indexChat(conversation));
+  }
+
+  /// Adds an assistant turn that only carries an error, for the failures that
+  /// happen before a request is ever made — a budget standing in the way, say.
+  void _appendErrorTurn(Conversation conversation, String message) {
+    conversation.messages.add(ChatMessage(
+      role: 'assistant',
+      swipes: <MessageVariant>[MessageVariant(content: message, error: true)],
+    ));
+    conversation.updatedAt = DateTime.now();
+    _moveToTop(conversation);
+    notifyListeners();
+    unawaited(_saveConversations());
   }
 
   /// Joins provider-returned thinking with thinking parsed out of the reply

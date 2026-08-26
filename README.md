@@ -25,7 +25,7 @@ push).
    [Releases](https://github.com/Ansh99999/Maichat/releases). It's a single universal APK —
    no ABI to pick.
 2. Allow install from unknown sources and open it.
-3. Open **Settings → Providers**, add a provider, paste your API key, pick a model.
+3. Open **Providers** in the navigation drawer, add one, paste your API key, pick a model.
 
 Notes:
 
@@ -48,17 +48,29 @@ version exists.
 
 ## Features
 
-**Providers** — bring your own key, any of three wire formats:
+**Providers** — bring your own key, any of four wire formats:
 
 | Format | Speaks to | Notes |
 | --- | --- | --- |
-| OpenAI-compatible | OpenAI, OpenRouter, DeepSeek, Groq, local llama.cpp / Ollama / LM Studio, most proxies | Just change the base URL |
+| OpenAI chat/completions | OpenAI, OpenRouter, DeepSeek, Groq, Nvidia NIM, most proxies | Just change the base URL |
+| OpenAI `v1/responses` | OpenAI's newer endpoint | Input items, instructions, reasoning effort |
 | Anthropic | Claude | Native `/messages`, extended thinking, exact token counting |
-| Google Gemini | Gemini | Native `streamGenerateContent`, thinking budgets |
+| Google Gemini | Gemini, AI Studio | Native `streamGenerateContent`, thinking budgets |
+| Local LLM (HTTP) | llama.cpp, Ollama, LM Studio on your LAN | Cleartext allowed, key optional |
+| KoboldCPP | A local KoboldCPP server | Its OpenAI-compatible endpoint |
 
-- Multiple named providers side by side; switch the active one from the chat itself.
-- **Multiple API keys per provider** with round-robin, random or error-based rotation.
+- Providers are their own destination in the drawer: search the roster, tap the ring to
+  switch which one answers, long-press to select for export or deletion.
+- **Ready-made templates** for Nvidia NIM, Google AI Studio, OpenRouter, Ollama, LM Studio
+  and KoboldCPP fill in the base URL for you.
+- **Multiple API keys per provider** with round-robin, random or error-based rotation — each
+  key hides, reveals and tests itself, or test the whole pool in one pass.
 - Model list fetched from the provider and searchable (cached, refresh on demand).
+- **Per-model prices, a fallback chain and arbitrary headers** per provider.
+- **Costs**: tokens and money in and out, a per-model breakdown, usage over time, and
+  budgets that warn or refuse. Counts come off the wire where the host reports them and
+  from the app's own tokenizer where it doesn't, labelled as estimates either way.
+- **Import/export** providers as JSON — keys stripped unless you ask for them.
 - Streaming with a stop button — and a real non-streaming mode when you turn streaming off.
 
 **Characters**
@@ -196,8 +208,9 @@ a small machine.
 lib/
   models/     Character, Preset, PromptBlock, Provider, Conversation, ChatInterface, …
   services/   chat_client (the wire), prompt_builder, macro_engine, tokenizer,
-              character_codec (card formats), preset_io, storage, update_service
-  screens/    home, chats, chat, characters, presets/, settings/
+              character_codec (card formats), preset_io, storage, usage_ledger,
+              update_service
+  screens/    home, chats, chat, characters, presets/, providers/, settings/
   widgets/    message_bubble, thinking_block, avatars, pickers
   state/      app_state.dart — the single ChangeNotifier everything reads
 test/         one file per concern; ~half are widget tests driving real screens
