@@ -4,10 +4,9 @@
 /// so the destination can scroll the row into view and flash it, the way
 /// Android Settings highlights the entry you searched for.
 enum SettingAnchor {
-  baseUrl,
-  apiKey,
-  model,
-  tokenizer,
+  // Providers now has a section of its own, whose search reaches its own list —
+  // so the provider fields no longer need an anchor here. Kept for the pages that
+  // still deep-link.
   theme,
   systemColours,
   font,

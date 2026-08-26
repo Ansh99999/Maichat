@@ -53,6 +53,11 @@ class Storage {
   static const _embeddingKey = 'embeddings';
   static const _documentsKey = 'documents';
 
+  /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
+  /// it is written after every reply where a provider is written almost never —
+  /// and a save rewrites the whole entry.
+  static const _usageKey = 'usage';
+
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
   /// Loads the configured providers. If none are stored yet, a legacy
@@ -352,6 +357,13 @@ class Storage {
 
   Future<void> saveModelCache(Map<String, List<String>> cache) async =>
       (await _prefs).setString(_modelCacheKey, jsonEncode(cache));
+
+  /// The raw usage ledger, decoded by [UsageLedger.decode] rather than here, so
+  /// the shape lives with the thing that understands it.
+  Future<String?> loadUsage() async => (await _prefs).getString(_usageKey);
+
+  Future<void> saveUsage(String encoded) async =>
+      (await _prefs).setString(_usageKey, encoded);
 
   /// Drops the entries that are only a performance cache and cost nothing to
   /// rebuild: the per-provider model lists and the Discover browsing state. The

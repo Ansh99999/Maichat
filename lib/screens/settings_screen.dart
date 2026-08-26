@@ -5,9 +5,10 @@ import '../state/app_state.dart';
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
 import 'settings/chat_interface_settings_page.dart';
-import 'settings/providers_settings_page.dart';
+import 'providers/providers_screen.dart';
 import 'settings/setting_anchors.dart';
 import 'settings/storage_settings_page.dart';
+import 'settings/tokenizer_settings_page.dart';
 
 /// The settings hub, laid out the Android way: a search bar that jumps to any
 /// individual setting, then a short list of sections you drill into.
@@ -31,7 +32,7 @@ class SettingsScreen extends StatelessWidget {
             icon: Icons.dns_outlined,
             title: 'Providers',
             subtitle: _providerSummary(state),
-            onTap: () => _open(context, const ProvidersSettingsPage()),
+            onTap: () => _open(context, const ProvidersScreen()),
           ),
           _SectionTile(
             icon: Icons.palette_outlined,
@@ -296,9 +297,8 @@ const List<_SearchEntry> _searchIndex = [
 ];
 
 // Const tear-offs so the index above stays a compile-time constant.
-Widget _providersPage() => const ProvidersSettingsPage();
-Widget _tokenizerPage() =>
-    const ProvidersSettingsPage(highlight: SettingAnchor.tokenizer);
+Widget _providersPage() => const ProvidersScreen();
+Widget _tokenizerPage() => const TokenizerSettingsPage();
 Widget _themePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.theme);
 Widget _systemColoursPage() =>

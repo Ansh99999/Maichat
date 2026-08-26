@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/message.dart';
 import '../models/provider.dart';
+import '../models/usage.dart';
 
 /// Raised for anything the user can act on: bad key, bad URL, dead host.
 class ChatApiException implements Exception {
@@ -13,6 +14,39 @@ class ChatApiException implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+/// What came back from trying one credential.
+///
+/// [ok] means the host accepted the key. It does not mean every model listed is
+/// available to it — no API offers that — so the message stays modest about what
+/// was actually proven.
+class KeyTestResult {
+  const KeyTestResult({
+    required this.ok,
+    required this.message,
+    this.status,
+    this.modelCount,
+    this.latency,
+  });
+
+  final bool ok;
+
+  /// One line for the UI, phrased for someone who does not know what a 401 is.
+  final String message;
+
+  /// The HTTP status, where there was one. Null for a transport failure.
+  final int? status;
+
+  /// How many models the host listed, when it listed any.
+  final int? modelCount;
+
+  final Duration? latency;
+
+  /// A key that is not just wrong but *definitely* wrong — worth telling apart
+  /// from a host that was merely unreachable, since only one of the two is
+  /// solved by pasting a different key.
+  bool get isRejected => status == 401 || status == 403;
 }
 
 /// Generation knobs a preset contributes to a request. Only values that differ
@@ -64,7 +98,7 @@ class GenParams {
 /// two travel together (and in order) so a thinking block can be timed against
 /// the moment the answer starts.
 class ChatDelta {
-  const ChatDelta({this.text = '', this.reasoning = ''});
+  const ChatDelta({this.text = '', this.reasoning = '', this.usage});
 
   /// Message text meant for the chat.
   final String text;
@@ -75,7 +109,13 @@ class ChatDelta {
   /// here: it arrives as [text] and is separated later by `splitReasoning`.
   final String reasoning;
 
-  bool get isEmpty => text.isEmpty && reasoning.isEmpty;
+  /// Token counts, on the one event that carries them. Every dialect reports
+  /// usage once — at the end for the OpenAI shapes, incrementally for Anthropic,
+  /// as a running snapshot for Gemini — so this is null on almost every delta and
+  /// the last non-null value is the authoritative one.
+  final TokenUsage? usage;
+
+  bool get isEmpty => text.isEmpty && reasoning.isEmpty && usage == null;
 }
 
 /// Minimal client for chat and model listing. Speaks two wire formats depending
@@ -87,11 +127,14 @@ class ChatClient {
 
   /// Joins [baseUrl] and [path], tolerating trailing slashes and a base URL
   /// that already points at the endpoint.
-  static Uri endpoint(String baseUrl, String path) {
+  static Uri endpoint(String baseUrl, String path, {bool preferHttp = false}) {
     var base = baseUrl.trim();
     if (base.isEmpty) throw ChatApiException('Set a base URL in Settings.');
     if (!base.startsWith('http://') && !base.startsWith('https://')) {
-      base = 'https://$base';
+      // A scheme-less address gets https, except for the local formats, where
+      // `localhost:11434` plainly means http and upgrading it only produces a
+      // confusing TLS error against a server that speaks none.
+      base = '${preferHttp ? 'http' : 'https'}://$base';
     }
     while (base.endsWith('/')) {
       base = base.substring(0, base.length - 1);
@@ -266,6 +309,11 @@ class ChatClient {
     return {
       'model': model,
       'stream': params.stream,
+      // Ask for the token counts, which the chat dialect only sends when told to.
+      // Withheld from the local kinds: several OpenAI-compatible servers reject
+      // the field, and a rejected request is worse than a missing number.
+      if (params.stream && provider.kind.usageReporting)
+        'stream_options': <String, dynamic>{'include_usage': true},
       'messages': history.map((m) => m.toApi()).toList(growable: false),
       if (params.temperature != null) 'temperature': params.temperature,
       if ((params.maxTokens ?? 0) > 0) 'max_tokens': params.maxTokens,
@@ -333,25 +381,68 @@ class ChatClient {
   /// Names that read like a credential: `x-gateway-token`, `api_secret`, …
   static final RegExp _secretish = RegExp(r'key|token|secret|auth|password');
 
+  /// Token usage out of an OpenAI-shaped `usage` object, covering the field names
+  /// the chat and Responses dialects use for the same numbers.
+  static TokenUsage? _openAiUsage(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final input = (raw['prompt_tokens'] ?? raw['input_tokens']) as num?;
+    final output = (raw['completion_tokens'] ?? raw['output_tokens']) as num?;
+    if (input == null && output == null) return null;
+    final outputDetails = raw['completion_tokens_details'] ??
+        raw['output_tokens_details'];
+    final inputDetails =
+        raw['prompt_tokens_details'] ?? raw['input_tokens_details'];
+    return TokenUsage(
+      inputTokens: input?.toInt() ?? 0,
+      outputTokens: output?.toInt() ?? 0,
+      reasoningTokens: outputDetails is Map<String, dynamic>
+          ? (outputDetails['reasoning_tokens'] as num?)?.toInt() ?? 0
+          : 0,
+      cachedTokens: inputDetails is Map<String, dynamic>
+          ? (inputDetails['cached_tokens'] as num?)?.toInt() ?? 0
+          : 0,
+    );
+  }
+
+  /// Token usage out of Gemini's `usageMetadata`. Gemini reports a running total
+  /// on every chunk rather than a final tally, so the last one seen wins.
+  static TokenUsage? _geminiUsage(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final input = raw['promptTokenCount'] as num?;
+    final output = raw['candidatesTokenCount'] as num?;
+    final thoughts = raw['thoughtsTokenCount'] as num?;
+    if (input == null && output == null) return null;
+    return TokenUsage(
+      inputTokens: input?.toInt() ?? 0,
+      // Thinking is billed as output but reported beside it, not inside it.
+      outputTokens: (output?.toInt() ?? 0) + (thoughts?.toInt() ?? 0),
+      reasoningTokens: thoughts?.toInt() ?? 0,
+      cachedTokens:
+          (raw['cachedContentTokenCount'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// The endpoint a chat turn is POSTed to, by wire format. Gemini puts the
   /// choice between streaming and a single response in the URL (a different
   /// method plus the `alt=sse` transport), where the other formats carry it as a
   /// body field.
   static Uri requestUri(Provider provider, {bool stream = true}) {
+    final http = provider.kind.prefersHttp;
     switch (provider.wire) {
       case WireFormat.gemini:
         final uri = endpoint(
           provider.baseUrl,
           '/models/${Uri.encodeComponent(provider.model.trim())}'
               '${stream ? ':streamGenerateContent' : ':generateContent'}',
+          preferHttp: http,
         );
         return stream ? uri.replace(queryParameters: {'alt': 'sse'}) : uri;
       case WireFormat.anthropic:
-        return endpoint(provider.baseUrl, '/messages');
+        return endpoint(provider.baseUrl, '/messages', preferHttp: http);
       case WireFormat.openaiResponses:
-        return endpoint(provider.baseUrl, '/responses');
+        return endpoint(provider.baseUrl, '/responses', preferHttp: http);
       case WireFormat.openaiChat:
-        return endpoint(provider.baseUrl, '/chat/completions');
+        return endpoint(provider.baseUrl, '/chat/completions', preferHttp: http);
     }
   }
 
@@ -407,14 +498,16 @@ class ChatClient {
           if (delta != null && !delta.isEmpty) yield delta;
         } else if (anthropic) {
           final event = _extractAnthropicDelta(payload);
-          if (event.stop) break;
           final delta = event.delta;
+          // Yielded before the break: a terminating event can still carry the
+          // token counts, and breaking first would throw them away.
           if (delta != null && !delta.isEmpty) yield delta;
+          if (event.stop) break;
         } else if (responses) {
           final event = _extractResponsesDelta(payload);
-          if (event.stop) break;
           final delta = event.delta;
           if (delta != null && !delta.isEmpty) yield delta;
+          if (event.stop) break;
         } else {
           if (payload == '[DONE]') break;
           final delta = _extractDelta(payload);
@@ -567,9 +660,91 @@ class ChatClient {
     return indexed.map((e) => e.value).toList(growable: false);
   }
 
+  /// What [listModels] says when a host answers but names nothing.
+  ///
+  /// A constant because [testKey] has to tell this apart from a real failure: the
+  /// host authenticated the request, which is exactly what a key test is asking
+  /// about, and only the model list came back empty.
+  static const String noModelsListed = 'This host listed no models.';
+
+  /// Tries one credential against the host and reports what happened.
+  ///
+  /// Always sends exactly [key] — never the rest of the pool — by narrowing the
+  /// provider first, so testing key 3 cannot pass on key 1's authority. `/models`
+  /// is the probe because every dialect the app speaks serves it and it is the
+  /// cheapest authenticated call available; a host that authenticates but has no
+  /// model list still counts as reachable.
+  Future<KeyTestResult> testKey(Provider provider, String key) async {
+    final trimmed = key.trim();
+    if (trimmed.isEmpty) {
+      return const KeyTestResult(ok: false, message: 'No key to test.');
+    }
+    final stopwatch = Stopwatch()..start();
+    try {
+      final models = await listModels(provider.withActiveKey(trimmed));
+      stopwatch.stop();
+      return KeyTestResult(
+        ok: true,
+        status: 200,
+        modelCount: models.length,
+        latency: stopwatch.elapsed,
+        message: models.isEmpty
+            ? 'Key accepted, though the host listed no models.'
+            : 'Key works — ${models.length} '
+                'model${models.length == 1 ? '' : 's'} available.',
+      );
+    } on ChatApiException catch (e) {
+      stopwatch.stop();
+      // The host answered and authenticated us; it simply has no list to give.
+      // That is a pass for the question being asked here.
+      if (e.message == noModelsListed) {
+        return KeyTestResult(
+          ok: true,
+          status: 200,
+          modelCount: 0,
+          latency: stopwatch.elapsed,
+          message: 'Key accepted, though the host listed no models.',
+        );
+      }
+      return KeyTestResult(
+        ok: false,
+        status: _statusIn(e.message),
+        latency: stopwatch.elapsed,
+        message: e.message,
+      );
+    } catch (e) {
+      stopwatch.stop();
+      return KeyTestResult(
+        ok: false,
+        latency: stopwatch.elapsed,
+        message: _describeTransport(e),
+      );
+    }
+  }
+
+  /// Recovers the status code from a message [_describeFailure] built, so a
+  /// rejected key can be told from an unreachable host without changing the
+  /// exception type every call site already handles.
+  static int? _statusIn(String message) =>
+      int.tryParse(RegExp(r'\b(4\d\d|5\d\d)\b').firstMatch(message)?[0] ?? '');
+
+  /// A delta with [usage] attached, when there is any to attach.
+  static ChatDelta _withUsage(ChatDelta delta, TokenUsage? usage) =>
+      usage == null
+          ? delta
+          : ChatDelta(
+              text: delta.text,
+              reasoning: delta.reasoning,
+              usage: usage,
+            );
+
   /// Fetches selectable model ids from the provider's `/models` endpoint.
   Future<List<String>> listModels(Provider provider) async {
-    final uri = endpoint(provider.baseUrl, '/models');
+    final uri = endpoint(
+      provider.baseUrl,
+      '/models',
+      preferHttp: provider.kind.prefersHttp,
+    );
     final gemini = provider.wire == WireFormat.gemini;
     try {
       final response =
@@ -605,7 +780,7 @@ class ChatClient {
         if (id != null && id.trim().isNotEmpty) ids.add(id.trim());
       }
       if (ids.isEmpty) {
-        throw ChatApiException('This host listed no models.');
+        throw ChatApiException(noModelsListed);
       }
       final sorted = ids.toList()..sort();
       return sorted;
@@ -630,15 +805,26 @@ class ChatClient {
         throw ChatApiException(_describeErrorBody(json));
       }
       final choices = json['choices'];
-      if (choices is! List || choices.isEmpty) return null;
+      // The usage-bearing chunk arrives with an empty `choices` list, after the
+      // last text chunk. It is a delta in its own right, carrying no text.
+      if (choices is! List || choices.isEmpty) {
+        final usage = _openAiUsage(json['usage']);
+        return usage == null ? null : ChatDelta(usage: usage);
+      }
       final choice = choices.first;
       if (choice is! Map<String, dynamic>) return null;
+      // A host may also attach usage to the final text chunk.
+      final usage = _openAiUsage(json['usage']);
       final delta = choice['delta'];
-      if (delta is Map<String, dynamic>) return _openAiParts(delta);
+      if (delta is Map<String, dynamic>) {
+        return _withUsage(_openAiParts(delta), usage);
+      }
       // Some hosts echo non-streaming shapes even when stream is requested.
       final message = choice['message'];
-      if (message is Map<String, dynamic>) return _openAiParts(message);
-      return null;
+      if (message is Map<String, dynamic>) {
+        return _withUsage(_openAiParts(message), usage);
+      }
+      return usage == null ? null : ChatDelta(usage: usage);
     } on ChatApiException {
       rethrow;
     } catch (_) {
@@ -668,10 +854,17 @@ class ChatClient {
         throw ChatApiException(_describeErrorBody(json));
       }
       final candidates = json['candidates'];
-      if (candidates is! List || candidates.isEmpty) return null;
+      // Gemini repeats a running usage total on every chunk, and sends a final
+      // chunk that is usage only.
+      final usage = _geminiUsage(json['usageMetadata']);
+      if (candidates is! List || candidates.isEmpty) {
+        return usage == null ? null : ChatDelta(usage: usage);
+      }
       final first = candidates.first;
       if (first is! Map<String, dynamic>) return null;
-      return _geminiParts(first['content']);
+      final parts = _geminiParts(first['content']);
+      if (parts == null) return usage == null ? null : ChatDelta(usage: usage);
+      return _withUsage(parts, usage);
     } on ChatApiException {
       rethrow;
     } catch (_) {
@@ -706,6 +899,25 @@ class ChatClient {
         throw ChatApiException(_describeErrorBody(json));
       }
       if (type == 'message_stop') return (delta: null, stop: true);
+      // Anthropic splits usage across the stream: the input count arrives with
+      // `message_start`, the output count with `message_delta` at the end.
+      if (type == 'message_start') {
+        final message = json['message'];
+        final usage = message is Map<String, dynamic>
+            ? _openAiUsage(message['usage'])
+            : null;
+        return (
+          delta: usage == null ? null : ChatDelta(usage: usage),
+          stop: false,
+        );
+      }
+      if (type == 'message_delta') {
+        final usage = _openAiUsage(json['usage']);
+        return (
+          delta: usage == null ? null : ChatDelta(usage: usage),
+          stop: false,
+        );
+      }
       if (type == 'content_block_delta') {
         final delta = json['delta'];
         if (delta is Map<String, dynamic>) {
@@ -743,7 +955,14 @@ class ChatClient {
         throw ChatApiException(_describeErrorBody(json));
       }
       if (type == 'response.completed' || type == 'response.incomplete') {
-        return (delta: null, stop: true);
+        final response = json['response'];
+        final usage = response is Map<String, dynamic>
+            ? _openAiUsage(response['usage'])
+            : null;
+        return (
+          delta: usage == null ? null : ChatDelta(usage: usage),
+          stop: true,
+        );
       }
       if (type == 'response.output_text.delta' && json['delta'] is String) {
         return (

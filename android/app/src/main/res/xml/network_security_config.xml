@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plain HTTP, for the "Local LLM (HTTP)" and KoboldCPP provider formats.
+
+  Android 9 and later block cleartext by default, which meant a model running on
+  the user's own machine — Ollama on http://192.168.1.x:11434, LM Studio,
+  KoboldCPP — could not be reached at all from a release build. The failure
+  surfaced only as "Could not reach the host", with nothing the user could do
+  about it.
+
+  This permits cleartext to any host, which is broader than we would like. It has
+  to be: a LAN address cannot be expressed as a range here, only host by host, and
+  the whole point is that we do not know the user's server's address. The
+  narrowing that does hold is elsewhere — every hosted provider the app ships
+  defaults to https, so the only requests that can go out in the clear are ones
+  aimed at an http:// URL the user typed themselves.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

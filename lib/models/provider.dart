@@ -51,6 +51,7 @@ enum ProviderKind {
     WireFormat.openaiChat,
     prefersHttp: true,
     requiresKey: false,
+    usageReporting: false,
   ),
   koboldCpp(
     'KoboldCPP',
@@ -58,6 +59,7 @@ enum ProviderKind {
     WireFormat.openaiChat,
     prefersHttp: true,
     requiresKey: false,
+    usageReporting: false,
   );
 
   const ProviderKind(
@@ -66,6 +68,7 @@ enum ProviderKind {
     this.wire, {
     this.prefersHttp = false,
     this.requiresKey = true,
+    this.usageReporting = true,
   });
 
   final String label;
@@ -80,6 +83,11 @@ enum ProviderKind {
 
   /// False where a key is genuinely optional, so the UI stops nagging for one.
   final bool requiresKey;
+
+  /// Whether to ask this host for token usage. Off for the local kinds, whose
+  /// servers are a moving target and several of which reject the field outright —
+  /// the app estimates their tokens instead and labels them as estimates.
+  final bool usageReporting;
 
   /// The helper line under the base-URL field. Lives on the kind so the editor
   /// does not need a `switch` that has to be revisited for every new format.
@@ -244,6 +252,24 @@ class Provider {
   /// A copy that will only ever send [key] — used by rotation to pin the chosen
   /// credential for a single request without disturbing the stored pool.
   Provider withActiveKey(String key) => copyWith(apiKeys: <String>[key]);
+
+  /// The same provider under a new [id]. Only import needs this: reissuing the
+  /// id is what stops a re-imported provider from colliding with the copy that
+  /// is already installed.
+  Provider withId(String id) => Provider(
+        id: id,
+        name: name,
+        kind: kind,
+        baseUrl: baseUrl,
+        apiKeys: apiKeys,
+        keyStrategy: keyStrategy,
+        model: model,
+        prices: prices,
+        fallbackModels: fallbackModels,
+        customHeaders: customHeaders,
+        claudeCodeHeaders: claudeCodeHeaders,
+        budgets: budgets,
+      );
 
   Provider copyWith({
     String? name,
