@@ -142,8 +142,53 @@ Uint8List? _decode(String base64Avatar) {
   }
 }
 
+// --- intrinsic ratios --------------------------------------------------------
+
+/// Intrinsic width/height per picture, by [_signature] — remembered across
+/// widgets and across screens.
+///
+/// Anything that lays a picture out at its *own* proportions has to know the
+/// ratio before it can choose a height, and the only way to learn it is to
+/// resolve the image and wait for a frame. That is a one-off cost per picture,
+/// but paid per widget it becomes a visible jump: the character sheet's header
+/// would open square, measure, then snap to 16:9 every single time it is
+/// pushed. Caching the answer means only the very first open pays it.
+///
+/// Deliberately unbounded by bytes — an entry is one double and a short key —
+/// and capped by count like the provider cache above.
+final LinkedHashMap<String, double> _ratios = LinkedHashMap<String, double>();
+
+/// Bigger than [_maxEntries]: a ratio costs almost nothing to keep, and the
+/// character roster can scroll past a lot of pictures.
+const int _maxRatios = 256;
+
+/// The known width/height of [avatar], or null when nothing has measured it yet.
+double? avatarRatio(String avatar) {
+  final trimmed = avatar.trim();
+  if (trimmed.isEmpty) return null;
+  final key = _signature(trimmed);
+  final cached = _ratios.remove(key);
+  if (cached == null) return null;
+  _ratios[key] = cached; // most recently used
+  return cached;
+}
+
+/// Records the measured width/height of [avatar]. Called by whatever resolved
+/// the image; every later reader gets it for free.
+void noteAvatarRatio(String avatar, double ratio) {
+  final trimmed = avatar.trim();
+  if (trimmed.isEmpty || !ratio.isFinite || ratio <= 0) return;
+  final key = _signature(trimmed);
+  _ratios.remove(key);
+  _ratios[key] = ratio;
+  while (_ratios.length > _maxRatios) {
+    _ratios.remove(_ratios.keys.first);
+  }
+}
+
 /// Drops every cached provider. For tests and for the "free up memory" path.
 void clearAvatarImageCache() {
   _cache.clear();
   _bytes.clear();
+  _ratios.clear();
 }

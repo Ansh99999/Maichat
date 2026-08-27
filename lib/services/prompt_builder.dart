@@ -121,7 +121,7 @@ class PromptBuilder {
         case PromptId.charPersonality:
           return character?.personality ?? '';
         case PromptId.scenario:
-          return character?.scenario ?? '';
+          return character?.activeScenario ?? '';
         case PromptId.dialogueExamples:
           // Lore can ask to sit around the examples rather than around the
           // definitions, so it rides along with this marker.

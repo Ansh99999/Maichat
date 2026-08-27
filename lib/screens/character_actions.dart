@@ -8,7 +8,7 @@ import '../models/character.dart';
 import '../services/character_codec.dart';
 import '../state/app_state.dart';
 import 'chats_screen.dart';
-import 'character_detail_screen.dart';
+import 'character_sheet_screen.dart';
 import 'character_edit_screen.dart';
 import 'chat_screen.dart';
 import 'gallery/gallery_screen.dart';
@@ -96,11 +96,11 @@ void startCharacterChat(
   );
 }
 
-/// Opens a character's page.
+/// Opens a character's sheet.
 void openCharacterDetail(BuildContext context, String characterId) {
   Navigator.of(context).push(
     MaterialPageRoute<void>(
-      builder: (_) => CharacterDetailScreen(characterId: characterId),
+      builder: (_) => CharacterSheetScreen(characterId: characterId),
     ),
   );
 }

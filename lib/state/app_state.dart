@@ -1374,6 +1374,39 @@ class AppState extends ChangeNotifier {
     await _persistCharacters();
   }
 
+  /// Replaces (or with an empty [scenario], clears) a character's **custom
+  /// scenario** — the "write your own" half of the character sheet's scenario
+  /// row. The card's own scenario is left untouched underneath, so clearing this
+  /// restores it; [Character.activeScenario] is the single place that decides
+  /// which of the two is in force.
+  Future<void> setCustomScenario(String id, String scenario) async {
+    final character = characterById(id);
+    if (character == null) return;
+    final next = scenario.trim();
+    if (character.customScenario == next) return;
+    character.customScenario = next;
+    character.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistCharacters();
+  }
+
+  /// The freshest thread with [characterId] that actually holds messages, or null
+  /// when the character has never been chatted with.
+  ///
+  /// Threads are held newest-first, so this is the first match — but the list is
+  /// scanned rather than indexed, because an empty "New chat" can sit at the top
+  /// and opening that instead of the real conversation is exactly the surprise
+  /// the character sheet's "recent chat" bubble must not spring.
+  Conversation? mostRecentChatWith(String characterId) {
+    Conversation? best;
+    for (final c in _conversations) {
+      if (c.isEmpty) continue;
+      if (!c.memberIds.contains(characterId)) continue;
+      if (best == null || c.updatedAt.isAfter(best.updatedAt)) best = c;
+    }
+    return best;
+  }
+
   /// Copies a character under a new id and "(copy)" name — the duplicate action.
   Future<Character> duplicateCharacter(Character character) async {
     final copy = character.copyWith(

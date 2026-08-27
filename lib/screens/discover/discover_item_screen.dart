@@ -6,7 +6,7 @@ import '../../models/character.dart';
 import '../../models/discover.dart';
 import '../../services/discover/discover_sources.dart';
 import '../../state/app_state.dart';
-import '../character_detail_screen.dart';
+import '../character_sheet_screen.dart';
 import '../library/lorebooks_screen.dart';
 import '../presets/presets_screen.dart';
 import 'discover_browser_sheet.dart';
@@ -192,7 +192,7 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
       await state.addCharacter(character);
       _savedCharacterId = character.id;
       message = '${character.displayName} added to Characters';
-      open = () => _push(CharacterDetailScreen(characterId: character.id));
+      open = () => _push(CharacterSheetScreen(characterId: character.id));
       // A card's own `character_book` rides along with it. Filing the character
       // and dropping its world info would look like a working download and
       // behave like a broken character.
@@ -290,7 +290,7 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
       return FloatingActionButton.extended(
         onPressed: () {
           if (id != null) {
-            _push(CharacterDetailScreen(characterId: id));
+            _push(CharacterSheetScreen(characterId: id));
           } else {
             _push(const LorebooksScreen());
           }

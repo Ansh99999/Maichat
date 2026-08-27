@@ -38,6 +38,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   late final TextEditingController _description;
   late final TextEditingController _personality;
   late final TextEditingController _scenario;
+  late final TextEditingController _customScenario;
   late final TextEditingController _greeting;
   late final TextEditingController _example;
   late final TextEditingController _system;
@@ -77,6 +78,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     _description = TextEditingController(text: c?.description ?? '');
     _personality = TextEditingController(text: c?.personality ?? '');
     _scenario = TextEditingController(text: c?.scenario ?? '');
+    _customScenario = TextEditingController(text: c?.customScenario ?? '');
     _greeting = TextEditingController(text: c?.firstMes ?? '');
     _example = TextEditingController(text: c?.mesExample ?? '');
     _system = TextEditingController(text: c?.systemPrompt ?? '');
@@ -122,8 +124,8 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   @override
   void dispose() {
     for (final controller in [
-      _name, _avatar, _description, _personality, _scenario, _greeting,
-      _example, _system, _postHistory, _creator, _notes, _tags,
+      _name, _avatar, _description, _personality, _scenario, _customScenario,
+      _greeting, _example, _system, _postHistory, _creator, _notes, _tags,
       ..._altGreetings,
     ]) {
       controller.dispose();
@@ -154,6 +156,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
       ..description = _description.text.trim()
       ..personality = _personality.text.trim()
       ..scenario = _scenario.text.trim()
+      ..customScenario = _customScenario.text.trim()
       ..firstMes = _greeting.text.trim()
       ..alternateGreetings = _altGreetings
           .map((c) => c.text.trim())
@@ -198,6 +201,9 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
             _field(_description, 'Description', lines: 4),
             _field(_personality, 'Personality', lines: 2),
             _field(_scenario, 'Scenario', lines: 2),
+            _field(_customScenario, 'Custom scenario',
+                hint: "Optional — used instead of the card's scenario",
+                lines: 2),
             const _SectionLabel('Conversation'),
             _field(_greeting, 'Greeting (first message)', lines: 3),
             _alternateGreetings(),

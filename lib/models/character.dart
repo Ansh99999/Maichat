@@ -35,6 +35,7 @@ class Character {
     this.description = '',
     this.personality = '',
     this.scenario = '',
+    this.customScenario = '',
     this.firstMes = '',
     this.alternateGreetings = const <String>[],
     this.mesExample = '',
@@ -68,7 +69,24 @@ class Character {
 
   String description;
   String personality;
+
+  /// The card's own scenario, as its creator wrote it. Kept even when the user
+  /// has supplied a [customScenario], so switching back is possible.
   String scenario;
+
+  /// The user's own scenario, replacing [scenario] everywhere the character is
+  /// used once it is non-empty. Read it through [activeScenario] and nowhere
+  /// else, so "which scenario is in force" is decided in exactly one place —
+  /// the prompt, the sheet, the exporter and the definition fallback all agree.
+  String customScenario;
+
+  /// The scenario actually in force: the user's when they wrote one, else the
+  /// card's.
+  String get activeScenario =>
+      customScenario.trim().isEmpty ? scenario : customScenario;
+
+  /// Whether the user has replaced the card's scenario with their own.
+  bool get hasCustomScenario => customScenario.trim().isNotEmpty;
 
   /// The opening line the character sends (SillyTavern `first_mes`, Agnai
   /// `greeting`).
@@ -162,7 +180,7 @@ class Character {
 
     section('Description', description);
     section('Personality', personality);
-    section('Scenario', scenario);
+    section('Scenario', activeScenario);
     section('Example dialogue', mesExample);
     parts.add(persona.toString().trim());
 
@@ -198,7 +216,7 @@ class Character {
 
     section('Description', description);
     section('Personality', personality);
-    section('Scenario', scenario);
+    section('Scenario', activeScenario);
     section('Example dialogue', mesExample);
 
     return resolveMacros(
@@ -253,6 +271,7 @@ class Character {
         description: description,
         personality: personality,
         scenario: scenario,
+        customScenario: customScenario,
         firstMes: firstMes,
         alternateGreetings: List<String>.from(alternateGreetings),
         mesExample: mesExample,
@@ -284,6 +303,7 @@ class Character {
         'description': description,
         'personality': personality,
         'scenario': scenario,
+        if (customScenario.trim().isNotEmpty) 'customScenario': customScenario,
         'firstMes': firstMes,
         'alternateGreetings': alternateGreetings,
         'mesExample': mesExample,
@@ -308,6 +328,7 @@ class Character {
         description: json['description'] as String? ?? '',
         personality: json['personality'] as String? ?? '',
         scenario: json['scenario'] as String? ?? '',
+        customScenario: json['customScenario'] as String? ?? '',
         firstMes: json['firstMes'] as String? ?? '',
         alternateGreetings: _stringList(json['alternateGreetings']),
         mesExample: json['mesExample'] as String? ?? '',

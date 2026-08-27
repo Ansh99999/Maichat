@@ -105,6 +105,9 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
       _provider = provider;
       return;
     }
+    // Something has measured this picture before: start at the right shape
+    // rather than opening square and snapping a frame later.
+    _ratio ??= avatarRatio(_ref);
     if (provider == _provider && _stream != null) return;
     _detach();
     _provider = provider;
@@ -114,6 +117,7 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
       final h = info.image.height.toDouble();
       if (h <= 0 || w <= 0) return;
       final ratio = w / h;
+      noteAvatarRatio(_ref, ratio);
       if (mounted && ratio != _ratio) setState(() => _ratio = ratio);
     }, onError: (_, _) {
       // Bad image: leave the frame square and let the monogram show.

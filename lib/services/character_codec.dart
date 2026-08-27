@@ -224,7 +224,11 @@ class CharacterCodec {
       'name': c.name,
       'description': c.description,
       'personality': c.personality,
-      'scenario': c.scenario,
+      // The scenario in force, not the card's original: another app reading this
+      // export has no idea the user replaced it, and sending the overwritten one
+      // would silently undo their edit. The original rides along under
+      // `extensions` so our own importer can put both back.
+      'scenario': c.activeScenario,
       'first_mes': c.firstMes,
       'mes_example': c.mesExample,
       'creator_notes': c.creatorNotes,
@@ -234,7 +238,10 @@ class CharacterCodec {
       'tags': c.tags,
       'creator': c.creator,
       'character_version': c.characterVersion,
-      'extensions': <String, dynamic>{},
+      'extensions': <String, dynamic>{
+        if (c.hasCustomScenario)
+          'maichat': <String, dynamic>{'cardScenario': c.scenario},
+      },
     };
     return <String, dynamic>{
       'spec': 'chara_card_v2',
@@ -243,7 +250,7 @@ class CharacterCodec {
       'name': c.name,
       'description': c.description,
       'personality': c.personality,
-      'scenario': c.scenario,
+      'scenario': c.activeScenario,
       'first_mes': c.firstMes,
       'mes_example': c.mesExample,
     };
@@ -253,13 +260,19 @@ class CharacterCodec {
 
   static Character _fromTavern(Map<String, dynamic> m, CharacterFormat format) {
     final avatar = _str(m, 'avatar');
+    // A card we exported ourselves carries the creator's original scenario in
+    // `extensions`, with the user's own in the standard `scenario` slot (where
+    // every other app will read it). Put the pair back the way round we hold it.
+    final scenario = _str(m, 'scenario');
+    final cardScenario = _ourCardScenario(m['extensions']);
     return Character(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       name: _firstNonEmpty([_str(m, 'name'), _str(m, 'char_name')]),
       avatar: (avatar.startsWith('http') ? avatar : ''),
       description: _firstNonEmpty([_str(m, 'description'), _str(m, 'char_persona')]),
       personality: _str(m, 'personality'),
-      scenario: _str(m, 'scenario'),
+      scenario: cardScenario.isEmpty ? scenario : cardScenario,
+      customScenario: cardScenario.isEmpty ? '' : scenario,
       firstMes:
           _firstNonEmpty([_str(m, 'first_mes'), _str(m, 'char_greeting')]),
       alternateGreetings: _strList(m['alternate_greetings']),
@@ -273,6 +286,16 @@ class CharacterCodec {
       characterVersion: _str(m, 'character_version'),
       format: format,
     );
+  }
+
+  /// The creator's original scenario stashed by our own exporter under
+  /// `extensions.maichat.cardScenario`, or empty when this card is not one of
+  /// ours (or carried no custom scenario).
+  static String _ourCardScenario(Object? extensions) {
+    if (extensions is! Map) return '';
+    final ours = extensions['maichat'];
+    if (ours is! Map) return '';
+    return ours['cardScenario']?.toString().trim() ?? '';
   }
 
   // --- Agnai ---------------------------------------------------------------
