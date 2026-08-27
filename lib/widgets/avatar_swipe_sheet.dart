@@ -3,6 +3,7 @@ import 'package:provider/provider.dart' hide Provider;
 
 import '../models/character.dart';
 import '../models/conversation.dart';
+import '../models/floating_image.dart';
 import '../services/jank_logger.dart';
 import '../state/app_state.dart';
 import 'avatar_image.dart';
@@ -130,9 +131,30 @@ class _AvatarSwipeScreenState extends State<AvatarSwipeScreen> {
     // prerequisite, so an avatar that arrived on an imported card works too.
     // `floatPictureRef` ties it to the gallery record when there is one.
     JankLogger.instance.breadcrumb('float added from avatar sheet');
+    // Decode the bitmap at the size a float is drawn at *before* leaving, the
+    // same way `_set` warms an avatar. Otherwise this sheet's copy of the
+    // picture disappears with the route while the float's own bitmap is still
+    // decoding, and the picture blinks out for a frame or two on arrival.
+    await _warmForFloat(ref);
     await state.floatPictureRef(widget.conversationId, ref);
     if (!mounted) return;
     Navigator.of(context).pop();
+  }
+
+  /// Decodes [ref] at the width a new float is drawn at, so it is on screen the
+  /// instant the chat is uncovered.
+  Future<void> _warmForFloat(String ref) async {
+    if (!mounted) return;
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final provider = avatarImage(
+      ref,
+      displaySize: kFloatingImageDefaultWidth,
+      devicePixelRatio: dpr,
+    );
+    if (provider == null || !mounted) return;
+    // A picture that will not decode is not a reason to refuse to float it — the
+    // float has its own placeholder.
+    await precacheImage(provider, context, onError: (_, _) {});
   }
 
   @override

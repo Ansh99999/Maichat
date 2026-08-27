@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/chat_interface.dart';
+import 'package:maichat/models/floating_image.dart';
 import 'package:maichat/models/gallery_image.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/screens/chat_screen.dart';
 import 'package:maichat/state/app_state.dart';
+import 'package:maichat/widgets/avatar_image.dart';
 import 'package:maichat/widgets/avatar_swipe_sheet.dart';
 import 'package:maichat/widgets/character_avatar.dart';
 import 'package:maichat/widgets/message_bubble.dart';
@@ -176,6 +178,58 @@ void main() {
 
       expect(state.active.floatingImages.single.imageId, 'img0');
       expect(find.byType(AvatarSwipeScreen), findsNothing);
+    });
+
+    testWidgets('Float has the picture decoded before it leaves the sheet',
+        (tester) async {
+      // The blink on first float: this sheet is showing the picture full size,
+      // and the float draws its own, smaller bitmap. Pop without warming that one
+      // and the picture goes off screen with the route while the float's decode is
+      // still running — visible as the picture vanishing for a frame or two just
+      // as it arrives. Same shape as the "old avatar flashes back on Set" fix
+      // above it: decode first, then leave.
+      imageCache.clear();
+      imageCache.clearLiveImages();
+      clearAvatarImageCache();
+      // A real, decodable picture, unlike the `local:` refs the rest of these
+      // tests use — there has to be something to decode.
+      final state = await chatWith(pictures: [_png]);
+      await pumpChat(tester, state);
+      await openAvatar(tester);
+
+      // The bitmap a float of this picture will draw. Naming it does not decode
+      // it — only whoever asks the image cache for it does.
+      final provider = avatarImage(
+        _png,
+        displaySize: kFloatingImageDefaultWidth,
+        devicePixelRatio: tester.view.devicePixelRatio,
+      );
+      final key = await provider!.obtainKey(ImageConfiguration.empty);
+      expect(imageCache.containsKey(key), isFalse, reason: 'nothing yet');
+
+      // What matters is the *order*: was the bitmap in hand at the moment the
+      // float appeared, or does the float have to go and fetch it once it is on
+      // screen? Sampled the instant the picture is floated, because a moment
+      // later it has decoded either way.
+      bool? readyOnArrival;
+      state.addListener(() {
+        if (readyOnArrival == null && state.active.floatingImages.isNotEmpty) {
+          readyOnArrival = imageCache.containsKey(key);
+        }
+      });
+
+      // `runAsync`, because this is the one test that turns real bytes into a
+      // real bitmap: an image decode is genuine async work the fake clock cannot
+      // drive, and Float now waits for it before popping.
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Float'));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pumpAndSettle();
+
+      expect(state.active.floatingImages, hasLength(1));
+      expect(readyOnArrival, isTrue,
+          reason: 'the float-sized bitmap is in hand before the sheet closes');
     });
 
     testWidgets('a picture that was never in the gallery still floats',
@@ -504,3 +558,7 @@ void main() {
     });
   });
 }
+
+/// A 1x1 PNG, for the tests that need a picture that really decodes.
+const _png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8'
+    'z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==';

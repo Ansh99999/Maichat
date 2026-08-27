@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
+import '../../models/floating_image.dart';
 import '../../models/gallery_image.dart';
 import '../../state/app_state.dart';
 import '../../services/jank_logger.dart';
@@ -202,6 +203,20 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final conversationId = widget.conversationId;
     if (conversationId == null) return;
     JankLogger.instance.breadcrumb('float added from gallery viewer');
+    // Decode at the width a float is drawn at before leaving. This viewer is
+    // showing the picture at full size; pop without warming the float's own
+    // (smaller, differently-keyed) bitmap and the picture vanishes with the route
+    // for the frame or two that decode takes — the blink on first float.
+    final provider = avatarImage(
+      image.image,
+      displaySize: kFloatingImageDefaultWidth,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
+    if (provider != null) {
+      // A picture that will not decode still floats — with its placeholder.
+      await precacheImage(provider, context, onError: (_, _) {});
+      if (!mounted) return;
+    }
     await state.floatImage(conversationId, image.id);
     if (!mounted) return;
     // Straight back to the chat, where the picture now is — staying here would

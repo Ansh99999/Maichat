@@ -4,7 +4,9 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/floating_image.dart';
 import 'package:maichat/models/gallery_image.dart';
 import 'package:maichat/screens/chat_screen.dart';
+import 'package:maichat/screens/gallery/image_viewer_screen.dart';
 import 'package:maichat/state/app_state.dart';
+import 'package:maichat/widgets/avatar_image.dart';
 import 'package:maichat/widgets/floating_images_layer.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -749,7 +751,304 @@ void main() {
     await pumpChat(tester, state);
     expect(find.byType(BackdropFilter), findsNothing);
   });
+
+  /// The picture's own box: what it was laid out at, and where it is painted.
+  Finder pictureBox() => find
+      .descendant(
+        of: find.byType(FloatingImagesLayer),
+        matching: find.byType(RawGestureDetector),
+      )
+      .first;
+
+  group('a drag follows the finger, whatever the picture is turned to', () {
+    // The reported "it doesn't even move diagonally", and the displacement left
+    // behind after turning a picture and moving it.
+    //
+    // The recogniser has to live *inside* the live transform, or fingers cannot
+    // hit the picture where it is drawn. But `ScaleUpdateDetails.focalPointDelta`
+    // is the one figure in those details measured in the **receiver's local
+    // space** — so a turned float received its drag along its *own* axes: push
+    // right on a picture turned 90° and it went up the screen. Worse, the
+    // recogniser converts through the transform of whichever pointer delivered
+    // the last event, and each pointer's transform is frozen at its own
+    // touch-down — so a second finger added after the picture had moved made
+    // consecutive updates convert one focal point through two different
+    // matrices, inventing a large constant delta from a still hand (the
+    // ~104px-per-frame rows in the 1.16.0 trace).
+    //
+    // Every rotation × axis is here because the previous three attempts at this
+    // each fixed one configuration and shipped the others broken.
+    for (final degrees in <double>[0, 45, 90, 135, 180, -60]) {
+      for (final sideways in <bool>[true, false]) {
+        testWidgets('turned $degrees°, dragged ${sideways ? 'across' : 'down'}',
+            (tester) async {
+          final state = await chatWithFloats();
+          await state.settleFloatingImage(
+            state.active.id,
+            state.active.floatingImages.single,
+            x: 0.5,
+            y: 0.5,
+            rotation: degrees * 3.1415926535 / 180,
+          );
+          await pumpChat(tester, state);
+          final before = floatOf(state, 'img0');
+
+          // The centre of the picture: on it at every rotation, and clear of the
+          // ✕ in its corner.
+          final gesture = await tester.startGesture(
+            tester.getRect(pictureBox()).center,
+          );
+          final step = sideways ? const Offset(12, 0) : const Offset(0, 12);
+          for (var i = 0; i < 8; i++) {
+            await gesture.moveBy(step);
+            await tester.pump();
+          }
+          await gesture.up();
+          await tester.pump();
+          await tester.pump();
+
+          final after = floatOf(state, 'img0');
+          // A fraction of a 400x900 chat. ~48px of the 96px dragged survives the
+          // pan slop, so ~0.12 across and ~0.053 down; the point of the test is
+          // the axis, not the distance.
+          if (sideways) {
+            expect(after.x, greaterThan(before.x + 0.05),
+                reason: 'a sideways drag moves it sideways');
+            expect(after.y, closeTo(before.y, 0.01),
+                reason: 'and not up or down the screen');
+          } else {
+            expect(after.y, greaterThan(before.y + 0.02),
+                reason: 'a drag down the screen moves it down');
+            expect(after.x, closeTo(before.x, 0.01),
+                reason: 'and not sideways');
+          }
+        });
+      }
+    }
+  });
+
+  testWidgets('a float wider than the chat is laid out at its real width',
+      (tester) async {
+    // "It stops getting bigger at a certain size." The float was positioned with
+    // an `Align`, which only *loosens* the layer's constraints — it keeps their
+    // maxima — and a `SizedBox` enforces its width against what it is handed. So
+    // a float wider than the chat was silently laid out at the chat's width, and
+    // no amount of pinching could make it any bigger.
+    final state = await chatWithFloats();
+    await state.settleFloatingImage(
+      state.active.id,
+      state.active.floatingImages.single,
+      width: 900, // The chat is 400 wide.
+    );
+    await pumpChat(tester, state);
+
+    expect(tester.getSize(pictureBox()).width, closeTo(900, 1),
+        reason: 'the laid-out width is the width, not the chat\'s');
+  });
+
+  testWidgets('placing an oversized float does not change its size',
+      (tester) async {
+    // The other half of the same bug, and the one that was visible: the live
+    // size rides a transform scale of `width / _baseWidth`. Once the layout was
+    // clamped to the chat width but `_baseWidth` was not, the drawn size stopped
+    // matching the geometry — so every release re-baked a width the layout would
+    // not honour and the picture snapped to a different size. Here a big float is
+    // pinched smaller; what it is drawn at while held must be what it is drawn at
+    // once let go.
+    final state = await chatWithFloats();
+    await state.settleFloatingImage(
+      state.active.id,
+      state.active.floatingImages.single,
+      x: 0.5,
+      y: 0.5,
+      width: 900,
+    );
+    await pumpChat(tester, state);
+
+    final centre = tester.getRect(pictureBox()).center;
+    final left = await tester.startGesture(centre - const Offset(90, 0));
+    final right = await tester.startGesture(centre + const Offset(90, 0));
+    // Squeezed to roughly two thirds.
+    for (var i = 0; i < 6; i++) {
+      await left.moveBy(const Offset(5, 0));
+      await right.moveBy(const Offset(-5, 0));
+      await tester.pump();
+    }
+    final heldWidth = tester.getRect(pictureBox()).width;
+    await left.up();
+    await right.up();
+    await tester.pump();
+    await tester.pump();
+
+    expect(state.active.floatingImages.single.width, lessThan(900),
+        reason: 'it really did shrink');
+    expect(tester.getRect(pictureBox()).width, closeTo(heldWidth, 8),
+        reason: 'the size it was let go at is the size it keeps');
+  });
+
+  testWidgets('pinching past the size cap leaves the cap again immediately',
+      (tester) async {
+    // "It restricts to a specific size and after that it displaces to a
+    // different size each time." Clamping the *output* while measuring the pinch
+    // from a fixed reference banks up a dead zone: spread to three times the cap
+    // and the fingers have to travel all the way back before the size responds at
+    // all, so the picture settles at a size with no relation to where the fingers
+    // are. Re-anchoring the reference at the bound keeps it pinned there and lets
+    // it leave the moment the fingers reverse.
+    final state = await chatWithFloats();
+    await state.settleFloatingImage(
+      state.active.id,
+      state.active.floatingImages.single,
+      x: 0.5,
+      y: 0.5,
+      width: 1200, // Near the 1600 ceiling.
+    );
+    await pumpChat(tester, state);
+
+    final centre = tester.getRect(pictureBox()).center;
+    final left = await tester.startGesture(centre - const Offset(60, 0));
+    final right = await tester.startGesture(centre + const Offset(60, 0));
+    // Well past the ceiling: span 120 -> 300, so 2.5x on a picture already at
+    // three quarters of the cap.
+    for (var i = 0; i < 9; i++) {
+      await left.moveBy(const Offset(-10, 0));
+      await right.moveBy(const Offset(10, 0));
+      await tester.pump();
+    }
+    expect(state.active.floatingImages.single.width, 1200,
+        reason: 'nothing is persisted mid-pinch');
+
+    // Now bring them back in — nowhere near the span they started at, but a
+    // clear reversal. The picture must shrink.
+    for (var i = 0; i < 5; i++) {
+      await left.moveBy(const Offset(9, 0));
+      await right.moveBy(const Offset(-9, 0));
+      await tester.pump();
+    }
+    await left.up();
+    await right.up();
+    await tester.pump();
+    await tester.pump();
+
+    expect(state.active.floatingImages.single.width,
+        lessThan(kFloatingImageMaxWidth),
+        reason: 'reversing the pinch leaves the cap at once, with no dead zone');
+  });
+
+  testWidgets('both of a float\'s decode sizes are ready before it needs them',
+      (tester) async {
+    // The blink on first float. An `Image` whose provider is not in the image
+    // cache paints *nothing* until the decode lands, and this layer swaps between
+    // two differently-sized bitmaps — the crisp framed one at rest and a small
+    // working texture while a touch manipulates it. Those live in different
+    // subtrees, so `gaplessPlayback` cannot carry a frame across the swap: a cold
+    // bucket is a picture that vanishes for a frame or two. Both are warmed as
+    // soon as the float is mounted.
+    //
+    // (The blink itself is an on-device observation; what is checkable here is
+    // that the bitmaps are in hand before anything asks for them.)
+    imageCache.clear();
+    imageCache.clearLiveImages();
+    clearAvatarImageCache();
+    final state = AppState()..debounceFloatSaves = false;
+    await state.init();
+    final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
+    await state.addCharacter(character);
+    state.startChatWithCharacter(character);
+    // A real, decodable picture — 1x1 base64, floated by reference.
+    await state.floatPictureRef(state.active.id, _png);
+    await pumpChat(tester, state);
+    await tester.pump();
+
+    for (final size in <double>[
+      kFloatingImageDefaultWidth,
+      512 / tester.view.devicePixelRatio, // the small working texture
+    ]) {
+      final provider = avatarImage(
+        _png,
+        displaySize: size,
+        devicePixelRatio: tester.view.devicePixelRatio,
+      );
+      expect(provider, isNotNull);
+      final key = await provider!.obtainKey(ImageConfiguration.empty);
+      expect(imageCache.containsKey(key), isTrue,
+          reason: 'the ${size.toInt()}px bitmap is decoded before it is drawn');
+    }
+  });
+  testWidgets('Send to chat decodes the picture before the viewer closes',
+      (tester) async {
+    // The other way a picture is floated, and the one the blink was reported
+    // from: the viewer is showing this picture full size, and taps Send. It pops
+    // straight back to the chat — so unless the float's own (smaller, separately
+    // keyed) bitmap is decoded first, the picture goes off screen with the route
+    // and the float has to fetch it while the chat is already visible.
+    imageCache.clear();
+    imageCache.clearLiveImages();
+    clearAvatarImageCache();
+    final state = AppState()..debounceFloatSaves = false;
+    await state.init();
+    final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
+    await state.addCharacter(character);
+    state.startChatWithCharacter(character);
+    await state.saveGalleryImage(GalleryImage(
+      id: 'img0',
+      image: _png,
+      title: 'Picture',
+      createdAt: DateTime(2026, 4, 24),
+    ));
+    await tester.binding.setSurfaceSize(const Size(400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    addTearDown(state.flushPendingSaves);
+
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => openImageViewer(
+              context,
+              images: state.gallery,
+              index: 0,
+              extra: ViewerExtra.sendToChat,
+              conversationId: state.active.id,
+            ),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final provider = avatarImage(
+      _png,
+      displaySize: kFloatingImageDefaultWidth,
+      devicePixelRatio: tester.view.devicePixelRatio,
+    );
+    final key = await provider!.obtainKey(ImageConfiguration.empty);
+    bool? readyOnArrival;
+    state.addListener(() {
+      if (readyOnArrival == null && state.active.floatingImages.isNotEmpty) {
+        readyOnArrival = imageCache.containsKey(key);
+      }
+    });
+
+    // Real async, because a real decode is what is being waited for.
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Send'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pumpAndSettle();
+
+    expect(state.active.floatingImages.single.imageId, 'img0');
+    expect(readyOnArrival, isTrue,
+        reason: 'the float-sized bitmap is decoded before the route pops');
+  });
 }
+
+/// 1x1 PNGs, for the tests that need a picture that really decodes.
+const _png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8'
+    'z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==';
 
 /// Counts how many times it is painted — a stand-in for "the chat behind the
 /// float", used to prove a drag does not repaint it.
