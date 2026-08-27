@@ -49,6 +49,20 @@ class _JankLogsPageState extends State<JankLogsPage> {
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(msg)));
 
+  Widget _sectionHeader(BuildContext context, String text) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: scheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<void>(
@@ -60,6 +74,7 @@ class _JankLogsPageState extends State<JankLogsPage> {
     final logger = JankLogger.instance;
     final s = logger.summary;
     final events = logger.events.reversed.toList(); // newest first on screen
+    final placements = logger.placements.reversed.toList(); // newest first
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
@@ -79,8 +94,10 @@ class _JankLogsPageState extends State<JankLogsPage> {
             child: Text(
               s.recording
                   ? 'Recording. Use the app normally; when it stutters or '
-                      'freezes, the frame is caught here. Then Save or Copy and '
-                      'send it over.'
+                      'freezes, the frame is caught here. To trace the float '
+                      '"placed further away" glitch, float a picture, drag/pinch '
+                      'and let go — each release is listed below. Then Copy or '
+                      'Save and send it over.'
                   : 'Not recording. Turn on "Record jank logs" in Appearance '
                       'first.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -88,21 +105,31 @@ class _JankLogsPageState extends State<JankLogsPage> {
                   ),
             ),
           ),
-          _SummaryStrip(summary: s),
+          _SummaryStrip(summary: s, placements: placements.length),
           const Divider(height: 1),
           Expanded(
-            child: events.isEmpty
+            child: (events.isEmpty && placements.isEmpty)
                 ? Center(
                     child: Text(
                       s.recording
-                          ? 'No janky frames yet.'
+                          ? 'No janky frames or placements yet.'
                           : 'Nothing recorded.',
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   )
-                : ListView.builder(
-                    itemCount: events.length,
-                    itemBuilder: (context, i) => _EventTile(event: events[i]),
+                : ListView(
+                    children: [
+                      if (placements.isNotEmpty) ...[
+                        _sectionHeader(context, 'Float placements (release '
+                            'trace) — newest first'),
+                        for (final p in placements)
+                          _PlacementTile(placement: p),
+                      ],
+                      if (events.isNotEmpty) ...[
+                        _sectionHeader(context, 'Janky frames — newest first'),
+                        for (final e in events) _EventTile(event: e),
+                      ],
+                    ],
                   ),
           ),
           SafeArea(
@@ -137,9 +164,10 @@ class _JankLogsPageState extends State<JankLogsPage> {
 }
 /// The at-a-glance counters across the top.
 class _SummaryStrip extends StatelessWidget {
-  const _SummaryStrip({required this.summary});
+  const _SummaryStrip({required this.summary, required this.placements});
 
   final JankSummary summary;
+  final int placements;
 
   @override
   Widget build(BuildContext context) {
@@ -151,6 +179,7 @@ class _SummaryStrip extends StatelessWidget {
         children: [
           _chip(context, 'frames', '${summary.framesSeen}'),
           _chip(context, 'janky', '${summary.jankyFrames}'),
+          _chip(context, 'placements', '$placements'),
           _chip(context, 'freezes', '${summary.freezes}',
               alert: summary.freezes > 0),
           _chip(context, 'worst build',
@@ -181,6 +210,57 @@ class _SummaryStrip extends StatelessWidget {
           fontWeight: alert ? FontWeight.w600 : FontWeight.w500,
         ),
       ),
+    );
+  }
+}
+
+/// One floating-picture release: how far it shifted at lift-off and the raw
+/// tail of frames behind that number.
+class _PlacementTile extends StatelessWidget {
+  const _PlacementTile({required this.placement});
+
+  final FloatPlacement placement;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // A lift-off jump is the tell: the last frame moved far more than a typical
+    // one, or moved at all after the finger had effectively stopped.
+    final suspect = placement.lastShiftPx > placement.typicalShiftPx * 3 + 2 ||
+        (placement.gapBeforeUpMs > 40 && placement.lastShiftPx > 2);
+    return ExpansionTile(
+      dense: true,
+      leading: Icon(
+        suspect ? Icons.error_outline : Icons.open_with,
+        color: suspect ? scheme.error : scheme.tertiary,
+      ),
+      title: Text(
+        'shift@release ${placement.releaseShiftPx.toStringAsFixed(1)}px'
+        '${suspect ? '  ⚠ lift-off jump' : ''}',
+        style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
+      ),
+      subtitle: Text(
+        '${placement.hadTwoFingers ? '2+finger' : '1finger'} '
+        '(max ${placement.maxFingers}) · last '
+        '${placement.lastShiftPx.toStringAsFixed(1)} vs typ '
+        '${placement.typicalShiftPx.toStringAsFixed(1)}px · '
+        'gap ${placement.gapBeforeUpMs}ms · moves ${placement.moves}',
+      ),
+      childrenPadding: const EdgeInsets.fromLTRB(56, 0, 16, 12),
+      children: [
+        for (final line in placement.tail)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              line,
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

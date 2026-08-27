@@ -63,6 +63,28 @@ class JankLogger {
     if (_on) _htmlParses++;
   }
 
+  // --- TEMPORARY: floating-picture placement trace -------------------------
+  // Answers one thing with device data instead of a guess: when a float is
+  // "placed a little further away" on release, WHAT moved it in the final
+  // frames — a leftover finger, a synthesized/resampled move at lift-off, or a
+  // scale/rotation recompute. Recorded even when frame-timing recording is off
+  // (this bug leaves no janky frame behind), and always included in report().
+  // Delete alongside the rest of this diagnostic once the glitch is understood.
+  static const int _maxPlacements = 80;
+  final List<FloatPlacement> _placements = <FloatPlacement>[];
+  List<FloatPlacement> get placements => List.unmodifiable(_placements);
+
+  void notePlacement(FloatPlacement p) {
+    try {
+      _placements.add(p);
+      if (_placements.length > _maxPlacements) _placements.removeAt(0);
+      _dirty = true;
+      unawaited(_persist());
+    } catch (_) {
+      // A diagnostic must never take the app down.
+    }
+  }
+
   File? _file;
   Timer? _flush;
   bool _dirty = false;
@@ -164,6 +186,7 @@ class JankLogger {
   void clear() {
     _events.clear();
     _crumbs.clear();
+    _placements.clear();
     _framesSeen = 0;
     if (_on) _startedAt = DateTime.now();
     _dirty = true;
@@ -237,6 +260,25 @@ class JankLogger {
     for (final c in _crumbs) {
       b.writeln('${c.at.toIso8601String().padRight(26)}  ${c.label}');
     }
+    b.writeln('');
+    b.writeln('# float placements (oldest first) — TEMP release trace');
+    b.writeln('one row per picture let go. "shift@release" = how far the picture '
+        'moved on-screen in its final 2 update frames (the glitch, in px). '
+        '"last vs typ" = the final frame\'s shift against the median frame — a '
+        'last >> typ spike is a jump at lift-off. tail rows (final frames, '
+        'oldest first) are: dt(ms since touch-down) d(px moved this frame) '
+        'pc(fingers this frame) T/. (translation applied or blocked by the '
+        'leftover-finger guard) s(scale) r(rotation°).');
+    if (_placements.isEmpty) {
+      b.writeln('(none captured — float a picture, drag/pinch it, let go)');
+    }
+    for (final p in _placements) {
+      b.writeln('${p.at.toIso8601String().padRight(26)}  ${p.headline}  '
+          '[${p.label}]');
+      for (final line in p.tail) {
+        b.writeln('    $line');
+      }
+    }
     return b.toString();
   }
 }
@@ -273,6 +315,55 @@ class _Crumb {
   _Crumb(this.at, this.label);
   final DateTime at;
   final String label;
+}
+
+/// TEMPORARY: one floating-picture release, traced through its final frames.
+///
+/// Built by `_FloatingPictureState` on the last pointer-up and handed to
+/// [JankLogger.notePlacement]. The decisive numbers for "placed a little
+/// further away on release": how far the picture moved in the final couple of
+/// frames ([releaseShiftPx]) and whether that last frame was an outlier spike
+/// ([lastShiftPx] vs [typicalShiftPx]) — a jump at lift-off rather than the
+/// hand still dragging.
+class FloatPlacement {
+  FloatPlacement({
+    required this.at,
+    required this.label,
+    required this.moves,
+    required this.hadTwoFingers,
+    required this.maxFingers,
+    required this.durationMs,
+    required this.gapBeforeUpMs,
+    required this.releaseShiftPx,
+    required this.lastShiftPx,
+    required this.typicalShiftPx,
+    required this.tail,
+  });
+
+  final DateTime at;
+  final String label;
+  final int moves;
+  final bool hadTwoFingers;
+  final int maxFingers;
+  final int durationMs;
+
+  /// Time from the last onUpdate to the final pointer-up. A long gap with a
+  /// non-zero [lastShiftPx] means the picture moved after the finger had
+  /// effectively stopped — the "unknown reasons" jump.
+  final int gapBeforeUpMs;
+
+  /// On-screen px the picture moved across its final (up to) two update frames.
+  final double releaseShiftPx;
+  final double lastShiftPx;
+  final double typicalShiftPx;
+  final List<String> tail;
+
+  String get headline =>
+      'shift@release ${releaseShiftPx.toStringAsFixed(1)}px · '
+      'last ${lastShiftPx.toStringAsFixed(1)} vs typ '
+      '${typicalShiftPx.toStringAsFixed(1)}px · '
+      '${hadTwoFingers ? '2+finger' : '1finger'} '
+      '(max $maxFingers) · moves $moves · gap ${gapBeforeUpMs}ms';
 }
 
 /// The at-a-glance numbers the diagnostics screen shows.
