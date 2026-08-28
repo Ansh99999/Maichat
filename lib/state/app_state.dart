@@ -19,8 +19,10 @@ import '../models/message.dart';
 import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
+import '../models/scenario.dart';
 import '../models/summary.dart';
 import '../models/usage.dart';
+import '../models/view_prefs.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
 import '../services/avatar_store.dart';
@@ -77,6 +79,7 @@ class AppState extends ChangeNotifier {
   final List<Provider> _providers = <Provider>[];
   final List<Character> _characters = <Character>[];
   final List<Lorebook> _lorebooks = <Lorebook>[];
+  final List<Scenario> _scenarios = <Scenario>[];
   final List<GalleryImage> _gallery = <GalleryImage>[];
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
@@ -170,6 +173,7 @@ class AppState extends ChangeNotifier {
   List<Provider> get providers => List.unmodifiable(_providers);
   List<Character> get characters => List.unmodifiable(_characters);
   List<Lorebook> get lorebooks => List.unmodifiable(_lorebooks);
+  List<Scenario> get scenarios => List.unmodifiable(_scenarios);
   List<GalleryImage> get gallery => List.unmodifiable(_gallery);
   List<Preset> get presets => List.unmodifiable(_presets);
   Appearance get appearance => _appearance;
@@ -326,6 +330,10 @@ class AppState extends ChangeNotifier {
     _lorebooks
       ..clear()
       ..addAll(await _storage.loadLorebooks());
+    _scenarios
+      ..clear()
+      ..addAll(await _storage.loadScenarios());
+    _viewPrefs = await _storage.loadViewPrefs();
     _gallery
       ..clear()
       ..addAll(await _storage.loadGallery());
@@ -1596,6 +1604,165 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       await _saveConversations();
     }
+  }
+
+  // --- Scenarios -----------------------------------------------------------
+  //
+  // A scenario reaches a request by one of three routes, and they are ranked in
+  // exactly one place ([scenarioFor]): the character's own card, a library
+  // scenario plugged into the chat, or one written for that chat alone.
+
+  Future<void> _persistScenarios() async {
+    if (!_writable) return;
+    await _storage.saveScenarios(_scenarios);
+  }
+
+  Scenario? scenarioById(String? id) {
+    if (id == null) return null;
+    for (final s in _scenarios) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+
+  /// The library scenario plugged into [conversation], or null when none is (or
+  /// when the one it named has since been deleted).
+  Scenario? scenarioOf(Conversation? conversation) =>
+      scenarioById(conversation?.scenarioId);
+
+  /// The scenario text in force for [conversation] with [character] answering.
+  ///
+  /// **The** resolution point, in ranked order: a scenario written for this chat
+  /// wins, then the library scenario plugged into it (applied over the card's, so
+  /// an "add to it" scenario keeps both), then the character's own. Everything
+  /// that needs to know — the request, the inspectors, the chat settings screen —
+  /// reads it through here, so a chosen scenario cannot be honoured in one place
+  /// and forgotten in another.
+  String scenarioFor(Conversation? conversation, Character? character) {
+    final card = character?.activeScenario.trim() ?? '';
+    final own = conversation?.scenarioOverride.trim() ?? '';
+    if (own.isNotEmpty) return own;
+    final plugged = scenarioOf(conversation);
+    if (plugged != null && plugged.isUsable) return plugged.appliedOver(card);
+    return card;
+  }
+
+  /// Where [conversation]'s scenario comes from, phrased for a settings row.
+  String scenarioSourceFor(Conversation? conversation) {
+    if (conversation == null) return "The character's own";
+    if (conversation.scenarioOverride.trim().isNotEmpty) {
+      return 'Written for this chat';
+    }
+    final plugged = scenarioOf(conversation);
+    if (plugged != null) return plugged.displayName;
+    return "The character's own";
+  }
+
+  Future<void> addScenario(Scenario scenario) async {
+    _scenarios.insert(0, scenario);
+    notifyListeners();
+    await _persistScenarios();
+  }
+
+  /// Adds several at once (an import), newest first, persisting once.
+  Future<void> addScenarios(List<Scenario> scenarios) async {
+    if (scenarios.isEmpty) return;
+    _scenarios.insertAll(0, scenarios.reversed);
+    notifyListeners();
+    await _persistScenarios();
+  }
+
+  /// Replaces the stored scenario sharing [scenario]'s id, or adds it when new.
+  Future<void> saveScenario(Scenario scenario) async {
+    scenario.updatedAt = DateTime.now();
+    final index = _scenarios.indexWhere((s) => s.id == scenario.id);
+    if (index == -1) {
+      _scenarios.insert(0, scenario);
+    } else {
+      _scenarios[index] = scenario;
+    }
+    notifyListeners();
+    await _persistScenarios();
+  }
+
+  /// Deletes a scenario and unplugs it from every chat that was running it, so no
+  /// thread is left pointing at something that is gone. A chat that had *edited*
+  /// the scenario keeps its own copy — that text is the user's, not the library's.
+  Future<void> deleteScenario(String id) async {
+    _scenarios.removeWhere((s) => s.id == id);
+    for (final conversation in _conversations) {
+      if (conversation.scenarioId == id) conversation.scenarioId = null;
+    }
+    notifyListeners();
+    await _persistScenarios();
+    await _saveConversations();
+  }
+
+  Future<void> toggleScenarioStar(String id) async {
+    final index = _scenarios.indexWhere((s) => s.id == id);
+    if (index == -1) return;
+    final scenario = _scenarios[index];
+    scenario.starred = !scenario.starred;
+    notifyListeners();
+    await _persistScenarios();
+  }
+
+  Future<Scenario> duplicateScenario(Scenario scenario) async {
+    final copy = scenario.copyWith(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: '${scenario.displayName} (copy)',
+      updatedAt: DateTime.now(),
+    );
+    await addScenario(copy);
+    return copy;
+  }
+
+  /// Applies a scenario to one chat. [scenarioId] names the library scenario it
+  /// came from (null for one written on the spot); [text] is a wording for this
+  /// chat alone, which wins over the library copy. Passing neither clears the
+  /// chat back to the character's own scenario.
+  Future<void> setChatScenario(
+    String conversationId, {
+    String? scenarioId,
+    String text = '',
+  }) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    conversation.scenarioId = scenarioId;
+    conversation.scenarioOverride = text.trim();
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
+  /// Puts a chat back on the character's own scenario.
+  Future<void> clearChatScenario(String conversationId) =>
+      setChatScenario(conversationId);
+
+  // --- Browse layout -------------------------------------------------------
+
+  ViewPrefs _viewPrefs = const ViewPrefs();
+
+  /// Which shape each browsable section (characters, lorebooks, scenarios) was
+  /// last left in. Persisted, because it is a preference about how the user likes
+  /// to read their own library and not a per-visit gesture.
+  ViewPrefs get viewPrefs => _viewPrefs;
+
+  BrowseLayout browseLayout(String section,
+          {BrowseLayout fallback = BrowseLayout.grid}) =>
+      _viewPrefs.layoutFor(section, fallback: fallback);
+
+  Future<void> setBrowseLayout(String section, BrowseLayout layout) async {
+    // Nothing observable changes when the section already reads this way — and
+    // writing the default out explicitly would rewrite the store for a tap that
+    // did nothing.
+    if (browseLayout(section) == layout) return;
+    final next = _viewPrefs.withLayout(section, layout);
+    if (next == _viewPrefs) return;
+    _viewPrefs = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveViewPrefs(_viewPrefs);
   }
 
   // --- Embeddings (semantic memory + Data Bank) ----------------------------
@@ -3451,6 +3618,13 @@ class AppState extends ChangeNotifier {
         : impersonation.userPersona(charName: character?.displayName ?? 'the character');
     final maxContext = _effectiveMaxContext(preset, model);
 
+    // Which of the three scenarios this turn runs under, resolved once here so
+    // the marker block, the fallbacks below and the inspectors all agree.
+    final scenario = scenarioFor(conversation, character);
+    final cardScenario = character?.activeScenario.trim() ?? '';
+    final chosenScenario =
+        scenario.trim().isNotEmpty && scenario.trim() != cardScenario;
+
     // Which lorebook entries this turn should carry. Scanned here so the
     // inspectors and the real send go through exactly the same code and see the
     // same history. One caveat worth knowing: an entry carrying a probability is
@@ -3538,6 +3712,7 @@ class AppState extends ChangeNotifier {
         memoryText: memoryText,
         docsText: docsText,
         memoryDepth: _embeddingConfig.depth,
+        scenario: scenario,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently
@@ -3552,7 +3727,18 @@ class AppState extends ChangeNotifier {
       if (character == null) {
         addPrefix('Character (stored)', conversation.systemPrompt);
       } else if (!_presetEmitsDefinition(preset)) {
-        addPrefix('Character definition', character.definition(userName: userName));
+        addPrefix('Character definition',
+            character.definition(userName: userName, scenario: scenario));
+      }
+      // A scenario the user *chose* — plugged in from the library, or written for
+      // this chat — must reach the model even under a preset that carries no
+      // scenario marker, which is otherwise where it would silently vanish. Only
+      // the chosen case is rescued: a card's own scenario under a marker-less
+      // preset behaves exactly as it always has.
+      if (chosenScenario &&
+          !_presetEmitsScenario(preset) &&
+          !(character != null && !_presetEmitsDefinition(preset))) {
+        addPrefix('Scenario', scenario);
       }
       // The persona reaches the payload through the preset's personaDescription
       // block when it has one; otherwise inject it as a leading system turn so
@@ -3587,12 +3773,27 @@ class AppState extends ChangeNotifier {
       // prompt belongs to the primary character, so the responder's own composed
       // persona is used instead — otherwise a non-primary speaker would be sent
       // the wrong definition.
+      //
+      // A chosen scenario forces the same rebuild in a one-to-one thread. The
+      // stored prompt is a snapshot taken when the chat was created and it has
+      // the *card's* scenario baked into it, so merely prefixing the new one
+      // would send both and leave the model to guess which setting it is in.
+      // Rebuilding costs anything an import had merged into that snapshot, which
+      // is the lesser loss — and only happens on a thread with no preset at all.
+      final rebuild = character != null &&
+          (conversation.isGroup || chosenScenario);
       addPrefix(
         'Character (stored)',
-        conversation.isGroup && character != null
-            ? character.composedSystemPrompt(userName: userName)
+        rebuild
+            ? character.composedSystemPrompt(
+                userName: userName, scenario: scenario)
             : conversation.systemPrompt,
       );
+      // With the card gone there is nothing to rebuild from, so a scenario
+      // chosen since then rides as its own block rather than not at all.
+      if (chosenScenario && character == null) {
+        addPrefix('Scenario', scenario);
+      }
       if (persona.isNotEmpty) addPrefix('User persona', persona);
       // With no preset there are no slots to place lore in, so everything that
       // activated is prefixed as one block. Depth-injected entries lose their
@@ -3705,6 +3906,19 @@ class AppState extends ChangeNotifier {
   bool _presetEmitsPersona(Preset preset) {
     for (final entry in preset.promptOrder) {
       if (entry.identifier == PromptId.personaDescription && entry.enabled) {
+        final block = preset.blockById(entry.identifier);
+        if (block != null && block.marker) return true;
+      }
+    }
+    return false;
+  }
+
+  /// Whether [preset] has an enabled scenario marker to put the scenario in.
+  /// A preset can carry the rest of the definition and still leave this one out,
+  /// which is why it is asked separately from [_presetEmitsDefinition].
+  bool _presetEmitsScenario(Preset preset) {
+    for (final entry in preset.promptOrder) {
+      if (entry.identifier == PromptId.scenario && entry.enabled) {
         final block = preset.blockById(entry.identifier);
         if (block != null && block.marker) return true;
       }

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../screens/library/lorebooks_screen.dart';
 import '../screens/library/embeddings_screen.dart';
+import '../screens/library/scenarios_screen.dart';
 import '../screens/library/summaries_screen.dart';
-import '../screens/section_screen.dart';
 
 /// Which Library destination is currently on screen, so the drawer can show it
 /// selected.
@@ -92,10 +92,7 @@ class LibraryDrawer extends StatelessWidget {
                     onTap: () => _go(
                       context,
                       LibrarySection.scenarios,
-                      const SectionScreen(
-                        title: 'Scenarios',
-                        icon: Icons.theater_comedy_outlined,
-                      ),
+                      const ScenariosScreen(),
                     ),
                   ),
                   _NavItem(

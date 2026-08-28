@@ -2,18 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/lorebook.dart';
+import '../../models/scenario.dart';
 import '../../state/app_state.dart';
 import '../../widgets/app_drawer.dart';
 import '../../widgets/avatar_image.dart';
-import '../section_screen.dart';
 import '../summary/summary_edit_screen.dart';
 import 'embeddings_screen.dart';
 import 'lorebook_edit_screen.dart';
 import 'lorebooks_screen.dart';
+import 'scenario_edit_screen.dart';
+import 'scenarios_screen.dart';
 import 'summaries_screen.dart';
 
 /// The Library: the shelf everything the user *writes* rather than chats with
-/// lives on — lorebooks today, scenarios and embeddings once they exist.
+/// lives on — lorebooks, summaries, scenarios and embeddings.
 ///
 /// Deliberately unhurried. This is a place to browse, so it leads with a large
 /// title, one search field that covers the whole library rather than one
@@ -88,6 +90,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<Widget> _sections(BuildContext context, List<Lorebook> books) {
     final entries = books.fold<int>(0, (sum, b) => sum + b.entries.length);
     final summaries = context.read<AppState>().conversationsWithSummary.length;
+    final scenarios = context.read<AppState>().scenarios.length;
     final recent = [...books]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return [
@@ -115,9 +118,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
         child: _SectionCard(
           icon: Icons.theater_comedy_outlined,
           title: 'Scenarios',
-          subtitle: 'Reusable openings and settings — not built yet',
-          onTap: () => _open(const SectionScreen(
-              title: 'Scenarios', icon: Icons.theater_comedy_outlined)),
+          subtitle: scenarios == 0
+              ? 'Reusable openings — where a chat starts and what is happening'
+              : '${_count(scenarios, 'scenario')} to plug into a chat',
+          onTap: () => _open(const ScenariosScreen()),
         ),
       ),
       SliverToBoxAdapter(
@@ -168,9 +172,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
             c.title.toLowerCase().contains(q))
           c,
     ];
+    final matchedScenarios = [
+      for (final s in context.read<AppState>().scenarios)
+        if (s.matches(q)) s,
+    ];
 
     if (matchedBooks.isEmpty &&
         matchedEntries.isEmpty &&
+        matchedScenarios.isEmpty &&
         matchedSummaries.isEmpty) {
       return [
         SliverToBoxAdapter(
@@ -211,6 +220,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   _open(SummaryEditScreen(conversationId: c.id)),
             );
           },
+        ),
+      ],
+      if (matchedScenarios.isNotEmpty) ...[
+        _header(context, 'Scenarios'),
+        SliverList.builder(
+          itemCount: matchedScenarios.length,
+          itemBuilder: (context, i) => _ScenarioRow(
+            scenario: matchedScenarios[i],
+            onTap: () =>
+                _open(ScenarioEditScreen(scenario: matchedScenarios[i])),
+          ),
         ),
       ],
       if (matchedEntries.isNotEmpty) ...[
@@ -349,6 +369,36 @@ class _BookRow extends StatelessWidget {
   }
 }
 
+/// A scenario found by search: its title and the first line of the opening.
+class _ScenarioRow extends StatelessWidget {
+  const _ScenarioRow({required this.scenario, required this.onTap});
+
+  final Scenario scenario;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      leading: CircleAvatar(
+        radius: 22,
+        backgroundColor: scheme.secondaryContainer,
+        child: Icon(Icons.theater_comedy_outlined,
+            color: scheme.onSecondaryContainer, size: 20),
+      ),
+      title: Text(scenario.displayName,
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle:
+          Text(scenario.blurb, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: scenario.starred
+          ? Icon(Icons.star, size: 18, color: scheme.primary)
+          : null,
+      onTap: onTap,
+    );
+  }
+}
+
 /// A single fact found by search, labelled with the book it lives in.
 class _EntryRow extends StatelessWidget {
   const _EntryRow({
@@ -379,8 +429,8 @@ class _EntryRow extends StatelessWidget {
   }
 }
 
-/// Nothing matched. Says so, and admits which shelves are still empty by
-/// design, so an unhelpful search does not read as a broken one.
+/// Nothing matched. Says so, and admits which shelf is still empty by design, so
+/// an unhelpful search does not read as a broken one.
 class _Nothing extends StatelessWidget {
   const _Nothing({required this.query});
 
@@ -402,8 +452,8 @@ class _Nothing extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Lorebooks and summaries are searchable — scenarios and embeddings '
-            'are not built yet.',
+            'Lorebooks, scenarios and summaries are searchable — embeddings are '
+            'browsed rather than searched.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: scheme.onSurfaceVariant,

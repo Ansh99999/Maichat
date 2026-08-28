@@ -88,10 +88,11 @@ the code are the source of truth — verify file:line claims before relying on t
   prefs parser OOM'd *before Dart ran* — an unopenable app. `lib/services/prefs_repair.dart`
   is the escape hatch. There is **no avatar size cap** by design.
 - **Per-chat overrides resolve in exactly one place each.** Read a thread's style
-  via `AppState.interfaceFor(conversation)` and a character *inside a thread* via
-  `AppState.characterFor(conversation, id)` — assembly, restart, impersonation,
-  the message list and the exporter all go through them. `Conversation.copyAs`
-  keeps fork/renumber from dropping a new per-chat field.
+  via `AppState.interfaceFor(conversation)`, a character *inside a thread* via
+  `AppState.characterFor(conversation, id)` and its scenario via
+  `AppState.scenarioFor(conversation, character)` — assembly, restart,
+  impersonation, the message list and the exporter all go through them.
+  `Conversation.copyAs` keeps fork/renumber from dropping a new per-chat field.
 - **`AppState.init()` must always finish** (timeout + catch, surfaces `loadError`,
   goes read-only on failure). A throw here = permanent startup spinner.
 
@@ -119,6 +120,19 @@ the code are the source of truth — verify file:line claims before relying on t
 - **Lorebooks:** `models/lorebook.dart`, `services/lorebook_codec.dart` (ST world
   info / card `character_book` / Agnai memory books — one export file all read),
   `services/world_info.dart` (activation scan). `lib/screens/library/`.
+- **Scenarios:** `models/scenario.dart` (Agnai's shape: text plus
+  `overwriteCharacterScenario`; Agnai's triggered `entries`/`states` ride in
+  `extensions` and deliberately do not fire), `services/scenario_codec.dart`
+  (Agnai / character card / MaiChat / plain prose in, MaiChat + Agnai out),
+  `screens/library/scenarios_screen.dart` + `scenario_edit_screen.dart`,
+  `widgets/scenario_picker_sheet.dart` (the browse → preview → edit-in-place →
+  "library or here only?" → Proceed sheet, used by the character sheet's scenario
+  fold and by chat settings). A scenario arrives by one of three routes and they
+  are ranked in `AppState.scenarioFor` alone: the chat's own text, the library
+  scenario `Conversation.scenarioId` names, then `Character.activeScenario`.
+- **Browse layout:** cards-vs-rows for Characters / Lorebooks / Scenarios is a
+  *persisted* preference (`models/view_prefs.dart`, the `viewPrefs` store entry,
+  `AppState.browseLayout`/`setBrowseLayout`) — no screen holds it in a field.
 - **Discover (in-app catalogue browser):** `models/discover.dart`,
   `services/discover/*` (per-site sources: Chub, JannyAI, CharacterTavern, Risu
   realm, Botbooru, Pygmalion, Wyvern, DataCat — each with its own API quirks),

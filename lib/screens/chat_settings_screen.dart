@@ -8,6 +8,7 @@ import '../models/conversation.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
+import '../widgets/scenario_picker_sheet.dart';
 import 'character_edit_screen.dart';
 import 'gallery/gallery_picker_sheet.dart';
 import 'group_add_sheet.dart';
@@ -18,9 +19,12 @@ import 'settings/chat_ui_scope.dart';
 /// picture behind it, a chat style of its own, and the characters taking part —
 /// including definitions edited for this chat alone.
 ///
-/// Nothing here is written until Save. That matters most for the character
-/// edits: a change to a card has two plausible homes (this chat, or everywhere),
-/// so the edits are collected as drafts and Save asks where each one goes.
+/// Nothing typed or toggled here is written until Save. That matters most for the
+/// character edits: a change to a card has two plausible homes (this chat, or
+/// everywhere), so the edits are collected as drafts and Save asks where each one
+/// goes. The two rows that reach their own committing UI first — the participant
+/// list and the scenario picker — apply straight away, because asking again on
+/// Save would be asking the same question twice.
 class ChatSettingsScreen extends StatefulWidget {
   const ChatSettingsScreen({super.key, required this.conversationId});
 
@@ -357,6 +361,33 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
     setState(() => _appearance = result == global ? null : result);
   }
 
+  /// Opens the scenario picker for this chat and applies what comes back.
+  ///
+  /// Applied straight away rather than held as a draft, like the participant
+  /// list above it: the picker already made the user commit with Proceed, and
+  /// asking twice for the same decision is how a setting ends up half-applied.
+  Future<void> _pickScenario(Conversation conversation) async {
+    final state = context.read<AppState>();
+    final character = state.characterFor(conversation, conversation.characterId);
+    final pick = await showScenarioPickerSheet(
+      context,
+      localLabel: 'this chat',
+      currentScenarioId: conversation.scenarioId,
+      currentText: conversation.scenarioOverride,
+      cardScenario: character?.activeScenario ?? '',
+    );
+    if (pick == null || !mounted) return;
+    await state.setChatScenario(
+      conversation.id,
+      scenarioId: pick.scenarioId,
+      text: pick.text,
+    );
+    if (!mounted) return;
+    _toast(pick.isClear
+        ? "This chat is back on the character's own scenario."
+        : 'Scenario set for this chat.');
+  }
+
   Future<bool> _confirm({
     required String title,
     required String body,
@@ -534,6 +565,19 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
                 ),
           onTap: _editAppearance,
         ),
+        const SizedBox(height: 4),
+        _ScenarioRow(
+          source: state.scenarioSourceFor(conversation),
+          scenario: state.scenarioFor(
+            conversation,
+            state.characterFor(conversation, conversation.characterId),
+          ),
+          ownScenario: conversation.hasScenarioOfItsOwn,
+          onTap: () => _pickScenario(conversation),
+          onReset: conversation.hasScenarioOfItsOwn
+              ? () => state.clearChatScenario(conversation.id)
+              : null,
+        ),
         const Divider(height: 32),
         Row(
           children: [
@@ -596,6 +640,51 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
 
 /// Where a background picture can come from.
 enum _BackgroundSource { gallery, files, remove }
+
+/// The scenario row: where this chat's opening comes from, the first line of what
+/// it says, and a way back to the character's own.
+///
+/// A chat can be running a scenario the character knows nothing about, so the row
+/// names the source rather than only saying "custom" — "Written for this chat"
+/// and "Snowed in at the station" are different situations to be in.
+class _ScenarioRow extends StatelessWidget {
+  const _ScenarioRow({
+    required this.source,
+    required this.scenario,
+    required this.ownScenario,
+    required this.onTap,
+    this.onReset,
+  });
+
+  final String source;
+  final String scenario;
+  final bool ownScenario;
+  final VoidCallback onTap;
+  final VoidCallback? onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final flat = scenario.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        Icons.theater_comedy_outlined,
+        color: ownScenario ? scheme.primary : null,
+      ),
+      title: const Text('Scenario'),
+      subtitle: Text(
+        flat.isEmpty ? 'None — nothing is being set up' : '$source · $flat',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: onReset == null
+          ? const Icon(Icons.chevron_right)
+          : TextButton(onPressed: onReset, child: const Text('Reset')),
+      onTap: onTap,
+    );
+  }
+}
 
 /// The background row: a preview of what is set, a tap to change it, and — once
 /// there is a picture — how strongly it shows through. A photo at full strength

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/character.dart';
+import '../models/view_prefs.dart';
 import '../services/character_codec.dart';
 import '../services/character_sources.dart';
 import '../state/app_state.dart';
@@ -36,11 +37,15 @@ class CharactersScreen extends StatefulWidget {
 class _CharactersScreenState extends State<CharactersScreen> {
   final TextEditingController _search = TextEditingController();
   String _query = '';
-  bool _avatarView = true;
   CharacterSort _sort = CharacterSort.recent;
   final Set<String> _tagFilter = <String>{};
   bool _selecting = false;
   final Set<String> _selection = <String>{};
+
+  /// Cards or rows, read live from the stored preference rather than mirrored in
+  /// a field — the choice outlives the screen, so the screen must not own it.
+  bool _avatarView(AppState state) =>
+      state.browseLayout(BrowseSection.characters) == BrowseLayout.grid;
 
   @override
   void dispose() {
@@ -359,7 +364,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
       // fixed header), so they scroll away as the roster is browsed.
       body: CustomScrollView(
         slivers: [
-          SliverToBoxAdapter(child: _searchAndControls(tags)),
+          SliverToBoxAdapter(child: _searchAndControls(state, tags)),
           if (all.isEmpty)
             SliverFillRemaining(
               hasScrollBody: false,
@@ -431,7 +436,8 @@ class _CharactersScreenState extends State<CharactersScreen> {
     await exportCharacters(context, chosen);
   }
 
-  Widget _searchAndControls(List<String> tags) {
+  Widget _searchAndControls(AppState state, List<String> tags) {
+    final avatarView = _avatarView(state);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
       child: Column(
@@ -474,11 +480,14 @@ class _CharactersScreenState extends State<CharactersScreen> {
               ),
               const Spacer(),
               IconButton(
-                tooltip: _avatarView ? 'Show as list' : 'Show as grid',
-                icon: Icon(_avatarView
+                tooltip: avatarView ? 'Show as list' : 'Show as grid',
+                icon: Icon(avatarView
                     ? Icons.view_list_outlined
                     : Icons.grid_view_outlined),
-                onPressed: () => setState(() => _avatarView = !_avatarView),
+                onPressed: () => state.setBrowseLayout(
+                  BrowseSection.characters,
+                  avatarView ? BrowseLayout.list : BrowseLayout.grid,
+                ),
               ),
             ],
           ),
@@ -504,7 +513,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
     void tap(Character c) => _onItemTap(state, c);
     void long(Character c) => _onItemLongPress(c);
 
-    if (_avatarView) {
+    if (_avatarView(state)) {
       return SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         sliver: SliverGrid.builder(

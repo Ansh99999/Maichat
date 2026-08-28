@@ -168,6 +168,10 @@ void main() {
 
       expect(find.text('Alice'), findsWidgets); // title field + its row
       expect(find.text('Bob'), findsOneWidget);
+      // Two members plus the user is one row more than fits the test viewport,
+      // so the user's row is scrolled to rather than assumed to be on screen.
+      await tester.drag(find.byType(ListView), const Offset(0, -240));
+      await tester.pumpAndSettle();
       expect(find.text('You'), findsOneWidget);
     });
 
@@ -268,6 +272,9 @@ void main() {
       await tester.tap(find.widgetWithText(TextButton, 'Save'));
       await tester.pumpAndSettle();
       expect(state.characterById('c')!.description, 'calm');
+      // The note sits under the participant list, past the foot of the viewport.
+      await tester.drag(find.byType(ListView), const Offset(0, -240));
+      await tester.pumpAndSettle();
       expect(find.textContaining('1 character change waiting'), findsOneWidget);
 
       // Now Save the screen and send the change to this chat only.

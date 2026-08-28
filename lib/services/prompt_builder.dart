@@ -69,6 +69,7 @@ class PromptBuilder {
     String memoryText = '',
     String docsText = '',
     int memoryDepth = 2,
+    String? scenario,
   }) {
     final charName = character?.displayName ?? '';
     // The caller may resolve a different window than the preset carries (the
@@ -121,7 +122,10 @@ class PromptBuilder {
         case PromptId.charPersonality:
           return character?.personality ?? '';
         case PromptId.scenario:
-          return character?.activeScenario ?? '';
+          // The caller resolves which of the three scenarios is in force (the
+          // card's, a library one plugged into the chat, or one written for this
+          // chat); the card's own is the fallback for a caller that does not.
+          return scenario ?? character?.activeScenario ?? '';
         case PromptId.dialogueExamples:
           // Lore can ask to sit around the examples rather than around the
           // definitions, so it rides along with this marker.

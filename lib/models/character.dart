@@ -162,7 +162,11 @@ class Character {
   /// card's own system prompt (if any), then a persona block assembled from the
   /// description/personality/scenario/examples, then any post-history note. All
   /// macros are resolved against [name] and [userName].
-  String composedSystemPrompt({String userName = 'User'}) {
+  ///
+  /// [scenario] replaces the card's own scenario when given — a chat can be
+  /// running a scenario of its own, and this snapshot has to say the same thing
+  /// the request does.
+  String composedSystemPrompt({String userName = 'User', String? scenario}) {
     final parts = <String>[];
     if (systemPrompt.trim().isNotEmpty) parts.add(systemPrompt.trim());
 
@@ -180,7 +184,7 @@ class Character {
 
     section('Description', description);
     section('Personality', personality);
-    section('Scenario', activeScenario);
+    section('Scenario', scenario ?? activeScenario);
     section('Example dialogue', mesExample);
     parts.add(persona.toString().trim());
 
@@ -203,7 +207,10 @@ class Character {
   /// from the request even under a trimmed or imported preset. The card's own
   /// system prompt and post-history note are deliberately excluded — the main
   /// and jailbreak blocks carry those.
-  String definition({String userName = 'User'}) {
+  ///
+  /// [scenario] replaces the card's own when given, so a chat running its own
+  /// scenario is not handed the card's by the safety net.
+  String definition({String userName = 'User', String? scenario}) {
     final buffer = StringBuffer();
     void section(String heading, String value) {
       final v = value.trim();
@@ -216,7 +223,7 @@ class Character {
 
     section('Description', description);
     section('Personality', personality);
-    section('Scenario', activeScenario);
+    section('Scenario', scenario ?? activeScenario);
     section('Example dialogue', mesExample);
 
     return resolveMacros(

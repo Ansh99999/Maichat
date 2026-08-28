@@ -25,6 +25,8 @@ class Conversation {
     this.impersonateName,
     this.presetId,
     this.presetOverride,
+    this.scenarioId,
+    this.scenarioOverride = '',
     this.backgroundImage,
     this.backgroundOpacity = 1,
     this.interfaceOverride,
@@ -83,6 +85,25 @@ class Conversation {
   /// A chat-specific preset copy that overrides [presetId] when present — the
   /// "save for this chat only" case from the in-chat preset editor.
   Preset? presetOverride;
+
+  /// The library [Scenario] plugged into this thread, by id — the second of the
+  /// three ways a chat gets a scenario (the character's own card is the first,
+  /// [scenarioOverride] the third). Held as an id rather than a copy so a later
+  /// edit to the library scenario reaches this chat, the way a bound preset does.
+  /// Null means no scenario is plugged in.
+  String? scenarioId;
+
+  /// A scenario written for this thread alone — the "made on the spot" case, and
+  /// also where an edit saved "for this chat only" lands. Wins over
+  /// [scenarioId] and over the character's own scenario; empty means it is not in
+  /// play. Read it through `AppState.scenarioFor`, never directly, so "which
+  /// scenario is in force" is decided in exactly one place.
+  String scenarioOverride;
+
+  /// Whether this thread's scenario comes from somewhere other than the
+  /// character's card.
+  bool get hasScenarioOfItsOwn =>
+      scenarioOverride.trim().isNotEmpty || scenarioId != null;
 
   /// A picture drawn behind this thread only, as an [avatarRef]-style
   /// `local:<file>` reference (or an `http(s)` URL). [backgroundOpacity] fades
@@ -225,6 +246,8 @@ class Conversation {
         presetOverride: presetOverride == null
             ? null
             : Preset.fromJson(presetOverride!.toJson()),
+        scenarioId: scenarioId,
+        scenarioOverride: scenarioOverride,
         backgroundImage: backgroundImage,
         backgroundOpacity: backgroundOpacity,
         interfaceOverride: interfaceOverride == null
@@ -270,6 +293,9 @@ class Conversation {
         if (impersonateName != null) 'impersonateName': impersonateName,
         if (presetId != null) 'presetId': presetId,
         if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
+        if (scenarioId != null) 'scenarioId': scenarioId,
+        if (scenarioOverride.trim().isNotEmpty)
+          'scenarioOverride': scenarioOverride,
         if (backgroundImage != null && backgroundImage!.isNotEmpty)
           'backgroundImage': backgroundImage,
         if (backgroundOpacity != 1) 'backgroundOpacity': backgroundOpacity,
@@ -318,6 +344,10 @@ class Conversation {
         presetOverride: json['presetOverride'] is Map<String, dynamic>
             ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)
             : null,
+        scenarioId: (json['scenarioId'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['scenarioId'] as String).trim(),
+        scenarioOverride: json['scenarioOverride'] as String? ?? '',
         backgroundImage: (json['backgroundImage'] as String?)?.trim(),
         backgroundOpacity:
             ((json['backgroundOpacity'] as num?)?.toDouble() ?? 1)

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// A stand-in page for sections that are wired into the drawer but not built
-/// out yet (Scenarios, Image Generation, Notifications).
+/// out yet (Image Generation, Notifications).
 ///
 /// It keeps navigation honest — every drawer entry lands somewhere real with a
 /// back arrow — while signalling clearly that the feature is still to come.

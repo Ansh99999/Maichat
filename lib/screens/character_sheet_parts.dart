@@ -6,6 +6,7 @@ import '../models/message.dart';
 import '../state/app_state.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/rich_notes_view.dart';
+import '../widgets/scenario_picker_sheet.dart';
 import '../services/rich_notes.dart';
 
 /// The character sheet's blocks, kept out of the screen file so each stays small
@@ -303,12 +304,39 @@ class FoldTile extends StatelessWidget {
 // APPEND-SCENARIO
 
 /// The scenario fold. Shows whichever scenario is in force, says when that is a
-/// custom one, and puts an edit button on the header row that opens the
-/// custom-scenario sheet.
+/// custom one, and offers the two ways to change it: plug one in from the
+/// library, or write your own here.
+///
+/// The library route is the interesting one. It opens the picker over the bottom
+/// three-quarters of the screen, where a scenario can be searched for, read,
+/// edited in place and only then committed — so choosing an opening for a
+/// character never means leaving the character.
 class ScenarioFold extends StatelessWidget {
   const ScenarioFold({super.key, required this.character});
 
   final Character character;
+
+  /// Opens the picker and applies what comes back as this character's own
+  /// scenario, so every new chat with them starts there.
+  Future<void> _plugIn(BuildContext context) async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final pick = await showScenarioPickerSheet(
+      context,
+      localLabel: character.displayName,
+      cardScenario: character.scenario,
+      currentText: character.customScenario,
+    );
+    if (pick == null) return;
+    await state.setCustomScenario(character.id, pick.preview);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(pick.isClear
+            ? "Back to the card's own scenario."
+            : 'Scenario set for ${character.displayName}.'),
+      ));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -332,8 +360,8 @@ class ScenarioFold extends StatelessWidget {
       children: [
         if (active.isEmpty)
           Text(
-            'This character has no scenario. Write one and it will be used in '
-            'every new chat with them.',
+            'This character has no scenario. Choose one from your library or '
+            'write your own, and it will be used in every new chat with them.',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -358,6 +386,21 @@ class ScenarioFold extends StatelessWidget {
                 ),
           ),
         ],
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            FilledButton.tonalIcon(
+              onPressed: () => _plugIn(context),
+              icon: const Icon(Icons.theater_comedy_outlined, size: 18),
+              label: const Text('Choose a scenario'),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: () => showCustomScenarioSheet(context, character),
+              child: const Text('Write your own'),
+            ),
+          ],
+        ),
       ],
     );
   }

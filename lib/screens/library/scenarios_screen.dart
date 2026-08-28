@@ -5,47 +5,48 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../models/lorebook.dart';
+import '../../models/scenario.dart';
 import '../../models/view_prefs.dart';
-import '../../services/lorebook_codec.dart';
+import '../../services/scenario_codec.dart';
 import '../../state/app_state.dart';
-import '../../widgets/avatar_image.dart';
 import '../../widgets/brand_mark.dart';
+import '../../widgets/export_sheet.dart';
 import '../../widgets/library_drawer.dart';
 import '../../widgets/tag_filter_sheet.dart';
-import 'lorebook_edit_screen.dart';
+import 'scenario_edit_screen.dart';
+import 'scenario_info.dart';
 
 /// How the shelf is ordered.
-enum LorebookSort {
+enum ScenarioSort {
   recent('Recently updated'),
   added('Recently added'),
   name('Name (A–Z)'),
-  entries('Most entries');
+  longest('Longest first');
 
-  const LorebookSort(this.label);
+  const ScenarioSort(this.label);
   final String label;
 }
 
-/// The Lorebooks shelf: a search bar, sort / tag / view controls, a starred
-/// shelf pinned above the rest, and per-book actions.
+/// The Scenarios shelf: reusable openings, browsed the way the Characters roster
+/// and the Lorebooks shelf are browsed, because a user who has learnt one of
+/// those should not have to learn a third.
 ///
-/// This is deliberately the Characters roster wearing a different object: the
-/// two are browsed the same way (search, sort, tag filter, cards or rows,
-/// long-press to multi-select, import from the app bar), and a user who has
-/// learnt one should not have to learn the other. Search reaches inside the
-/// books — [Lorebook.matches] looks at entry text and keywords too — because
-/// what you usually remember is the fact, not which book you filed it in.
-class LorebooksScreen extends StatefulWidget {
-  const LorebooksScreen({super.key});
+/// The title is a large one that scrolls away — this is a place to read and
+/// choose, not a tool bar — and the "i" beside it goes to a plain-English
+/// explainer, since "scenario" means three slightly different things across the
+/// apps this one talks to. Import and multi-select live in the app bar; making a
+/// new one is the button under your thumb.
+class ScenariosScreen extends StatefulWidget {
+  const ScenariosScreen({super.key});
 
   @override
-  State<LorebooksScreen> createState() => _LorebooksScreenState();
+  State<ScenariosScreen> createState() => _ScenariosScreenState();
 }
 
-class _LorebooksScreenState extends State<LorebooksScreen> {
+class _ScenariosScreenState extends State<ScenariosScreen> {
   final TextEditingController _search = TextEditingController();
   String _query = '';
-  LorebookSort _sort = LorebookSort.recent;
+  ScenarioSort _sort = ScenarioSort.recent;
   final Set<String> _tagFilter = <String>{};
   bool _selecting = false;
   final Set<String> _selection = <String>{};
@@ -53,7 +54,7 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
   /// Cards or rows, read live from the stored preference rather than mirrored in
   /// a field — the choice outlives the screen, so the screen must not own it.
   bool _cardView(AppState state) =>
-      state.browseLayout(BrowseSection.lorebooks) == BrowseLayout.grid;
+      state.browseLayout(BrowseSection.scenarios) == BrowseLayout.grid;
 
   @override
   void dispose() {
@@ -63,36 +64,35 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
 
   // --- filtering / sorting -------------------------------------------------
 
-  /// Every tag across the shelf, for the tag-filter sheet.
-  List<String> _allTags(List<Lorebook> books) {
+  List<String> _allTags(List<Scenario> scenarios) {
     final tags = <String>{};
-    for (final b in books) {
-      tags.addAll(b.tags);
+    for (final s in scenarios) {
+      tags.addAll(s.tags);
     }
     final sorted = tags.toList()..sort();
     return sorted;
   }
 
   /// Applies the text query and tag filter (tags match on AND), then the sort.
-  List<Lorebook> _visible(List<Lorebook> books) {
-    final result = books.where((b) {
+  List<Scenario> _visible(List<Scenario> scenarios) {
+    final result = scenarios.where((s) {
       if (_tagFilter.isNotEmpty &&
-          !_tagFilter.every((t) => b.tags.contains(t))) {
+          !_tagFilter.every((t) => s.tags.contains(t))) {
         return false;
       }
-      return b.matches(_query);
+      return s.matches(_query);
     }).toList();
 
     switch (_sort) {
-      case LorebookSort.recent:
+      case ScenarioSort.recent:
         result.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-      case LorebookSort.added:
+      case ScenarioSort.added:
         result.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      case LorebookSort.name:
+      case ScenarioSort.name:
         result.sort((a, b) =>
             a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
-      case LorebookSort.entries:
-        result.sort((a, b) => b.entries.length.compareTo(a.entries.length));
+      case ScenarioSort.longest:
+        result.sort((a, b) => b.text.length.compareTo(a.text.length));
     }
     return result;
   }
@@ -120,9 +120,9 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Delete $count lorebook${count == 1 ? '' : 's'}?'),
-        content: const Text('Chats using them keep working — they simply stop '
-            'injecting these facts.'),
+        title: Text('Delete $count scenario${count == 1 ? '' : 's'}?'),
+        content: const Text('Chats using them fall back to the character\'s own '
+            'scenario. A chat that had edited one keeps its own copy.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -137,42 +137,44 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     );
     if (ok != true) return;
     for (final id in _selection.toList()) {
-      await state.deleteLorebook(id);
+      await state.deleteScenario(id);
     }
     if (mounted) _exitSelection();
   }
 
   Future<void> _exportSelected(AppState state) async {
     final chosen =
-        state.lorebooks.where((b) => _selection.contains(b.id)).toList();
+        state.scenarios.where((s) => _selection.contains(s.id)).toList();
     if (chosen.isEmpty) return;
     // One file for the whole selection: the importer reads an array back as a
     // bundle, so a multi-selection round-trips as a single document.
-    await _offerExport(
+    await offerExport(
       context,
-      json: LorebookCodec.exportManyNative(chosen),
-      fileName: 'lorebooks-${chosen.length}.json',
-      subtitle: '${chosen.length} lorebooks, MaiChat format',
+      text: ScenarioCodec.exportManyNative(chosen),
+      fileName: 'scenarios-${chosen.length}.json',
+      subtitle: '${chosen.length} scenarios, MaiChat format',
+      dialogTitle: 'Save scenarios',
     );
   }
-
   // --- create / import -----------------------------------------------------
 
   Future<void> _createNew() async {
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const LorebookEditScreen()),
+      MaterialPageRoute<Scenario>(builder: (_) => const ScenarioEditScreen()),
     );
   }
 
-  Future<void> _open(Lorebook book) async {
+  Future<void> _open(Scenario scenario) async {
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => LorebookEditScreen(book: book)),
+      MaterialPageRoute<Scenario>(
+        builder: (_) => ScenarioEditScreen(scenario: scenario),
+      ),
     );
   }
 
-  /// The add sheet: create from scratch, or bring a book in from a file or the
-  /// clipboard. Both import paths land in [_ingest], which works out which of
-  /// the four supported shapes the text is.
+  /// The import sheet. Three routes in, because a scenario arrives as a file from
+  /// Agnai, as prose pasted out of a chat, or sitting inside a character card
+  /// you already like.
   void _showImportSheet() {
     showModalBottomSheet<void>(
       context: context,
@@ -185,7 +187,7 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.add),
-              title: const Text('Create new lorebook'),
+              title: const Text('Write a new scenario'),
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 _createNew();
@@ -205,9 +207,9 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.insert_drive_file_outlined),
-              title: const Text('A .json file'),
-              subtitle: const BrandedText('SillyTavern world info, an Agnai '
-                  'memory book, a character card, or a MaiChat export'),
+              title: const Text('A file'),
+              subtitle: const BrandedText('An Agnai scenario, a character card, '
+                  'a MaiChat export, or a plain .txt'),
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 _importFile();
@@ -215,11 +217,11 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.content_paste_outlined),
-              title: const Text('Paste JSON'),
-              subtitle: const Text('Straight from the clipboard'),
+              title: const Text('Paste it'),
+              subtitle: const Text('Prose or JSON, straight from the clipboard'),
               onTap: () {
                 Navigator.of(sheetContext).pop();
-                _pasteJson();
+                _pasteText();
               },
             ),
             const SizedBox(height: 8),
@@ -229,17 +231,15 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     );
   }
 
-  /// Picks one or more `.json` files and imports every book in them. A world
-  /// file carries no name of its own, so the file name is handed to the parser
-  /// to use as one.
+  /// Picks one or more files and imports every scenario in them.
   Future<void> _importFile() async {
     FilePickerResult? result;
     try {
       result = await FilePicker.pickFiles(
-        dialogTitle: 'Import lorebook',
+        dialogTitle: 'Import scenario',
         // FileType.any, not custom: Android greys out a .json whose provider
-        // MIME isn't application/json (browser-saved files land as octet-stream
-        // /text-plain). The parser reads contents, so filter in code instead.
+        // MIME isn't application/json. The parser reads contents, so filter in
+        // code instead.
         type: FileType.any,
         allowMultiple: true,
         withData: true,
@@ -249,30 +249,28 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     }
     final files = result?.files ?? const [];
     if (files.isEmpty) return;
-    final books = <Lorebook>[];
+    final scenarios = <Scenario>[];
     String? firstError;
     for (final file in files) {
       final bytes = file.bytes;
       if (bytes == null || bytes.isEmpty) continue;
       try {
-        books.addAll(LorebookCodec.parse(
+        scenarios.addAll(ScenarioCodec.parse(
           utf8.decode(bytes),
           fileName: _baseName(file.name),
         ));
       } on FormatException catch (e) {
         firstError ??= e.message;
       } catch (_) {
-        firstError ??= 'Could not read ${file.name} as a lorebook.';
+        firstError ??= 'Could not read ${file.name} as a scenario.';
       }
     }
-    await _store(books, firstError);
+    await _store(scenarios, firstError);
   }
 
-  /// The clipboard path, for a book copied out of a browser or another app.
-  Future<void> _pasteJson() async {
+  /// The clipboard path, for an opening copied out of a browser or another app.
+  Future<void> _pasteText() async {
     final controller = TextEditingController();
-    // Pre-fill from the clipboard: nine times out of ten that is exactly what
-    // the user meant to paste, and it saves a long-press in a text field.
     final clip = await Clipboard.getData(Clipboard.kTextPlain);
     controller.text = clip?.text ?? '';
     if (!mounted) {
@@ -282,14 +280,14 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     final text = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Paste lorebook JSON'),
+        title: const Text('Paste a scenario'),
         content: TextField(
           controller: controller,
           minLines: 5,
           maxLines: 10,
           keyboardType: TextInputType.multiline,
           decoration: const InputDecoration(
-            hintText: '{ "entries": … }',
+            hintText: 'The opening, or the JSON it came in',
             border: OutlineInputBorder(),
           ),
         ),
@@ -307,84 +305,83 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     );
     controller.dispose();
     if (text == null || text.trim().isEmpty) return;
-    await _ingest(text, null);
-  }
-
-  /// Parses [text] as one book or a bundle, then stores whatever came out.
-  Future<void> _ingest(String text, String? fileName) async {
     try {
-      await _store(LorebookCodec.parse(text, fileName: fileName), null);
+      await _store(ScenarioCodec.parse(text), null);
     } on FormatException catch (e) {
       _say(e.message);
     } catch (_) {
-      _say('Could not read that as a lorebook.');
+      _say('Could not read that as a scenario.');
     }
   }
-
-  /// Adds [books] to the library and reports what happened. [error] is the first
-  /// parse failure, shown only when nothing at all could be read.
-  Future<void> _store(List<Lorebook> books, String? error) async {
-    if (books.isEmpty) {
-      _say(error ?? 'Could not read that as a lorebook.');
+  /// Adds [scenarios] to the library and reports what happened. [error] is the
+  /// first parse failure, shown only when nothing at all could be read.
+  ///
+  /// An Agnai scenario can carry triggered events, which this app has nowhere to
+  /// fire. They are kept (so an export is unchanged) but the message says so —
+  /// silently importing half a scenario as if it were whole is worse than
+  /// admitting which half arrived.
+  Future<void> _store(List<Scenario> scenarios, String? error) async {
+    if (scenarios.isEmpty) {
+      _say(error ?? 'Could not read that as a scenario.');
       return;
     }
     final state = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    await state.addLorebooks(books);
+    await state.addScenarios(scenarios);
     if (!mounted) return;
-    messenger.showSnackBar(SnackBar(
-      content: Text(books.length == 1
-          ? 'Imported "${books.single.displayName}" '
-              '(${books.single.entries.length} entries).'
-          : 'Imported ${books.length} lorebooks.'),
-    ));
+    final events = scenarios.fold<int>(
+        0, (sum, s) => sum + ScenarioCodec.eventCount(s));
+    final what = scenarios.length == 1
+        ? 'Imported "${scenarios.single.displayName}".'
+        : 'Imported ${scenarios.length} scenarios.';
+    _say(events == 0
+        ? what
+        : '$what $events triggered event${events == 1 ? '' : 's'} came along '
+            'and were kept, but they do not fire here.');
   }
 
   void _say(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  // --- per-book actions ----------------------------------------------------
+  // --- per-scenario actions ------------------------------------------------
 
   Future<void> _runAction(
-      AppState state, Lorebook book, _LoreAction action) async {
+      AppState state, Scenario scenario, _ScenarioAction action) async {
     switch (action) {
-      case _LoreAction.edit:
-        await _open(book);
-      case _LoreAction.download:
-        await _exportOne(book);
-      case _LoreAction.duplicate:
-        await state.duplicateLorebook(book);
-        _say('Lorebook duplicated.');
-      case _LoreAction.delete:
-        await _confirmDelete(state, book);
+      case _ScenarioAction.edit:
+        await _open(scenario);
+      case _ScenarioAction.copyText:
+        await Clipboard.setData(ClipboardData(text: scenario.text));
+        _say('Scenario copied.');
+      case _ScenarioAction.download:
+        await _exportOne(scenario);
+      case _ScenarioAction.duplicate:
+        await state.duplicateScenario(scenario);
+        _say('Scenario duplicated.');
+      case _ScenarioAction.delete:
+        await _confirmDelete(state, scenario);
     }
   }
 
-  /// Offers the three export shapes, then hands the text to the file / clipboard
-  /// chooser. The default is this app's own format, which is the only lossless
-  /// one; the other two exist for moving a book to where it came from.
-  Future<void> _exportOne(Lorebook book) async {
-    final format = await showModalBottomSheet<LoreExportFormat>(
+  /// Offers the two export shapes, then hands the text to the file / clipboard
+  /// chooser. This app's own is the lossless one; Agnai's exists for moving a
+  /// scenario back to where it came from.
+  Future<void> _exportOne(Scenario scenario) async {
+    final format = await showModalBottomSheet<ScenarioExportFormat>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final f in LoreExportFormat.values)
+            for (final f in ScenarioExportFormat.values)
               ListTile(
-                // Our own format wears the app's mark; the others keep a
-                // generic glyph in the same slot, so the rows stay aligned.
-                leading: f == LoreExportFormat.native
+                leading: f == ScenarioExportFormat.native
                     ? const MaiChatMark()
-                    : Icon(switch (f) {
-                        LoreExportFormat.native => Icons.data_object_outlined,
-                        LoreExportFormat.sillyTavern => Icons.public_outlined,
-                        LoreExportFormat.agnai => Icons.smart_toy_outlined,
-                      }),
+                    : const Icon(Icons.smart_toy_outlined),
                 title: Text(f.label),
                 subtitle: Text(f.blurb),
                 onTap: () => Navigator.of(context).pop(f),
@@ -394,22 +391,23 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
       ),
     );
     if (format == null || !mounted) return;
-    final safe = _safeName(book.displayName);
-    await _offerExport(
+    final safe = _safeName(scenario.displayName);
+    await offerExport(
       context,
-      json: format.write(book),
-      fileName: '${safe.isEmpty ? 'lorebook' : safe}.json',
+      text: format.write(scenario),
+      fileName: '${safe.isEmpty ? 'scenario' : safe}.json',
       subtitle: format.label,
+      dialogTitle: 'Save scenario',
     );
   }
 
-  Future<void> _confirmDelete(AppState state, Lorebook book) async {
+  Future<void> _confirmDelete(AppState state, Scenario scenario) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete lorebook?'),
-        content: Text('"${book.displayName}" will be removed, and switched off '
-            'in any chat using it.'),
+        title: const Text('Delete scenario?'),
+        content: Text('"${scenario.displayName}" will be removed, and unplugged '
+            'from any chat running it.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -422,14 +420,14 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
         ],
       ),
     );
-    if (ok == true) await state.deleteLorebook(book.id);
+    if (ok == true) await state.deleteScenario(scenario.id);
   }
 
   // --- tag filter / sort ---------------------------------------------------
 
   void _showTagFilter(List<String> tags) {
     if (tags.isEmpty) {
-      _say('No tags on any lorebook yet.');
+      _say('No tags on any scenario yet.');
       return;
     }
     showTagFilterSheet(
@@ -441,14 +439,14 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
   }
 
   Future<void> _pickSort() async {
-    final picked = await showModalBottomSheet<LorebookSort>(
+    final picked = await showModalBottomSheet<ScenarioSort>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final s in LorebookSort.values)
+            for (final s in ScenarioSort.values)
               ListTile(
                 title: Text(s.label),
                 trailing: _sort == s ? const Icon(Icons.check) : null,
@@ -461,22 +459,21 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     if (picked != null) setState(() => _sort = picked);
   }
 
-  // --- build ---------------------------------------------------------------
-
-  void _onItemTap(Lorebook book) {
+  void _onItemTap(Scenario scenario) {
     if (_selecting) {
-      _toggleSelect(book.id);
+      _toggleSelect(scenario.id);
     } else {
-      _open(book);
+      _open(scenario);
     }
   }
 
-  void _onItemLongPress(Lorebook book) {
+  void _onItemLongPress(Scenario scenario) {
     setState(() {
       _selecting = true;
-      _selection.add(book.id);
+      _selection.add(scenario.id);
     });
   }
+  // --- build ---------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -484,30 +481,28 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     if (!state.ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final all = state.lorebooks;
+    final all = state.scenarios;
     final tags = _allTags(all);
     final visible = _visible(all);
-    final starred = visible.where((b) => b.starred).toList();
-    final others = visible.where((b) => !b.starred).toList();
+    final starred = visible.where((s) => s.starred).toList();
+    final others = visible.where((s) => !s.starred).toList();
     final hasStar = starred.isNotEmpty;
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
       drawer: _selecting
           ? null
-          : const LibraryDrawer(selected: LibrarySection.lorebooks),
-      appBar: _selecting ? _selectionAppBar(state) : _mainAppBar(),
+          : const LibraryDrawer(selected: LibrarySection.scenarios),
       floatingActionButton: _selecting
           ? null
           : FloatingActionButton.extended(
               onPressed: _createNew,
               icon: const Icon(Icons.add),
-              label: const Text('New lorebook'),
+              label: const Text('New scenario'),
             ),
-      // The search bar and controls ride at the top of the scroll view (not a
-      // fixed header), so they scroll away as the shelf is browsed.
       body: CustomScrollView(
         slivers: [
+          if (_selecting) _selectionAppBar(state) else _mainAppBar(),
           SliverToBoxAdapter(child: _searchAndControls(state, tags)),
           if (all.isEmpty)
             SliverFillRemaining(
@@ -522,7 +517,7 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
               _shelf(state, starred),
             ],
             if (others.isNotEmpty) ...[
-              if (hasStar) _header('All lorebooks'),
+              if (hasStar) _header('All scenarios'),
               _shelf(state, others),
             ],
             SliverToBoxAdapter(child: SizedBox(height: 96 + bottom)),
@@ -532,18 +527,23 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
     );
   }
 
-  AppBar _mainAppBar() => AppBar(
-        title: const Text('Lorebooks'),
+  /// The unhurried header: a large title that scrolls away, the explainer, and
+  /// the two things you do to the shelf as a whole.
+  Widget _mainAppBar() => SliverAppBar.large(
+        title: const Text('Scenarios'),
         actions: [
+          IconButton(
+            tooltip: 'About scenarios',
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                  builder: (_) => const ScenarioInfoScreen()),
+            ),
+          ),
           IconButton(
             tooltip: 'Import',
             icon: const Icon(Icons.upload_file_outlined),
             onPressed: _showImportSheet,
-          ),
-          IconButton(
-            tooltip: 'New lorebook',
-            icon: const Icon(Icons.add),
-            onPressed: _createNew,
           ),
           IconButton(
             tooltip: 'Select multiple',
@@ -553,7 +553,8 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
         ],
       );
 
-  AppBar _selectionAppBar(AppState state) => AppBar(
+  Widget _selectionAppBar(AppState state) => SliverAppBar(
+        pinned: true,
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: _exitSelection,
@@ -581,7 +582,7 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
         children: [
           SearchBar(
             controller: _search,
-            hintText: 'Search lorebooks',
+            hintText: 'Search scenarios',
             padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(horizontal: 14),
             ),
@@ -611,7 +612,8 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
                 icon: Icons.label_outline,
                 label: _tagFilter.isEmpty
                     ? 'Tags'
-                    : '${_tagFilter.length} tag${_tagFilter.length == 1 ? '' : 's'}',
+                    : '${_tagFilter.length} tag'
+                        '${_tagFilter.length == 1 ? '' : 's'}',
                 selected: _tagFilter.isNotEmpty,
                 onTap: () => _showTagFilter(tags),
               ),
@@ -622,7 +624,7 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
                     ? Icons.view_list_outlined
                     : Icons.grid_view_outlined),
                 onPressed: () => state.setBrowseLayout(
-                  BrowseSection.lorebooks,
+                  BrowseSection.scenarios,
                   cardView ? BrowseLayout.list : BrowseLayout.grid,
                 ),
               ),
@@ -646,26 +648,27 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
         ),
       );
 
-  /// One section of books, as cards or as rows.
-  Widget _shelf(AppState state, List<Lorebook> list) {
+  /// One section of scenarios, as cards or as rows. A scenario has no picture, so
+  /// a card shows the thing itself — as much of the opening as fits.
+  Widget _shelf(AppState state, List<Scenario> list) {
     if (_cardView(state)) {
       return SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         sliver: SliverGrid.builder(
           gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 200,
+            maxCrossAxisExtent: 240,
             mainAxisSpacing: 12,
             crossAxisSpacing: 12,
-            childAspectRatio: 0.74,
+            childAspectRatio: 0.86,
           ),
           itemCount: list.length,
-          itemBuilder: (context, i) => _LorebookCard(
-            book: list[i],
+          itemBuilder: (context, i) => _ScenarioCard(
+            scenario: list[i],
             selecting: _selecting,
             selected: _selection.contains(list[i].id),
             onTap: () => _onItemTap(list[i]),
             onLongPress: () => _onItemLongPress(list[i]),
-            onToggleStar: () => state.toggleLorebookStar(list[i].id),
+            onToggleStar: () => state.toggleScenarioStar(list[i].id),
             onAction: (a) => _runAction(state, list[i], a),
           ),
         ),
@@ -675,36 +678,36 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       sliver: SliverList.builder(
         itemCount: list.length,
-        itemBuilder: (context, i) => _LorebookTile(
-          book: list[i],
+        itemBuilder: (context, i) => _ScenarioTile(
+          scenario: list[i],
           selecting: _selecting,
           selected: _selection.contains(list[i].id),
           onTap: () => _onItemTap(list[i]),
           onLongPress: () => _onItemLongPress(list[i]),
-          onToggleStar: () => state.toggleLorebookStar(list[i].id),
+          onToggleStar: () => state.toggleScenarioStar(list[i].id),
           onAction: (a) => _runAction(state, list[i], a),
         ),
       ),
     );
   }
 }
-
-/// The per-book actions, shared by the card's and the row's 3-dot menu so both
-/// entry points behave identically.
-enum _LoreAction {
+/// The per-scenario actions, shared by the card's and the row's 3-dot menu so
+/// both entry points behave identically.
+enum _ScenarioAction {
   edit('Edit', Icons.edit_outlined),
+  copyText('Copy text', Icons.copy_outlined),
   download('Download', Icons.download_outlined),
   duplicate('Duplicate', Icons.copy_all_outlined),
   delete('Delete', Icons.delete_outline);
 
-  const _LoreAction(this.label, this.icon);
+  const _ScenarioAction(this.label, this.icon);
   final String label;
   final IconData icon;
 }
 
-List<PopupMenuEntry<_LoreAction>> _loreMenuItems() => [
-      for (final action in _LoreAction.values)
-        PopupMenuItem<_LoreAction>(
+List<PopupMenuEntry<_ScenarioAction>> _scenarioMenuItems() => [
+      for (final action in _ScenarioAction.values)
+        PopupMenuItem<_ScenarioAction>(
           value: action,
           child: ListTile(
             contentPadding: EdgeInsets.zero,
@@ -746,21 +749,16 @@ class _ControlChip extends StatelessWidget {
   }
 }
 
-/// How many entries a book holds, phrased for a label.
-String _entryCount(Lorebook book) {
-  final n = book.entries.length;
-  return n == 1 ? '1 entry' : '$n entries';
-}
+/// How a scenario relates to the character it is used with, in two words.
+String _modeLabel(Scenario scenario) =>
+    scenario.overwriteCharacterScenario ? 'Replaces' : 'Adds to';
 
-/// The book's own accent colour, falling back to the app's primary.
-Color _accentOf(Lorebook book, ColorScheme scheme) =>
-    book.color == null ? scheme.primary : Color(book.color!);
-
-/// A book in the card grid: the picture (or a tinted book glyph) up top, and a
-/// label slot beneath carrying the name, the entry count and the actions menu.
-class _LorebookCard extends StatelessWidget {
-  const _LorebookCard({
-    required this.book,
+/// A scenario in the card grid. There is no picture to show, so the card shows
+/// the opening itself — the only thing that distinguishes one scenario from
+/// another at a glance.
+class _ScenarioCard extends StatelessWidget {
+  const _ScenarioCard({
+    required this.scenario,
     required this.selecting,
     required this.selected,
     required this.onTap,
@@ -769,13 +767,13 @@ class _LorebookCard extends StatelessWidget {
     required this.onAction,
   });
 
-  final Lorebook book;
+  final Scenario scenario;
   final bool selecting;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onToggleStar;
-  final ValueChanged<_LoreAction> onAction;
+  final ValueChanged<_ScenarioAction> onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -796,81 +794,86 @@ class _LorebookCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 2, 0),
+              child: Row(
                 children: [
-                  _CardImage(book: book),
-                  Positioned(
-                    top: 4,
-                    left: 4,
-                    child: _GlassIcon(
-                      icon: book.starred ? Icons.star : Icons.star_border,
-                      color: book.starred ? Colors.amber : null,
-                      onTap: onToggleStar,
+                  Expanded(
+                    child: Text(
+                      scenario.displayName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
                   if (selecting)
-                    Positioned(
-                      top: 4,
-                      right: 4,
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
                       child: Icon(
                         selected
                             ? Icons.check_circle
                             : Icons.radio_button_unchecked,
+                        size: 20,
                         color: selected ? scheme.primary : scheme.onSurface,
+                      ),
+                    )
+                  else
+                    SizedBox(
+                      width: 32,
+                      child: PopupMenuButton<_ScenarioAction>(
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.more_vert, size: 20),
+                        tooltip: 'Actions',
+                        onSelected: onAction,
+                        itemBuilder: (context) => _scenarioMenuItems(),
                       ),
                     ),
                 ],
               ),
             ),
-            // The name / count slot sits on a slightly stronger surface so it
-            // reads as a label attached under the picture.
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                child: Text(
+                  scenario.blurb.isEmpty ? 'Nothing written yet' : scenario.blurb,
+                  overflow: TextOverflow.fade,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                ),
+              ),
+            ),
+            // The footer carries the two facts a card cannot show in prose: how
+            // it combines with a character, and whether it is starred.
             Container(
-              width: double.infinity,
               color: scheme.surfaceContainerHighest,
-              padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
+              padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          book.displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _entryCount(book),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
+                    child: Text(
+                      _modeLabel(scenario),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
                     ),
                   ),
-                  if (!selecting)
-                    SizedBox(
-                      width: 32,
-                      child: PopupMenuButton<_LoreAction>(
-                        padding: EdgeInsets.zero,
-                        icon: const Icon(Icons.more_vert, size: 20),
-                        tooltip: 'Actions',
-                        onSelected: onAction,
-                        itemBuilder: (context) => _loreMenuItems(),
-                      ),
+                  IconButton(
+                    tooltip: scenario.starred ? 'Unstar' : 'Star',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 18,
+                    icon: Icon(
+                      scenario.starred ? Icons.star : Icons.star_border,
+                      color: scenario.starred ? Colors.amber : null,
                     ),
+                    onPressed: onToggleStar,
+                  ),
                 ],
               ),
             ),
@@ -880,74 +883,11 @@ class _LorebookCard extends StatelessWidget {
     );
   }
 }
-
-/// The picture area of a [_LorebookCard]: the book's thumbnail cropped to fill,
-/// or a panel tinted with the book's own colour carrying a book glyph.
-class _CardImage extends StatelessWidget {
-  const _CardImage({required this.book});
-
-  final Lorebook book;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final accent = _accentOf(book, scheme);
-    Widget fallback() => Container(
-          // A gentle blend of the accent over the surface, so a book with a
-          // vivid colour is recognisable without shouting.
-          color: Color.alphaBlend(
-              accent.withValues(alpha: 0.18), scheme.surfaceContainerHigh),
-          alignment: Alignment.center,
-          child: Icon(Icons.auto_stories, size: 44, color: accent),
-        );
-
-    // Shared provider: decoded once, at card size, however many cards show it.
-    final provider = avatarImage(
-      book.thumbnail,
-      displaySize: 320,
-      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
-    );
-    if (provider == null) return fallback();
-    return Image(
-      image: provider,
-      fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => fallback(),
-    );
-  }
-}
-
-/// A translucent, tappable circular icon that floats over the card image
-/// (used for the star toggle).
-class _GlassIcon extends StatelessWidget {
-  const _GlassIcon({required this.icon, required this.onTap, this.color});
-
-  final IconData icon;
-  final VoidCallback onTap;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surface.withValues(alpha: 0.72),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(5),
-          child: Icon(icon, size: 18, color: color ?? scheme.onSurface),
-        ),
-      ),
-    );
-  }
-}
-
-/// A book in the names list: a small thumbnail, the name, its blurb, the entry
-/// count, and the star / actions affordances.
-class _LorebookTile extends StatelessWidget {
-  const _LorebookTile({
-    required this.book,
+/// A scenario in the names list: a glyph, the title, the opening's first line,
+/// and the star / actions affordances.
+class _ScenarioTile extends StatelessWidget {
+  const _ScenarioTile({
+    required this.scenario,
     required this.selecting,
     required this.selected,
     required this.onTap,
@@ -956,13 +896,13 @@ class _LorebookTile extends StatelessWidget {
     required this.onAction,
   });
 
-  final Lorebook book;
+  final Scenario scenario;
   final bool selecting;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onToggleStar;
-  final ValueChanged<_LoreAction> onAction;
+  final ValueChanged<_ScenarioAction> onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -986,9 +926,19 @@ class _LorebookTile extends StatelessWidget {
                 selected ? Icons.check_circle : Icons.radio_button_unchecked,
                 color: selected ? scheme.primary : scheme.onSurfaceVariant,
               )
-            : _Thumb(book: book),
+            : Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: scheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: Icon(Icons.theater_comedy_outlined,
+                    size: 22, color: scheme.onSecondaryContainer),
+              ),
         title: Text(
-          book.displayName,
+          scenario.displayName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w600),
@@ -996,10 +946,19 @@ class _LorebookTile extends StatelessWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(book.blurb, maxLines: 2, overflow: TextOverflow.ellipsis),
+            Text(
+              scenario.blurb.isEmpty ? 'Nothing written yet' : scenario.blurb,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
             const SizedBox(height: 2),
             Text(
-              _entryCount(book),
+              [
+                _modeLabel(scenario),
+                if (scenario.tags.isNotEmpty) scenario.tags.take(3).join(', '),
+              ].join(' · '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Theme.of(context)
                   .textTheme
                   .labelSmall
@@ -1013,19 +972,19 @@ class _LorebookTile extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
-                    tooltip: book.starred ? 'Unstar' : 'Star',
+                    tooltip: scenario.starred ? 'Unstar' : 'Star',
                     visualDensity: VisualDensity.compact,
                     icon: Icon(
-                      book.starred ? Icons.star : Icons.star_border,
-                      color: book.starred ? Colors.amber : null,
+                      scenario.starred ? Icons.star : Icons.star_border,
+                      color: scenario.starred ? Colors.amber : null,
                     ),
                     onPressed: onToggleStar,
                   ),
-                  PopupMenuButton<_LoreAction>(
+                  PopupMenuButton<_ScenarioAction>(
                     tooltip: 'Actions',
                     icon: const Icon(Icons.more_vert),
                     onSelected: onAction,
-                    itemBuilder: (context) => _loreMenuItems(),
+                    itemBuilder: (context) => _scenarioMenuItems(),
                   ),
                 ],
               ),
@@ -1034,47 +993,7 @@ class _LorebookTile extends StatelessWidget {
   }
 }
 
-/// The small rounded thumbnail that leads a [_LorebookTile] — a square rather
-/// than a circle, because a book is an object, not a face.
-class _Thumb extends StatelessWidget {
-  const _Thumb({required this.book});
-
-  final Lorebook book;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final accent = _accentOf(book, scheme);
-    final provider = avatarImage(
-      book.thumbnail,
-      displaySize: 44,
-      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
-    );
-    Widget glyph() => Icon(Icons.auto_stories, size: 22, color: accent);
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        color: Color.alphaBlend(
-            accent.withValues(alpha: 0.18), scheme.surfaceContainerHigh),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      clipBehavior: Clip.antiAlias,
-      alignment: Alignment.center,
-      child: provider == null
-          ? glyph()
-          : Image(
-              image: provider,
-              fit: BoxFit.cover,
-              width: 44,
-              height: 44,
-              errorBuilder: (_, _, _) => glyph(),
-            ),
-    );
-  }
-}
-
-/// Shown when there are no lorebooks at all — a friendly nudge to make one.
+/// Shown when there are no scenarios at all — a nudge, and what one is for.
 class _EmptyShelf extends StatelessWidget {
   const _EmptyShelf({required this.onCreate});
 
@@ -1089,15 +1008,15 @@ class _EmptyShelf extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.auto_stories_outlined, size: 56, color: scheme.outline),
+            Icon(Icons.theater_comedy_outlined, size: 56, color: scheme.outline),
             const SizedBox(height: 16),
-            Text('No lorebooks yet',
+            Text('No scenarios yet',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              'A lorebook feeds facts about your world into a chat when the '
-              'conversation mentions them. Create one, or import a SillyTavern '
-              'world or an Agnai memory book.',
+              'A scenario is the situation a chat starts in — where you both '
+              'are and what is happening. Write one here and plug it into any '
+              'character, or into a single chat.',
               textAlign: TextAlign.center,
               style: Theme.of(context)
                   .textTheme
@@ -1108,7 +1027,7 @@ class _EmptyShelf extends StatelessWidget {
             FilledButton.tonalIcon(
               onPressed: onCreate,
               icon: const Icon(Icons.add),
-              label: const Text('Create lorebook'),
+              label: const Text('Write a scenario'),
             ),
           ],
         ),
@@ -1133,7 +1052,7 @@ class _NoMatches extends StatelessWidget {
             Icon(Icons.search_off_outlined, size: 48, color: scheme.outline),
             const SizedBox(height: 12),
             Text(
-              'No lorebooks match your search.',
+              'No scenarios match your search.',
               textAlign: TextAlign.center,
               style: Theme.of(context)
                   .textTheme
@@ -1147,78 +1066,12 @@ class _NoMatches extends StatelessWidget {
   }
 }
 
-/// The shared save-to-file / copy-to-clipboard chooser for exports — the same
-/// two permission-free routes character export offers, so a download behaves
-/// the same wherever it is started from.
-Future<void> _offerExport(
-  BuildContext context, {
-  required String json,
-  required String fileName,
-  required String subtitle,
-}) async {
-  final choice = await showModalBottomSheet<String>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.save_alt_outlined),
-            title: const Text('Save as .json file'),
-            // The subtitle names the format, so it carries the mark when the
-            // format is ours.
-            subtitle: BrandedText(subtitle),
-            onTap: () => Navigator.of(context).pop('file'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.copy_all_outlined),
-            title: const Text('Copy JSON to clipboard'),
-            onTap: () => Navigator.of(context).pop('clipboard'),
-          ),
-        ],
-      ),
-    ),
-  );
-  if (choice == null || !context.mounted) return;
-
-  if (choice == 'clipboard') {
-    await Clipboard.setData(ClipboardData(text: json));
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Copied to clipboard.')),
-      );
-    }
-    return;
-  }
-
-  String? path;
-  try {
-    path = await FilePicker.saveFile(
-      dialogTitle: 'Save lorebook',
-      fileName: fileName,
-      bytes: Uint8List.fromList(utf8.encode(json)),
-      type: FileType.custom,
-      allowedExtensions: const ['json'],
-    );
-  } catch (_) {
-    path = null;
-  }
-  if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(path == null ? 'Export cancelled.' : 'Saved to $path'),
-    ),
-  );
-}
-
 String _safeName(String s) => s
     .replaceAll(RegExp(r'[^A-Za-z0-9 _-]'), '')
     .trim()
     .replaceAll(RegExp(r'\s+'), '_');
 
-/// A picked file's name without its extension — what a SillyTavern world file
-/// means by its own name.
+/// A picked file's name without its extension.
 String _baseName(String fileName) {
   final dot = fileName.lastIndexOf('.');
   return dot <= 0 ? fileName : fileName.substring(0, dot);

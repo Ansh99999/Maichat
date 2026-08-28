@@ -12,7 +12,9 @@ import '../models/gallery_image.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
+import '../models/scenario.dart';
 import '../models/settings.dart';
+import '../models/view_prefs.dart';
 import 'tokenizer.dart';
 
 /// The persisted provider list plus which one is active.
@@ -42,6 +44,7 @@ class Storage {
   static const _conversationsKey = 'conversations';
   static const _charactersKey = 'characters';
   static const _lorebooksKey = 'lorebooks';
+  static const _scenariosKey = 'scenarios';
   static const _galleryKey = 'gallery';
   static const _activeKey = 'activeConversation';
   static const _defaultPersonaKey = 'defaultPersona';
@@ -52,6 +55,7 @@ class Storage {
   static const _discoverKey = 'discover';
   static const _embeddingKey = 'embeddings';
   static const _documentsKey = 'documents';
+  static const _viewPrefsKey = 'viewPrefs';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -257,6 +261,49 @@ class Storage {
         _lorebooksKey,
         jsonEncode(books.map((b) => b.toJson()).toList()),
       );
+
+  /// The reusable scenarios the user has written or imported. Its own entry, like
+  /// the lorebooks beside it, so editing one opening does not rewrite the roster.
+  Future<List<Scenario>> loadScenarios() async {
+    final raw = (await _prefs).getString(_scenariosKey);
+    if (raw == null) return <Scenario>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(Scenario.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <Scenario>[];
+  }
+
+  Future<void> saveScenarios(List<Scenario> scenarios) async =>
+      (await _prefs).setString(
+        _scenariosKey,
+        jsonEncode(scenarios.map((s) => s.toJson()).toList()),
+      );
+
+  /// Which shape each browsable section (characters, lorebooks, scenarios) was
+  /// last left in. A tiny entry of its own, so flipping the cards/rows toggle
+  /// never rewrites anything large.
+  Future<ViewPrefs> loadViewPrefs() async {
+    final raw = (await _prefs).getString(_viewPrefsKey);
+    if (raw == null) return const ViewPrefs();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return ViewPrefs.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const ViewPrefs();
+  }
+
+  Future<void> saveViewPrefs(ViewPrefs prefs) async =>
+      (await _prefs).setString(_viewPrefsKey, jsonEncode(prefs.toJson()));
 
   /// The pictures the user keeps in the app's gallery — the records only; the
   /// images themselves are files in the pictures directory, referenced by
