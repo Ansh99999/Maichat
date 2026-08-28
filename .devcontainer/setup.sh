@@ -23,6 +23,15 @@ flutter precache --android || true
 echo "==> flutter doctor"
 flutter doctor -v || true
 
+echo "==> Restoring Claude state from Google Drive"
+if [ -n "${GDRIVE_TOKEN:-}" ]; then
+  # New codespace, same memories: pull what the last session pushed. Conservative
+  # by design -- newer files win, existing transcripts are never overwritten.
+  bash "$(dirname "$0")/drive-sync.sh" pull || echo "    (pull failed; run drive-sync.sh doctor)"
+else
+  echo "    skipped: GDRIVE_TOKEN not set"
+fi
+
 echo
 echo "Setup complete."
 echo "  - Build a release APK:  flutter build apk --release"
