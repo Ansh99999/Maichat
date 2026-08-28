@@ -340,8 +340,12 @@ void main() {
     testWidgets('writing one in the sheet saves it onto the character',
         (tester) async {
       final state = await open(tester, _card(scenario: 'Card scenario.'));
-      await scrollTo(tester, find.byIcon(Icons.playlist_add));
-      await tester.tap(find.byIcon(Icons.playlist_add));
+      // The row's own button opens the scenario picker now, so writing your own
+      // is inside the fold, beside "Choose a scenario".
+      await scrollTo(tester, find.text('Scenario'));
+      await tester.tap(find.text('Scenario'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Write your own'));
       await tester.pumpAndSettle();
       expect(find.text('Custom scenario'), findsOneWidget);
 
@@ -360,8 +364,10 @@ void main() {
         tester,
         _card(scenario: 'Card scenario.', customScenario: 'Mine.'),
       );
-      await scrollTo(tester, find.byIcon(Icons.edit_note));
-      await tester.tap(find.byIcon(Icons.edit_note));
+      await scrollTo(tester, find.text('Scenario'));
+      await tester.tap(find.text('Scenario'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Write your own'));
       await tester.pumpAndSettle();
       await tester.tap(find.text("Use the card's"));
       await tester.pumpAndSettle();
@@ -370,12 +376,18 @@ void main() {
       expect(state.characterById('c')!.activeScenario, 'Card scenario.');
     });
 
-    testWidgets('a card with no scenario still offers to write one',
+    testWidgets('a card with no scenario offers both ways to set one',
         (tester) async {
       await open(tester, _card());
       await scrollTo(tester, find.text('Scenario'));
       expect(find.text('None on this card'), findsOneWidget);
-      expect(find.byIcon(Icons.playlist_add), findsOneWidget);
+      // The picker rides on the collapsed row; writing your own is a tap deeper.
+      expect(find.byTooltip('Choose a scenario'), findsOneWidget);
+      await tester.tap(find.text('Scenario'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Choose a scenario'),
+          findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Write your own'), findsOneWidget);
     });
   });
 

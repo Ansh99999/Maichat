@@ -510,19 +510,19 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // The scenario fold is where the choice lives, below the portrait.
+      // The scenario fold is where the choice lives, below the creator notes.
       await tester.scrollUntilVisible(
         find.text('Scenario'),
         300,
         scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Scenario'));
-      await tester.pumpAndSettle();
-      expect(find.text('Choose a scenario'), findsOneWidget);
 
-      await tester.tap(find.text('Choose a scenario'));
+      // Reachable from the collapsed row, without unfolding anything first.
+      expect(find.byTooltip('Choose a scenario'), findsOneWidget);
+      await tester.tap(find.byTooltip('Choose a scenario'));
       await tester.pumpAndSettle();
+      expect(find.text('Choose a scenario'), findsWidgets);
       await tester.tap(find.text('Snowed in'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Proceed'));
@@ -532,6 +532,43 @@ void main() {
       expect(aria.activeScenario, 'The radio has been dead since Tuesday.');
       expect(aria.scenario, 'A rainy night at the archive.',
           reason: "the card's own scenario is kept underneath");
+    });
+
+    testWidgets('and from inside the fold, next to writing your own',
+        (tester) async {
+      final state = await ready();
+      await state.addScenario(winter());
+      await state.addCharacter(Character(
+        id: 'a',
+        name: 'Aria',
+        scenario: 'A rainy night at the archive.',
+      ));
+      await tester.pumpWidget(
+        host(state, const CharacterSheetScreen(characterId: 'a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('Scenario'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Scenario'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Choose a scenario'),
+          findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Write your own'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Choose a scenario'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Snowed in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Proceed'));
+      await tester.pumpAndSettle();
+
+      expect(state.characterById('a')!.activeScenario,
+          'The radio has been dead since Tuesday.');
     });
 
     testWidgets('chat settings sets one for that chat alone', (tester) async {

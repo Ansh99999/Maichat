@@ -350,12 +350,17 @@ class ScenarioFold extends StatelessWidget {
           ? 'Your own scenario'
           : (active.isEmpty ? 'None on this card' : null),
       trailingAction: IconButton(
-        tooltip: custom ? 'Edit custom scenario' : 'Write a custom scenario',
+        // The picker is the primary action, so it lives on the *collapsed* row.
+        // It used to sit inside the fold's body with only a pencil showing out
+        // here, which meant the one thing this row is for was invisible until
+        // you unfolded it — and the visible icon opened the plain text editor
+        // instead. Whichever affordance is reached first now leads to the picker.
+        tooltip: 'Choose a scenario',
         icon: Icon(
-          custom ? Icons.edit_note : Icons.playlist_add,
+          Icons.theater_comedy_outlined,
           color: custom ? scheme.primary : null,
         ),
-        onPressed: () => showCustomScenarioSheet(context, character),
+        onPressed: () => _plugIn(context),
       ),
       children: [
         if (active.isEmpty)
