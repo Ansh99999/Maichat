@@ -48,7 +48,9 @@ class CharacterSheetScreen extends StatelessWidget {
               _SheetAppBar(character: character, state: state),
               SliverToBoxAdapter(child: _Portrait(character: character)),
               SliverToBoxAdapter(child: TagBand(tags: character.tags)),
-              SliverToBoxAdapter(child: NotesBlock(character: character)),
+              SliverToBoxAdapter(
+                child: NotesBlock(notes: character.creatorNotes),
+              ),
               const SliverToBoxAdapter(child: SheetDivider()),
               SliverToBoxAdapter(
                 child: DefinitionFolds(character: character),

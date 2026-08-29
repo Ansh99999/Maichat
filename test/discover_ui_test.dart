@@ -56,8 +56,12 @@ void main() {
     await tester.tap(find.text('Aria'));
     await load(tester);
 
-    // The page reads like a local character's page, with the definition fetched.
-    expect(find.text('DESCRIPTION'), findsOneWidget);
+    // The page *is* the character sheet: the definition sits behind the same
+    // folds, built only when one is opened.
+    expect(find.text('Description'), findsOneWidget);
+    expect(find.text('A ranger.', skipOffstage: false), findsNothing);
+    await tester.tap(find.text('Description'));
+    await tester.pumpAndSettle();
     expect(find.text('A ranger.'), findsOneWidget);
     expect(find.widgetWithText(FloatingActionButton, 'Download'), findsOneWidget);
   });
@@ -298,6 +302,8 @@ void main() {
 
       // No button was pressed: opening the character was the request.
       expect(opened, ['https://example.invalid/characters/uuid-1']);
+      await tester.tap(find.text('Description'));
+      await tester.pumpAndSettle();
       expect(find.text('From the page: <html>the real page</html>'),
           findsOneWidget);
       expect(find.text('Pass the check'), findsNothing);

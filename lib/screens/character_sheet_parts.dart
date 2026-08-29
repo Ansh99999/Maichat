@@ -50,10 +50,21 @@ class TagBand extends StatelessWidget {
 /// The creator's notes: their own HTML/CSS when they wrote any, plain text
 /// otherwise. Long plain notes collapse behind "Read more"; rich notes are shown
 /// whole, because clipping a designed card mid-way looks broken.
+///
+/// Takes the prose rather than a [Character], because a catalogue entry has the
+/// same block on its page and the notes it shows may be the listing's own blurb
+/// (a different [label]) until the card itself has been fetched.
 class NotesBlock extends StatefulWidget {
-  const NotesBlock({super.key, required this.character});
+  const NotesBlock({
+    super.key,
+    required this.notes,
+    this.label = 'Creator notes',
+  });
 
-  final Character character;
+  final String notes;
+
+  /// The section heading, so a listing's blurb can be called what it is.
+  final String label;
 
   @override
   State<NotesBlock> createState() => _NotesBlockState();
@@ -66,7 +77,7 @@ class _NotesBlockState extends State<NotesBlock> {
 
   @override
   Widget build(BuildContext context) {
-    final notes = widget.character.creatorNotes.trim();
+    final notes = widget.notes.trim();
     if (notes.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
     final rich = notesLookRich(notes);
@@ -76,7 +87,7 @@ class _NotesBlockState extends State<NotesBlock> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SheetLabel('Creator notes'),
+          SheetLabel(widget.label),
           const SizedBox(height: 8),
           if (rich)
             RichNotes(
@@ -174,16 +185,29 @@ class MoreButton extends StatelessWidget {
 /// Each fold's body is built only while it is open ([ExpansionTile] with
 /// `maintainState: false`), so a card with a huge description or a dozen
 /// HTML greetings costs nothing until asked.
+///
+/// [interactive] is false for a card that is not (yet) in the library — a
+/// catalogue entry being read before it is downloaded. Everything still renders
+/// the same way; the scenario simply becomes a plain fold, because there is no
+/// stored character to write a chosen scenario onto.
 class DefinitionFolds extends StatelessWidget {
-  const DefinitionFolds({super.key, required this.character});
+  const DefinitionFolds({
+    super.key,
+    required this.character,
+    this.interactive = true,
+  });
 
   final Character character;
+  final bool interactive;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        ScenarioFold(character: character),
+        if (interactive)
+          ScenarioFold(character: character)
+        else
+          TextFold(title: 'Scenario', body: character.activeScenario),
         TextFold(title: 'Description', body: character.description),
         GreetingsFold(character: character),
         TextFold(title: 'Personality', body: character.personality),

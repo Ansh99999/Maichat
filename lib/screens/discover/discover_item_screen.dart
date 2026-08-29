@@ -4,23 +4,33 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/character.dart';
 import '../../models/discover.dart';
+import '../../models/lorebook.dart';
 import '../../services/discover/discover_sources.dart';
 import '../../state/app_state.dart';
+import '../../widgets/natural_image.dart';
+import '../character_sheet_parts.dart';
 import '../character_sheet_screen.dart';
 import '../library/lorebooks_screen.dart';
 import '../presets/presets_screen.dart';
 import 'discover_browser_sheet.dart';
 import 'discover_card.dart';
 
-/// A catalogue entry's page. Reads like a character's own page in MaiChat —
-/// same header, same section-by-section persona — except the button downloads it
-/// instead of starting a chat.
+/// A catalogue entry's page — the character sheet, for a character that is not
+/// yours yet.
+///
+/// It is the *same* page as [CharacterSheetScreen] in everything that shows: the
+/// art at its own proportions with the name burned into it, the scrolling tag
+/// band, the creator's notes rendered as they wrote them (HTML, CSS and images
+/// included), and the definition behind folds whose greetings are drawn by the
+/// real chat bubble. Two things differ, and only two: the catalogue's own numbers
+/// sit between the tags and the notes, and the button downloads instead of
+/// starting a chat.
 ///
 /// The definition is fetched as the page opens, because that is also what a
 /// download needs: by the time the button is pressed the work is usually done.
-/// When the site refuses (JannyAI's card API is Cloudflare-guarded from some
-/// networks) the page still shows everything the feed knew, says what happened,
-/// and lets the button try again.
+/// Until it lands the page shows everything the feed knew. When the site refuses
+/// (JannyAI's card API is Cloudflare-guarded from some networks) it says what
+/// happened and lets the button try again.
 class DiscoverItemScreen extends StatefulWidget {
   const DiscoverItemScreen({
     super.key,
@@ -250,38 +260,94 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final character = _payload?.character;
+    final book = _payload?.lorebook;
+    final notes = _notes();
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(item.name, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            tooltip: 'Open on ${widget.source.label}',
-            icon: const Icon(Icons.open_in_new),
-            onPressed: _openInBrowser,
-          ),
-        ],
-      ),
       floatingActionButton: _downloadButton(),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 110),
-        children: [
-          _Header(item: item),
-          _FactsCard(item: item, source: widget.source, payload: _payload),
-          if (_loading) const _LoadingNote(),
-          if (_error != null)
-            _ErrorNote(
-              message: _error!,
-              onRetry: _retry,
-              // A bot check has a real way through it; offer that instead of a
-              // retry that will be refused the same way.
-              onPassCheck:
-                  _challenge != null && webViewSupported ? _passCheck : null,
+      // One CustomScrollView of slivers, exactly as the character sheet is built,
+      // so the art can be the top of the page rather than sit under a title bar.
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            floating: true,
+            backgroundColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            actions: [
+              IconButton(
+                tooltip: 'Open on ${widget.source.label}',
+                icon: const Icon(Icons.open_in_new),
+                onPressed: _openInBrowser,
+              ),
+            ],
+          ),
+          SliverToBoxAdapter(
+            child: _Portrait(item: item, character: character),
+          ),
+          SliverToBoxAdapter(child: TagBand(tags: _tags())),
+          const SliverToBoxAdapter(child: SheetDivider()),
+          SliverToBoxAdapter(
+            child: _CatalogueBlock(
+              item: item,
+              source: widget.source,
+              payload: _payload,
             ),
-          ..._details(character),
+          ),
+          const SliverToBoxAdapter(child: SheetDivider()),
+          SliverToBoxAdapter(
+            child: NotesBlock(notes: notes.text, label: notes.label),
+          ),
+          if (_loading) const SliverToBoxAdapter(child: _LoadingNote()),
+          if (_error != null)
+            SliverToBoxAdapter(
+              child: _ErrorNote(
+                message: _error!,
+                onRetry: _retry,
+                // A bot check has a real way through it; offer that instead of a
+                // retry that will be refused the same way.
+                onPassCheck:
+                    _challenge != null && webViewSupported ? _passCheck : null,
+              ),
+            ),
+          if (notes.text.trim().isNotEmpty && (character != null || book != null))
+            const SliverToBoxAdapter(child: SheetDivider()),
+          if (character != null)
+            SliverToBoxAdapter(
+              // Not interactive: the scenario picker writes onto a stored
+              // character, and this one is still the catalogue's.
+              child: DefinitionFolds(character: character, interactive: false),
+            )
+          else if (book != null)
+            SliverToBoxAdapter(child: _BookFolds(book: book)),
+          // Room for the download button to sit over nothing important.
+          SliverToBoxAdapter(child: SizedBox(height: 120 + bottomInset)),
         ],
       ),
     );
+  }
+
+  /// The tags to band across the page: the card's own once it has arrived, since
+  /// a fetched card usually carries more of them than the listing did.
+  List<String> _tags() {
+    final tags = _payload?.character?.tags ?? const <String>[];
+    return tags.isNotEmpty ? tags : widget.item.tags;
+  }
+
+  /// The prose block under the numbers, and what to call it. A fetched card's
+  /// creator notes when it has any; otherwise the listing's own blurb, which is
+  /// what the site shows on its page and is not the creator's notes.
+  ({String text, String label}) _notes() {
+    final character = _payload?.character;
+    if (character != null && character.creatorNotes.trim().isNotEmpty) {
+      return (text: character.creatorNotes, label: 'Creator notes');
+    }
+    final book = _payload?.lorebook;
+    if (character == null && book != null && book.description.trim().isNotEmpty) {
+      return (text: book.description, label: 'About');
+    }
+    return (text: widget.item.description, label: 'About');
   }
 
   Widget _downloadButton() {
@@ -311,134 +377,187 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
       label: Text(_saving ? 'Downloading…' : 'Download'),
     );
   }
-
-  /// The definition, laid out exactly as a local character's page lays it out —
-  /// the point is that this feels like the same app, not a web view.
-  List<Widget> _details(Character? character) {
-    final item = widget.item;
-    final book = _payload?.lorebook;
-    if (character != null) {
-      return [
-        _Section('Description', character.description),
-        _Section('Personality', character.personality),
-        _Section('Scenario', character.scenario),
-        _Section('Greeting', character.firstMes),
-        if (character.alternateGreetings.isNotEmpty)
-          _Section(
-            'Alternate greetings',
-            character.alternateGreetings
-                .asMap()
-                .entries
-                .map((e) => '${e.key + 1}. ${e.value}')
-                .join('\n\n'),
-          ),
-        _Section('Example dialogue', character.mesExample),
-        _Section('System prompt', character.systemPrompt),
-        _Section(
-            'Post-history instructions', character.postHistoryInstructions),
-        _Section('Creator notes', character.creatorNotes),
-      ];
-    }
-    if (book != null) {
-      return [
-        _Section('About', book.description),
-        for (final entry in book.entries.take(8))
-          _Section(
-            entry.name.trim().isEmpty
-                ? (entry.keys.isEmpty ? 'Entry' : entry.keys.join(', '))
-                : entry.name,
-            entry.content,
-          ),
-        if (book.entries.length > 8)
-          _Section(
-            'And more',
-            '${book.entries.length - 8} further entries download with the book.',
-          ),
-      ];
-    }
-    // Nothing fetched yet: show what the listing itself said.
-    return [
-      _Section('Tagline', item.tagline),
-      _Section('About', item.description),
-    ];
-  }
 }
 
-/// The header block: the art, the name, where it came from, and its tags.
-class _Header extends StatelessWidget {
-  const _Header({required this.item});
+/// A lorebook's entries as folds, the same shell the definition uses. Only the
+/// first few: the rest arrive with the download, and saying so is more honest
+/// than a page that scrolls for a minute.
+class _BookFolds extends StatelessWidget {
+  const _BookFolds({required this.book});
+
+  final Lorebook book;
+
+  static String _title(LorebookEntry entry) {
+    final name = entry.name.trim();
+    if (name.isNotEmpty) return name;
+    return entry.keys.isEmpty ? 'Entry' : entry.keys.join(', ');
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          for (final entry in book.entries.take(8))
+            TextFold(title: _title(entry), body: entry.content),
+          if (book.entries.length > 8)
+            TextFold(
+              title: 'And more',
+              body: '${book.entries.length - 8} further entries download '
+                  'with the book.',
+            ),
+        ],
+      );
+}
+
+/// The art at its own proportions across the full width, with the name in the
+/// lower-right over a fade — the character sheet's header, drawn from a listing.
+///
+/// The listing's largest image wins over the fetched card's own avatar: it is
+/// the picture the catalogue publishes for exactly this purpose, and using it
+/// throughout means the header does not swap out from under the reader halfway
+/// through the fetch.
+class _Portrait extends StatelessWidget {
+  const _Portrait({required this.item, required this.character});
 
   final DiscoverItem item;
+  final Character? character;
+
+  String get _imageRef {
+    final listed = item.bestImageUrl?.trim() ?? '';
+    if (listed.isNotEmpty) return listed;
+    return character?.avatar.trim() ?? '';
+  }
+
+  String get _meta => <String>[
+        if (item.creator.trim().isNotEmpty) 'by ${item.creator.trim()}',
+        if (item.nsfw) '18+',
+      ].join(' · ');
+
+  IconData get _icon => item.kind == DiscoverKind.character
+      ? Icons.person_outline
+      : Icons.menu_book_outlined;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final meta = <String>[
-      if (item.creator.trim().isNotEmpty) 'by ${item.creator.trim()}',
-      if (item.nsfw) '18+',
-    ].join(' · ');
+    final ref = _imageRef;
+    // A lorebook, or a listing whose art never existed: a full-width empty
+    // square is not a header, so it reads as a tile with the name under it.
+    if (ref.isEmpty) {
+      return _PlainHeader(name: item.name, meta: _meta, icon: _icon);
+    }
 
-    return Column(
-      children: [
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: SizedBox(
-            width: 140,
-            height: 140,
-            child: DiscoverImage(
-              url: item.bestImageUrl,
-              fallbackIcon: item.kind == DiscoverKind.character
-                  ? Icons.person_outline
-                  : Icons.menu_book_outlined,
-              size: 140,
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Text(
-          item.name,
-          textAlign: TextAlign.center,
-          style: Theme.of(context)
-              .textTheme
-              .headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        if (meta.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(
-            meta,
-            textAlign: TextAlign.center,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        ],
-        if (item.tags.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (final tag in item.tags.take(12))
-                Chip(
-                  label: Text(tag),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    return NaturalImage(
+      imageRef: ref,
+      fallback: DiscoverImage(url: null, fallbackIcon: _icon),
+      // Passed as the picture's own overlay rather than stacked around it, so a
+      // capped (very tall) picture keeps its caption on the artwork instead of
+      // in the empty margin beside it.
+      overlay: IgnorePointer(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 40, 20, 14),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0),
+                    Colors.black.withValues(alpha: 0.62),
+                  ],
                 ),
-            ],
-          ),
-        ],
-      ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    item.name,
+                    textAlign: TextAlign.right,
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineMedium
+                        ?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  if (_meta.isNotEmpty)
+                    Text(
+                      _meta,
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.82),
+                          ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
-/// The numbers, in the same "FOR THIS CHAT" card shape the character page uses.
-class _FactsCard extends StatelessWidget {
-  const _FactsCard({
+/// The header for something with no art: a rounded tile, the name, the byline.
+class _PlainHeader extends StatelessWidget {
+  const _PlainHeader({
+    required this.name,
+    required this.meta,
+    required this.icon,
+  });
+
+  final String name;
+  final String meta;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+      child: Column(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: SizedBox(
+              width: 140,
+              height: 140,
+              child: DiscoverImage(url: null, fallbackIcon: icon),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            name,
+            textAlign: TextAlign.center,
+            style: Theme.of(context)
+                .textTheme
+                .headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          if (meta.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              meta,
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The one thing a catalogue entry has that a local character does not: where it
+/// came from and what the site says about it. Flat and between two thin rules,
+/// in the sheet's own idiom, rather than a card floating in the page.
+class _CatalogueBlock extends StatelessWidget {
+  const _CatalogueBlock({
     required this.item,
     required this.source,
     required this.payload,
@@ -452,6 +571,7 @@ class _FactsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final entries = payload?.lorebook?.entries.length ?? item.entryCount;
+    final tagline = item.tagline.trim();
     final rows = <(IconData, String, String)>[
       (Icons.travel_explore_outlined, 'Source', source.label),
       if (item.downloads != null)
@@ -475,54 +595,51 @@ class _FactsCard extends StatelessWidget {
     ];
 
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'FROM THE CATALOGUE',
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: scheme.primary,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                    ),
-              ),
-              const SizedBox(height: 10),
-              for (var i = 0; i < rows.length; i++) ...[
-                if (i > 0) const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(rows[i].$1, size: 18, color: scheme.onSurfaceVariant),
-                    const SizedBox(width: 10),
-                    Text(
-                      '${rows[i].$2}: ',
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.copyWith(color: scheme.onSurfaceVariant),
-                    ),
-                    Expanded(
-                      child: Text(
-                        rows[i].$3,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SheetLabel('From the catalogue'),
+          if (tagline.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              tagline,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                    height: 1.4,
+                  ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(rows[i].$1, size: 18, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 10),
+                Text(
+                  '${rows[i].$2}: ',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+                Expanded(
+                  child: Text(
+                    rows[i].$3,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
-            ],
-          ),
-        ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -537,7 +654,7 @@ class _LoadingNote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 24),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
         child: Row(
           children: [
             const SizedBox(
@@ -546,11 +663,15 @@ class _LoadingNote extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
             const SizedBox(width: 12),
-            Text(
-              'Fetching the full definition…',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+            // Expanded, not free-standing: on a 360dp phone this line is wider
+            // than the space beside the spinner and would overflow.
+            Expanded(
+              child: Text(
+                'Fetching the full definition…',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
             ),
           ],
         ),
@@ -575,7 +696,7 @@ class _ErrorNote extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final blocked = onPassCheck != null;
     return Padding(
-      padding: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
       child: Card(
         elevation: 0,
         color: scheme.errorContainer,
@@ -633,76 +754,6 @@ class _ErrorNote extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// A titled block of body text, collapsed behind "Read more" when it is long —
-/// the same treatment the local character page gives it.
-class _Section extends StatefulWidget {
-  const _Section(this.title, this.body);
-
-  final String title;
-  final String body;
-
-  @override
-  State<_Section> createState() => _SectionState();
-}
-
-class _SectionState extends State<_Section> {
-  bool _expanded = false;
-
-  static const int _collapsedLines = 5;
-  static const int _threshold = 200;
-
-  @override
-  Widget build(BuildContext context) {
-    final body = widget.body.trim();
-    if (body.isEmpty) return const SizedBox.shrink();
-    final scheme = Theme.of(context).colorScheme;
-    final isLong = body.length > _threshold ||
-        '\n'.allMatches(body).length >= _collapsedLines;
-    final collapsed = isLong && !_expanded;
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.title.toUpperCase(),
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.primary,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                ),
-          ),
-          const SizedBox(height: 6),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 150),
-            alignment: Alignment.topCenter,
-            child: Text(
-              body,
-              maxLines: collapsed ? _collapsedLines : null,
-              overflow: collapsed ? TextOverflow.ellipsis : TextOverflow.clip,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
-          if (isLong)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: () => setState(() => _expanded = !_expanded),
-                child: Text(_expanded ? 'Read less' : 'Read more'),
-              ),
-            ),
-        ],
       ),
     );
   }

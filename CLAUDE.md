@@ -138,6 +138,14 @@ the code are the source of truth — verify file:line claims before relying on t
   realm, Botbooru, Pygmalion, Wyvern, DataCat — each with its own API quirks),
   `screens/discover/*`. A feed is a live remote view held by
   `discover_controller.dart`, deliberately *not* in `AppState`.
+  `discover_item_screen.dart` is the **character sheet drawn from a listing**: it
+  builds the same slivers out of `screens/character_sheet_parts.dart`
+  (`TagBand`, `SheetDivider`, `NotesBlock`, `DefinitionFolds`) plus its own
+  natural-ratio portrait, so a catalogue entry gets the card's images, HTML and
+  CSS exactly as a local character does. Its two differences: a flat "From the
+  catalogue" block between the tags and the notes, and `DefinitionFolds(
+  interactive: false)` — the scenario picker writes onto a *stored* character and
+  this one is not saved yet.
 - **Chat portability:** `services/chat_codec.dart` (imports ST `.jsonl`, Agnai,
   ooba, CAI, Risu, Kobold, plain logs; native export is one file ST+Agnai+MaiChat
   all read). `test/chat_codec_test.dart` has a "what the other apps accept" group.
