@@ -1,10 +1,13 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../models/conversation.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
+import '../models/message_image.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
@@ -16,6 +19,7 @@ import '../widgets/character_avatar.dart';
 import '../widgets/floating_images_layer.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
+import '../widgets/picture_viewer.dart';
 import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
 import 'chat_export.dart';
@@ -24,7 +28,9 @@ import 'chat_memory_panel.dart';
 import 'chat_settings_screen.dart';
 import 'chats_screen.dart';
 import 'gallery/chat_gallery_screen.dart';
+import 'gallery/gallery_picker_sheet.dart';
 import 'group_add_sheet.dart';
+import 'image_gen/image_gen_sheet.dart';
 import 'prompt_view_screen.dart';
 import 'presets/chat_preset_panel.dart';
 import 'presets/preset_pickers.dart';
@@ -89,6 +95,27 @@ class _ChatScreenState extends State<ChatScreen> {
   /// the operations strip's group symbol, dismissed by its own ✕.
   bool _showGroupBar = false;
 
+  /// Whether the attachment tray is showing above the composer: the two ways to
+  /// choose a picture, and then the preview of what is about to be sent. Opened
+  /// from the operations strip's picture symbol.
+  bool _showAttachBar = false;
+
+  /// Pictures already chosen for the next send, in the order they were picked.
+  final List<MessageImage> _attachments = <MessageImage>[];
+
+  /// The text the newest turn had when the reader scrolled away from the bottom
+  /// mid-stream, and how far the thread had grown by then.
+  ///
+  /// The thread is a *reversed* list, so its newest turn is the one anchored to
+  /// the bottom and everything older is measured from it: every time that turn
+  /// gains (or, when a half-written markdown fence reflows, loses) a line, every
+  /// message above it moves by that much. Somebody reading three screens back
+  /// therefore watched the page twitch on every token. While they are away the
+  /// newest turn is drawn with the text it had when they left, so the thread holds
+  /// perfectly still; it catches up the moment they return to the bottom.
+  String? _frozenTail;
+  String _frozenTailReasoning = '';
+
   @override
   void initState() {
     super.initState();
@@ -139,16 +166,72 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send(AppState state) async {
     final text = _input.text;
-    if (text.trim().isEmpty || state.streaming) return;
+    final images = List<MessageImage>.of(_attachments);
+    if ((text.trim().isEmpty && images.isEmpty) || state.streaming) return;
     if (!state.isConfigured) {
       _openSettings();
       return;
     }
     _input.clear();
+    setState(() {
+      _attachments.clear();
+      _showAttachBar = false;
+    });
     _stickToLatest();
-    await state.send(text);
+    await state.send(text, images: images);
     _stickToLatest();
   }
+
+  /// Picks a picture out of the app's own gallery for the next send.
+  Future<void> _attachFromGallery(AppState state) async {
+    final ref = await showGalleryPickerSheet(
+      context,
+      title: 'Send a picture',
+      characterId: state.active.characterId,
+    );
+    if (ref == null || !mounted) return;
+    setState(() => _attachments
+        .add(MessageImage(ref: ref, mime: mimeForRef(ref))));
+  }
+
+  /// Picks pictures off the device for the next send. The bytes are written into
+  /// the pictures directory straight away, so the message holds a reference like
+  /// every other picture in the app rather than a blob.
+  Future<void> _attachFromDevice(AppState state) async {
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.pickFiles(
+        type: FileType.image,
+        allowMultiple: true,
+        withData: true,
+      );
+    } catch (_) {
+      result = null;
+    }
+    if (result == null || result.files.isEmpty || !mounted) return;
+    final chosen = <MessageImage>[];
+    for (final file in result.files) {
+      final bytes = file.bytes;
+      if (bytes == null || bytes.isEmpty) continue;
+      final image = await state.storeAttachment(bytes);
+      if (image != null) chosen.add(image);
+    }
+    if (!mounted) return;
+    if (chosen.isEmpty) {
+      _toast('Those pictures could not be read.');
+      return;
+    }
+    setState(() => _attachments.addAll(chosen));
+  }
+
+  /// Opens the image studio over the chat — the 75%-height sheet where pictures
+  /// are made. [prompt] seeds the prompt box, which is how a message's "Generate
+  /// image" action hands its own text over.
+  void _openImageStudio({String prompt = ''}) => showImageStudio(
+        context,
+        conversationId: context.read<AppState>().active.id,
+        prompt: prompt,
+      );
 
   void _openSettings() => Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
@@ -267,18 +350,33 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Returns to the newest message. The list is reversed, so "the end" is
   /// offset 0: [animated] glides there (the jump-to-latest button), otherwise it
   /// snaps, which is what streaming and sending want.
+  ///
+  /// A snap deliberately gives way to the reader. `jumpTo` calls `goIdle`, which
+  /// throws away whatever activity the position was running — so a snap fired
+  /// while a finger is on the thread kills the drag outright, and one fired
+  /// during a fling stops it dead. Streaming asks for this on every repaint, so
+  /// the first few pixels of every scroll-back used to be cancelled again and
+  /// again until the reader had dragged past the stick threshold. It is also
+  /// simply unnecessary at rest: in a reversed list, offset 0 pins the *bottom*
+  /// of the newest turn to the bottom of the viewport, so a growing reply follows
+  /// itself with no scrolling at all.
   void _scrollToEnd({bool animated = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
+      final position = _scroll.position;
       if (animated) {
         _scroll.animateTo(
           0,
           duration: const Duration(milliseconds: 240),
           curve: Curves.easeOut,
         );
-      } else {
-        _scroll.jumpTo(0);
+        return;
       }
+      // Already there: nothing to do, and nothing to interrupt.
+      if (position.pixels.abs() < 0.5) return;
+      // The reader has hold of the thread — leave it in their hands.
+      if (position.userScrollDirection != ScrollDirection.idle) return;
+      _scroll.jumpTo(0);
     });
   }
 
@@ -339,6 +437,19 @@ class _ChatScreenState extends State<ChatScreen> {
     // Keep pinned to the newest text as a reply streams in — but only while the
     // reader is at the bottom, so scrolling up during a stream is never undone.
     if (state.streaming && _stick) _scrollToEnd();
+    // Away from the bottom mid-stream: hold the newest turn at the text it had
+    // when they left, so the thread they are reading does not twitch on every
+    // token — see [_frozenTail].
+    if (state.streaming && !_stick && !conversation.isEmpty) {
+      final tail = conversation.messages.last;
+      if (_frozenTail == null) {
+        _frozenTail = tail.content;
+        _frozenTailReasoning = tail.reasoning;
+      }
+    } else if (_frozenTail != null) {
+      _frozenTail = null;
+      _frozenTailReasoning = '';
+    }
 
     final topInset = MediaQuery.paddingOf(context).top;
     // A chat can carry chat-style settings of its own; otherwise the app-wide
@@ -357,8 +468,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onChatGraph: () => _openChatGraph(conversation.id),
         onProviderModel: _openQuickSettings,
         onSettings: _openSettings,
-        onImageGen: () =>
-            _openSection('Image Generation', Icons.add_photo_alternate_outlined),
+        onImageGen: _openImageStudio,
         onExport: () => _exportChat(state),
         onRestart: () => _restartChat(state),
         onDelete: () => _deleteChat(state),
@@ -415,6 +525,12 @@ class _ChatScreenState extends State<ChatScreen> {
                               child: _JumpToLatestButton(
                                 visible: _showJumpToEnd || _unread > 0,
                                 unread: _unread,
+                                // A reply is still being written down there, and
+                                // while the reader is away the newest turn is held
+                                // still on purpose — so the button says so rather
+                                // than letting a frozen turn read as a stalled
+                                // one.
+                                live: state.streaming && !_stick,
                                 onTap: () =>
                                     setState(() => _stickToLatest(animated: true)),
                               ),
@@ -493,7 +609,15 @@ class _ChatScreenState extends State<ChatScreen> {
       itemBuilder: (context, index) {
         final msgIndex = conversation.messages.length - 1 - index;
         final isLast = index == 0;
-        final message = conversation.messages[msgIndex];
+        var message = conversation.messages[msgIndex];
+        // The newest turn, held at the text it had when the reader scrolled away
+        // mid-stream. Everything else about the turn is live.
+        if (isLast && _frozenTail != null) {
+          message = message.copyWith(
+            content: _frozenTail,
+            reasoning: _frozenTailReasoning,
+          );
+        }
         if (msgIndex == _editingIndex) {
           return _InlineMessageEditor(
             key: ValueKey('edit-${conversation.id}-$msgIndex'),
@@ -530,6 +654,11 @@ class _ChatScreenState extends State<ChatScreen> {
               : state.avatarRefFor(conversation, userSpeaker),
           onAvatarTap: (isUser) =>
               _openAvatar(state, conversation, isUser ? userSpeaker : speaker),
+          onImageTap: (at) => showPictureViewer(
+            context,
+            refs: [for (final image in message.images) image.ref],
+            index: at,
+          ),
           pending: isLast && state.streaming,
           streaming: state.streaming,
           onAction: (action) =>
@@ -583,6 +712,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _openPromptView(state, conversation, index);
       case MessageAction.info:
         _openMessageInfo(state, conversation, index);
+      case MessageAction.imagine:
+        _openImageStudio(prompt: conversation.messages[index].content);
     }
   }
 
@@ -676,6 +807,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Generate image'),
+              subtitle: const Text('Open the studio with this message as the '
+                  'prompt'),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _openImageStudio(prompt: message.content);
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.call_split),
               title: const Text('Branch from here'),
               subtitle: const Text('Carry on differently, in this chat\'s graph'),
@@ -736,16 +877,15 @@ class _ChatScreenState extends State<ChatScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // The operations strip: a row of symbols opened by the composer's ⋯
-          // button. Group chat is the first operation, shown when the feature is
-          // switched on; a muted note stands in when there is nothing to show
-          // yet, so the strip never opens to an empty, broken-looking gap.
+          // button. Sending a picture, the image studio, and group chat when the
+          // feature is switched on.
           //
           // AnimatedSize expands it open/closed. It is anchored top-right so the
           // strip grows straight down from under the ⋯ button (which lives at the
           // right, beside Send) and its content sits inside the clip the whole
           // way — the earlier animated attempt used the default centre alignment,
           // which clipped the group symbol mid-grow and left it untappable. At
-          // rest the size settles to the strip's natural size, so the symbol
+          // rest the size settles to the strip's natural size, so each symbol
           // keeps its full hit region.
           AnimatedSize(
             duration: const Duration(milliseconds: 200),
@@ -760,6 +900,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          IconButton(
+                            key: const Key('composer-image-button'),
+                            tooltip: 'Send a picture',
+                            isSelected: _showAttachBar,
+                            onPressed: () => setState(
+                                () => _showAttachBar = !_showAttachBar),
+                            icon: const Icon(Icons.image_outlined),
+                          ),
+                          IconButton(
+                            key: const Key('composer-imagegen-button'),
+                            tooltip: 'Image studio',
+                            onPressed: () => _openImageStudio(),
+                            icon: const Icon(Icons.auto_awesome_outlined),
+                          ),
                           if (groupEnabled)
                             IconButton(
                               tooltip: conversation.isGroup
@@ -768,22 +922,27 @@ class _ChatScreenState extends State<ChatScreen> {
                               isSelected: _showGroupBar,
                               onPressed: () => _toggleGroupBar(state),
                               icon: const Icon(Icons.groups_outlined),
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 10),
-                              child: Text(
-                                'More actions coming soon',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(color: scheme.onSurfaceVariant),
-                              ),
                             ),
                         ],
                       ),
                     ),
+                  ),
+          ),
+          // The attachment tray: two ways to choose a picture, replaced by a
+          // preview of the pictures once any are chosen. Grows out of the send bar
+          // like the participant bar above it.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomCenter,
+            child: !_showAttachBar
+                ? const SizedBox(width: double.infinity)
+                : _AttachBar(
+                    attachments: _attachments,
+                    onGallery: () => _attachFromGallery(state),
+                    onDevice: () => _attachFromDevice(state),
+                    onRemove: (i) => setState(() => _attachments.removeAt(i)),
+                    onClose: () => setState(() => _showAttachBar = false),
                   ),
           ),
           Row(
@@ -899,7 +1058,11 @@ class _ChatScreenState extends State<ChatScreen> {
       valueListenable: _input,
       builder: (context, value, _) => IconButton.filled(
         tooltip: 'Send',
-        onPressed: value.text.trim().isEmpty ? null : () => _send(state),
+        // A picture on its own is a message: Send stays live with an empty box
+        // as long as something is attached.
+        onPressed: value.text.trim().isEmpty && _attachments.isEmpty
+            ? null
+            : () => _send(state),
         icon: const Icon(Icons.arrow_upward),
       ),
     );
@@ -910,6 +1073,209 @@ class _ChatScreenState extends State<ChatScreen> {
 /// Edits a message in place, right where it sits in the thread — no dialog. A
 /// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
 /// there is room to type.
+/// The composer's attachment tray: a dark strip that rises out of the send bar
+/// offering the two places a picture can come from, and — once anything is
+/// chosen — showing exactly what is about to be sent, each thumbnail with its own
+/// ✕.
+///
+/// Deliberately a strip rather than a sheet: choosing a picture should not cover
+/// the conversation it is being sent to, and the preview has to sit where the
+/// message is being typed.
+class _AttachBar extends StatelessWidget {
+  const _AttachBar({
+    required this.attachments,
+    required this.onGallery,
+    required this.onDevice,
+    required this.onRemove,
+    required this.onClose,
+  });
+
+  final List<MessageImage> attachments;
+  final VoidCallback onGallery;
+  final VoidCallback onDevice;
+  final ValueChanged<int> onRemove;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // A deliberately dark tray, the way a photo strip reads in every messaging
+    // app — and it keeps thumbnails from bleeding into the composer behind it.
+    // Taken from the scheme rather than hard-coded black, so it is still a
+    // MaiChat surface in either theme.
+    final background = Color.alphaBlend(
+      scheme.inverseSurface.withValues(alpha: 0.92),
+      scheme.surface,
+    );
+    final foreground = scheme.onInverseSurface;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: attachments.isEmpty
+                ? Row(
+                    children: [
+                      _AttachChoice(
+                        key: const Key('attach-from-gallery'),
+                        icon: Icons.photo_library_outlined,
+                        label: 'From gallery',
+                        color: foreground,
+                        onTap: onGallery,
+                      ),
+                      const SizedBox(width: 6),
+                      _AttachChoice(
+                        key: const Key('attach-from-device'),
+                        icon: Icons.add_photo_alternate_outlined,
+                        label: 'From device',
+                        color: foreground,
+                        onTap: onDevice,
+                      ),
+                    ],
+                  )
+                : SizedBox(
+                    height: 64,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: attachments.length + 1,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (context, i) => i == attachments.length
+                          // One more, without leaving the tray.
+                          ? _AttachChoice(
+                              key: const Key('attach-another'),
+                              icon: Icons.add,
+                              label: 'Add',
+                              color: foreground,
+                              onTap: onGallery,
+                            )
+                          : _AttachPreview(
+                              image: attachments[i],
+                              onRemove: () => onRemove(i),
+                            ),
+                    ),
+                  ),
+          ),
+          IconButton(
+            tooltip: 'Close',
+            visualDensity: VisualDensity.compact,
+            color: foreground,
+            onPressed: onClose,
+            icon: const Icon(Icons.close, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One of the tray's two sources, as a tappable pill.
+class _AttachChoice extends StatelessWidget {
+  const _AttachChoice({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(20),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelLarge
+                    ?.copyWith(color: color),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A thumbnail of a picture queued for the next send, with its own remove button.
+class _AttachPreview extends StatelessWidget {
+  const _AttachPreview({required this.image, required this.onRemove});
+
+  final MessageImage image;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    const double side = 64;
+    final provider = avatarImage(
+      image.ref,
+      displaySize: side,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            width: side,
+            height: side,
+            child: provider == null
+                ? const ColoredBox(
+                    color: Colors.black26,
+                    child: Center(
+                      child: Icon(Icons.broken_image_outlined,
+                          size: 20, color: Colors.white54),
+                    ),
+                  )
+                : Image(image: provider, fit: BoxFit.cover),
+          ),
+        ),
+        Positioned(
+          top: -6,
+          right: -6,
+          child: IconButton(
+            tooltip: 'Remove',
+            iconSize: 16,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.black54,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: onRemove,
+            icon: const Icon(Icons.close),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// The picture behind one chat, drawn edge to edge under the thread.
 ///
 /// [opacity] is the point of the whole thing: a photograph at full strength
@@ -1295,6 +1661,7 @@ class _JumpToLatestButton extends StatelessWidget {
     required this.visible,
     required this.onTap,
     this.unread = 0,
+    this.live = false,
   });
 
   final bool visible;
@@ -1302,6 +1669,9 @@ class _JumpToLatestButton extends StatelessWidget {
 
   /// Turns that arrived while scrolled away; shown as a count badge when > 0.
   final int unread;
+
+  /// Whether a reply is being written right now, out of sight below.
+  final bool live;
 
   @override
   Widget build(BuildContext context) {
@@ -1320,10 +1690,15 @@ class _JumpToLatestButton extends StatelessWidget {
             children: [
               FloatingActionButton.small(
                 heroTag: null,
-                tooltip: 'Jump to latest',
+                tooltip:
+                    live ? 'A reply is coming in — jump to it' : 'Jump to latest',
                 elevation: 2,
-                backgroundColor: scheme.secondaryContainer,
-                foregroundColor: scheme.onSecondaryContainer,
+                backgroundColor: live
+                    ? scheme.primaryContainer
+                    : scheme.secondaryContainer,
+                foregroundColor: live
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSecondaryContainer,
                 onPressed: onTap,
                 child: const Icon(Icons.arrow_downward),
               ),

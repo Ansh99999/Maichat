@@ -289,7 +289,11 @@ enum MessageAction {
   // label reads "Branch", which is what the Chat Graph calls the result.
   fork('Branch', Icons.call_split),
   prompt('View prompt', Icons.terminal),
-  info('Info', Icons.info_outline);
+  info('Info', Icons.info_outline),
+  // Opens the image studio with this turn's text as the prompt. Independent of
+  // the chat's own model — generation goes to the studio's endpoint — so it
+  // applies to either speaker and is never blocked by a reply in flight.
+  imagine('Generate image', Icons.auto_awesome_outlined);
 
   const MessageAction(this.label, this.icon);
 
@@ -357,6 +361,7 @@ const List<MessageActionPref> kDefaultMessageActions = [
   MessageActionPref(MessageAction.fork),
   MessageActionPref(MessageAction.prompt),
   MessageActionPref(MessageAction.info),
+  MessageActionPref(MessageAction.imagine),
 ];
 
 /// Normalises a loaded list: drops unknown/duplicate actions and appends any

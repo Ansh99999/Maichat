@@ -7,6 +7,7 @@ import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/message.dart';
 import '../services/jank_logger.dart';
+import 'avatar_image.dart';
 import 'character_avatar.dart';
 import 'message_html.dart';
 import 'message_markdown.dart';
@@ -39,6 +40,7 @@ class MessageBubble extends StatelessWidget {
     this.onAvatarTap,
     this.avatarOverride,
     this.userAvatarOverride,
+    this.onImageTap,
     this.streaming = false,
   });
 
@@ -90,6 +92,11 @@ class MessageBubble extends StatelessWidget {
 
   /// The same, for the impersonated user's side.
   final String? userAvatarOverride;
+
+  /// Opens the attachment at that index full size. Null (the settings preview)
+  /// leaves the pictures inert — something that cannot be opened must not look
+  /// tappable.
+  final void Function(int index)? onImageTap;
 
   /// Whether a reply is currently streaming — disables mutating actions.
   final bool streaming;
@@ -205,13 +212,31 @@ class MessageBubble extends StatelessWidget {
     // holds more than one alternative.
     Widget content({Widget? leading}) {
       final text = _text(scheme, textColor, showCaret, leading: leading);
-      if (!message.hasSwipes) return text;
+      // Pictures sit above the words, the way every messaging app draws them —
+      // and a picture sent with nothing typed is the whole message.
+      final Widget body;
+      if (!message.hasImages) {
+        body = text;
+      } else {
+        body = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: crossAxis,
+          children: [
+            _attachments(context),
+            if (showCaret || message.content.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              text,
+            ],
+          ],
+        );
+      }
+      if (!message.hasSwipes) return body;
       return Column(
         mainAxisSize: MainAxisSize.min,
         // Centred under the message, per the spec — the bubble hugs whichever of
         // the two is wider.
         crossAxisAlignment: CrossAxisAlignment.center,
-        children: [text, _swipeBar(context, textColor)],
+        children: [body, _swipeBar(context, textColor)],
       );
     }
 // APPEND-BUILD
@@ -800,6 +825,69 @@ class MessageBubble extends StatelessWidget {
           ...spans,
         ],
       ),
+    );
+  }
+
+  /// The pictures attached to this turn, above its text inside the bubble.
+  ///
+  /// One picture is drawn at its own proportions and given room to be looked at;
+  /// several become a row of squares, because a turn carrying five photographs
+  /// full size would push the conversation off the screen. Either way a tap opens
+  /// the picture full size, when the caller wired [onImageTap] up.
+  Widget _attachments(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final single = message.images.length == 1;
+    final double side = single ? 232 : 96;
+
+    Widget broken() => Container(
+          width: side,
+          height: side * 0.75,
+          alignment: Alignment.center,
+          color: scheme.surfaceContainerHighest,
+          child: Icon(Icons.broken_image_outlined, color: scheme.outline),
+        );
+
+    Widget tile(int index) {
+      final image = message.images[index];
+      final provider =
+          avatarImage(image.ref, displaySize: side, devicePixelRatio: dpr);
+      final Widget picture = provider == null
+          ? broken()
+          : single
+              // Its own proportions, capped so a phone screenshot does not fill
+              // the thread.
+              ? Image(
+                  image: provider,
+                  width: side,
+                  fit: BoxFit.fitWidth,
+                  errorBuilder: (_, _, _) => broken(),
+                )
+              : Image(
+                  image: provider,
+                  width: side,
+                  height: side,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => broken(),
+                );
+      final framed = ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: picture,
+      );
+      final tap = onImageTap;
+      if (tap == null) return framed;
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => tap(index),
+        child: framed,
+      );
+    }
+
+    if (single) return tile(0);
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [for (var i = 0; i < message.images.length; i++) tile(i)],
     );
   }
 

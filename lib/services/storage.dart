@@ -9,6 +9,7 @@ import '../models/conversation.dart';
 import '../models/discover.dart';
 import '../models/embedding.dart';
 import '../models/gallery_image.dart';
+import '../models/image_gen.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
@@ -56,6 +57,8 @@ class Storage {
   static const _embeddingKey = 'embeddings';
   static const _documentsKey = 'documents';
   static const _viewPrefsKey = 'viewPrefs';
+  static const _imageGenKey = 'imageGen';
+  static const _summaryFoldsKey = 'summaryFolds';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -304,6 +307,63 @@ class Storage {
 
   Future<void> saveViewPrefs(ViewPrefs prefs) async =>
       (await _prefs).setString(_viewPrefsKey, jsonEncode(prefs.toJson()));
+
+  /// How the image studio talks to its endpoint. Its own small entry, so opening
+  /// the studio's settings never rewrites anything large.
+  Future<ImageGenConfig> loadImageGen() async {
+    final raw = (await _prefs).getString(_imageGenKey);
+    if (raw == null) return const ImageGenConfig();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return ImageGenConfig.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const ImageGenConfig();
+  }
+
+  Future<void> saveImageGen(ImageGenConfig config) async =>
+      (await _prefs).setString(_imageGenKey, jsonEncode(config.toJson()));
+
+  /// Which memory blocks are folded shut, as `{conversationId: [segmentId, …]}`.
+  ///
+  /// This is a *view* preference and it lives in its own tiny entry for one
+  /// concrete reason: it used to ride on the segment inside `conversations`, so
+  /// folding one block re-encoded and rewrote every message of every chat. On a
+  /// large store that is tens of milliseconds of JSON on the UI thread — the
+  /// micro-freeze on opening a memory block. A fold now costs a few dozen bytes.
+  Future<Map<String, Set<String>>> loadSummaryFolds() async {
+    final raw = (await _prefs).getString(_summaryFoldsKey);
+    if (raw == null) return <String, Set<String>>{};
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map) {
+        final out = <String, Set<String>>{};
+        for (final entry in json.entries) {
+          final ids = entry.value;
+          if (ids is! List) continue;
+          final set = ids.map((e) => e.toString()).where((s) => s.isNotEmpty);
+          if (set.isNotEmpty) out[entry.key.toString()] = set.toSet();
+        }
+        return out;
+      }
+    } catch (_) {
+      // An unreadable entry just means nothing is remembered folded.
+    }
+    return <String, Set<String>>{};
+  }
+
+  Future<void> saveSummaryFolds(Map<String, Set<String>> folds) async {
+    final prefs = await _prefs;
+    if (folds.isEmpty) {
+      await prefs.remove(_summaryFoldsKey);
+      return;
+    }
+    await prefs.setString(
+      _summaryFoldsKey,
+      jsonEncode(folds.map((id, ids) => MapEntry(id, ids.toList()))),
+    );
+  }
 
   /// The pictures the user keeps in the app's gallery — the records only; the
   /// images themselves are files in the pictures directory, referenced by

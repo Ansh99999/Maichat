@@ -76,7 +76,10 @@ void main() {
     await tester.tap(find.byKey(const Key('composer-ops-button')));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.groups_outlined), findsNothing);
-    expect(find.text('More actions coming soon'), findsOneWidget);
+    // The picture and studio operations are not gated on group chat, so the
+    // strip still has something in it.
+    expect(find.byKey(const Key('composer-image-button')), findsOneWidget);
+    expect(find.byKey(const Key('composer-imagegen-button')), findsOneWidget);
   });
 
   testWidgets('the auto-reply menu sets a responder and toggles it off',

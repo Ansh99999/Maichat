@@ -25,6 +25,11 @@ void main() {
 
   Future<void> open(WidgetTester tester, String tile) async {
     await reveal(tester, find.text(tile));
+    // `scrollUntilVisible` stops as soon as the row has been *built*, which on a
+    // page this long can still leave it below the fold — bring it into view
+    // before tapping it.
+    await tester.ensureVisible(find.text(tile));
+    await tester.pumpAndSettle();
     await tester.tap(find.text(tile));
     await tester.pumpAndSettle();
   }

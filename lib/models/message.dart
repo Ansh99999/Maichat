@@ -1,3 +1,5 @@
+import 'message_image.dart';
+
 /// One generated alternative for a turn — the unit the swipe control selects
 /// between.
 ///
@@ -81,7 +83,11 @@ class ChatMessage {
     int swipeIndex = 0,
     this.speakerId,
     this.speakerName,
-  })  : swipes = List<MessageVariant>.unmodifiable(
+    List<MessageImage>? images,
+  })  : images = List<MessageImage>.unmodifiable(
+          images ?? const <MessageImage>[],
+        ),
+        swipes = List<MessageVariant>.unmodifiable(
           swipes == null || swipes.isEmpty
               ? <MessageVariant>[
                   MessageVariant(
@@ -99,6 +105,14 @@ class ChatMessage {
 
   /// Either `user` or `assistant`.
   final String role;
+
+  /// Pictures attached to this turn, in the order they were added. They belong
+  /// to the *turn* rather than to a variant: regenerating a reply produces new
+  /// text, never new attachments, and it is the user's turns that carry these.
+  /// Empty for the overwhelming majority of messages.
+  final List<MessageImage> images;
+
+  bool get hasImages => images.isNotEmpty;
 
   /// In a group chat, which participant *said* this turn — its [Character.id]
   /// and a denormalised display name (kept so a turn still labels right if the
@@ -141,6 +155,7 @@ class ChatMessage {
     int? thinkingMs,
     Object? speakerId = _unset,
     Object? speakerName = _unset,
+    List<MessageImage>? images,
   }) {
     final next = active.copyWith(
       content: content,
@@ -152,6 +167,7 @@ class ChatMessage {
       role: role,
       swipes: <MessageVariant>[...swipes]..[swipeIndex] = next,
       swipeIndex: swipeIndex,
+      images: images ?? this.images,
       speakerId: identical(speakerId, _unset)
           ? this.speakerId
           : speakerId as String?,
@@ -173,6 +189,7 @@ class ChatMessage {
               role: role,
               swipes: swipes.toList(),
               swipeIndex: index,
+              images: images,
               speakerId: speakerId,
               speakerName: speakerName,
             );
@@ -183,6 +200,7 @@ class ChatMessage {
         role: role,
         swipes: <MessageVariant>[...swipes, variant],
         swipeIndex: swipes.length,
+        images: images,
         speakerId: speakerId,
         speakerName: speakerName,
       );
@@ -200,6 +218,7 @@ class ChatMessage {
       role: role,
       swipes: rest,
       swipeIndex: selected.clamp(0, rest.length - 1),
+      images: images,
       speakerId: speakerId,
       speakerName: speakerName,
     );
@@ -216,6 +235,8 @@ class ChatMessage {
         if (thinkingMs != null) 'thinkingMs': thinkingMs,
         if (speakerId != null) 'speakerId': speakerId,
         if (speakerName != null) 'speakerName': speakerName,
+        if (images.isNotEmpty)
+          'images': images.map((i) => i.toJson()).toList(),
         if (hasSwipes) 'swipes': swipes.map((s) => s.toJson()).toList(),
         if (hasSwipes) 'swipeIndex': swipeIndex,
       };
@@ -228,6 +249,7 @@ class ChatMessage {
             .map(MessageVariant.fromJson)
             .toList()
         : const <MessageVariant>[];
+    final pictures = json['images'];
     return ChatMessage(
       role: json['role'] as String? ?? 'assistant',
       content: json['content'] as String? ?? '',
@@ -240,6 +262,13 @@ class ChatMessage {
       speakerName: (json['speakerName'] as String?)?.trim().isEmpty ?? true
           ? null
           : (json['speakerName'] as String).trim(),
+      images: pictures is List
+          ? pictures
+              .whereType<Map<String, dynamic>>()
+              .map(MessageImage.fromJson)
+              .where((i) => i.ref.isNotEmpty)
+              .toList()
+          : null,
       swipes: swipes.isEmpty ? null : swipes,
       swipeIndex: (json['swipeIndex'] as num?)?.toInt() ?? 0,
     );
@@ -247,7 +276,42 @@ class ChatMessage {
 
   /// Wire format for the chat completions endpoint. Thinking is deliberately
   /// absent: it is a display artefact of one turn, not part of the transcript.
-  Map<String, String> toApi() => {'role': role, 'content': content};
+  ///
+  /// A turn with attachments sends OpenAI's multi-part content array instead of
+  /// a plain string — but only when a picture actually has something to send, so
+  /// a text-only turn (every turn, in the overwhelming majority of chats) keeps
+  /// the exact shape it has always had.
+  Map<String, dynamic> toApi() => {'role': role, 'content': openAiContent()};
+
+  /// This turn's content in OpenAI's chat dialect: the plain string when there
+  /// is nothing attached, otherwise `[{type: text}, {type: image_url}, …]`.
+  Object openAiContent() {
+    final parts = <Map<String, dynamic>>[];
+    for (final image in images) {
+      final url = _imageUrl(image);
+      if (url != null) {
+        parts.add({
+          'type': 'image_url',
+          'image_url': <String, dynamic>{'url': url},
+        });
+      }
+    }
+    if (parts.isEmpty) return content;
+    return <Map<String, dynamic>>[
+      if (content.isNotEmpty) {'type': 'text', 'text': content},
+      ...parts,
+    ];
+  }
+
+  /// What an OpenAI-shaped `image_url` should carry for [image]: the picture's
+  /// own address when it lives online, a data URL when its bytes are to hand,
+  /// and null when neither — a picture whose file has gone is dropped rather
+  /// than sent as an empty attachment the host will reject.
+  static String? _imageUrl(MessageImage image) {
+    if (image.isUrl) return image.ref.trim();
+    if (!image.hasData) return null;
+    return 'data:${image.mime};base64,${image.data}';
+  }
 }
 
 /// Collapses runs of consecutive same-role messages into one, joined by blank
@@ -259,6 +323,11 @@ class ChatMessage {
 /// many small blocks to whichever fragment happened to come first. Adjacent
 /// blocks of one role are contiguous document text by design, so joining them is
 /// what the preset author meant.
+///
+/// Attachments are carried across the join rather than dropped: a preset that
+/// wraps the conversation in framing blocks can merge a `user` framing turn into
+/// the very turn a picture was attached to, and losing the picture there would
+/// make an attachment vanish for one preset and work for another.
 List<ChatMessage> mergeSameRole(List<ChatMessage> input) {
   final out = <ChatMessage>[];
   for (final message in input) {
@@ -266,6 +335,7 @@ List<ChatMessage> mergeSameRole(List<ChatMessage> input) {
       out[out.length - 1] = ChatMessage(
         role: message.role,
         content: '${out.last.content}\n\n${message.content}',
+        images: <MessageImage>[...out.last.images, ...message.images],
       );
     } else {
       out.add(message);

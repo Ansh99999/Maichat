@@ -71,6 +71,20 @@ the code are the source of truth — verify file:line claims before relying on t
   shipped wrong twice despite green widget tests. Say plainly what was verified
   (analyze, tests, Linux/xvfb) and what needs the user's phone.
 
+### Widget tests and real file I/O
+
+A `testWidgets` body runs inside a fake-async zone that **never pumps real
+`dart:io` futures**, so anything that writes a picture (`storePicture`,
+`storeAttachment`, `addGalleryImages`, `AvatarStore.write`) hangs forever if it is
+plainly awaited — the symptom is a test that sits there until `pumpAndSettle`
+times out ten minutes later, with no assertion failure. Wrap those calls in
+`tester.runAsync(...)`, or wait for a chain of them with a loop of
+`runAsync(Future.delayed(...))` + `pump()` (see
+`test/image_gen_ui_test.dart`'s `settleRealWork`). Plain `test()` bodies are
+unaffected. Two related traps in the same tests: a progress spinner means
+`pumpAndSettle` never settles, and a drag started at the left edge of the chat is
+eaten by the drawer's edge-swipe region.
+
 ## Critical invariants — do not regress these
 
 - **Exactly one leading `system` message on the wire.** The request must contain
@@ -86,7 +100,10 @@ the code are the source of truth — verify file:line claims before relying on t
   a `local:<file>` ref, or legacy base64 only until the startup migration moves
   it. Base64 blobs inside prefs previously grew the store until Android's native
   prefs parser OOM'd *before Dart ran* — an unopenable app. `lib/services/prefs_repair.dart`
-  is the escape hatch. There is **no avatar size cap** by design.
+  is the escape hatch. There is **no avatar size cap** by design. This holds for
+  message attachments too (`MessageImage.ref`): base64 only ever exists on the
+  copy handed to the wire, and `_sweepAvatars`' keep-list must name every message
+  attachment or the sweep deletes a picture that is in the transcript.
 - **Per-chat overrides resolve in exactly one place each.** Read a thread's style
   via `AppState.interfaceFor(conversation)`, a character *inside a thread* via
   `AppState.characterFor(conversation, id)` and its scenario via
@@ -95,6 +112,21 @@ the code are the source of truth — verify file:line claims before relying on t
   `Conversation.copyAs` keeps fork/renumber from dropping a new per-chat field.
 - **`AppState.init()` must always finish** (timeout + catch, surfaces `loadError`,
   goes read-only on failure). A throw here = permanent startup spinner.
+- **The thread is a `reverse: true` list, and that has consequences.** Its newest
+  turn is anchored to the bottom and every older message is positioned relative to
+  it, so a turn that grows moves the whole conversation above it. Two rules follow:
+  a streaming reply repaints on a cadence (`AppState._streamPaintMs`) rather than
+  per delta, and while the reader is scrolled away mid-stream the newest turn is
+  drawn frozen at the text it had (`_ChatScreenState._frozenTail`). Never `jumpTo`
+  the thread while a gesture is live — `jumpTo` goes through `goIdle`, which
+  cancels the drag or fling outright (`_scrollToEnd` guards on
+  `userScrollDirection`). At offset 0 nothing needs scrolling at all: the bottom
+  anchor already follows a growing reply.
+- **A view preference never rides in the `conversations` blob.** That entry holds
+  every message of every chat, so re-encoding it to record one boolean is tens of
+  milliseconds of JSON on the UI thread. Memory-block folds live in their own
+  `summaryFolds` entry and are laid back over the summaries on load
+  (`AppState._applySummaryFolds`); `browseLayout` does the same via `viewPrefs`.
 
 ## Architecture map (where things live)
 
@@ -158,8 +190,30 @@ the code are the source of truth — verify file:line claims before relying on t
   image; a character's extra avatars live in `Character.avatars` and are resolved
   only through `AppState.avatarPoolFor`/`avatarRefFor`.
 - **Chat UI:** `screens/chat_screen.dart`, `widgets/message_bubble.dart`
-  (swipes/variants, per-message action bar, name placement), `widgets/thinking_block.dart`,
-  per-chat settings screen, `screens/prompt_view_screen.dart` (View prompt inspector).
+  (swipes/variants, per-message action bar, name placement, attachments),
+  `widgets/thinking_block.dart`, per-chat settings screen,
+  `screens/prompt_view_screen.dart` (View prompt inspector).
+- **Pictures in a chat (sending):** `models/message_image.dart` — a turn's
+  `ChatMessage.images` hold a `local:`/URL ref plus a mime; the base64 only exists
+  on the copy `AppState._wireImages` builds, capped at `kMaxWireImages` newest.
+  Each dialect carries an attachment differently and the four shapes live together
+  in `ChatClient`'s "attachments" block (`anthropicTurn`, `geminiParts`,
+  `_responsesImage`, `ChatMessage.openAiContent`); `requestPreview` elides the
+  payload. The composer's tray (`_AttachBar` in `chat_screen.dart`) opens off the
+  operations strip and offers gallery-or-device, then previews what will be sent.
+  `test/image_wire_test.dart` asserts the outgoing bytes per dialect.
+- **Image studio (generation):** `models/image_gen.dart` (`ImageGenConfig` — its
+  own endpoint and key, deliberately *not* the chat provider, which is what makes
+  "every chat can generate a picture" true), `services/image_client.dart` (OpenAI
+  `/images/generations`, multipart `/images/edits` when there are reference
+  pictures, and Gemini `:generateContent` asking for an image modality; failures
+  are `ChatApiException` with the chat client's own wording),
+  `screens/image_gen/image_gen_sheet.dart` (a 75%-height sheet with its settings
+  page swapped in *inside* the sheet) + `image_gen_settings.dart`. Everything it
+  makes is filed in the gallery under the chat's character by
+  `AppState.generateImages`; "Send to chat" goes through `postImageToChat`. Reached
+  from the drawer footer, the composer's operations strip, and
+  `MessageAction.imagine`.
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by
   `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over
@@ -172,7 +226,17 @@ the code are the source of truth — verify file:line claims before relying on t
 
 - **On-device gestures/touch** — verify drag/nudge on the user's phone. This now
   includes the gallery's pinch-to-zoom ladder and the drag/resize/rotate of
-  pictures floating over a chat.
+  pictures floating over a chat, and how smooth scrolling back through a chat
+  *feels* while a reply streams (the widget tests pin down offsets and extents,
+  not perceived smoothness).
+- **A real image endpoint.** The studio is written against agreeing sources and
+  loopback tests; whether a given host wants `quality`, rejects a `size`, or hands
+  back a link instead of base64 is only settled by pointing it at one. Nothing
+  here has a key.
+- **Saving a picture to the device gallery.** "Save to this device" uses the
+  system save dialog (`FilePicker.saveFile`), the same permission-free path every
+  other export takes — it writes wherever the user points it, not into MediaStore,
+  which would need a native plugin (and the AGP-9 Kotlin hook).
 - **Chub** (`api.chub.ai` etc.) geo-blocks datacentre IPs; **JannyAI** is
   Cloudflare-challenged from a datacentre. Those Discover paths are written from
   agreeing sources + loopback tests and confirmed on the user's phone, not here.

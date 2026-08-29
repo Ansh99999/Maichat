@@ -584,10 +584,56 @@ void main() {
     expect(state.conversationById(id)!.summary!.segments[0].content, 'body-a');
     state.setSummarySegmentCollapsed(id, 'ghost', true);
 
-    // The fold survives a reload (persisted via the deferred whole-store write).
+    // The fold survives a reload (persisted in its own small store entry).
     await Future<void>.delayed(const Duration(milliseconds: 500));
     final reloaded = AppState(client: FakeClient());
     await reloaded.init();
     expect(reloaded.conversationById(id)!.summary!.segments[0].collapsed, isTrue);
+  });
+
+  test('folding a memory block never rewrites the conversation store', () async {
+    // The micro-freeze this closes: the fold used to live on the segment inside
+    // `conversations`, so recording one boolean re-encoded every message of every
+    // chat on the UI thread. A view preference costs its own few dozen bytes now.
+    final state = await _state(FakeClient(deltas: ['ok']));
+    await state.send('hi');
+    final id = state.active.id;
+    await state.setSummary(
+      id,
+      ChatSummary(
+        enabled: true,
+        segments: [SummarySegment(id: 'a', content: 'body-a')],
+      ),
+    );
+    final prefs = await SharedPreferences.getInstance();
+    final before = prefs.getString('conversations');
+    expect(before, isNotNull);
+
+    state.setSummarySegmentCollapsed(id, 'a', true);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
+    expect(prefs.getString('conversations'), before,
+        reason: 'the big entry must not be touched by a fold');
+    expect(prefs.getString('summaryFolds'), contains('a'));
+
+    // Unfolding it again clears the entry rather than leaving a growing record of
+    // every block anyone ever opened.
+    state.setSummarySegmentCollapsed(id, 'a', false);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(prefs.getString('summaryFolds'), isNull);
+    expect(prefs.getString('conversations'), before);
+  });
+
+  test('a fold for a chat that no longer exists is forgotten on load', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'summaryFolds': '{"ghost-chat":["a"]}',
+    });
+    final state = AppState(client: FakeClient());
+    await state.init();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(
+      (await SharedPreferences.getInstance()).getString('summaryFolds'),
+      isNull,
+    );
   });
 }

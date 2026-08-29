@@ -331,6 +331,7 @@ void main() {
         MessageAction.fork,
         MessageAction.prompt,
         MessageAction.info,
+        MessageAction.imagine,
       ]);
     });
 
@@ -345,6 +346,7 @@ void main() {
           MessageActionPref(MessageAction.delete),
           MessageActionPref(MessageAction.copy),
           MessageActionPref(MessageAction.fork),
+          MessageActionPref(MessageAction.imagine),
         ],
       );
       final restored = ChatInterface.fromJson(custom.toJson());

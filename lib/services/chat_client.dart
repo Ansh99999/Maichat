@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../models/message.dart';
+import '../models/message_image.dart';
 import '../models/provider.dart';
 import '../models/usage.dart';
 
@@ -181,9 +182,19 @@ class ChatClient {
 
   /// The request body for a chat turn, shaped for the provider's format and
   /// carrying the preset's [GenParams].
-  Object _body(Provider provider, List<ChatMessage> history, GenParams params) {
+  ///
+  /// With [elideImages] the base64 of every attachment is replaced by a note
+  /// about its size. That is only for [requestPreview] — the preview is copyable
+  /// and ends up in bug reports, and a megabyte of base64 makes it useless.
+  Object _body(
+    Provider provider,
+    List<ChatMessage> history,
+    GenParams params, {
+    bool elideImages = false,
+  }) {
     final model = provider.model.trim();
     final stop = params.stop.where((s) => s.trim().isNotEmpty).toList();
+    if (elideImages) history = elideImageData(history);
     if (provider.wire == WireFormat.gemini) {
       // Gemini carries the system prompt as `systemInstruction`, names the
       // assistant role "model", and wraps text in `parts`. The model id travels
@@ -197,9 +208,7 @@ class ChatClient {
           .where((m) => m.role != 'system')
           .map((m) => {
                 'role': m.role == 'assistant' ? 'model' : 'user',
-                'parts': [
-                  {'text': m.content}
-                ],
+                'parts': geminiParts(m),
               })
           .toList(growable: false);
       final gen = <String, dynamic>{
@@ -239,7 +248,7 @@ class ChatClient {
           .trim();
       final turns = history
           .where((m) => m.role != 'system')
-          .map((m) => m.toApi())
+          .map((m) => anthropicTurn(m))
           .toList(growable: false);
       var maxTokens = (params.maxTokens ?? 0) > 0 ? params.maxTokens! : 4096;
       // Extended thinking: the budget is a floor of 1024 and must leave room for
@@ -290,7 +299,10 @@ class ChatClient {
                     'type':
                         m.role == 'assistant' ? 'output_text' : 'input_text',
                     'text': m.content,
-                  }
+                  },
+                  // The Responses API names an attachment `input_image` and takes
+                  // the address (or data URL) flat rather than in an object.
+                  for (final image in m.images) ?_responsesImage(image),
                 ],
               })
           .toList(growable: false);
@@ -353,12 +365,88 @@ class ChatClient {
     final headers = _headers(provider, stream: params.stream)
       // Never put a credential on the clipboard.
       ..updateAll((key, value) => _isSecretHeader(key) ? '<redacted>' : value);
-    final body =
-        const JsonEncoder.withIndent('  ').convert(_body(provider, history, params));
+    final body = const JsonEncoder.withIndent('  ')
+        .convert(_body(provider, history, params, elideImages: true));
     return 'POST $uri\n'
         '${headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
         '$body';
   }
+
+  // --- attachments ----------------------------------------------------------
+  //
+  // Every dialect carries a picture differently, and each one is one small
+  // function here so the four request builders above stay readable and a fifth
+  // dialect has an obvious place to add its own.
+
+  /// One Anthropic turn: a plain string when nothing is attached, otherwise a
+  /// list of content blocks with the pictures first — which is the order
+  /// Anthropic's own guidance recommends, since a question about an image reads
+  /// better after it.
+  static Map<String, dynamic> anthropicTurn(ChatMessage m) {
+    if (m.images.isEmpty) return m.toApi();
+    final blocks = <Map<String, dynamic>>[];
+    for (final image in m.images) {
+      if (image.isUrl) {
+        blocks.add({
+          'type': 'image',
+          'source': {'type': 'url', 'url': image.ref.trim()},
+        });
+      } else if (image.hasData) {
+        blocks.add({
+          'type': 'image',
+          'source': {
+            'type': 'base64',
+            'media_type': image.mime,
+            'data': image.data,
+          },
+        });
+      }
+    }
+    if (blocks.isEmpty) return m.toApi();
+    return {
+      'role': m.role,
+      'content': <Map<String, dynamic>>[
+        ...blocks,
+        if (m.content.isNotEmpty) {'type': 'text', 'text': m.content},
+      ],
+    };
+  }
+
+  /// Gemini's `parts` for one turn. Gemini has no URL form for an inline
+  /// picture, so a picture that only lives online is left out rather than sent
+  /// as something the host will reject.
+  static List<Map<String, dynamic>> geminiParts(ChatMessage m) => [
+        {'text': m.content},
+        for (final image in m.images)
+          if (!image.isUrl && image.hasData)
+            {
+              'inlineData': <String, dynamic>{
+                'mimeType': image.mime,
+                'data': image.data,
+              },
+            },
+      ];
+
+  /// One Responses-API `input_image` part, or null when there is nothing to send.
+  static Map<String, dynamic>? _responsesImage(MessageImage image) {
+    final url = image.isUrl
+        ? image.ref.trim()
+        : (image.hasData ? 'data:${image.mime};base64,${image.data}' : null);
+    return url == null
+        ? null
+        : {'type': 'input_image', 'image_url': url};
+  }
+
+  /// [history] with every attachment's base64 replaced by a note about its size
+  /// — see [_body]'s `elideImages`.
+  static List<ChatMessage> elideImageData(List<ChatMessage> history) => [
+        for (final m in history)
+          m.images.isEmpty
+              ? m
+              : m.copyWith(
+                  images: [for (final i in m.images) i.elided()],
+                ),
+      ];
 
   /// Whether a header carries a credential and so must never reach the request
   /// preview (which is copyable, and ends up on clipboards and in bug reports).
@@ -474,7 +562,7 @@ class ChatClient {
       final response = await client.send(request);
       if (response.statusCode != 200) {
         final body = await response.stream.bytesToString();
-        throw ChatApiException(_describeFailure(response.statusCode, body));
+        throw ChatApiException(describeFailure(response.statusCode, body));
       }
 
       if (!params.stream) {
@@ -517,7 +605,7 @@ class ChatClient {
     } on ChatApiException {
       rethrow;
     } catch (e) {
-      throw ChatApiException(_describeTransport(e));
+      throw ChatApiException(describeTransport(e));
     } finally {
       client.close();
       if (_active == client) _active = null;
@@ -546,7 +634,7 @@ class ChatClient {
           .trim();
       final turns = history
           .where((m) => m.role != 'system')
-          .map((m) => m.toApi())
+          .map((m) => anthropicTurn(m))
           .toList(growable: false);
       // count_tokens rejects an empty messages array; nothing to count then.
       if (turns.isEmpty) return null;
@@ -619,7 +707,7 @@ class ChatClient {
           )
           .timeout(const Duration(seconds: 60));
     } catch (e) {
-      throw ChatApiException(_describeTransport(e));
+      throw ChatApiException(describeTransport(e));
     }
     if (response.statusCode != 200) {
       // A 404 on /embeddings usually means this provider has no embeddings
@@ -633,7 +721,7 @@ class ChatClient {
         );
       }
       throw ChatApiException(
-        _describeFailure(response.statusCode, response.body),
+        describeFailure(response.statusCode, response.body),
       );
     }
     final decoded = jsonDecode(response.body);
@@ -717,12 +805,12 @@ class ChatClient {
       return KeyTestResult(
         ok: false,
         latency: stopwatch.elapsed,
-        message: _describeTransport(e),
+        message: describeTransport(e),
       );
     }
   }
 
-  /// Recovers the status code from a message [_describeFailure] built, so a
+  /// Recovers the status code from a message [describeFailure] built, so a
   /// rejected key can be told from an unreachable host without changing the
   /// exception type every call site already handles.
   static int? _statusIn(String message) =>
@@ -753,7 +841,7 @@ class ChatClient {
               );
       if (response.statusCode != 200) {
         throw ChatApiException(
-          _describeFailure(response.statusCode, response.body),
+          describeFailure(response.statusCode, response.body),
         );
       }
       final decoded = jsonDecode(response.body);
@@ -787,7 +875,7 @@ class ChatClient {
     } on ChatApiException {
       rethrow;
     } catch (e) {
-      throw ChatApiException(_describeTransport(e));
+      throw ChatApiException(describeTransport(e));
     }
   }
 
@@ -1073,7 +1161,11 @@ class ChatClient {
     }
   }
 
-  static String _describeFailure(int status, String body) {
+  /// A sentence explaining an HTTP failure, from the status and whatever the body
+  /// managed to say. Public because the image studio's client raises the same
+  /// [ChatApiException] with the same wording — one failure vocabulary for the
+  /// whole app.
+  static String describeFailure(int status, String body) {
     final detail = _tryErrorMessage(body);
     switch (status) {
       case 401:
@@ -1116,7 +1208,9 @@ class ChatClient {
     return 'The host returned an error.';
   }
 
-  static String _describeTransport(Object e) {
+  /// A sentence explaining a transport failure (no route, TLS, timeout). Public
+  /// for the same reason as [describeFailure].
+  static String describeTransport(Object e) {
     if (e is TimeoutException) return 'The host did not respond in time.';
     if (e is FormatException) return 'The host sent a malformed response.';
     if (e is http.ClientException) {

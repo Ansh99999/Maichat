@@ -397,7 +397,11 @@ class PromptBuilder {
       if (isSystem && conversationStarted) {
         out.add(_Part(
           part.label,
-          ChatMessage(role: 'user', content: part.msg.content),
+          ChatMessage(
+            role: 'user',
+            content: part.msg.content,
+            images: part.msg.images,
+          ),
         ));
       } else {
         out.add(part);

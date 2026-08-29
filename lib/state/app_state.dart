@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -14,8 +15,10 @@ import '../models/discover.dart';
 import '../models/embedding.dart';
 import '../models/floating_image.dart';
 import '../models/gallery_image.dart';
+import '../models/image_gen.dart';
 import '../models/lorebook.dart';
 import '../models/message.dart';
+import '../models/message_image.dart';
 import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
@@ -30,6 +33,7 @@ import '../services/document_sources.dart';
 import '../services/embedding_index.dart';
 import '../services/embedding_store.dart';
 import '../services/gallery_group.dart';
+import '../services/image_client.dart';
 import '../services/jank_logger.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
@@ -49,12 +53,14 @@ class AppState extends ChangeNotifier {
   AppState({
     Storage? storage,
     ChatClient? client,
+    ImageClient? imageClient,
     UpdateService? updateService,
     AvatarStore? avatars,
     EmbeddingStore? embeddings,
     this.loadTimeout = const Duration(seconds: 30),
   })  : _storage = storage ?? Storage(),
         _client = client ?? ChatClient(),
+        _imageClient = imageClient ?? ImageClient(),
         _updateService = updateService ?? UpdateService() {
     _avatars = avatars;
     _vectors = embeddings;
@@ -62,6 +68,7 @@ class AppState extends ChangeNotifier {
 
   final Storage _storage;
   final ChatClient _client;
+  final ImageClient _imageClient;
   final UpdateService _updateService;
 
   /// How long the startup read is given before the app opens anyway. Generous
@@ -334,6 +341,10 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(await _storage.loadScenarios());
     _viewPrefs = await _storage.loadViewPrefs();
+    _imageGen = await _storage.loadImageGen();
+    _summaryFolds
+      ..clear()
+      ..addAll(await _storage.loadSummaryFolds());
     _gallery
       ..clear()
       ..addAll(await _storage.loadGallery());
@@ -365,6 +376,9 @@ class AppState extends ChangeNotifier {
     _conversations
       ..clear()
       ..addAll(stored);
+    // Folds are a view preference held apart from the conversations blob, so
+    // they are laid back over the summaries once those are in memory.
+    _applySummaryFolds();
     _activeId = await _storage.loadActiveId();
     // The persona new chats default to. A card the user deleted between runs
     // leaves a dangling id, which would resolve to nobody — drop it so the
@@ -1266,9 +1280,10 @@ class AppState extends ChangeNotifier {
 
   /// Deletes picture files nothing refers to any more. The keep-list has to name
   /// every place a picture can be referenced from — a chat's background, a
-  /// per-chat character override, a gallery entry, a character's extra avatars and
-  /// a per-chat avatar choice all live outside the roster's `avatar` field, and a
-  /// sweep that forgot one would delete a picture still on screen.
+  /// per-chat character override, a gallery entry, a character's extra avatars, a
+  /// per-chat avatar choice and a picture attached to a message all live outside
+  /// the roster's `avatar` field, and a sweep that forgot one would delete a
+  /// picture still on screen.
   Future<void> _sweepAvatars() async {
     final store = _avatars;
     if (store == null || !_writable) return;
@@ -1285,6 +1300,9 @@ class AppState extends ChangeNotifier {
         // A float can carry a picture the gallery never held (an avatar off an
         // imported card), and it is on screen right now.
         ...c.floatingImages.map((f) => f.imageRef),
+        // A picture sent in a message is part of the transcript: it has to
+        // outlive the gallery record it may have been picked from.
+        ...c.messages.expand((m) => m.images.map((i) => i.ref)),
       ],
     ]);
   }
@@ -2253,21 +2271,69 @@ class AppState extends ChangeNotifier {
 
   /// Persists the folded/unfolded state of a single memory block without going
   /// through the editor's save/dirty flow — collapse is a view preference, so it
-  /// should stick even when the user leaves without saving content edits. Only
-  /// the stored segment's [SummarySegment.collapsed] flag is touched, so any
-  /// unsaved draft edits are left alone.
+  /// should stick even when the user leaves without saving content edits.
+  ///
+  /// The fold is written to its own small store entry and **not** into the
+  /// conversation. Writing it into the conversation meant re-encoding every
+  /// message of every chat to record one boolean, which on a real store is tens
+  /// of milliseconds of JSON on the UI thread — the hitch felt when a memory
+  /// block was opened. The stored segment's flag is still updated in memory, so
+  /// a later Save carries it too and nothing else has to know where it came from.
   void setSummarySegmentCollapsed(
       String conversationId, String segmentId, bool collapsed) {
     final cfg = _conversationById(conversationId)?.summary;
     if (cfg == null) return;
     for (final s in cfg.segments) {
-      if (s.id == segmentId) {
-        if (s.collapsed == collapsed) return;
-        s.collapsed = collapsed;
-        _saveConversationsSoon();
-        return;
+      if (s.id != segmentId) continue;
+      s.collapsed = collapsed;
+      final folded = _summaryFolds.putIfAbsent(conversationId, () => <String>{});
+      if (collapsed ? !folded.add(segmentId) : !folded.remove(segmentId)) {
+        return; // Already recorded that way; nothing to write.
+      }
+      if (folded.isEmpty) _summaryFolds.remove(conversationId);
+      unawaited(_persistSummaryFolds());
+      return;
+    }
+  }
+
+  /// Which memory blocks are folded shut, by conversation id. A view preference,
+  /// kept apart from the conversations blob — see [setSummarySegmentCollapsed].
+  final Map<String, Set<String>> _summaryFolds = <String, Set<String>>{};
+
+  Future<void> _persistSummaryFolds() async {
+    if (!_writable) return;
+    await _storage.saveSummaryFolds(_summaryFolds);
+  }
+
+  /// Applies the remembered folds to the summaries just read from the store, and
+  /// forgets folds for chats and blocks that no longer exist.
+  void _applySummaryFolds() {
+    var stale = false;
+    for (final id in _summaryFolds.keys.toList()) {
+      final cfg = _conversationById(id)?.summary;
+      if (cfg == null) {
+        _summaryFolds.remove(id);
+        stale = true;
+        continue;
+      }
+      final folded = _summaryFolds[id]!;
+      final known = <String>{};
+      for (final segment in cfg.segments) {
+        if (folded.contains(segment.id)) {
+          segment.collapsed = true;
+          known.add(segment.id);
+        }
+      }
+      if (known.length != folded.length) {
+        stale = true;
+        if (known.isEmpty) {
+          _summaryFolds.remove(id);
+        } else {
+          _summaryFolds[id] = known;
+        }
       }
     }
+    if (stale) unawaited(_persistSummaryFolds());
   }
 
   /// Every chat that currently has a summary, newest-updated first — the source
@@ -2276,6 +2342,94 @@ class AppState extends ChangeNotifier {
         for (final c in _conversations)
           if (c.summary != null) c,
       ];
+
+  // --- Image generation -----------------------------------------------------
+  //
+  // The studio is deliberately independent of the chat provider list: every chat
+  // and every model can generate a picture because generation goes to an endpoint
+  // of its own, with its own key. Nothing here depends on which model the
+  // conversation runs on.
+
+  ImageGenConfig _imageGen = const ImageGenConfig();
+
+  /// How the image studio talks to its endpoint.
+  ImageGenConfig get imageGen => _imageGen;
+
+  /// Whether the studio has enough to make a request.
+  bool get imageGenReady => _imageGen.isReady;
+
+  Future<void> updateImageGen(ImageGenConfig next) async {
+    _imageGen = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveImageGen(next);
+  }
+
+  /// Generates pictures for [prompt] and files every one of them in the gallery,
+  /// belonging to the character whose chat asked for them — so a picture made in
+  /// Aria's chat is in Aria's album afterwards without anyone having to save it.
+  ///
+  /// [references] are pictures already in the app (a gallery entry, an
+  /// attachment) handed to the endpoint as a starting point; their bytes are read
+  /// here so the studio only has to pass references around.
+  ///
+  /// Throws [ChatApiException] with the same wording a failed chat request uses.
+  Future<List<GalleryImage>> generateImages({
+    required String prompt,
+    String? conversationId,
+    List<MessageImage> references = const <MessageImage>[],
+  }) async {
+    final config = _imageGen;
+    if (!config.isReady) {
+      throw ChatApiException(
+        'Set an image model and endpoint in the studio settings first.',
+      );
+    }
+    final conversation =
+        conversationId == null ? null : _conversationById(conversationId);
+    final result = await _imageClient.generate(
+      config: config,
+      prompt: config.composePrompt(prompt),
+      references: _referenceBytes(references),
+    );
+    if (result.images.isEmpty) {
+      throw ChatApiException('The host returned no pictures.');
+    }
+    final title = _pictureTitle(prompt);
+    return addGalleryImages(
+      result.images,
+      characterId: conversation?.characterId,
+      title: title,
+      tags: const <String>['generated'],
+    );
+  }
+
+  /// A short, searchable name for a generated picture: the first few words of the
+  /// prompt, which is what someone looking for it later would type.
+  static String _pictureTitle(String prompt) {
+    final flat = prompt.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (flat.isEmpty) return 'Generated picture';
+    return flat.length <= 48 ? flat : '${flat.substring(0, 48)}…';
+  }
+
+  /// Reads the bytes behind each reference, skipping anything unreadable — a
+  /// missing reference should cost the reference, not the whole generation.
+  List<ImageReference> _referenceBytes(List<MessageImage> references) {
+    final out = <ImageReference>[];
+    for (final image in references) {
+      final file = avatarRefFile(image.ref);
+      if (file == null) continue;
+      try {
+        if (!file.existsSync()) continue;
+        final bytes = file.readAsBytesSync();
+        if (bytes.isEmpty) continue;
+        out.add(ImageReference(bytes: bytes, mime: image.mime));
+      } catch (error) {
+        debugPrint('MaiChat: could not read a reference picture ($error)');
+      }
+    }
+    return out;
+  }
 
   // --- Gallery -------------------------------------------------------------
 
@@ -2916,10 +3070,11 @@ class AppState extends ChangeNotifier {
         id: '${DateTime.now().microsecondsSinceEpoch}-${_conversations.length}',
       );
 
-  /// Sends [text] and streams the reply into a placeholder turn.
-  Future<void> send(String text) async {
+  /// Sends [text] with any [images] attached, and streams the reply into a
+  /// placeholder turn. A picture on its own (no text) is a perfectly good send.
+  Future<void> send(String text, {List<MessageImage> images = const []}) async {
     final prompt = text.trim();
-    if (prompt.isEmpty || _streaming) return;
+    if ((prompt.isEmpty && images.isEmpty) || _streaming) return;
 
     // Resolve the provider before materializing a thread, so a misconfigured
     // app never spawns an empty conversation just to bail out.
@@ -2931,7 +3086,10 @@ class AppState extends ChangeNotifier {
 
     final conversation = active;
 
-    if (conversation.isEmpty) conversation.retitleFrom(prompt);
+    if (conversation.isEmpty) {
+      // A picture with nothing typed still deserves a name for the chat lists.
+      conversation.retitleFrom(prompt.isEmpty ? 'Picture' : prompt);
+    }
     // In a group chat the user's turn is tagged with whoever they are speaking
     // as, so the transcript and the wire can label it (mirrors how each member's
     // replies carry their speaker).
@@ -2939,6 +3097,7 @@ class AppState extends ChangeNotifier {
     conversation.messages.add(ChatMessage(
       role: 'user',
       content: prompt,
+      images: images,
       speakerId: speaking?.id,
       speakerName: speaking?.displayName,
     ));
@@ -2995,6 +3154,15 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     await _saveConversations();
   }
+
+  /// How often a streaming reply repaints the chat, in milliseconds.
+  ///
+  /// A repaint rebuilds every visible bubble and re-derives the thinking split
+  /// over the whole reply so far, so doing it per delta costs more the longer the
+  /// answer gets — and it competes with the reader's own scrolling for the UI
+  /// thread, which is exactly when smoothness matters most. ~20 batches a second
+  /// still reads as text being typed.
+  static const int _streamPaintMs = 50;
 
   /// Streams an assistant reply into [conversation], whose messages already end
   /// with the user's latest turn (this does NOT append the user message). Shared
@@ -3081,6 +3249,27 @@ class AppState extends ChangeNotifier {
 
     // Narrow the key pool to the one this request should use.
     final provider = _applyKey(base);
+
+    // Re-derives the split, times the thinking, writes the turn and repaints.
+    // Called on a cadence rather than per delta — see [_streamPaintMs].
+    void paint() {
+      final split = splitReasoning(raw.toString(), tags);
+      answer = split.text;
+      thinking = _joinThinking(thoughts.toString(), split.reasoning);
+      // Thinking is over the moment the answer starts — or, for tagged
+      // thinking, when the closing tag lands.
+      if (thinkingMs == null &&
+          thinking.trim().isNotEmpty &&
+          !split.open &&
+          answer.trim().isNotEmpty) {
+        thinkingMs = clock.elapsedMilliseconds;
+      }
+      _replaceAt(conversation, target,
+          content: answer, reasoning: thinking, thinkingMs: thinkingMs);
+      notifyListeners();
+    }
+
+    var painted = -_streamPaintMs; // so the first delta always shows at once
     try {
       final deltas =
           _client.streamChat(provider: provider, history: history, params: params);
@@ -3088,21 +3277,19 @@ class AppState extends ChangeNotifier {
         if (delta.usage != null) reported = delta.usage;
         if (delta.reasoning.isNotEmpty) thoughts.write(delta.reasoning);
         if (delta.text.isNotEmpty) raw.write(delta.text);
-        final split = splitReasoning(raw.toString(), tags);
-        answer = split.text;
-        thinking = _joinThinking(thoughts.toString(), split.reasoning);
-        // Thinking is over the moment the answer starts — or, for tagged
-        // thinking, when the closing tag lands.
-        if (thinkingMs == null &&
-            thinking.trim().isNotEmpty &&
-            !split.open &&
-            answer.trim().isNotEmpty) {
-          thinkingMs = clock.elapsedMilliseconds;
-        }
-        _replaceAt(conversation, target,
-            content: answer, reasoning: thinking, thinkingMs: thinkingMs);
-        notifyListeners();
+        // A host can send a token every few milliseconds, and each repaint
+        // rebuilds every visible bubble and re-splits the whole reply so far —
+        // work that grows with the length of the answer. Painting on a cadence
+        // instead leaves the UI thread with frames to spare for the reader's own
+        // scrolling, and text arriving in ~20 batches a second still reads as
+        // streaming. Whatever the last batch left unpainted is flushed below.
+        final now = clock.elapsedMilliseconds;
+        if (now - painted < _streamPaintMs) continue;
+        painted = now;
+        paint();
       }
+      // Fold in whatever arrived after the last paint.
+      paint();
       // A block the model never closed, or a reply that was thinking and nothing
       // else, still gets a duration once the stream ends.
       if (thinkingMs == null && thinking.trim().isNotEmpty) {
@@ -3126,6 +3313,9 @@ class AppState extends ChangeNotifier {
       }
     } on ChatApiException catch (e) {
       if (_stopRequested) {
+        // Fold in anything the last paint left behind, so stopping keeps every
+        // word that actually arrived rather than the last painted batch.
+        paint();
         _finishStopped(conversation, target, answer,
             reasoning: thinking, thinkingMs: thinkingMs);
       } else {
@@ -3830,12 +4020,128 @@ class AppState extends ChangeNotifier {
       // turn cannot re-fragment the payload. This is the exact list handed to
       // the wire layer, and the same list "View prompt" renders — the inspector
       // shows what is actually sent, not a pre-merge idealisation.
-      messages: mergeSameRole(messages),
+      messages: _wireImages(mergeSameRole(messages)),
       params: params,
       sections: sections,
       totalTokens: total,
       maxContext: maxContext,
     );
+  }
+
+  // --- attachments on the wire ---------------------------------------------
+
+  /// How many pictures one request may carry, newest first.
+  ///
+  /// There is no size limit on a picture anywhere in this app (see [AvatarStore])
+  /// and there should not be one — but a *request* is different from a file: ten
+  /// photographs straight off a camera become tens of megabytes of base64 on
+  /// every single turn, re-uploaded for the rest of the chat. Capping the count
+  /// keeps "the model remembers the picture" true for the pictures that are still
+  /// being talked about, without a chat quietly becoming unsendable.
+  static const int kMaxWireImages = 8;
+
+  /// Base64 payloads by picture reference, so a chat that keeps re-sending the
+  /// same attachment reads and encodes it once. Bounded by [_maxImageDataBytes];
+  /// nothing here is persisted.
+  final Map<String, String> _imageData = <String, String>{};
+
+  static const int _maxImageDataBytes = 32 * 1024 * 1024;
+
+  /// [messages] with each attachment's bytes resolved, newest [kMaxWireImages]
+  /// kept and the rest dropped.
+  ///
+  /// Reading the files is synchronous on purpose: this is the one place both a
+  /// real send and the "View prompt" / "Info" inspectors pass through, and those
+  /// two are synchronous by construction. It happens once per send, off any
+  /// animation, and the cache above means a long chat pays for each picture once.
+  List<ChatMessage> _wireImages(List<ChatMessage> messages) {
+    if (!messages.any((m) => m.hasImages)) return messages;
+    var budget = kMaxWireImages;
+    final out = List<ChatMessage>.of(messages);
+    for (var i = out.length - 1; i >= 0; i--) {
+      final message = out[i];
+      if (!message.hasImages) continue;
+      final kept = <MessageImage>[];
+      for (final image in message.images.reversed) {
+        if (budget <= 0) break;
+        if (image.isUrl) {
+          // The host fetches it itself; there is nothing to read or cache.
+          kept.insert(0, image);
+          budget--;
+          continue;
+        }
+        final data = _imagePayload(image.ref);
+        if (data == null) continue; // The file has gone: send the text alone.
+        kept.insert(0, image.withData(data));
+        budget--;
+      }
+      out[i] = message.copyWith(images: kept);
+    }
+    return out;
+  }
+
+  /// The base64 of the picture [ref] names, or null when there is no readable
+  /// file behind it.
+  String? _imagePayload(String ref) {
+    final trimmed = ref.trim();
+    if (trimmed.isEmpty) return null;
+    final cached = _imageData[trimmed];
+    if (cached != null) return cached;
+    final file = avatarRefFile(trimmed);
+    if (file == null) return null;
+    try {
+      if (!file.existsSync()) return null;
+      final encoded = base64Encode(file.readAsBytesSync());
+      var held = _imageData.values.fold<int>(0, (sum, d) => sum + d.length);
+      // Evict oldest-first until the newcomer fits; the map preserves insertion
+      // order, which is close enough to least-recently-added for this.
+      while (_imageData.isNotEmpty &&
+          held + encoded.length > _maxImageDataBytes) {
+        final oldest = _imageData.keys.first;
+        held -= _imageData.remove(oldest)?.length ?? 0;
+      }
+      _imageData[trimmed] = encoded;
+      return encoded;
+    } catch (error) {
+      debugPrint('MaiChat: could not read an attachment ($error)');
+      return null;
+    }
+  }
+
+  /// Files [bytes] as a chat attachment, returning what a message should carry —
+  /// or null when there is nowhere to write it. The picture becomes a file in the
+  /// pictures directory like every other picture in the app; nothing about an
+  /// attachment goes into the preferences store but its reference.
+  Future<MessageImage?> storeAttachment(Uint8List bytes) async {
+    if (bytes.isEmpty) return null;
+    final ref = await storePicture(bytes);
+    if (ref == null) return null;
+    return MessageImage(ref: ref, mime: mimeForBytes(bytes));
+  }
+
+  /// Posts a picture into a thread as a turn of its own — the image studio's
+  /// "share in the chat". Nothing is generated: the picture simply joins the
+  /// transcript, so it is on screen and (like any other attachment) rides along
+  /// with the next request.
+  Future<void> postImageToChat(
+    String conversationId,
+    MessageImage image, {
+    String text = '',
+  }) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null || image.ref.trim().isEmpty) return;
+    conversation.messages.add(ChatMessage(
+      role: 'user',
+      content: text.trim(),
+      images: <MessageImage>[image],
+    ));
+    if (conversation.title.trim().isEmpty || conversation.messages.length == 1) {
+      conversation.retitleFrom(text.trim().isEmpty ? 'Picture' : text);
+    }
+    conversation.updatedAt = DateTime.now();
+    _moveToTop(conversation);
+    notifyListeners();
+    await _saveConversations();
   }
 
   /// The exact prompt behind the message at [index] — for "View prompt"/"Info".
