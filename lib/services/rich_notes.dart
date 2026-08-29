@@ -1,5 +1,7 @@
 import 'package:markdown/markdown.dart' as md;
 
+import 'inline_images.dart';
+
 /// Turns a creator's notes into HTML `flutter_html` can actually draw, keeping
 /// the design they wrote rather than flattening it.
 ///
@@ -66,10 +68,17 @@ final _bareColorWord = RegExp(r'^[a-zA-Z]+$');
 /// and building that in one frame is a visible stall.
 const int kNotesRenderCap = 8000;
 
-/// Whether [notes] carry markup worth handing to the full HTML engine. Plain
+/// Whether [notes] carry anything worth handing to the full HTML engine. Plain
 /// prose (the common case) takes the cheap path instead and never pays for a
 /// DOM.
-bool notesLookRich(String notes) => _richMarkup.hasMatch(notes);
+///
+/// Three kinds of "rich" here, and the last two were the reported bug — a card
+/// whose markup arrived HTML-escaped, or whose formatting was markdown rather
+/// than tags, fell to the plain path and showed its own source.
+bool notesLookRich(String notes) =>
+    _richMarkup.hasMatch(notes) ||
+    _escapedMarkup.hasMatch(notes) ||
+    _richMarkdown.hasMatch(notes);
 
 final _richMarkup = RegExp(
     r'<(div|span|p|br|h[1-6]|img|table|tr|td|th|ul|ol|li|b|i|u|s|em|strong|'
@@ -77,19 +86,97 @@ final _richMarkup = RegExp(
     r'sub|sup|a)\b',
     caseSensitive: false);
 
+/// The same markup, delivered with its angle brackets escaped. Several catalogue
+/// APIs hand back notes that have been through an HTML encoder on the way out;
+/// left alone the reader sees `<div style="…">` as characters on the page.
+final _escapedMarkup =
+    RegExp(r'&lt;/?[a-zA-Z][a-zA-Z0-9]*', caseSensitive: false);
+
+/// Markdown that has to be *rendered* rather than shown: a link, an image, or a
+/// bare link to a picture. `[the wiki](https://…)` on the plain path is four
+/// pieces of punctuation and a URL, which is what "it just shows the raw format"
+/// meant.
+///
+/// Both runs are bounded. This is evaluated on every rebuild of the notes block,
+/// and an unbounded lazy run turns a long note without a match into a quadratic
+/// scan.
+final _richMarkdown = RegExp(
+    r'!?\[[^\]\n]{0,300}\]\(\s*\S{1,400}\s*\)|'
+    r'''https?://[^\s<>"']{1,300}?'''
+    r'\.(?:png|jpe?g|jfif|gif|webp|bmp|avif|apng|ico|heic|heif)\b',
+    caseSensitive: false);
+
+/// Escaped markup, unescaped — but only for notes that are *entirely* escaped.
+///
+/// A card that mixes real tags with an escaped example (`&lt;name&gt;` used as a
+/// placeholder in prose) is left exactly as it is: the tags already work, and
+/// unescaping the example would delete it from the page.
+String unescapeMarkupIfEscaped(String notes) {
+  if (!_escapedMarkup.hasMatch(notes)) return notes;
+  if (_richMarkup.hasMatch(notes)) return notes;
+  return notes
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&apos;', "'")
+      .replaceAll('&nbsp;', ' ')
+      // Last, or an `&amp;lt;` would come out as a tag.
+      .replaceAll('&amp;', '&');
+}
+
+/// Markdown treats a line indented four spaces or more as a **code block**, and
+/// pretty-printed HTML is indented — so a card written as
+///
+/// ```
+/// <div style="…">
+///     <h2>Elara</h2>
+///
+///     <p>She is a <b>rogue</b>.</p>
+/// </div>
+/// ```
+///
+/// came out with everything after the first blank line rendered as its own
+/// source, `<img>` tags included. That is precisely "it just shows the raw code,
+/// and none of the pictures".
+///
+/// The fix is to clamp every line's indent to three spaces, which is the most an
+/// HTML block or a paragraph may carry and still be one. Two-space markdown list
+/// nesting survives; a fenced ``` block is left alone, because there the author
+/// really did mean "show this verbatim". Only applied to notes that carry markup
+/// at all, so plain notes keep their indented code blocks.
+String clampMarkupIndent(String notes) {
+  if (!_richMarkup.hasMatch(notes)) return notes;
+  final lines = notes.split('\n');
+  var fenced = false;
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    final body = line.trimLeft();
+    if (body.startsWith('```') || body.startsWith('~~~')) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced || body.isEmpty) continue;
+    final indent = line.length - body.length;
+    if (indent > 3) lines[i] = '   $body';
+  }
+  return lines.join('\n');
+}
+
 /// Converts creator notes to the HTML the notes view renders.
 ///
 /// Markdown is honoured first (many cards are written in it), then the tag and
 /// CSS passes run over the result. Pure and deterministic, so the caller can
 /// cache by input.
 String creatorNotesToHtml(String notes) {
-  final source = notes.trim();
+  final source = clampMarkupIndent(unescapeMarkupIfEscaped(notes.trim()));
   if (source.isEmpty) return '';
   final html = md.markdownToHtml(
     source,
     extensionSet: md.ExtensionSet.gitHubWeb,
   );
-  return tameNoteCss(dropUnrenderableTags(html));
+  // A bare picture URL becomes the picture, not a line of blue text.
+  return linkedImagesToPictures(tameNoteCss(dropUnrenderableTags(html)));
 }
 
 /// Removes every [kDroppedNoteTags] element's tags, and the whole body of the

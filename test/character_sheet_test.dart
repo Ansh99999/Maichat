@@ -8,6 +8,7 @@ import 'package:maichat/widgets/avatar_image.dart';
 import 'package:maichat/widgets/fab_menu.dart';
 import 'package:maichat/widgets/message_bubble.dart';
 import 'package:maichat/widgets/natural_image.dart';
+import 'package:maichat/widgets/html_image.dart';
 import 'package:maichat/widgets/rich_notes_view.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -198,6 +199,48 @@ void main() {
       // The image went through the app's own capped/cached provider rather than
       // flutter_html's raw Image.network.
       expect(find.byType(Image), findsWidgets);
+    });
+
+    testWidgets('pretty-printed notes render as markup, not as their source',
+        (tester) async {
+      // The reported bug on the catalogue page and here alike: markdown reads a
+      // line indented four spaces as a code block, and an HTML block ends at the
+      // first blank line — so a card written the way anyone writes HTML came out
+      // as its own source, pictures included.
+      const indented = '<div style="background:#101018;padding:12px">\n'
+          '    <h2>ARIA</h2>\n\n'
+          '    <p>A quiet librarian.</p>\n\n'
+          '    <img src="https://example.com/banner.png" width="400">\n'
+          '</div>';
+      await open(tester, _card(notes: indented));
+      await scrollTo(tester, find.byType(RichNotes));
+      expect(find.byType(Html), findsOneWidget);
+      expect(find.textContaining('&lt;p&gt;'), findsNothing);
+      expect(find.textContaining('<p>'), findsNothing,
+          reason: 'the tags are drawn, not printed');
+      expect(find.text('A quiet librarian.'), findsOneWidget);
+      expect(find.byType(HtmlInlineImage), findsWidgets,
+          reason: 'and the picture is a picture');
+    });
+
+    testWidgets('HTML-escaped notes render as markup too', (tester) async {
+      // Several catalogue APIs hand notes back through an HTML encoder.
+      const escaped = '&lt;div style="color:#f00"&gt;A quiet librarian who '
+          '&lt;b&gt;loves&lt;/b&gt; books.&lt;/div&gt;';
+      await open(tester, _card(notes: escaped));
+      await scrollTo(tester, find.byType(RichNotes));
+      expect(find.byType(Html), findsOneWidget);
+      expect(find.textContaining('&lt;'), findsNothing);
+      expect(find.textContaining('loves'), findsWidgets);
+    });
+
+    testWidgets('a markdown link in notes is a link, not its source',
+        (tester) async {
+      await open(tester,
+          _card(notes: 'Full art at [the gallery](https://example.com/g).'));
+      await scrollTo(tester, find.byType(RichNotes));
+      expect(find.byType(Html), findsOneWidget);
+      expect(find.textContaining(']('), findsNothing);
     });
 
     testWidgets('plain notes take the cheap path — no HTML engine',

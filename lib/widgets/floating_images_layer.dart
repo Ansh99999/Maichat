@@ -27,8 +27,10 @@ import 'avatar_image.dart';
 ///   nothing beneath it.
 /// * **Rebuild its recogniser.** The gesture detector sits *outside* the animated
 ///   part, so it is never reconfigured mid-gesture.
-/// * **Re-decode its bitmap.** The decode size is held across a pinch and only
-///   stepped once the picture has grown well past it.
+/// * **Re-decode its bitmap.** The decode size is held across a whole touch and
+///   only stepped once the fingers have left and the picture has grown well past
+///   it — the framed and bare pictures deliberately share one provider, so the
+///   swap on touch-down can never wait on a decode.
 /// * **Repaint the conversation.** Each float is a [RepaintBoundary], so moving
 ///   one does not redraw the thread — which also keeps the chat's frosted menu
 ///   button from re-blurring its backdrop on every frame.
@@ -291,21 +293,23 @@ class _FloatingPictureState extends State<_FloatingPicture> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Warm both bitmaps this float can ask for. Nothing here is about
-    // performance — it is about the picture never being *absent*.
+    // Warm the bitmap this float draws. Nothing here is about performance — it
+    // is about the picture never being *absent*.
     //
     // An `Image` whose provider is not in the image cache paints nothing until
-    // the decode lands, and a provider swap crosses a widget boundary here
-    // (framed ⇄ bare are different subtrees), so `gaplessPlayback` cannot carry
-    // the old frame over. That is the reported blink: float a picture and the
-    // route that floated it pops while the float's own bitmap is still decoding,
-    // so the picture is on screen (the sheet's copy), gone for a frame or two,
-    // then back. Returning from the recents switcher is the same story with a
-    // trimmed cache. Warming both sizes up front closes the gap for every touch;
-    // the *first* appearance is closed at the two places that float a picture,
-    // which precache before they pop.
+    // the decode lands, and the swap between the framed and bare pictures
+    // crosses a widget boundary, so `gaplessPlayback` cannot carry the old frame
+    // over. That is the reported blink: float a picture and the route that
+    // floated it pops while the float's own bitmap is still decoding, so the
+    // picture is on screen (the sheet's copy), gone for a frame or two, then
+    // back. Returning from the recents switcher is the same story with a trimmed
+    // cache. Warming it up front closes the gap for every touch; the *first*
+    // appearance is closed at the two places that float a picture, which
+    // precache before they pop.
+    //
+    // One size, not two: both states draw [_decodeWidth], so the touch-down swap
+    // is a change of decoration around an already-decoded bitmap.
     _warm(_decodeWidth);
-    _warm(_manipWidth);
   }
 
   /// The provider this float draws at a given display width — the one function
@@ -317,13 +321,6 @@ class _FloatingPictureState extends State<_FloatingPicture> {
       displaySize: displayWidth,
       devicePixelRatio: dpr <= 0 ? 1 : dpr,
     );
-  }
-
-  /// The display width of the small working texture used while manipulating —
-  /// ~512 device px, whatever this screen's density is.
-  double get _manipWidth {
-    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
-    return 512 / (dpr <= 0 ? 1 : dpr);
   }
 
   /// Decodes the bitmap for [displayWidth] into the image cache without drawing
@@ -551,16 +548,22 @@ class _FloatingPictureState extends State<_FloatingPicture> {
 
   @override
   Widget build(BuildContext context) {
-    // At rest: decoded at the display size for a crisp framed picture.
+    // One bitmap, decoded for the size the picture is drawn at, used whether it
+    // is at rest or under a finger.
+    //
+    // It used to drop to a ~512 device-px working texture with nearest-neighbour
+    // sampling for the duration of a touch, on the theory that re-sampling a big
+    // bitmap is what stalls a phone GPU during a pinch. The visible cost of that
+    // was the reported bug: a float went blocky the moment it was touched and
+    // stayed blocky for the whole drag, because 512px is *half* the bucket a
+    // normal float sits in and nearest-neighbour shows every one of those missing
+    // pixels. The theory was also aimed at the wrong thing — [avatarImage]
+    // already caps the decode at the display bucket (never source resolution),
+    // and a GPU's cost for a scaled blit is per destination pixel, which does not
+    // change with the size of the texture behind it. What actually cost 16ms a
+    // frame was re-rasterising the rounded clip and the blurred shadow under a
+    // changing scale, and that is what [_BarePicture] still drops.
     final provider = _providerFor(_decodeWidth);
-    // While manipulating: a deliberately **small** working texture (~512 device
-    // px). This is the fix for "drag is smooth but pinch lags": dragging only
-    // *moves* the layer (the GPU never re-samples the picture), while a pinch
-    // *scales/rotates* it, which forces the GPU to re-sample the source texture
-    // every frame — and re-sampling a big bitmap is what stalls a phone GPU.
-    // A small texture is cheap to re-sample, so the pinch stays smooth; the full
-    // resolution comes back the instant the fingers leave.
-    final manipProvider = _providerFor(_manipWidth);
 
     // The inner boundary keeps the picture and the ✕ as a retained layer of its
     // own. A [Listener] wraps the gesture detector purely to count fingers on
@@ -594,17 +597,17 @@ class _FloatingPictureState extends State<_FloatingPicture> {
           ),
         },
         // While a touch is in progress the picture is drawn as its **bare bitmap**
-        // — no rounded clip, no blurred shadow — so moving/scaling/rotating it is
-        // just a GPU sample of a texture (drawImageRect under the transform) with
-        // no per-frame re-rasterisation. A benchmark on Linux measured the framed
+        // — no blurred shadow, no ✕ — so moving/scaling/rotating it is just a GPU
+        // sample of a texture (drawImageRect under the transform) with no
+        // per-frame re-rasterisation. A benchmark on Linux measured the framed
         // version at ~16ms raster (120/250 frames over budget, spikes to 36ms+)
         // and this bare version at ~5ms (0 sustained over-budget frames). The
-        // rounded corners and shadow — the expensive part to re-raster under a
-        // scale — come back the instant the fingers leave. Nothing is captured or
-        // re-captured (unlike a SnapshotWidget), so it behaves the same on Skia
-        // and Impeller.
+        // shadow — the expensive part to re-raster under a scale — comes back the
+        // instant the fingers leave. Nothing is captured or re-captured (unlike a
+        // SnapshotWidget), so it behaves the same on Skia and Impeller. Both
+        // states draw the *same* provider, so the swap cannot blink.
         child: _manipulating
-            ? _BarePicture(provider: manipProvider)
+            ? _BarePicture(provider: provider)
             : RepaintBoundary(
                 child: _Frame(
                   provider: provider,
@@ -686,12 +689,12 @@ class _FloatingPictureState extends State<_FloatingPicture> {
   }
 }
 
-/// The picture with no decoration at all — no rounded clip, no shadow, no ✕ —
-/// shown *only while a touch is in progress*. Drawing a bare bitmap under the
-/// live transform is a GPU texture sample with no per-frame re-rasterisation,
-/// which is what makes the manipulation buttery. It keeps the same top/right
-/// padding as [_Frame] so the picture does not shift when the framed and bare
-/// versions swap on touch start/end.
+/// The picture with no shadow and no ✕, shown *only while a touch is in
+/// progress*. Drawing a bare bitmap under the live transform is a GPU texture
+/// sample with no per-frame re-rasterisation, which is what makes the
+/// manipulation buttery. It keeps the same top/right padding as [_Frame] so the
+/// picture does not shift when the framed and bare versions swap on touch
+/// start/end.
 class _BarePicture extends StatelessWidget {
   const _BarePicture({required this.provider});
 
@@ -717,15 +720,14 @@ class _BarePicture extends StatelessWidget {
                 image: provider!,
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
-                // Nearest-neighbour sampling — the cheapest thing a GPU can do
-                // when scaling/rotating a texture. This is exactly the fast path
-                // the photo_view package uses (its `filterQuality: none` mode
-                // transforms a fixed texture instead of re-rendering at quality).
-                // Combined with the small working texture, a pinch is a cheap
-                // blit. It can look a touch blocky while actively pinching a
-                // small picture up large; the crisp, high-quality frame returns
-                // the instant the fingers leave.
-                filterQuality: FilterQuality.none,
+                // Bilinear — what a GPU's texture unit does in hardware, so it
+                // costs the same as no filtering at all while a scale or rotation
+                // is live. This used to be [FilterQuality.none]
+                // (nearest-neighbour) on the same reasoning photo_view uses it,
+                // but nearest-neighbour is exactly what made a touched float look
+                // blocky, and the saving it bought is not measurable next to the
+                // shadow this widget already drops.
+                filterQuality: FilterQuality.low,
                 errorBuilder: (_, _, _) => const AspectRatio(
                   aspectRatio: 4 / 3,
                   child: Center(child: Icon(Icons.broken_image_outlined)),

@@ -876,6 +876,25 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // The attachment tray sits **above** the operations strip, not between
+          // it and the send bar: what is about to be sent belongs at the top of
+          // the stack, with the controls that change it underneath, so a growing
+          // pile of pictures pushes away from the thumb rather than shoving the
+          // symbols around. Grows out of the strip below it.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomCenter,
+            child: !_showAttachBar
+                ? const SizedBox(width: double.infinity)
+                : _AttachBar(
+                    attachments: _attachments,
+                    onGallery: () => _attachFromGallery(state),
+                    onDevice: () => _attachFromDevice(state),
+                    onRemove: (i) => setState(() => _attachments.removeAt(i)),
+                    onClose: () => setState(() => _showAttachBar = false),
+                  ),
+          ),
           // The operations strip: a row of symbols opened by the composer's ⋯
           // button. Sending a picture, the image studio, and group chat when the
           // feature is switched on.
@@ -926,23 +945,6 @@ class _ChatScreenState extends State<ChatScreen> {
                         ],
                       ),
                     ),
-                  ),
-          ),
-          // The attachment tray: two ways to choose a picture, replaced by a
-          // preview of the pictures once any are chosen. Grows out of the send bar
-          // like the participant bar above it.
-          AnimatedSize(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.bottomCenter,
-            child: !_showAttachBar
-                ? const SizedBox(width: double.infinity)
-                : _AttachBar(
-                    attachments: _attachments,
-                    onGallery: () => _attachFromGallery(state),
-                    onDevice: () => _attachFromDevice(state),
-                    onRemove: (i) => setState(() => _attachments.removeAt(i)),
-                    onClose: () => setState(() => _showAttachBar = false),
                   ),
           ),
           Row(
@@ -1073,14 +1075,15 @@ class _ChatScreenState extends State<ChatScreen> {
 /// Edits a message in place, right where it sits in the thread — no dialog. A
 /// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
 /// there is room to type.
-/// The composer's attachment tray: a dark strip that rises out of the send bar
-/// offering the two places a picture can come from, and — once anything is
-/// chosen — showing exactly what is about to be sent, each thumbnail with its own
-/// ✕.
+/// The composer's attachment tray: a strip that rises above the operations strip
+/// showing exactly what is about to be sent — a **tall** band of thumbnails, each
+/// with its own ✕ — over a row carrying the two places a picture can come from.
 ///
 /// Deliberately a strip rather than a sheet: choosing a picture should not cover
 /// the conversation it is being sent to, and the preview has to sit where the
-/// message is being typed.
+/// message is being typed. The pictures go above the controls rather than below
+/// them so that adding a fifth one grows the tray upwards, away from the thumb,
+/// instead of pushing the composer around.
 class _AttachBar extends StatelessWidget {
   const _AttachBar({
     required this.attachments,
@@ -1095,6 +1098,10 @@ class _AttachBar extends StatelessWidget {
   final VoidCallback onDevice;
   final ValueChanged<int> onRemove;
   final VoidCallback onClose;
+
+  /// Height of the picture band. Tall enough to actually see what is queued —
+  /// the point of the preview — while leaving the thread visible above it.
+  static const double _bandHeight = 116;
 
   @override
   Widget build(BuildContext context) {
@@ -1112,62 +1119,81 @@ class _AttachBar extends StatelessWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 4, 6),
       decoration: BoxDecoration(
         color: background,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: attachments.isEmpty
-                ? Row(
-                    children: [
-                      _AttachChoice(
-                        key: const Key('attach-from-gallery'),
-                        icon: Icons.photo_library_outlined,
-                        label: 'From gallery',
-                        color: foreground,
-                        onTap: onGallery,
-                      ),
-                      const SizedBox(width: 6),
-                      _AttachChoice(
-                        key: const Key('attach-from-device'),
-                        icon: Icons.add_photo_alternate_outlined,
-                        label: 'From device',
-                        color: foreground,
-                        onTap: onDevice,
-                      ),
-                    ],
-                  )
-                : SizedBox(
-                    height: 64,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: attachments.length + 1,
-                      separatorBuilder: (_, _) => const SizedBox(width: 8),
-                      itemBuilder: (context, i) => i == attachments.length
-                          // One more, without leaving the tray.
-                          ? _AttachChoice(
-                              key: const Key('attach-another'),
-                              icon: Icons.add,
-                              label: 'Add',
-                              color: foreground,
-                              onTap: onGallery,
-                            )
-                          : _AttachPreview(
-                              image: attachments[i],
-                              onRemove: () => onRemove(i),
-                            ),
-                    ),
+          if (attachments.isNotEmpty)
+            Padding(
+              // Room on the right for a thumbnail's ✕, which hangs over its
+              // corner, and clearance from the controls below.
+              padding: const EdgeInsets.only(right: 8, bottom: 8),
+              child: SizedBox(
+                height: _bandHeight,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  // The ✕ sits outside the thumbnail; without the inset the first
+                  // one is clipped by the list's own edge.
+                  padding: const EdgeInsets.only(top: 6, right: 6),
+                  itemCount: attachments.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) => _AttachPreview(
+                    image: attachments[i],
+                    side: _bandHeight - 6,
+                    onRemove: () => onRemove(i),
                   ),
-          ),
-          IconButton(
-            tooltip: 'Close',
-            visualDensity: VisualDensity.compact,
-            color: foreground,
-            onPressed: onClose,
-            icon: const Icon(Icons.close, size: 20),
+                ),
+              ),
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: attachments.isEmpty
+                    ? Row(
+                        children: [
+                          _AttachChoice(
+                            key: const Key('attach-from-gallery'),
+                            icon: Icons.photo_library_outlined,
+                            label: 'From gallery',
+                            color: foreground,
+                            onTap: onGallery,
+                          ),
+                          const SizedBox(width: 6),
+                          _AttachChoice(
+                            key: const Key('attach-from-device'),
+                            icon: Icons.add_photo_alternate_outlined,
+                            label: 'From device',
+                            color: foreground,
+                            onTap: onDevice,
+                          ),
+                        ],
+                      )
+                    // Something is queued: one control to add to it, without
+                    // leaving the tray.
+                    : Align(
+                        alignment: Alignment.centerLeft,
+                        child: _AttachChoice(
+                          key: const Key('attach-another'),
+                          icon: Icons.add,
+                          label: 'Add',
+                          color: foreground,
+                          onTap: onGallery,
+                        ),
+                      ),
+              ),
+              IconButton(
+                tooltip: 'Close',
+                visualDensity: VisualDensity.compact,
+                color: foreground,
+                onPressed: onClose,
+                icon: const Icon(Icons.close, size: 20),
+              ),
+            ],
           ),
         ],
       ),
@@ -1222,14 +1248,21 @@ class _AttachChoice extends StatelessWidget {
 
 /// A thumbnail of a picture queued for the next send, with its own remove button.
 class _AttachPreview extends StatelessWidget {
-  const _AttachPreview({required this.image, required this.onRemove});
+  const _AttachPreview({
+    required this.image,
+    required this.side,
+    required this.onRemove,
+  });
 
   final MessageImage image;
+
+  /// Edge of the square thumbnail, set by the tray's band height.
+  final double side;
+
   final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
-    const double side = 64;
     final provider = avatarImage(
       image.ref,
       displaySize: side,

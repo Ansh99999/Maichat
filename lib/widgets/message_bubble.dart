@@ -762,8 +762,9 @@ class MessageBubble extends StatelessWidget {
     final style = TextStyle(color: color, fontSize: ui.fontSize, height: 1.35);
     final content = _displayContent;
 
-    // Full HTML + CSS engine for any message that actually contains HTML.
-    if (ui.markdown && content.isNotEmpty && looksLikeHtml(content)) {
+    // Full HTML + CSS engine for any message that contains HTML — or a picture
+    // the cheap inline renderer has nowhere to draw.
+    if (ui.markdown && content.isNotEmpty && messageNeedsHtml(content)) {
       final html = SelectionArea(
         child: buildMessageHtml(
           content,

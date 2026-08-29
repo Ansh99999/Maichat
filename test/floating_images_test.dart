@@ -935,18 +935,21 @@ void main() {
         reason: 'reversing the pinch leaves the cap at once, with no dead zone');
   });
 
-  testWidgets('both of a float\'s decode sizes are ready before it needs them',
+  testWidgets('a float has one decode size, warmed before it is drawn',
       (tester) async {
     // The blink on first float. An `Image` whose provider is not in the image
-    // cache paints *nothing* until the decode lands, and this layer swaps between
-    // two differently-sized bitmaps — the crisp framed one at rest and a small
-    // working texture while a touch manipulates it. Those live in different
-    // subtrees, so `gaplessPlayback` cannot carry a frame across the swap: a cold
-    // bucket is a picture that vanishes for a frame or two. Both are warmed as
-    // soon as the float is mounted.
+    // cache paints *nothing* until the decode lands, and the framed and bare
+    // pictures live in different subtrees, so `gaplessPlayback` cannot carry a
+    // frame across the swap on touch-down: a cold bucket is a picture that
+    // vanishes for a frame or two. It is warmed as soon as the float is mounted.
+    //
+    // There is deliberately only **one** size to warm. The layer used to drop to
+    // a ~512 device-px working texture for the duration of a touch, which is half
+    // the bucket a normal float sits in — that is the pixelation reported from a
+    // phone, and it also made the swap a second thing that could be cold.
     //
     // (The blink itself is an on-device observation; what is checkable here is
-    // that the bitmaps are in hand before anything asks for them.)
+    // that the bitmap is asked for before anything draws it.)
     imageCache.clear();
     imageCache.clearLiveImages();
     clearAvatarImageCache();
@@ -960,21 +963,81 @@ void main() {
     await pumpChat(tester, state);
     await tester.pump();
 
-    for (final size in <double>[
-      kFloatingImageDefaultWidth,
-      512 / tester.view.devicePixelRatio, // the small working texture
-    ]) {
-      final provider = avatarImage(
-        _png,
-        displaySize: size,
-        devicePixelRatio: tester.view.devicePixelRatio,
-      );
-      expect(provider, isNotNull);
-      final key = await provider!.obtainKey(ImageConfiguration.empty);
-      expect(imageCache.containsKey(key), isTrue,
-          reason: 'the ${size.toInt()}px bitmap is decoded before it is drawn');
-    }
+    final atRest = avatarImage(
+      _png,
+      displaySize: kFloatingImageDefaultWidth,
+      devicePixelRatio: tester.view.devicePixelRatio,
+    );
+    expect(atRest, isNotNull);
+    final key = await atRest!.obtainKey(ImageConfiguration.empty);
+    expect(imageCache.containsKey(key), isTrue,
+        reason: 'the bitmap is decoded before it is drawn');
+
+    // And it is the bitmap the framed picture actually draws.
+    expect(
+      tester
+          .widget<Image>(find.descendant(
+            of: find.byType(FloatingImagesLayer),
+            matching: find.byType(Image),
+          ))
+          .image,
+      same(atRest),
+    );
   });
+
+  testWidgets('a touched float keeps its full-resolution bitmap, sampled '
+      'smoothly', (tester) async {
+    // The reported pixelation: a float was crisp at rest and went blocky for as
+    // long as a finger was on it. Two causes, both here. It swapped to a ~512
+    // device-px working texture — half the bucket it sits in at rest — and it
+    // sampled that texture nearest-neighbour, which shows every missing pixel.
+    // Neither was buying anything measurable: [avatarImage] already caps the
+    // decode at the display bucket rather than source resolution, bilinear
+    // filtering is what a GPU's texture unit does in hardware, and the 16ms-a-
+    // frame cost the bare picture was written to avoid was re-rasterising the
+    // blurred shadow under a changing scale — which it still drops.
+    imageCache.clear();
+    clearAvatarImageCache();
+    final state = AppState()..debounceFloatSaves = false;
+    await state.init();
+    final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
+    await state.addCharacter(character);
+    state.startChatWithCharacter(character);
+    await state.floatPictureRef(state.active.id, _png);
+    await pumpChat(tester, state);
+    // A widget test's codec never produces an image, so let the decode run to its
+    // failure in the real zone: the `Image` then falls back to its error box,
+    // which has area to put a finger on. What is under test is which provider the
+    // widget is handed and how it is sampled, not the bitmap.
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 80)));
+    await tester.pump();
+
+    final picture = find.descendant(
+      of: find.byType(FloatingImagesLayer),
+      matching: find.byType(Image),
+    );
+    final framed = tester.widget<Image>(picture).image;
+
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byIcon(Icons.close)) + const Offset(0, 40));
+    for (var i = 0; i < 4; i++) {
+      await gesture.moveBy(const Offset(8, 6));
+      await tester.pump();
+    }
+    expect(find.byIcon(Icons.close), findsNothing, reason: 'now bare');
+
+    final bare = tester.widget<Image>(picture);
+    expect(bare.image, same(framed),
+        reason: 'a touched float keeps the bitmap it was already drawing');
+    expect(bare.filterQuality, FilterQuality.low,
+        reason: 'bilinear, not the nearest-neighbour that made it blocky');
+
+    await gesture.up();
+    await tester.pump();
+    await tester.pump();
+  });
+
   testWidgets('Send to chat decodes the picture before the viewer closes',
       (tester) async {
     // The other way a picture is floated, and the one the blink was reported

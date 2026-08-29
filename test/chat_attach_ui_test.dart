@@ -217,6 +217,45 @@ void main() {
     );
   });
 
+  testWidgets('the tray puts its pictures above its controls', (tester) async {
+    // The reported layout: a tall band of what is about to be sent, over the row
+    // that adds to it and closes the tray, with the whole tray above the
+    // operations strip and the send bar.
+    final state = await boot();
+    await seedGallery(tester, state);
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    await openTray(tester);
+    await tester.tap(find.byKey(const Key('attach-from-gallery')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find
+          .descendant(of: find.byType(GridView), matching: find.byType(InkWell))
+          .first,
+    );
+    await tester.pumpAndSettle();
+
+    final add = tester.getRect(find.byKey(const Key('attach-another')));
+    final ops = tester.getRect(find.byKey(const Key('composer-image-button')));
+    final send = tester.getRect(find.byIcon(Icons.arrow_upward));
+    final band = tester.getRect(find.byTooltip('Remove'));
+
+    expect(band.center.dy, lessThan(add.top),
+        reason: 'the pictures band is above the tray controls');
+    expect(add.bottom, lessThanOrEqualTo(ops.top),
+        reason: 'the whole tray is above the operations strip');
+    expect(ops.bottom, lessThanOrEqualTo(send.top),
+        reason: 'and the strip is still above the send bar');
+    // Tall enough to actually see the picture, not the old 64px sliver.
+    final tile = tester.getRect(find.descendant(
+      of: find.byType(ListView),
+      matching: find.byType(ClipRRect),
+    ).first);
+    expect(tile.height, greaterThanOrEqualTo(100),
+        reason: 'a queued picture is shown large enough to make out');
+  });
+
   testWidgets('an attached picture is drawn in its turn, and is openable',
       (tester) async {
     final state = await boot();

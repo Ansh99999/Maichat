@@ -5,6 +5,7 @@ import 'package:flutter_html/flutter_html.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
+import 'package:maichat/widgets/html_image.dart';
 import 'package:maichat/widgets/message_bubble.dart';
 import 'package:maichat/widgets/message_html.dart';
 import 'package:maichat/widgets/thinking_block.dart';
@@ -281,6 +282,84 @@ void main() {
       // …and the card renders through the HTML engine, not as a black slate.
       expect(find.byType(Html), findsOneWidget);
       expect(find.textContaining('A Card'), findsOneWidget);
+    });
+  });
+  group('a picture in a turn', () {
+    Widget host(Widget child) => MaterialApp(
+          home: Scaffold(body: SizedBox(width: 400, height: 900, child: child)),
+        );
+
+    test('a message carrying a picture is routed to the HTML engine', () {
+      // The reported bug: the lightweight inline renderer builds InlineSpans and
+      // has nowhere to put a bitmap, so a turn with a picture in it showed the
+      // link's characters. Routing is the fix, so routing is what is pinned.
+      expect(messageNeedsHtml('look ![](https://files.catbox.moe/a.png)'),
+          isTrue);
+      expect(messageNeedsHtml('here it is: https://files.catbox.moe/a.png'),
+          isTrue);
+      expect(messageNeedsHtml('<img src="https://x.tld/a.png">'), isTrue);
+      // And nothing else is dragged onto the expensive path.
+      expect(messageNeedsHtml('just talking'), isFalse);
+      expect(messageNeedsHtml('read https://example.com/article'), isFalse);
+      expect(messageNeedsHtml('the file is called photo.png'), isFalse);
+    });
+
+    test('a bare picture link becomes a picture, a labelled one stays a link',
+        () {
+      expect(messageToHtml('see https://files.catbox.moe/a.jpg'),
+          contains('<img src="https://files.catbox.moe/a.jpg"'));
+      expect(messageToHtml('![her portrait](https://x.tld/p.png)'),
+          contains('<img src="https://x.tld/p.png"'));
+      final labelled = messageToHtml('[full size](https://x.tld/p.png)');
+      expect(labelled, contains('<a href="https://x.tld/p.png">full size</a>'));
+      expect(labelled, isNot(contains('<img')));
+    });
+
+    test('a picture URL shown as code stays code', () {
+      final html = messageToHtml('use `https://files.catbox.moe/a.png` here');
+      expect(html, contains('<code>'));
+      expect(html, isNot(contains('<img')));
+    });
+
+    testWidgets('a markdown picture in a turn draws an image, not its link',
+        (tester) async {
+      await tester.pumpWidget(host(
+        SingleChildScrollView(
+          child: MessageBubble(
+            message: ChatMessage(
+              role: 'assistant',
+              content: 'Here she is:\n\n'
+                  '![portrait](https://files.catbox.moe/abc.png)',
+            ),
+            ui: const ChatInterface(),
+          ),
+        ),
+      ));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.takeException(), isNull);
+      expect(find.byType(Html), findsOneWidget);
+      expect(find.byType(HtmlInlineImage), findsOneWidget,
+          reason: 'through the shared cache, not a full-resolution fetch');
+      expect(find.textContaining('files.catbox.moe'), findsNothing,
+          reason: 'the link is the picture now, not text');
+    });
+
+    testWidgets('a bare picture link in a turn draws an image too',
+        (tester) async {
+      await tester.pumpWidget(host(
+        SingleChildScrollView(
+          child: MessageBubble(
+            message: ChatMessage(
+              role: 'assistant',
+              content: 'https://files.catbox.moe/abc.png',
+            ),
+            ui: const ChatInterface(),
+          ),
+        ),
+      ));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.takeException(), isNull);
+      expect(find.byType(HtmlInlineImage), findsOneWidget);
     });
   });
 }

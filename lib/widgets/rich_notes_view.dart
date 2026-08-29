@@ -4,7 +4,7 @@ import 'package:flutter_html/flutter_html.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/rich_notes.dart';
-import 'avatar_image.dart';
+import 'html_image.dart';
 
 /// Renders a creator's notes: their HTML and CSS as they designed it, images
 /// included, without letting a hostile or careless card stall the page.
@@ -129,17 +129,7 @@ class _RichNotesState extends State<RichNotes> {
         // Belt and braces: the string pass already removed these, but a tag
         // reconstructed by the HTML parser's error recovery must not build.
         doNotRenderTheseTags: kDroppedNoteTags,
-        extensions: [
-          ImageExtension(
-            builder: (context) => _NoteImage(
-              src: context.attributes['src'] ?? '',
-              alt: context.attributes['alt'] ?? '',
-              declaredWidth:
-                  double.tryParse(context.attributes['width'] ?? ''),
-              color: widget.baseColor,
-            ),
-          ),
-        ],
+        extensions: [inlineImageExtension(color: widget.baseColor)],
         style: {
           'body': Style(
             margin: Margins.zero,
@@ -167,74 +157,6 @@ class _RichNotesState extends State<RichNotes> {
           'td': Style(padding: HtmlPaddings.all(6)),
         },
       );
-}
-
-/// One `<img>` from the notes, drawn through the shared cache and bounded.
-///
-/// The built-in renderer uses `Image.network` at source resolution with
-/// `BoxFit.fill`: a 3000px banner then decodes to ~36 MB and is squashed to
-/// whatever box CSS asked for. Here the picture goes through [avatarImage], so it
-/// decodes near the width it is drawn at and the same URL anywhere in the app is
-/// one cache entry, and it keeps its aspect ratio.
-class _NoteImage extends StatelessWidget {
-  const _NoteImage({
-    required this.src,
-    required this.alt,
-    required this.declaredWidth,
-    required this.color,
-  });
-
-  final String src;
-  final String alt;
-
-  /// The `width=` attribute, when the card gave one.
-  final double? declaredWidth;
-
-  final Color color;
-
-  /// Cap on a note image's height, so one tall picture cannot push the rest of
-  /// the sheet off the screen.
-  static const double _maxHeight = 420;
-
-  @override
-  Widget build(BuildContext context) {
-    if (src.trim().isEmpty) return const SizedBox.shrink();
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final available =
-            constraints.maxWidth.isFinite && constraints.maxWidth > 0
-                ? constraints.maxWidth
-                : MediaQuery.sizeOf(context).width;
-        final width = declaredWidth == null
-            ? available
-            : (declaredWidth! < available ? declaredWidth! : available);
-        final provider = avatarImage(
-          src,
-          displaySize: width,
-          devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
-        );
-        if (provider == null) return _altText();
-        return ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: width, maxHeight: _maxHeight),
-          child: Image(
-            image: provider,
-            fit: BoxFit.contain,
-            gaplessPlayback: true,
-            errorBuilder: (_, _, _) => _altText(),
-            // A picture that never arrives must not leave a collapsed line: hold
-            // a slim band until it does.
-            frameBuilder: (_, child, frame, wasSync) => frame == null && !wasSync
-                ? SizedBox(width: width, height: 2)
-                : child,
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _altText() => alt.trim().isEmpty
-      ? const SizedBox.shrink()
-      : Text(alt, style: TextStyle(color: color.withValues(alpha: 0.7)));
 }
 
 Future<void> _open(String? url) async {

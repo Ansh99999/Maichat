@@ -6,7 +6,9 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/text_wrap.dart';
+import '../services/inline_images.dart';
 import '../services/jank_logger.dart';
+import 'html_image.dart';
 
 /// Colours + base size for the HTML renderer, mirroring the ChatInterface text
 /// options so an HTML message matches a plain one. [wraps] carries the user's
@@ -61,6 +63,17 @@ class HtmlMessageStyle {
 /// full HTML+CSS engine instead of the lightweight inline renderer.
 bool looksLikeHtml(String text) => _htmlTag.hasMatch(text);
 
+/// Whether a message has to go through the HTML engine at all.
+///
+/// Tags are the obvious reason. The other is a **picture**: the lightweight
+/// renderer builds [InlineSpan]s and has nowhere to put a bitmap, so a turn
+/// carrying `![](https://files.catbox.moe/x.png)` — or just the bare link —
+/// showed the characters instead of the photograph. That was the reported bug,
+/// and it is fixed by sending those turns down this path, where [_html] draws
+/// them through the shared picture cache.
+bool messageNeedsHtml(String text) =>
+    looksLikeHtml(text) || carriesInlineImage(text);
+
 final _htmlTag = RegExp(r'<(/?[a-zA-Z][a-zA-Z0-9]*)(\s[^<>]*)?/?>');
 final _curlyQuotes = RegExp(r'[“”„‟]');
 // A tag, a fenced/inline code run, or a "double-quoted" span (captured).
@@ -87,7 +100,10 @@ String messageToHtml(String text, {List<TextWrapRule> wraps = const []}) {
     if (quoted == null) return m.group(0)!;
     return '<q>$quoted</q>';
   });
-  return tameRichCss(resolveFontFamilies(quoted));
+  // A bare link to a picture becomes the picture. Markdown has already turned it
+  // into an `<a>`; this is the one place that knows a photograph was meant.
+  return linkedImagesToPictures(
+      tameRichCss(resolveFontFamilies(quoted)));
 }
 
 // --- reasoning wrappers ------------------------------------------------------
@@ -492,6 +508,13 @@ Widget _html(String text, HtmlMessageStyle s) {
   return Html(
     data: messageToHtml(text, wraps: s.wraps),
     onLinkTap: (url, _, _) => _open(url),
+    // Every `<img>` — the model's own, a card's, a bare link that became one —
+    // goes through the shared cache and decodes at the width it is drawn at.
+    // The built-in renderer would fetch a 3000px photograph at full resolution
+    // and squash it, which in a scrolling thread is both the memory and the
+    // stutter. Capped shorter than a character sheet's: a picture inside a turn
+    // must not be the whole screen.
+    extensions: [inlineImageExtension(color: s.base, maxHeight: 320)],
     style: {
       'body': Style(
         margin: Margins.zero,
