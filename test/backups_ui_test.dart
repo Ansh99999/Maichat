@@ -287,15 +287,34 @@ void main() {
     });
 
     testWidgets('asks for a client when the build has none', (tester) async {
+      tall(tester);
       final state = await ready();
       await tester.pumpWidget(host(state, const DriveSettingsPage()));
       await tester.pumpAndSettle();
 
       expect(find.widgetWithText(FilledButton, 'Connect Google Drive'),
           findsNothing);
-      expect(find.textContaining('Desktop app'), findsOneWidget);
+      expect(find.textContaining('Desktop app'), findsWidgets);
       expect(find.widgetWithText(TextField, 'Client ID'), findsOneWidget);
       expect(find.widgetWithText(TextField, 'Client secret'), findsOneWidget);
+    });
+
+    testWidgets('walks you to the console page for every step', (tester) async {
+      tall(tester);
+      final state = await ready();
+      await tester.pumpWidget(host(state, const DriveSettingsPage()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('HOW TO GET THEM'), findsOneWidget);
+      expect(find.text('Make a Google Cloud project'), findsOneWidget);
+      expect(find.text('Switch the Drive API on'), findsOneWidget);
+      expect(find.text('Name the app on the sign-in page'), findsOneWidget);
+      expect(find.text('Publish it'), findsOneWidget);
+      expect(find.text('Create the client'), findsOneWidget);
+      // Five steps, five taps out to the right page.
+      expect(find.byIcon(Icons.open_in_new), findsNWidgets(5));
+      // The reason a backup silently stops if you skip step 4.
+      expect(find.textContaining('every 7 days'), findsOneWidget);
     });
   });
 

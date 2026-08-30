@@ -106,6 +106,7 @@ class DriveClient {
     UriLauncher? launcher,
     this.folderName = 'MaiChat Backups',
     this.consentTimeout = const Duration(minutes: 5),
+    this.loopbackHost = '127.0.0.1',
     String? bundledClientId,
     String? bundledClientSecret,
   })  : _http = client ?? http.Client(),
@@ -136,6 +137,12 @@ class DriveClient {
   final UriLauncher _launch;
   final String folderName;
   final Duration consentTimeout;
+
+  /// The address the consent page is sent back to. Google's documented form for
+  /// a desktop client is the loopback IP on a random port; `localhost` also
+  /// works and is the fallback if a project ever answers
+  /// `redirect_uri_mismatch`.
+  final String loopbackHost;
 
   /// Only the files this app creates, plus the address of the account so the UI
   /// can say which one is connected.
@@ -171,7 +178,7 @@ class DriveClient {
     } catch (error) {
       throw DriveException('Could not listen for the sign-in reply ($error).');
     }
-    final redirect = 'http://127.0.0.1:${server.port}';
+    final redirect = 'http://$loopbackHost:${server.port}';
     try {
       final consent = Uri.parse(endpoints.authorize).replace(
         queryParameters: <String, String>{
@@ -270,6 +277,16 @@ class DriveClient {
       throw const DriveException(
         'Google did not send a refresh token. Remove MaiChat from your Google '
         'account permissions and connect again.',
+      );
+    }
+    // Drive access is a *checkbox* on the consent screen (Google's granular
+    // permissions), so a sign-in can succeed with the box unticked. Saying so
+    // here beats a mystifying 403 on the first upload.
+    final granted = json['scope']?.toString() ?? '';
+    if (granted.isNotEmpty && !granted.contains('drive.file')) {
+      throw const DriveException(
+        'The Drive permission was not granted — connect again and tick the box '
+        'for the Drive files MaiChat creates.',
       );
     }
     if (access.isNotEmpty) _cache(refresh, access, json['expires_in']);

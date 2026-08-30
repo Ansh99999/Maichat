@@ -53,6 +53,10 @@ class FakeGoogle {
   /// What a 'files' request should answer with instead of the happy path.
   int? failWith;
 
+  /// The `scope` the token endpoint reports as granted. Null leaves it out, as
+  /// Google does for a refresh.
+  String? grantedScope;
+
   Future<void> _handle(HttpRequest request) async {
     final path = request.uri.path;
     if (path == '/token') {
@@ -62,6 +66,7 @@ class FakeGoogle {
       return _json(request, <String, Object?>{
         'access_token': 'access-${tokenCalls.length}',
         'expires_in': 3600,
+        if (grantedScope != null) 'scope': grantedScope,
         if (form['grant_type'] == 'authorization_code')
           'refresh_token': 'refresh-1',
       });
@@ -240,6 +245,41 @@ void main() {
         drive.connect(const DriveAuth()),
         throwsA(isA<DriveException>()),
       );
+    });
+
+    test('says so when the Drive box was left unticked', () async {
+      // Google's granular permissions let a sign-in succeed with the Drive
+      // checkbox cleared; the grant then has the identity scope and nothing else.
+      google.grantedScope = 'https://www.googleapis.com/auth/userinfo.email';
+      final drive = DriveClient(
+        client: client,
+        endpoints: google.endpoints,
+        launcher: browser(),
+      );
+
+      await expectLater(
+        drive.connect(const DriveAuth(clientId: 'a', clientSecret: 'b')),
+        throwsA(isA<DriveException>().having(
+          (e) => e.message,
+          'message',
+          contains('tick the box'),
+        )),
+      );
+    });
+
+    test('accepts a grant that does name the Drive scope', () async {
+      google.grantedScope =
+          'https://www.googleapis.com/auth/drive.file email';
+      final drive = DriveClient(
+        client: client,
+        endpoints: google.endpoints,
+        launcher: browser(),
+      );
+
+      final connected =
+          await drive.connect(const DriveAuth(clientId: 'a', clientSecret: 'b'));
+
+      expect(connected.refreshToken, 'refresh-1');
     });
 
     test('uses the client the app ships with when the user has set none',

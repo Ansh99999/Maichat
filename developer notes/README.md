@@ -22,6 +22,10 @@ learned this / do not regress this" layer underneath it.
   what can't be verified from the dev host.
 - [chat-portability-formats.md](chat-portability-formats.md) — cross-app chat
   import/export format facts and the one-file-three-apps trick.
+- [google-drive-oauth.md](google-drive-oauth.md) — how to make the Drive OAuth
+  client (five console links), and the OAuth facts that bite: Testing status
+  expires refresh tokens weekly, `drive.file` is non-sensitive so publishing
+  needs no review, and the support email is user-facing.
 - [feature-notes-and-test-traps.md](feature-notes-and-test-traps.md) — per-feature
   gotchas (per-chat overrides, lorebooks, group chats, gallery) and the recurring
   Flutter/test traps.

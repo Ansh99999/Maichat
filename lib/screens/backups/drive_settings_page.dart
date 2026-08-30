@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/drive_client.dart';
 import '../../state/app_state.dart';
@@ -163,8 +164,46 @@ class _DriveSettingsPageState extends State<DriveSettingsPage> {
     );
   }
 }
-/// The client id and secret, for somebody who would rather use their own Google
-/// project than the one the app ships with.
+/// The Google Cloud console pages a client is made on, in the order they are
+/// needed.
+///
+/// Deep links rather than directions: that console is redesigned every year or
+/// so and the button names move with it, while these URLs have outlived several
+/// redesigns. Each line says what to do there in one sentence, which is the part
+/// that does not go stale.
+const List<({String title, String detail, String url})> _clientSteps = [
+  (
+    title: 'Make a Google Cloud project',
+    detail: 'Call it MaiChat — any name will do. It is free.',
+    url: 'https://console.cloud.google.com/projectcreate',
+  ),
+  (
+    title: 'Switch the Drive API on',
+    detail: 'With that project selected, press Enable.',
+    url: 'https://console.cloud.google.com/apis/library/drive.googleapis.com',
+  ),
+  (
+    title: 'Name the app on the sign-in page',
+    detail: 'An app name and an email of yours. This is the page you will see '
+        'when you connect, and the email is the one it shows.',
+    url: 'https://console.cloud.google.com/auth/branding',
+  ),
+  (
+    title: 'Publish it',
+    detail: 'Choose External, then press Publish app. Left in testing, Google '
+        'expires the sign-in every 7 days and scheduled backups stop.',
+    url: 'https://console.cloud.google.com/auth/audience',
+  ),
+  (
+    title: 'Create the client',
+    detail: 'Create credentials ▸ OAuth client ID ▸ application type '
+        '"Desktop app". Copy the two strings it shows into the boxes above.',
+    url: 'https://console.cloud.google.com/apis/credentials',
+  ),
+];
+
+/// The client id and secret, for somebody using their own Google project —
+/// with the walk to the console that produces them.
 class _ClientFold extends StatelessWidget {
   const _ClientFold({
     required this.id,
@@ -214,7 +253,81 @@ class _ClientFold extends StatelessWidget {
             label: const Text('Connect with this client'),
           ),
         ),
+        const Divider(height: 32),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'HOW TO GET THEM',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        for (var i = 0; i < _clientSteps.length; i++)
+          _StepRow(number: i + 1, step: _clientSteps[i]),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(
+            'Five minutes, once. Nothing is charged: the app only ever touches '
+            'the files it creates itself, and that access is free.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+/// One step, with the console page it happens on a tap away.
+class _StepRow extends StatelessWidget {
+  const _StepRow({required this.number, required this.step});
+
+  final int number;
+  final ({String title, String detail, String url}) step;
+
+  Future<void> _open(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final ok = await launchUrl(
+        Uri.parse(step.url),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!ok) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('No browser would open ${step.url}')),
+        );
+      }
+    } catch (_) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('No browser would open ${step.url}')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: CircleAvatar(
+        radius: 14,
+        backgroundColor: scheme.secondaryContainer,
+        child: Text(
+          '$number',
+          style: theme.textTheme.labelLarge
+              ?.copyWith(color: scheme.onSecondaryContainer),
+        ),
+      ),
+      title: Text(step.title),
+      subtitle: Text(step.detail),
+      trailing: const Icon(Icons.open_in_new, size: 18),
+      onTap: () => _open(context),
     );
   }
 }

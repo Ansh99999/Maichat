@@ -94,8 +94,19 @@ jobs:
       - name: Build universal APK
         # One APK that installs on any device — no ABI-picking for the user.
         # Skipped on PRs, where analyze + test are the gate.
+        #
+        # The Google Drive client is injected here rather than committed: this
+        # repository is public, and while an installed app's client secret is not
+        # a confidential credential (PKCE is what protects the exchange, and the
+        # only scope asked for is `drive.file`), there is no reason to leave it
+        # sitting in the git history. With no secrets configured — a fork, say —
+        # the defines are empty and the app asks for a client of the user's own
+        # instead. See `developer notes/google-drive-oauth.md`.
         if: github.event_name != 'pull_request'
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release \
+            --dart-define=MAICHAT_DRIVE_CLIENT_ID="${{ secrets.DRIVE_CLIENT_ID }}" \
+            --dart-define=MAICHAT_DRIVE_CLIENT_SECRET="${{ secrets.DRIVE_CLIENT_SECRET }}"
 
       - name: Rename to MaiChat-<version>.apk
         # Give the single output a friendly, versioned name so the download is
@@ -120,7 +131,10 @@ jobs:
         # speed. It is a diagnostic, so it only builds on manual dispatch rather
         # than on every push/tag (it roughly doubled the build time).
         if: github.event_name == 'workflow_dispatch'
-        run: flutter build apk --profile
+        run: |
+          flutter build apk --profile \
+            --dart-define=MAICHAT_DRIVE_CLIENT_ID="${{ secrets.DRIVE_CLIENT_ID }}" \
+            --dart-define=MAICHAT_DRIVE_CLIENT_SECRET="${{ secrets.DRIVE_CLIENT_SECRET }}"
 
       - name: Rename profile APK
         if: github.event_name == 'workflow_dispatch'

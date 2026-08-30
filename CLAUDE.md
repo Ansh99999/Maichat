@@ -239,9 +239,9 @@ eaten by the drawer's edge-swipe region.
   chat-completion preset out of SillyTavern's own `default/content`.
   Drive is OAuth with a "Desktop app" client, PKCE, and a loopback listener —
   deliberately no custom scheme, so no native plugin and no AGP-9 hook. The
-  client the app ships with lives in `kBundledDriveClientId`/`Secret`
-  (`--dart-define`-able, empty in a fork), which is what makes connecting one
-  tap; an installed app's client secret is not a confidential credential and the
+  client the app ships with lives in `kBundledDriveClientId`/`Secret`, injected
+  by CI from the `DRIVE_CLIENT_ID`/`DRIVE_CLIENT_SECRET` repo secrets and empty
+  in a fork (or a local build), which is what makes connecting one tap; an installed app's client secret is not a confidential credential and the
   only scope asked for is `drive.file`, so the pair grants nothing on its own.
   `DriveClient.clientIdFor` prefers a client the user pasted under Advanced, and
   the grant never records which client made it.
