@@ -8,6 +8,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../app_info.dart';
 import '../models/appearance.dart';
+import '../models/backup.dart';
 import '../models/budget.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
@@ -30,9 +31,13 @@ import '../models/view_prefs.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
 import '../services/avatar_store.dart';
+import '../services/backup_codec.dart';
+import '../services/backup_store.dart';
 import '../services/document_sources.dart';
+import '../services/drive_client.dart';
 import '../services/embedding_index.dart';
 import '../services/embedding_store.dart';
+import '../services/foreign_backup.dart';
 import '../services/gallery_group.dart';
 import '../services/image_client.dart';
 import '../services/jank_logger.dart';
@@ -58,19 +63,27 @@ class AppState extends ChangeNotifier {
     UpdateService? updateService,
     AvatarStore? avatars,
     EmbeddingStore? embeddings,
+    BackupStore? backups,
+    DriveClient? drive,
     this.loadTimeout = const Duration(seconds: 30),
   })  : _storage = storage ?? Storage(),
         _client = client ?? ChatClient(),
         _imageClient = imageClient ?? ImageClient(),
-        _updateService = updateService ?? UpdateService() {
+        _updateService = updateService ?? UpdateService(),
+        _drive = drive ?? DriveClient() {
     _avatars = avatars;
     _vectors = embeddings;
+    _backups = backups;
   }
 
   final Storage _storage;
   final ChatClient _client;
   final ImageClient _imageClient;
   final UpdateService _updateService;
+
+  /// How Google Drive is talked to. Injectable so the backup tests can point the
+  /// whole flow at a loopback server instead of at Google.
+  final DriveClient _drive;
 
   /// How long the startup read is given before the app opens anyway. Generous
   /// enough for a big store on a slow phone, short enough that the app is never
@@ -82,6 +95,13 @@ class AppState extends ChangeNotifier {
   /// null when the platform would not say where to put them, in which case
   /// pictures stay where an older build left them.
   AvatarStore? _avatars;
+
+  /// Where backups the app keeps for itself live, or null when the platform
+  /// would not name a directory (in which case only exporting to a file works).
+  BackupStore? _backups;
+
+  BackupPrefs _backupPrefs = const BackupPrefs();
+  final List<BackupRecord> _backupRecords = <BackupRecord>[];
 
   final List<Conversation> _conversations = <Conversation>[];
   final List<Provider> _providers = <Provider>[];
@@ -312,6 +332,10 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       // Best-effort, non-blocking: surfaces an update affordance if one exists.
       unawaited(checkForUpdates());
+      // The schedule is checked here because there is no background worker: a
+      // backup that is owed is taken the next time the app is opened. Returns at
+      // once when nothing is due, which is the normal case.
+      unawaited(runDueBackup());
       // Building a BPE vocabulary is ~100k entries of work and the encoder cache
       // is static, so the first caller pays for the whole process. Left on the
       // build path it landed on whichever screen happened to ask first, as a
@@ -368,6 +392,10 @@ class AppState extends ChangeNotifier {
     // actually changed something.
     if (_usage.prune()) await _persistUsage();
     _discoverPrefs = await _storage.loadDiscoverPrefs();
+    _backupPrefs = await _storage.loadBackupPrefs();
+    _backupRecords
+      ..clear()
+      ..addAll(await _storage.loadBackupRecords());
     _embeddingConfig = await _storage.loadEmbeddingConfig();
     _documents
       ..clear()
@@ -1395,6 +1423,460 @@ class AppState extends ChangeNotifier {
     _modelCache.clear();
     await _storage.clearCache();
     notifyListeners();
+  }
+
+  // --- Backups ---------------------------------------------------------------
+
+  /// The export settings: schedule, destination, what a backup contains.
+  BackupPrefs get backupPrefs => _backupPrefs;
+
+  /// Every backup taken, newest first — the Backups screen's list.
+  List<BackupRecord> get backups {
+    final list = _backupRecords.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return List.unmodifiable(list);
+  }
+
+  BackupStats get backupStats => BackupStats.from(_backupRecords);
+
+  /// Whether the app has a folder of its own to keep backups in. False only when
+  /// the platform would not name one, and then there is nowhere for a scheduled
+  /// backup to go — exporting to a file still works.
+  bool get canKeepBackups => _backups != null;
+
+  /// How much room the kept backups take, for the statistics block.
+  int get keptBackupBytes => _backups?.sizeBytes() ?? 0;
+
+  Future<void> updateBackupPrefs(BackupPrefs next) async {
+    _backupPrefs = next;
+    notifyListeners();
+    if (_writable) await _storage.saveBackupPrefs(next);
+  }
+  /// Gathers everything a backup carries: the store as it stands, every picture
+  /// file and every vector file.
+  ///
+  /// The store is copied *verbatim* rather than rebuilt from the models. That is
+  /// the whole reason a restore lands exactly where it was — a per-chat override
+  /// or a preference added later rides along without this method knowing it
+  /// exists. Pending writes are flushed first, or the archive would hold a store
+  /// one edit behind the screen.
+  Future<BackupSnapshot> collectBackup({
+    bool? includeKeys,
+    bool? includePictures,
+    bool? includeVectors,
+  }) async {
+    final keys = includeKeys ?? _backupPrefs.includeKeys;
+    final withPictures = includePictures ?? _backupPrefs.includePictures;
+    final withVectors = includeVectors ?? _backupPrefs.includeVectors;
+
+    await flushPendingSaves();
+
+    var store = <String, StoreEntry>{};
+    for (final entry in (await _storage.dump()).entries) {
+      if (kBackupExcludedKeys.contains(entry.key)) continue;
+      store[entry.key] = StoreEntry.of(entry.value);
+    }
+    if (!keys) store = stripSecrets(store);
+
+    return BackupSnapshot(
+      store: store,
+      pictures: withPictures
+          ? await _readDirectoryBytes(imageDirectory)
+          : const <String, Uint8List>{},
+      vectors: withVectors
+          ? (await _readDirectoryBytes(_vectors?.directory)).map(
+              (name, bytes) => MapEntry(name, utf8.decode(bytes,
+                  allowMalformed: true)),
+            )
+          : const <String, String>{},
+      createdAt: DateTime.now(),
+      appVersion: kAppVersion,
+      includesKeys: keys,
+    );
+  }
+
+  /// Every file in [directory] by name. Best-effort per file: one unreadable
+  /// picture must not cost the user the whole backup.
+  Future<Map<String, Uint8List>> _readDirectoryBytes(Directory? directory) async {
+    final out = <String, Uint8List>{};
+    if (directory == null || !directory.existsSync()) return out;
+    try {
+      for (final entity in directory.listSync()) {
+        if (entity is! File) continue;
+        try {
+          out[entity.uri.pathSegments.last] = await entity.readAsBytes();
+        } catch (error) {
+          debugPrint('MaiChat: a file was left out of the backup ($error)');
+        }
+      }
+    } catch (error) {
+      debugPrint('MaiChat: could not list a directory for the backup ($error)');
+    }
+    return out;
+  }
+  /// The one path every export takes: build the archive, deliver it, write down
+  /// what happened, then drop whatever the retention setting says is surplus.
+  ///
+  /// [save] is how a file leaves the app — the screen hands in the system save
+  /// dialog, which keeps `file_picker` out of the state layer and lets a test
+  /// export without one. It returns where the file went, or null if the user
+  /// cancelled, in which case nothing is recorded because nothing happened.
+  ///
+  /// Throws [BackupFormatException] or [DriveException] when a destination will
+  /// not take it; the caller shows the message.
+  Future<BackupRecord?> exportBackup({
+    required BackupDestination destination,
+    Future<String?> Function(String name, Uint8List bytes)? save,
+    bool automatic = false,
+  }) async {
+    final snapshot = await collectBackup();
+    final bytes = encodeBackup(snapshot);
+    var name = backupFileName(snapshot.createdAt, automatic: automatic);
+    var path = '';
+    var driveFileId = '';
+
+    switch (destination) {
+      case BackupDestination.file:
+        if (save == null) {
+          throw const BackupFormatException(
+            'Saving to a file needs the save dialog.',
+          );
+        }
+        final where = await save(name, bytes);
+        if (where == null) return null;
+        path = where;
+      case BackupDestination.device:
+        final store = _backups;
+        if (store == null) {
+          throw const BackupFormatException(
+            'This device would not give the app a folder to keep backups in. '
+            'Export to a file instead.',
+          );
+        }
+        final file = await store.write(name, bytes);
+        path = file.path;
+        // The folder may have stepped the name aside (two backups inside one
+        // second); the record names the file that actually exists.
+        name = file.uri.pathSegments.last;
+      case BackupDestination.drive:
+        final auth = await _drive.ensureFolder(_backupPrefs.drive);
+        driveFileId = (await _drive.upload(
+          auth: auth,
+          name: name,
+          bytes: bytes,
+        )).id;
+        if (auth.folderId != _backupPrefs.drive.folderId) {
+          await updateBackupPrefs(_backupPrefs.copyWith(drive: auth));
+        }
+    }
+
+    final record = BackupRecord(
+      id: '${snapshot.createdAt.microsecondsSinceEpoch}',
+      name: name,
+      createdAt: snapshot.createdAt,
+      bytes: bytes.length,
+      destination: destination,
+      counts: snapshot.counts,
+      path: path,
+      driveFileId: driveFileId,
+      automatic: automatic,
+      appVersion: kAppVersion,
+      includesKeys: snapshot.includesKeys,
+    );
+    _backupRecords.insert(0, record);
+    await _pruneBackups(destination);
+    notifyListeners();
+    if (_writable) await _storage.saveBackupRecords(_backupRecords);
+    return record;
+  }
+  /// Keeps only the newest [BackupPrefs.keep] backups at [destination] and
+  /// forgets the records that pointed at what went. A backup folder that grows
+  /// for ever is a storage bug, not a safety feature — and the whole point of
+  /// this app's storage discipline is that nothing grows unbounded.
+  ///
+  /// A backup the user saved to a file of their own is never touched: the app
+  /// does not own that file, so it only forgets the oldest *records* once the
+  /// history gets long.
+  Future<void> _pruneBackups(BackupDestination destination) async {
+    final keep = _backupPrefs.keep.clamp(1, 50);
+    switch (destination) {
+      case BackupDestination.device:
+        final store = _backups;
+        if (store == null) return;
+        final removed = (await store.pruneToNewest(keep)).toSet();
+        _backupRecords.removeWhere(
+          (record) =>
+              record.destination == BackupDestination.device &&
+              removed.contains(record.path),
+        );
+      case BackupDestination.drive:
+        if (!_backupPrefs.drive.isConnected) return;
+        try {
+          final files = await _drive.list(_backupPrefs.drive);
+          for (final file in files.skip(keep)) {
+            await _drive.delete(_backupPrefs.drive, file.id);
+            _backupRecords.removeWhere((r) => r.driveFileId == file.id);
+          }
+        } catch (error) {
+          // Retention is housekeeping: failing to delete an old backup must
+          // never make the new one look like a failure.
+          debugPrint('MaiChat: could not tidy old Drive backups ($error)');
+        }
+      case BackupDestination.file:
+        break;
+    }
+    // The history itself is a store entry, so it is bounded too.
+    if (_backupRecords.length > 100) {
+      _backupRecords.removeRange(100, _backupRecords.length);
+    }
+  }
+
+  /// Reads a recorded backup back: from the app's folder, or from Drive. Null
+  /// when it cannot be reached — a file handed to the save dialog is the user's,
+  /// and the app has no lasting access to it (they can import it by hand).
+  Future<Uint8List?> readBackup(BackupRecord record) async {
+    switch (record.destination) {
+      case BackupDestination.device:
+        return _backups?.readPath(record.path);
+      case BackupDestination.drive:
+        if (record.driveFileId.isEmpty) return null;
+        return _drive.download(_backupPrefs.drive, record.driveFileId);
+      case BackupDestination.file:
+        return null;
+    }
+  }
+
+  /// Forgets a backup, and deletes the copy the app is holding for it.
+  Future<void> deleteBackup(String id) async {
+    final index = _backupRecords.indexWhere((record) => record.id == id);
+    if (index == -1) return;
+    final record = _backupRecords.removeAt(index);
+    if (record.destination == BackupDestination.device &&
+        record.path.isNotEmpty) {
+      await _backups?.deletePath(record.path);
+    }
+    if (record.destination == BackupDestination.drive &&
+        record.driveFileId.isNotEmpty &&
+        _backupPrefs.drive.isConnected) {
+      try {
+        await _drive.delete(_backupPrefs.drive, record.driveFileId);
+      } catch (error) {
+        debugPrint('MaiChat: could not delete a Drive backup ($error)');
+      }
+    }
+    notifyListeners();
+    if (_writable) await _storage.saveBackupRecords(_backupRecords);
+  }
+  /// Puts a MaiChat backup back.
+  ///
+  /// With [replace] (what restoring a snapshot means) the store becomes exactly
+  /// what the archive holds: an entry the archive does not mention is removed,
+  /// so a character deleted after the backup was taken does not survive the
+  /// restore. Without it the archive is merged in — lists reconcile by id and
+  /// settings are left alone.
+  ///
+  /// Files are written before the store, so nothing is ever referenced by a
+  /// picture that has not arrived yet. Keys blanked out of a keyless backup fall
+  /// back to whatever is live on the device rather than wiping it.
+  Future<BackupCounts> restoreBackup(
+    Uint8List bytes, {
+    bool replace = true,
+  }) =>
+      restoreSnapshot(decodeBackup(bytes), replace: replace);
+
+  /// Puts an already-decoded backup back — what the screens call, since they
+  /// decode first to show what is in the archive before asking to go ahead.
+  Future<BackupCounts> restoreSnapshot(
+    BackupSnapshot snapshot, {
+    bool replace = true,
+  }) async {
+    if (!_writable) {
+      throw const BackupFormatException(
+        'This session came up read-only, so it will not write over your data. '
+        'Restart the app and try again.',
+      );
+    }
+    await _restoreFiles(snapshot);
+
+    final current = <String, StoreEntry>{};
+    for (final entry in (await _storage.dump()).entries) {
+      if (kBackupExcludedKeys.contains(entry.key)) continue;
+      current[entry.key] = StoreEntry.of(entry.value);
+    }
+    var incoming = preserveSecrets(current: current, incoming: snapshot.store);
+    if (!replace) incoming = mergeStores(current, incoming);
+
+    await _storage.writeEntries(
+      <String, Object?>{
+        for (final entry in incoming.entries) entry.key: entry.value.stored,
+      },
+      replace: replace,
+      protect: kBackupExcludedKeys,
+    );
+    await reloadFromStore();
+    // Anything on disk the restored store does not reference is a leftover.
+    await _sweepAvatars();
+    return snapshot.counts;
+  }
+
+  /// Writes a backup's pictures and vectors back into the directories they came
+  /// from, under their original names — which is what makes a `local:<name>`
+  /// reference in a message resolve to the same picture again.
+  Future<void> _restoreFiles(BackupSnapshot snapshot) async {
+    Future<void> write(Directory? dir, String name, List<int> bytes) async {
+      if (dir == null) return;
+      if (name.isEmpty || name.contains('/') || name.contains('\\')) return;
+      try {
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        await File('${dir.path}/$name').writeAsBytes(bytes, flush: true);
+      } catch (error) {
+        debugPrint('MaiChat: could not restore $name ($error)');
+      }
+    }
+
+    for (final picture in snapshot.pictures.entries) {
+      await write(imageDirectory, picture.key, picture.value);
+    }
+    for (final vector in snapshot.vectors.entries) {
+      await write(_vectors?.directory, vector.key, utf8.encode(vector.value));
+    }
+  }
+
+  /// Re-reads every store entry into memory. A restore writes the store from
+  /// underneath the running app, so this is how the screens catch up.
+  Future<void> reloadFromStore() async {
+    try {
+      await _load();
+    } catch (error) {
+      _fail('Saved data could not be re-read after a restore: $error');
+    }
+    notifyListeners();
+  }
+  /// Takes the backup the schedule owes, if one is owed.
+  ///
+  /// Never throws and never blocks the launch: an automatic backup that cannot
+  /// be delivered — Drive unreachable on a train, say — leaves a line in the log
+  /// and is tried again next time the app opens.
+  Future<BackupRecord?> runDueBackup({DateTime? now}) async {
+    final at = now ?? DateTime.now();
+    if (!_writable || !_backupPrefs.dueAt(at)) return null;
+    try {
+      final record = await exportBackup(
+        destination: _backupPrefs.autoDestination,
+        automatic: true,
+      );
+      await updateBackupPrefs(_backupPrefs.copyWith(lastRunAt: at));
+      return record;
+    } catch (error) {
+      debugPrint('MaiChat: the scheduled backup did not run ($error)');
+      return null;
+    }
+  }
+
+  /// Signs in to Google Drive and remembers the grant. Throws [DriveException]
+  /// when the user declines or Google refuses.
+  Future<void> connectDrive({
+    required String clientId,
+    required String clientSecret,
+  }) async {
+    final auth = await _drive.connect(_backupPrefs.drive.copyWith(
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+    ));
+    await updateBackupPrefs(
+      _backupPrefs.copyWith(drive: await _drive.ensureFolder(auth)),
+    );
+  }
+
+  /// Drops the grant but keeps the client id and secret, so reconnecting is one
+  /// tap rather than another trip to the Google Cloud console.
+  Future<void> disconnectDrive() => updateBackupPrefs(
+        _backupPrefs.copyWith(
+          drive: DriveAuth(
+            clientId: _backupPrefs.drive.clientId,
+            clientSecret: _backupPrefs.drive.clientSecret,
+          ),
+        ),
+      );
+
+  /// The backups sitting in Drive — including ones taken on another device,
+  /// which is what makes Drive a way to move everything to a new phone.
+  Future<List<DriveFile>> driveBackups() async {
+    if (!_backupPrefs.drive.isConnected) return const <DriveFile>[];
+    final auth = await _drive.ensureFolder(_backupPrefs.drive);
+    if (auth.folderId != _backupPrefs.drive.folderId) {
+      await updateBackupPrefs(_backupPrefs.copyWith(drive: auth));
+    }
+    return _drive.list(auth);
+  }
+
+  /// Downloads one of [driveBackups] by id.
+  Future<Uint8List> downloadDriveBackup(String fileId) =>
+      _drive.download(_backupPrefs.drive, fileId);
+  /// Puts a backup from another app into place.
+  ///
+  /// Order matters: the characters land first, because the one binding a foreign
+  /// file carries is *which character a chat belongs to*, and it carries it by
+  /// name. A chat whose character is in the same file therefore arrives already
+  /// attached to it — persona and all — instead of as an orphan transcript.
+  Future<void> applyForeignBackup(ForeignBackup backup) async {
+    if (!_writable) {
+      throw const BackupFormatException(
+        'This session came up read-only, so nothing was imported.',
+      );
+    }
+    if (backup.characters.isNotEmpty) await addCharacters(backup.characters);
+    if (backup.lorebooks.isNotEmpty) await addLorebooks(backup.lorebooks);
+    if (backup.scenarios.isNotEmpty) await addScenarios(backup.scenarios);
+    for (final preset in backup.presets) {
+      await addPreset(preset);
+    }
+    for (final provider in backup.providers) {
+      await addProvider(provider);
+    }
+
+    if (backup.chats.isNotEmpty) {
+      final imported = <Conversation>[];
+      for (final chat in backup.chats) {
+        final conversation = chat.conversation;
+        final owner = _characterNamed(conversation.characterName);
+        if (owner != null) {
+          conversation
+            ..characterId = owner.id
+            ..characterName = owner.displayName
+            ..systemPrompt = _mergedPrompt(owner, conversation.systemPrompt);
+        }
+        imported.add(conversation);
+      }
+      await importConversations(imported);
+    }
+
+    // Pictures are filed per character in one pass each, so a gallery of fifty
+    // does not rewrite the gallery entry fifty times.
+    final byOwner = <String?, List<ForeignPicture>>{};
+    for (final picture in backup.pictures) {
+      final owner = _characterNamed(picture.characterName);
+      (byOwner[owner?.id] ??= <ForeignPicture>[]).add(picture);
+    }
+    for (final group in byOwner.entries) {
+      await addGalleryImages(
+        group.value.map((p) => p.bytes).toList(),
+        characterId: group.key,
+        title: group.value.length == 1 ? group.value.first.title : '',
+      );
+    }
+  }
+
+  /// The saved character with this display name, ignoring case — how a foreign
+  /// file's idea of "whose chat this is" is resolved, since its ids mean nothing
+  /// here.
+  Character? _characterNamed(String? name) {
+    final needle = name?.trim().toLowerCase() ?? '';
+    if (needle.isEmpty) return null;
+    for (final character in _characters) {
+      if (character.displayName.trim().toLowerCase() == needle) return character;
+    }
+    return null;
   }
 
   /// Flips a character's starred flag — the pin-to-top action.

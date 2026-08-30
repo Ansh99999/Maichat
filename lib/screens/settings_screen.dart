@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import 'backups/backups_screen.dart';
+import 'backups/backup_import_screen.dart';
+import 'backups/drive_settings_page.dart';
+import 'chats_screen.dart' show relativeTime;
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
 import 'settings/chat_interface_settings_page.dart';
@@ -53,6 +57,12 @@ class SettingsScreen extends StatelessWidget {
             onTap: () => _open(context, const StorageSettingsPage()),
           ),
           _SectionTile(
+            icon: Icons.backup_outlined,
+            title: 'Backups',
+            subtitle: _backupSummary(state),
+            onTap: () => _open(context, const BackupsScreen()),
+          ),
+          _SectionTile(
             icon: Icons.info_outline,
             title: 'About',
             subtitle: 'Version ${AboutSettingsPage.version}',
@@ -82,13 +92,24 @@ class SettingsScreen extends StatelessWidget {
         : a.mode.label;
   }
 
-  static String _chatInterfaceSummary(AppState state) {
-    final ui = state.chatInterface;
+  static String _chatInterfaceSummary(AppState state) {    final ui = state.chatInterface;
     final style = ui.bubbles ? 'Bubbles' : 'Document';
     final avatars = (ui.botAvatar.show || ui.userAvatar.show)
         ? 'avatars on'
         : 'no avatars';
     return '$style · $avatars · ${ui.textPlacement.label}';
+  }
+
+  static String _backupSummary(AppState state) {
+    final stats = state.backupStats;
+    final newest = stats.newest;
+    if (newest == null) {
+      return state.backupPrefs.automatic
+          ? '${state.backupPrefs.schedule.label} · none taken yet'
+          : 'Export and import everything';
+    }
+    final count = '${stats.count} ${stats.count == 1 ? 'backup' : 'backups'}';
+    return '$count · newest ${relativeTime(newest)}';
   }
 
   static void _open(BuildContext context, Widget page) {
@@ -288,6 +309,31 @@ const List<_SearchEntry> _searchIndex = [
     builder: _storagePage,
   ),
   _SearchEntry(
+    title: 'Backups',
+    section: 'Backups',
+    icon: Icons.backup_outlined,
+    keywords: 'backup export import restore snapshot zip archive google drive '
+        'schedule automatic periodic daily weekly monthly keep retention '
+        'migrate new phone move everything',
+    builder: _backupsPage,
+  ),
+  _SearchEntry(
+    title: 'Import a backup',
+    section: 'Backups',
+    icon: Icons.download_outlined,
+    keywords: 'import restore sillytavern silly tavern agnai agnaistic chub '
+        'venus card jsonl world info bring in migrate',
+    builder: _backupImportPage,
+  ),
+  _SearchEntry(
+    title: 'Google Drive',
+    section: 'Backups',
+    icon: Icons.cloud_outlined,
+    keywords: 'google drive oauth sign in cloud upload account connect '
+        'client id secret',
+    builder: _drivePage,
+  ),
+  _SearchEntry(
     title: 'Version',
     section: 'About',
     icon: Icons.info_outline,
@@ -295,7 +341,6 @@ const List<_SearchEntry> _searchIndex = [
     builder: _versionPage,
   ),
 ];
-
 // Const tear-offs so the index above stays a compile-time constant.
 Widget _providersPage() => const ProvidersScreen();
 Widget _tokenizerPage() => const TokenizerSettingsPage();
@@ -320,6 +365,9 @@ Widget _chatColoursPage() =>
 Widget _groupChatsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.groupChats);
 Widget _storagePage() => const StorageSettingsPage();
+Widget _backupsPage() => const BackupsScreen();
+Widget _backupImportPage() => const BackupImportScreen();
+Widget _drivePage() => const DriveSettingsPage();
 Widget _versionPage() =>
     const AboutSettingsPage(highlight: SettingAnchor.version);
 

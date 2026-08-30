@@ -181,6 +181,30 @@ eaten by the drawer's edge-swipe region.
 - **Chat portability:** `services/chat_codec.dart` (imports ST `.jsonl`, Agnai,
   ooba, CAI, Risu, Kobold, plain logs; native export is one file ST+Agnai+MaiChat
   all read). `test/chat_codec_test.dart` has a "what the other apps accept" group.
+- **Backups (Settings ▸ Backups):** `models/backup.dart` (schedule, destination,
+  `BackupPrefs`, `BackupRecord`, counts, stats), `services/backup_codec.dart`,
+  `services/backup_store.dart` (the app's own `backups/` folder),
+  `services/drive_client.dart`, `services/foreign_backup.dart`,
+  `screens/backups/*`. A backup is a zip of `maichat-backup.json` +
+  `pictures/` + `vectors/`, and the manifest holds **the store itself**, entry by
+  entry, decoded — copied verbatim rather than rebuilt from the models, which is
+  why a restore lands per-chat overrides and any field added later without this
+  code knowing about them. `kBackupExcludedKeys` keeps `backupPrefs`/`backups`
+  out of a backup, so restoring an old snapshot cannot disconnect Drive or erase
+  the history that is being read from. A restore writes files first, then the
+  store (`replace` removes anything the archive does not mention; merge
+  reconciles lists by id and leaves settings alone), then `reloadFromStore()`;
+  keys blanked out of a keyless backup fall back to the live ones
+  (`preserveSecrets`). Every export goes through `AppState.exportBackup`, which
+  is also what the schedule calls — there is no background worker, so
+  `runDueBackup()` runs from `init()` when one is owed, and only the in-app and
+  Drive destinations can run without a save dialog. **Foreign** imports are a
+  different mechanism: `readForeignBackup` walks an archive and routes each entry
+  through the codec that already reads it, so a chat binds to its character *by
+  name* (the folder name, in SillyTavern's case) and nothing here parses a format
+  twice. Drive is OAuth with the user's own "Desktop app" client, PKCE, and a
+  loopback listener — deliberately no custom scheme, so no native plugin and no
+  AGP-9 hook.
 - **Gallery:** `models/gallery_image.dart` (a record + the sort/zoom enums),
   `models/floating_image.dart`, `services/gallery_group.dart` (the pure
   date-bucketing and sorting the screens draw), `screens/gallery/*` (one
@@ -237,6 +261,12 @@ eaten by the drawer's edge-swipe region.
   system save dialog (`FilePicker.saveFile`), the same permission-free path every
   other export takes — it writes wherever the user points it, not into MediaStore,
   which would need a native plugin (and the AGP-9 Kotlin hook).
+- **Google Drive backups.** The whole flow (consent, PKCE, token exchange,
+  multipart upload, listing, download, delete) is exercised against a loopback
+  stand-in for Google in `test/drive_client_test.dart`, and nothing here has a
+  Google client. What only a real account settles: whether the browser on the
+  user's phone follows the `http://127.0.0.1:<port>` redirect back into the app,
+  and whether their own Cloud project has the Drive API enabled.
 - **Chub** (`api.chub.ai` etc.) geo-blocks datacentre IPs; **JannyAI** is
   Cloudflare-challenged from a datacentre. Those Discover paths are written from
   agreeing sources + loopback tests and confirmed on the user's phone, not here.

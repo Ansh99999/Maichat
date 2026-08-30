@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'models/appearance.dart';
 import 'screens/home_screen.dart';
 import 'services/avatar_store.dart';
+import 'services/backup_store.dart';
 import 'services/embedding_store.dart';
 import 'state/app_state.dart';
 
@@ -20,11 +21,18 @@ Future<void> main() async {
   final avatars = await AvatarStore.open();
   // Embedding vectors are files too (never in prefs — see EmbeddingStore).
   final embeddings = await EmbeddingStore.open();
-  runApp(MaiChatApp(avatars: avatars, embeddings: embeddings));
+  // The folder the app keeps its own backups in, so a scheduled export has
+  // somewhere to write without a save dialog.
+  final backups = await BackupStore.open();
+  runApp(MaiChatApp(
+    avatars: avatars,
+    embeddings: embeddings,
+    backups: backups,
+  ));
 }
 
 class MaiChatApp extends StatelessWidget {
-  const MaiChatApp({super.key, this.avatars, this.embeddings});
+  const MaiChatApp({super.key, this.avatars, this.embeddings, this.backups});
 
   /// The pictures directory, or null when the platform would not name one.
   final AvatarStore? avatars;
@@ -32,10 +40,17 @@ class MaiChatApp extends StatelessWidget {
   /// The vectors directory, or null when the platform would not name one.
   final EmbeddingStore? embeddings;
 
+  /// The backups directory, or null when the platform would not name one.
+  final BackupStore? backups;
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<AppState>(
-      create: (_) => AppState(avatars: avatars, embeddings: embeddings)..init(),
+      create: (_) => AppState(
+        avatars: avatars,
+        embeddings: embeddings,
+        backups: backups,
+      )..init(),
       // Outside the builder so a late palette does not rebuild app state.
       child: DynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {

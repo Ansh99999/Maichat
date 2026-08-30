@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.16.6+94
+version: 1.17.0+95
 
 environment:
   sdk: ^3.12.2
@@ -49,6 +49,9 @@ dependencies:
   # Reading CharX (.charx) character cards — a ZIP archive, standalone or
   # appended after a JPEG/PNG. Pure Dart, so no native-plugin build concerns.
   archive: 4.0.7
+  # SHA-256, for the PKCE challenge the Google Drive sign-in sends and for the
+  # stable ids a re-import derives. Pure Dart, so no AGP-9 native-plugin concern.
+  crypto: 3.0.7
   flutter_html: ^3.0.0
   markdown: ^7.3.1
   google_fonts: 8.2.1

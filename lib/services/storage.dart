@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/appearance.dart';
+import '../models/backup.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
@@ -59,6 +60,8 @@ class Storage {
   static const _viewPrefsKey = 'viewPrefs';
   static const _imageGenKey = 'imageGen';
   static const _summaryFoldsKey = 'summaryFolds';
+  static const _backupPrefsKey = 'backupPrefs';
+  static const _backupsKey = 'backups';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -555,6 +558,104 @@ class Storage {
 
   Future<void> saveDiscoverPrefs(DiscoverPrefs prefs) async =>
       (await _prefs).setString(_discoverKey, jsonEncode(prefs.toJson()));
+
+  /// The export settings (schedule, destination, what goes in a backup, the
+  /// Google Drive grant). Its own small entry, and one a backup never carries —
+  /// see `kBackupExcludedKeys`.
+  Future<BackupPrefs> loadBackupPrefs() async {
+    final raw = (await _prefs).getString(_backupPrefsKey);
+    if (raw == null) return const BackupPrefs();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return BackupPrefs.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const BackupPrefs();
+  }
+
+  Future<void> saveBackupPrefs(BackupPrefs prefs) async =>
+      (await _prefs).setString(_backupPrefsKey, jsonEncode(prefs.toJson()));
+
+  /// The backups taken so far, newest first — what the Backups screen lists and
+  /// its search bar searches.
+  Future<List<BackupRecord>> loadBackupRecords() async {
+    final raw = (await _prefs).getString(_backupsKey);
+    if (raw == null) return <BackupRecord>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(BackupRecord.fromJson)
+            .where((record) => record.id.isNotEmpty)
+            .toList();
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <BackupRecord>[];
+  }
+
+  Future<void> saveBackupRecords(List<BackupRecord> records) async =>
+      (await _prefs).setString(
+        _backupsKey,
+        jsonEncode(records.map((r) => r.toJson()).toList()),
+      );
+
+  /// Every stored entry, by key — the raw material a backup is made of.
+  ///
+  /// Deliberately untyped and not enumerated: a backup copies the store as it
+  /// stands, so an entry a later version of the app adds is carried out and put
+  /// back without this file having to learn about it.
+  Future<Map<String, Object?>> dump() async {
+    final prefs = await _prefs;
+    return <String, Object?>{
+      for (final key in prefs.getKeys()) key: prefs.get(key),
+    };
+  }
+
+  /// Writes [entries] back into the store.
+  ///
+  /// With [replace] every key that the snapshot does not mention is removed
+  /// first — that is what "put this backup back exactly" means, and without it a
+  /// character deleted after the backup was taken would survive the restore.
+  /// [protect] names the keys a restore must never touch either way.
+  Future<void> writeEntries(
+    Map<String, Object?> entries, {
+    bool replace = false,
+    Set<String> protect = const <String>{},
+  }) async {
+    final prefs = await _prefs;
+    if (replace) {
+      for (final key in prefs.getKeys().toList()) {
+        if (entries.containsKey(key) || protect.contains(key)) continue;
+        await prefs.remove(key);
+      }
+    }
+    for (final entry in entries.entries) {
+      if (protect.contains(entry.key)) continue;
+      final value = entry.value;
+      if (value == null) {
+        await prefs.remove(entry.key);
+      } else if (value is String) {
+        await prefs.setString(entry.key, value);
+      } else if (value is bool) {
+        await prefs.setBool(entry.key, value);
+      } else if (value is int) {
+        await prefs.setInt(entry.key, value);
+      } else if (value is double) {
+        await prefs.setDouble(entry.key, value);
+      } else if (value is List) {
+        await prefs.setStringList(
+          entry.key,
+          value.map((e) => e.toString()).toList(),
+        );
+      } else {
+        await prefs.setString(entry.key, value.toString());
+      }
+    }
+  }
 
   /// How much room each stored entry takes, in bytes, largest first.
   ///
