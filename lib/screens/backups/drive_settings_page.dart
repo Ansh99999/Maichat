@@ -4,13 +4,12 @@ import 'package:provider/provider.dart' hide Provider;
 import '../../services/drive_client.dart';
 import '../../state/app_state.dart';
 
-/// Connecting a Google account, and the one honest explanation of why it asks
-/// for a client id and secret.
+/// Connecting a Google account.
 ///
-/// There is no MaiChat server to hold an OAuth client, and a sideloaded app
-/// cannot keep a secret anyway, so the app uses the user's own Google Cloud
-/// project. The scope asked for is `drive.file`: it can only see the files it
-/// creates itself, never the rest of the Drive.
+/// One button when the app ships with a Google client of its own; the client id
+/// and secret move into an Advanced fold for anyone who would rather use their
+/// own project. The scope asked for is `drive.file`, which grants access only to
+/// the files this app creates — never the rest of the Drive.
 class DriveSettingsPage extends StatefulWidget {
   const DriveSettingsPage({super.key});
 
@@ -39,15 +38,17 @@ class _DriveSettingsPageState extends State<DriveSettingsPage> {
     super.dispose();
   }
 
-  Future<void> _connect(AppState state) async {
+  /// [own] connects with whatever is typed into the Advanced fields; without it
+  /// the app's own client is used.
+  Future<void> _connect(AppState state, {bool own = false}) async {
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       await state.connectDrive(
-        clientId: _id.text,
-        clientSecret: _secret.text,
+        clientId: own ? _id.text : '',
+        clientSecret: own ? _secret.text : '',
       );
       if (!mounted) return;
       setState(() => _busy = false);
@@ -55,18 +56,18 @@ class _DriveSettingsPageState extends State<DriveSettingsPage> {
         const SnackBar(content: Text('Connected to Google Drive.')),
       );
     } on DriveException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = error.message;
-      });
+      _fail(error.message);
     } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = 'The sign-in did not finish ($error).';
-      });
+      _fail('The sign-in did not finish ($error).');
     }
+  }
+
+  void _fail(String message) {
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = message;
+    });
   }
   @override
   Widget build(BuildContext context) {
@@ -75,6 +76,7 @@ class _DriveSettingsPageState extends State<DriveSettingsPage> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final bottom = MediaQuery.paddingOf(context).bottom;
+    final bundled = state.driveHasBundledClient;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Google Drive')),
@@ -102,32 +104,18 @@ class _DriveSettingsPageState extends State<DriveSettingsPage> {
             )
           else
             Text(
-              'MaiChat has no server of its own, so it uses your Google project '
-              'to talk to your Drive. In the Google Cloud console: enable the '
-              'Drive API, create an OAuth client of type "Desktop app", then '
-              'paste its ID and secret here. The app asks only for access to '
-              'the files it creates itself.',
+              bundled
+                  ? 'Backups go into a "MaiChat Backups" folder in your Drive. '
+                      'Signing in opens your browser and comes back to the app '
+                      'on its own. MaiChat asks only for access to the files it '
+                      'creates itself — it cannot see anything else in there.'
+                  : 'This build ships without a Google client of its own, so it '
+                      'needs one from your Google Cloud project: enable the '
+                      'Drive API, create an OAuth client of type "Desktop app", '
+                      'then paste its ID and secret below.',
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: scheme.onSurfaceVariant),
             ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _id,
-            decoration: const InputDecoration(
-              labelText: 'Client ID',
-              hintText: '…apps.googleusercontent.com',
-            ),
-            autocorrect: false,
-            enableSuggestions: false,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _secret,
-            decoration: const InputDecoration(labelText: 'Client secret'),
-            obscureText: true,
-            autocorrect: false,
-            enableSuggestions: false,
-          ),
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(
@@ -136,32 +124,97 @@ class _DriveSettingsPageState extends State<DriveSettingsPage> {
             ),
           ],
           const SizedBox(height: 20),
-          FilledButton.icon(
-            onPressed: _busy ? null : () => _connect(state),
-            icon: _busy
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.link),
-            label: Text(
-              _busy
-                  ? 'Waiting for Google…'
-                  : drive.isConnected
-                      ? 'Connect again'
-                      : 'Connect',
+          if (bundled)
+            FilledButton.icon(
+              onPressed: _busy ? null : () => _connect(state),
+              icon: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_outlined),
+              label: Text(
+                _busy
+                    ? 'Waiting for Google…'
+                    : drive.isConnected
+                        ? 'Connect a different account'
+                        : 'Connect Google Drive',
+              ),
             ),
+          const SizedBox(height: 8),
+          _ClientFold(
+            id: _id,
+            secret: _secret,
+            busy: _busy,
+            // Where the app has no client of its own, the fields *are* the
+            // sign-in rather than an advanced alternative to it.
+            open: !bundled,
+            onConnect: () => _connect(state, own: true),
           ),
           const SizedBox(height: 12),
           Text(
-            'Signing in opens your browser and comes back to the app on its own. '
-            'The grant is kept on this device only.',
+            'The grant is kept on this device only, beside your API keys.',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       ),
+    );
+  }
+}
+/// The client id and secret, for somebody who would rather use their own Google
+/// project than the one the app ships with.
+class _ClientFold extends StatelessWidget {
+  const _ClientFold({
+    required this.id,
+    required this.secret,
+    required this.busy,
+    required this.open,
+    required this.onConnect,
+  });
+
+  final TextEditingController id;
+  final TextEditingController secret;
+  final bool busy;
+  final bool open;
+  final VoidCallback onConnect;
+
+  @override
+  Widget build(BuildContext context) {
+    return ExpansionTile(
+      initiallyExpanded: open,
+      tilePadding: EdgeInsets.zero,
+      title: Text(open ? 'Google client' : 'Use my own Google client'),
+      childrenPadding: const EdgeInsets.only(bottom: 12),
+      children: [
+        TextField(
+          controller: id,
+          decoration: const InputDecoration(
+            labelText: 'Client ID',
+            hintText: '…apps.googleusercontent.com',
+          ),
+          autocorrect: false,
+          enableSuggestions: false,
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: secret,
+          decoration: const InputDecoration(labelText: 'Client secret'),
+          obscureText: true,
+          autocorrect: false,
+          enableSuggestions: false,
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: busy ? null : onConnect,
+            icon: const Icon(Icons.link),
+            label: const Text('Connect with this client'),
+          ),
+        ),
+      ],
     );
   }
 }

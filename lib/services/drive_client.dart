@@ -31,6 +31,23 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/backup.dart';
 
+/// The OAuth client this app ships with, so connecting Drive is one tap rather
+/// than a trip to the Google Cloud console.
+///
+/// A "Desktop app" client's secret is not a confidential credential — Google's
+/// own guidance for installed apps says as much, and PKCE is what actually
+/// protects the exchange. Nor does holding both strings grant anything: the only
+/// scope asked for is `drive.file`, so the most they allow is asking a user to
+/// consent to an app that can see the files it creates itself.
+///
+/// Either committed here or set at build time with
+/// `--dart-define=MAICHAT_DRIVE_CLIENT_ID=…`. Empty in a fork that has not made
+/// one, and then the Drive screen asks for a client of the user's own instead.
+const String kBundledDriveClientId =
+    String.fromEnvironment('MAICHAT_DRIVE_CLIENT_ID');
+const String kBundledDriveClientSecret =
+    String.fromEnvironment('MAICHAT_DRIVE_CLIENT_SECRET');
+
 /// The Google endpoints, overridable so the flow can be pointed at a loopback
 /// server in a test rather than at Google.
 class DriveEndpoints {
@@ -89,9 +106,30 @@ class DriveClient {
     UriLauncher? launcher,
     this.folderName = 'MaiChat Backups',
     this.consentTimeout = const Duration(minutes: 5),
+    String? bundledClientId,
+    String? bundledClientSecret,
   })  : _http = client ?? http.Client(),
+        bundledClientId = bundledClientId ?? kBundledDriveClientId,
+        bundledClientSecret = bundledClientSecret ?? kBundledDriveClientSecret,
         _launch = launcher ??
             ((uri) => launchUrl(uri, mode: LaunchMode.externalApplication));
+
+  /// The client the app ships with, used unless the user set one of their own.
+  final String bundledClientId;
+  final String bundledClientSecret;
+
+  /// Which client a sign-in should use: the user's own where they have entered
+  /// one, else the app's.
+  String clientIdFor(DriveAuth auth) =>
+      auth.clientId.trim().isEmpty ? bundledClientId : auth.clientId.trim();
+
+  String clientSecretFor(DriveAuth auth) => auth.clientSecret.trim().isEmpty
+      ? bundledClientSecret
+      : auth.clientSecret.trim();
+
+  /// Whether there is a client to sign in with at all.
+  bool canConnect(DriveAuth auth) =>
+      clientIdFor(auth).isNotEmpty && clientSecretFor(auth).isNotEmpty;
 
   final http.Client _http;
   final DriveEndpoints endpoints;
@@ -115,9 +153,10 @@ class DriveClient {
   /// Throws [DriveException] when the user declines, when the browser cannot be
   /// opened, or when Google refuses the exchange. The listener is always closed.
   Future<DriveAuth> connect(DriveAuth auth) async {
-    if (!auth.hasClient) {
+    if (!canConnect(auth)) {
       throw const DriveException(
-        'Add a Google client ID and secret first.',
+        'This build has no Google client of its own — add a client ID and '
+        'secret under Advanced.',
       );
     }
     final verifier = _randomString(64);
@@ -136,7 +175,7 @@ class DriveClient {
     try {
       final consent = Uri.parse(endpoints.authorize).replace(
         queryParameters: <String, String>{
-          'client_id': auth.clientId.trim(),
+          'client_id': clientIdFor(auth),
           'redirect_uri': redirect,
           'response_type': 'code',
           'scope': scopes,
@@ -219,8 +258,8 @@ class DriveClient {
   }) async {
     final json = await _postForm(endpoints.token, <String, String>{
       'code': code,
-      'client_id': auth.clientId.trim(),
-      'client_secret': auth.clientSecret.trim(),
+      'client_id': clientIdFor(auth),
+      'client_secret': clientSecretFor(auth),
       'redirect_uri': redirect,
       'grant_type': 'authorization_code',
       'code_verifier': verifier,
@@ -266,8 +305,8 @@ class DriveClient {
       return cached.token;
     }
     final json = await _postForm(endpoints.token, <String, String>{
-      'client_id': auth.clientId.trim(),
-      'client_secret': auth.clientSecret.trim(),
+      'client_id': clientIdFor(auth),
+      'client_secret': clientSecretFor(auth),
       'refresh_token': auth.refreshToken,
       'grant_type': 'refresh_token',
     });

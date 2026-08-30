@@ -39,9 +39,11 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 
+import '../models/backup.dart';
 import '../models/character.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
+import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../models/scenario.dart';
 import 'character_codec.dart';
@@ -210,6 +212,7 @@ Future<ForeignBackup> readForeignBackupFile(
   String path, {
   String fileName = '',
   PictureStore? storePicture,
+  BackupProgress? onProgress,
 }) async {
   final file = File(path);
   if (!file.existsSync()) {
@@ -225,7 +228,7 @@ Future<ForeignBackup> readForeignBackupFile(
       } catch (error) {
         throw FormatException('That archive could not be opened ($error).');
       }
-      return _orThrow(await _readArchive(archive, storePicture));
+      return _orThrow(await _readArchive(archive, storePicture, onProgress));
     } finally {
       await input.close();
     }
@@ -234,6 +237,7 @@ Future<ForeignBackup> readForeignBackupFile(
     await file.readAsBytes(),
     fileName: name,
     storePicture: storePicture,
+    onProgress: onProgress,
   );
 }
 
@@ -243,6 +247,7 @@ Future<ForeignBackup> readForeignBackupBytes(
   Uint8List bytes, {
   String fileName = '',
   PictureStore? storePicture,
+  BackupProgress? onProgress,
 }) async {
   if (bytes.isEmpty) throw const FormatException('That file is empty.');
   if (_isZip(bytes)) {
@@ -252,7 +257,7 @@ Future<ForeignBackup> readForeignBackupBytes(
     } catch (error) {
       throw FormatException('That archive could not be opened ($error).');
     }
-    return _orThrow(await _readArchive(archive, storePicture));
+    return _orThrow(await _readArchive(archive, storePicture, onProgress));
   }
   // One JSON document can be a whole Agnai backup — it says so at the top, and
   // it is worth saying which app the import came from.
@@ -427,6 +432,7 @@ class _ArchiveIndex {
 Future<ForeignBackup> _readArchive(
   Archive archive,
   PictureStore? storePicture,
+  BackupProgress? onProgress,
 ) async {
   final index = _ArchiveIndex(archive);
   // Agnai says what it is in a manifest, so it is asked first and cheaply.
@@ -438,9 +444,9 @@ Future<ForeignBackup> _readArchive(
   }
   final settings = _sillyTavernSettings(index);
   if (settings != null || _looksSillyTavern(index)) {
-    return _readSillyTavern(index, settings, storePicture);
+    return _readSillyTavern(index, settings, storePicture, onProgress);
   }
-  return _readLoose(index, storePicture);
+  return _readLoose(index, storePicture, onProgress);
 }
 
 Map<String, dynamic>? _agnaiManifest(_ArchiveIndex index) {
@@ -504,10 +510,12 @@ Future<ForeignBackup> _readSillyTavern(
   _ArchiveIndex index,
   Map<String, dynamic>? settings,
   PictureStore? store,
+  BackupProgress? onProgress,
 ) async {
   final backup = ForeignBackup(source: ForeignSource.sillyTavern);
   final pictures = _Pictures(index, store);
   final byCard = <String, Character>{};
+  final progress = _Progress(index.paths.length, onProgress);
 
   for (final path in index.under('characters')) {
     final data = index.bytes(path);
@@ -526,6 +534,7 @@ Future<ForeignBackup> _readSillyTavern(
     } catch (_) {
       backup.skip('unreadable character cards');
     }
+    progress.step(_basename(path));
   }
 
   if (settings != null) {
@@ -535,6 +544,7 @@ Future<ForeignBackup> _readSillyTavern(
   for (final path in index.under('worlds')) {
     if (!path.toLowerCase().endsWith('.json')) continue;
     _addLorebooks(backup, index.text(path) ?? '', _stem(path));
+    progress.step(_basename(path));
   }
 
   for (final path in index.under('openai settings')) {
@@ -549,12 +559,68 @@ Future<ForeignBackup> _readSillyTavern(
     }
   }
 
-  await _readSillyTavernChats(backup, index, byCard, pictures);
-  await _readSillyTavernGroups(backup, index, byCard, pictures);
-  await _readSillyTavernPictures(backup, index, byCard, pictures);
+  await _readSillyTavernChats(backup, index, byCard, pictures, progress);
+  await _readSillyTavernGroups(backup, index, byCard, pictures, progress);
+  await _readSillyTavernPictures(backup, index, byCard, pictures, progress);
+  _readSystemPrompts(backup, index);
   _countTheRest(backup, index);
+  progress.finish();
   return backup;
 }
+
+/// `sysprompt/<name>.json` — `{name, content, post_history}`, which is exactly
+/// this app's Main Prompt and Post-History Instructions. It becomes a preset of
+/// its own, because those two texts are the whole substance of one.
+///
+/// Its neighbours `instruct/` and `context/` deliberately do *not* come across:
+/// instruct templates are the sequences that frame a **text**-completion prompt,
+/// which this app never sends, and a context template's `story_string` is a
+/// Handlebars template in SillyTavern's own dialect — importing either would
+/// produce a preset full of markup that means nothing here.
+void _readSystemPrompts(ForeignBackup backup, _ArchiveIndex index) {
+  for (final path in index.under('sysprompt')) {
+    if (!path.toLowerCase().endsWith('.json')) continue;
+    final text = index.text(path);
+    if (text == null) continue;
+    try {
+      final json = jsonDecode(text);
+      if (json is! Map<String, dynamic>) continue;
+      final content = json['content']?.toString().trim() ?? '';
+      final after = json['post_history']?.toString().trim() ?? '';
+      if (content.isEmpty && after.isEmpty) continue;
+      final preset = Preset.create(
+        name: json['name']?.toString().trim().isNotEmpty == true
+            ? json['name'].toString().trim()
+            : _stem(path),
+      );
+      for (final block in preset.prompts) {
+        if (block.identifier == PromptId.main) block.content = content;
+        if (block.identifier == PromptId.jailbreak) block.content = after;
+      }
+      backup.presets.add(preset);
+    } catch (_) {
+      backup.skip('unreadable system prompts');
+    }
+  }
+}
+/// Counts its way through an archive so a screen can show a bar instead of
+/// nothing. The total is the number of entries; the passes that skip an entry
+/// simply do not count it, so the bar reaches the end via [finish].
+class _Progress {
+  _Progress(this.total, this.report);
+
+  final int total;
+  final BackupProgress? report;
+  int done = 0;
+
+  void step(String what) {
+    done++;
+    report?.call(done, total, what);
+  }
+
+  void finish() => report?.call(total, total, '');
+}
+
 /// Pictures already written out, by the archive path they came from.
 ///
 /// A picture in `user/images` is usually *both* an attachment on a turn and a
@@ -689,6 +755,7 @@ Future<void> _readSillyTavernChats(
   _ArchiveIndex index,
   Map<String, Character> byCard,
   _Pictures pictures,
+  _Progress progress,
 ) async {
   for (final path in index.under('chats')) {
     if (!path.toLowerCase().endsWith('.jsonl')) {
@@ -708,6 +775,7 @@ Future<void> _readSillyTavernChats(
       title: _stem(path),
       characterName: owner?.displayName ?? folder,
     );
+    progress.step(_basename(path));
   }
 }
 
@@ -719,6 +787,7 @@ Future<void> _readSillyTavernGroups(
   _ArchiveIndex index,
   Map<String, Character> byCard,
   _Pictures pictures,
+  _Progress progress,
 ) async {
   final byChatId = <String, Map<String, dynamic>>{};
   for (final path in index.under('groups')) {
@@ -757,6 +826,7 @@ Future<void> _readSillyTavernGroups(
       characterName: members.isEmpty ? '' : members.first,
       participantNames: members,
     );
+    progress.step(_basename(path));
   }
 }
 Future<void> _addSillyTavernChat(
@@ -869,6 +939,7 @@ Future<void> _readSillyTavernPictures(
   _ArchiveIndex index,
   Map<String, Character> byCard,
   _Pictures pictures,
+  _Progress progress,
 ) async {
   if (!pictures.enabled) return;
   for (final path in index.under('user')) {
@@ -886,6 +957,7 @@ Future<void> _readSillyTavernPictures(
       characterName: owner?.displayName ?? '',
       tags: const <String>['sillytavern'],
     ));
+    progress.step(_basename(path));
   }
 }
 
@@ -901,9 +973,11 @@ void _countTheRest(ForeignBackup backup, _ArchiveIndex index) {
     'vectors': 'vector caches',
     'thumbnails': 'thumbnails',
     'extensions': 'extensions',
-    'instruct': 'instruct templates',
-    'context': 'context templates',
-    'sysprompt': 'system prompts',
+    // Both of these frame a text-completion prompt, which this app never sends:
+    // instruct templates are literal sequences, and a context template is a
+    // Handlebars story string. `sysprompt/` *is* imported — see above.
+    'instruct': 'instruct templates (text completion only)',
+    'context': 'context templates (text completion only)',
     'reasoning': 'reasoning templates',
     'textgen settings': 'text-completion presets',
     'novelai settings': 'NovelAI presets',
@@ -1021,16 +1095,20 @@ String _agnaiName(Map<String, dynamic> json) {
 Future<ForeignBackup> _readLoose(
   _ArchiveIndex index,
   PictureStore? store,
+  BackupProgress? onProgress,
 ) async {
   final backup = ForeignBackup(source: _looksChub(index)
       ? ForeignSource.chub
       : ForeignSource.archive);
   final pictures = _Pictures(index, store);
+  final progress = _Progress(index.paths.length, onProgress);
   for (final path in index.paths) {
     final bytes = index.bytes(path);
     if (bytes == null || bytes.isEmpty) continue;
     await _readOne(backup, bytes, path, store, pictures: pictures);
+    progress.step(_basename(path));
   }
+  progress.finish();
   return backup;
 }
 

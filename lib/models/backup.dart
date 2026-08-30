@@ -6,6 +6,15 @@
 /// screens, and the archive itself is built by `services/backup_codec.dart`.
 library;
 
+/// Told how far along a long read or write is: [done] of [total] pieces, and
+/// what is being handled right now.
+///
+/// A backup can hold thousands of files, and a screen that says nothing while it
+/// works looks like a screen that has hung — which is exactly what the first
+/// version looked like. Both the archive reader and the foreign-backup reader
+/// report through this.
+typedef BackupProgress = void Function(int done, int total, String what);
+
 /// How often an automatic backup is taken. There is no background worker on
 /// Android here, so "automatic" means *checked when the app opens* — see
 /// [BackupPrefs.dueAt] and `AppState.runDueBackup`.

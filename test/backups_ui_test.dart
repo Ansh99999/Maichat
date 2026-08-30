@@ -6,8 +6,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/backup.dart';
 import 'package:maichat/screens/backups/backup_import_screen.dart';
 import 'package:maichat/screens/backups/backups_screen.dart';
+import 'package:maichat/screens/backups/drive_settings_page.dart';
 import 'package:maichat/screens/settings_screen.dart';
 import 'package:maichat/services/backup_store.dart';
+import 'package:maichat/services/drive_client.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -254,6 +256,47 @@ void main() {
     // The window closed behind it and the list now has the snapshot in it.
     expect(find.text('Keep a copy in the app'), findsNothing);
     expect(find.text('SNAPSHOTS · 1 of 1'), findsOneWidget);
+  });
+
+  group('the Google Drive page', () {
+    testWidgets('is one button when the app ships a client of its own',
+        (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final state = AppState(
+        drive: DriveClient(
+          bundledClientId: 'shipped',
+          bundledClientSecret: 'shh',
+        ),
+      );
+      await state.init();
+      await tester.pumpWidget(host(state, const DriveSettingsPage()));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(FilledButton, 'Connect Google Drive'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('creates itself'), findsOneWidget);
+      // The client id and secret are folded away, not gone.
+      expect(find.text('Use my own Google client'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Client ID'), findsNothing);
+
+      await tester.tap(find.text('Use my own Google client'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, 'Client ID'), findsOneWidget);
+    });
+
+    testWidgets('asks for a client when the build has none', (tester) async {
+      final state = await ready();
+      await tester.pumpWidget(host(state, const DriveSettingsPage()));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(FilledButton, 'Connect Google Drive'),
+          findsNothing);
+      expect(find.textContaining('Desktop app'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Client ID'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Client secret'), findsOneWidget);
+    });
   });
 
   testWidgets('Settings has a Backups section, and search finds it',

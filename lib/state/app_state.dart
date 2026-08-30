@@ -1721,10 +1721,15 @@ class AppState extends ChangeNotifier {
   Future<BackupCounts> restoreBackupFile(
     String path, {
     bool replace = true,
+    BackupProgress? onProgress,
   }) async {
     final archive = BackupArchive.openFile(path);
     try {
-      return await restoreArchive(archive, replace: replace);
+      return await restoreArchive(
+        archive,
+        replace: replace,
+        onProgress: onProgress,
+      );
     } finally {
       archive.close();
     }
@@ -1748,6 +1753,7 @@ class AppState extends ChangeNotifier {
   Future<BackupCounts> restoreArchive(
     BackupArchive archive, {
     bool replace = true,
+    BackupProgress? onProgress,
   }) async {
     if (!_writable) {
       throw const BackupFormatException(
@@ -1758,6 +1764,7 @@ class AppState extends ChangeNotifier {
     await archive.extractFiles(
       pictures: imageDirectory,
       vectors: _vectors?.directory,
+      onProgress: onProgress,
     );
 
     final current = <String, StoreEntry>{};
@@ -1812,15 +1819,24 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Signs in to Google Drive and remembers the grant. Throws [DriveException]
-  /// when the user declines or Google refuses.
+  /// Whether Drive can be connected at all: this build ships a Google client, or
+  /// the user has entered one of their own.
+  bool get driveCanConnect => _drive.canConnect(_backupPrefs.drive);
+
+  /// Whether the app is using its own bundled client rather than one the user
+  /// pasted — which is what the Drive screen shows one button for.
+  bool get driveHasBundledClient => _drive.bundledClientId.isNotEmpty;
+
+  /// Signs in to Google Drive and remembers the grant. With no client id given
+  /// the app's own is used. Throws [DriveException] when the user declines or
+  /// Google refuses.
   Future<void> connectDrive({
-    required String clientId,
-    required String clientSecret,
+    String clientId = '',
+    String clientSecret = '',
   }) async {
     final auth = await _drive.connect(_backupPrefs.drive.copyWith(
-      clientId: clientId.trim(),
-      clientSecret: clientSecret.trim(),
+      clientId: clientId.trim().isEmpty ? null : clientId.trim(),
+      clientSecret: clientSecret.trim().isEmpty ? null : clientSecret.trim(),
     ));
     await updateBackupPrefs(
       _backupPrefs.copyWith(drive: await _drive.ensureFolder(auth)),
@@ -1858,22 +1874,29 @@ class AppState extends ChangeNotifier {
   /// file this app is ever handed, and reading one into memory is what made an
   /// import kill the process instead of finishing. Pictures go straight into the
   /// pictures directory as they are found — [storePicture] is the sink.
-  Future<ForeignBackup> readForeignFile(String path, {String fileName = ''}) =>
+  Future<ForeignBackup> readForeignFile(
+    String path, {
+    String fileName = '',
+    BackupProgress? onProgress,
+  }) =>
       readForeignBackupFile(
         path,
         fileName: fileName,
         storePicture: storePicture,
+        onProgress: onProgress,
       );
 
   /// The same for bytes already in hand, when the platform would not give a path.
   Future<ForeignBackup> readForeignBytes(
     Uint8List bytes, {
     String fileName = '',
+    BackupProgress? onProgress,
   }) =>
       readForeignBackupBytes(
         bytes,
         fileName: fileName,
         storePicture: storePicture,
+        onProgress: onProgress,
       );
 
   /// Puts a backup from another app into place.

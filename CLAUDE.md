@@ -229,12 +229,22 @@ eaten by the drawer's edge-swipe region.
   rewritten to `local:` refs *before* `ChatCodec` parses the transcript, which is
   what puts a generated picture back on the turn that made it. Everything with no
   home here (themes, quick replies, extensions, wallpapers, `secrets.json`) is
-  counted in `ForeignBackup.skipped` and reported. `test/backup_sillytavern_test.dart`
+  counted in `ForeignBackup.skipped` and reported — including `instruct/` and
+  `context/`, which frame a *text*-completion prompt (literal sequences and a
+  Handlebars story string) and would import as markup; `sysprompt/` does come
+  across, as a preset whose Main Prompt and Post-History blocks are its
+  `content`/`post_history`. Both readers report through `BackupProgress`, which
+  is what the import screen's bar and the restore dialog's bar draw. `test/backup_sillytavern_test.dart`
   builds that layout file by file, with a real world-info fixture and a real
   chat-completion preset out of SillyTavern's own `default/content`.
-  Drive is OAuth with the user's own "Desktop app" client, PKCE, and a
-  loopback listener — deliberately no custom scheme, so no native plugin and no
-  AGP-9 hook.
+  Drive is OAuth with a "Desktop app" client, PKCE, and a loopback listener —
+  deliberately no custom scheme, so no native plugin and no AGP-9 hook. The
+  client the app ships with lives in `kBundledDriveClientId`/`Secret`
+  (`--dart-define`-able, empty in a fork), which is what makes connecting one
+  tap; an installed app's client secret is not a confidential credential and the
+  only scope asked for is `drive.file`, so the pair grants nothing on its own.
+  `DriveClient.clientIdFor` prefers a client the user pasted under Advanced, and
+  the grant never records which client made it.
 - **Gallery:** `models/gallery_image.dart` (a record + the sort/zoom enums),
   `models/floating_image.dart`, `services/gallery_group.dart` (the pure
   date-bucketing and sorting the screens draw), `screens/gallery/*` (one

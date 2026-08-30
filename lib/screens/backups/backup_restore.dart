@@ -56,12 +56,23 @@ Future<bool> restoreMaiChatBackup(
   );
   if (replace == null || !context.mounted) return false;
 
-  messenger.showSnackBar(const SnackBar(
-    content: Text('Restoring…'),
-    duration: Duration(seconds: 2),
-  ));
+  // A big backup takes a while: hundreds of pictures, written one at a time. A
+  // bar that moves is the difference between "working" and "hung".
+  final progress = ValueNotifier<(int, int)>((0, 0));
+  final navigator = Navigator.of(context);
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _RestoringDialog(progress: progress),
+  ).ignore();
+
   try {
-    final counts = await state.restoreArchive(archive, replace: replace);
+    final counts = await state.restoreArchive(
+      archive,
+      replace: replace,
+      onProgress: (done, total, _) => progress.value = (done, total),
+    );
+    if (navigator.canPop()) navigator.pop();
     messenger.showSnackBar(SnackBar(
       content: Text('${replace ? 'Restored' : 'Merged in'} '
           '${counts.summary(limit: 4)}.'),
@@ -74,13 +85,53 @@ Future<bool> restoreMaiChatBackup(
     }
     return true;
   } on BackupFormatException catch (error) {
+    if (navigator.canPop()) navigator.pop();
     messenger.showSnackBar(SnackBar(content: Text(error.message)));
   } catch (error) {
+    if (navigator.canPop()) navigator.pop();
     messenger.showSnackBar(
       SnackBar(content: Text('The restore did not finish ($error).')),
     );
+  } finally {
+    progress.dispose();
   }
   return false;
+}
+
+/// The bar a restore runs behind: what it is doing and how far along it is.
+class _RestoringDialog extends StatelessWidget {
+  const _RestoringDialog({required this.progress});
+
+  final ValueNotifier<(int, int)> progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Restoring…'),
+      content: ValueListenableBuilder<(int, int)>(
+        valueListenable: progress,
+        builder: (context, value, _) {
+          final (done, total) = value;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              LinearProgressIndicator(
+                value: total > 0 ? (done / total).clamp(0.0, 1.0) : null,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                total > 0
+                    ? 'Putting the pictures back — $done of $total'
+                    : 'Reading the backup…',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 /// Asks the one question a restore has: should the app become exactly what is in
 /// the file, or should the file be added to what is here?

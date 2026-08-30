@@ -241,6 +241,63 @@ void main() {
         throwsA(isA<DriveException>()),
       );
     });
+
+    test('uses the client the app ships with when the user has set none',
+        () async {
+      final drive = DriveClient(
+        client: client,
+        endpoints: google.endpoints,
+        launcher: browser(),
+        bundledClientId: 'shipped-client',
+        bundledClientSecret: 'shipped-secret',
+      );
+      expect(drive.canConnect(const DriveAuth()), isTrue);
+
+      final connected = await drive.connect(const DriveAuth());
+
+      expect(connected.refreshToken, 'refresh-1');
+      expect(google.tokenCalls.single['client_id'], 'shipped-client');
+      expect(google.tokenCalls.single['client_secret'], 'shipped-secret');
+      // Nothing of the app's client is written into the grant: the next build
+      // may ship a different one.
+      expect(connected.clientId, isEmpty);
+    });
+
+    test('a client of the user\'s own wins over the shipped one', () async {
+      final drive = DriveClient(
+        client: client,
+        endpoints: google.endpoints,
+        launcher: browser(),
+        bundledClientId: 'shipped-client',
+        bundledClientSecret: 'shipped-secret',
+      );
+
+      await drive.connect(const DriveAuth(
+        clientId: 'mine',
+        clientSecret: 'mine-secret',
+      ));
+
+      expect(google.tokenCalls.single['client_id'], 'mine');
+      expect(google.tokenCalls.single['client_secret'], 'mine-secret');
+    });
+
+    test('a refresh uses the shipped client too, or it could never renew',
+        () async {
+      final drive = DriveClient(
+        client: client,
+        endpoints: google.endpoints,
+        bundledClientId: 'shipped-client',
+        bundledClientSecret: 'shipped-secret',
+      );
+
+      await drive.list(const DriveAuth(
+        refreshToken: 'refresh-1',
+        folderId: 'folder-1',
+      ));
+
+      expect(google.tokenCalls.single['grant_type'], 'refresh_token');
+      expect(google.tokenCalls.single['client_id'], 'shipped-client');
+    });
   });
   group('the folder', () {
     test('is found when it is already there', () async {

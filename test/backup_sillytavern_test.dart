@@ -226,6 +226,24 @@ void main() {
       'OpenAI Settings/Default.json',
       File('test/fixtures/st_openai_default.json').readAsStringSync(),
     );
+    addText(
+      'sysprompt/Roleplay.json',
+      jsonEncode({
+        'name': 'Roleplay',
+        'content': 'Develop the plot slowly, always stay in character.',
+        'post_history': 'Stay in character.',
+      }),
+    );
+    // Its neighbours frame a text-completion prompt, so they are counted and
+    // left alone rather than turned into presets full of markup.
+    addText(
+      'instruct/Alpaca.json',
+      jsonEncode({'name': 'Alpaca', 'input_sequence': '### Instruction:'}),
+    );
+    addText(
+      'context/Default.json',
+      jsonEncode({'name': 'Default', 'story_string': '{{#if system}}…{{/if}}'}),
+    );
     addText('settings.json', jsonEncode(settings()));
     addText('secrets.json', jsonEncode({'api_key_openai': 'sk-nope'}));
     if (withPictures) {
@@ -269,8 +287,18 @@ void main() {
         backup.lorebooks.map((b) => b.name),
         containsAll(<String>['Eldoria', "Seraphina's lore"]),
       );
-      expect(backup.presets.single.name, 'Default');
-      expect(backup.presets.single.prompts, isNotEmpty);
+      // The chat-completion preset, and the system prompt as one of its own.
+      expect(backup.presets.map((p) => p.name),
+          containsAll(<String>['Default', 'Roleplay']));
+      final roleplay = backup.presets.firstWhere((p) => p.name == 'Roleplay');
+      expect(
+        roleplay.prompts.firstWhere((b) => b.identifier == 'main').content,
+        'Develop the plot slowly, always stay in character.',
+      );
+      expect(
+        roleplay.prompts.firstWhere((b) => b.identifier == 'jailbreak').content,
+        'Stay in character.',
+      );
     });
 
     test('binds each chat to the character whose folder it is in', () async {
@@ -338,6 +366,25 @@ void main() {
       expect(pictures.listSync().whereType<File>().length, 4);
     });
 
+    test('counts its way through, so a screen can show a bar', () async {
+      final state = await boot();
+      final seen = <(int, int)>[];
+
+      await state.readForeignFile(
+        (await backupZip()).path,
+        onProgress: (done, total, _) => seen.add((done, total)),
+      );
+
+      expect(seen, isNotEmpty);
+      expect(seen.first.$2, greaterThan(0));
+      // It ends at the end, whatever it skipped along the way.
+      expect(seen.last.$1, seen.last.$2);
+      // And it only ever moves forwards.
+      for (var i = 1; i < seen.length; i++) {
+        expect(seen[i].$1, greaterThanOrEqualTo(seen[i - 1].$1));
+      }
+    });
+
     test('says what it left behind instead of pretending it took it', () async {
       final state = await boot();
 
@@ -348,6 +395,8 @@ void main() {
       expect(backup.skipped['background pictures'], 1);
       expect(backup.skipped['thumbnails'], 1);
       expect(backup.skipped['API keys (not read)'], 1);
+      expect(backup.skipped['instruct templates (text completion only)'], 1);
+      expect(backup.skipped['context templates (text completion only)'], 1);
       expect(backup.leftOut(), contains('interface themes'));
     });
   });

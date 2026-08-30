@@ -433,11 +433,16 @@ class BackupArchive {
 
   /// Writes the pictures and the vectors back into the directories they came
   /// from, one entry at a time, under their original names. Returns how many
-  /// files were written.
-  Future<int> extractFiles({Directory? pictures, Directory? vectors}) async {
+  /// files were written, and reports its way through [onProgress].
+  Future<int> extractFiles({
+    Directory? pictures,
+    Directory? vectors,
+    BackupProgress? onProgress,
+  }) async {
     final archive = _archive;
     if (archive == null) return 0;
     var written = 0;
+    final total = pictureNames.length + vectorNames.length;
     for (final entry in archive.files) {
       if (!entry.isFile) continue;
       var name = _safeEntryName(entry.name, kBackupPictureFolder);
@@ -460,6 +465,7 @@ class BackupArchive {
         // One picture that will not write must not cost the user the restore.
         debugPrint('MaiChat: could not restore $name ($error)');
       }
+      onProgress?.call(written, total, name);
     }
     return written;
   }

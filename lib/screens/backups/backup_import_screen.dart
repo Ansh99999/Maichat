@@ -97,6 +97,13 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
   String _query = '';
   bool _busy = false;
 
+  /// How far a read has got: entries done, entries in the archive, and the name
+  /// of the one being read. A data folder has thousands, and a screen that says
+  /// nothing while it works reads as a screen that has hung.
+  int _done = 0;
+  int _total = 0;
+  String _reading = '';
+
   /// The Drive listing, once it has been asked for. Not fetched on open: a
   /// screen that hits the network before the user asks for it is a screen that
   /// fails to open on a train.
@@ -139,7 +146,12 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
     final files = result?.files ?? const <PlatformFile>[];
     if (files.isEmpty || !mounted) return;
 
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _done = 0;
+      _total = 0;
+      _reading = '';
+    });
     final messenger = ScaffoldMessenger.of(context);
     ForeignBackup? foreign;
     String? firstError;
@@ -156,10 +168,15 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
         }
         try {
           final read = path != null
-              ? await state.readForeignFile(path, fileName: file.name)
+              ? await state.readForeignFile(
+                  path,
+                  fileName: file.name,
+                  onProgress: _onProgress,
+                )
               : await state.readForeignBytes(
                   file.bytes ?? Uint8List(0),
                   fileName: file.name,
+                  onProgress: _onProgress,
                 );
           if (foreign == null) {
             foreign = read;
@@ -187,6 +204,18 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
     }
     await _confirmForeign(state, foreign, firstError);
   }
+  /// Paints the bar as the reader works, but not on every single entry: a data
+  /// folder would otherwise rebuild this screen a few thousand times.
+  void _onProgress(int done, int total, String what) {
+    if (!mounted) return;
+    if (done != total && done - _done < 8) return;
+    setState(() {
+      _done = done;
+      _total = total;
+      _reading = what;
+    });
+  }
+
   /// Shows what was recognised before anything is written, then writes it.
   Future<void> _confirmForeign(
     AppState state,
@@ -351,7 +380,30 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
             ),
           ),
           if (_busy)
-            const SliverToBoxAdapter(child: LinearProgressIndicator()),
+            SliverToBoxAdapter(
+              child: Column(
+                children: [
+                  LinearProgressIndicator(
+                    value: _total > 0
+                        ? (_done / _total).clamp(0.0, 1.0)
+                        : null,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: Text(
+                      _total > 0
+                          ? 'Reading $_done of $_total'
+                              '${_reading.isEmpty ? '' : ' — $_reading'}'
+                          : 'Reading…',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           _Header(
             'IMPORT FROM',
             trailing: sources.isEmpty ? 'nothing matches' : null,
