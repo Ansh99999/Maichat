@@ -195,4 +195,71 @@ void main() {
       contains('User persona'),
     );
   });
+
+  test('the message and the turn waiting for a reply are published before the '
+      'request is built', () async {
+    // Why this is worth pinning: assembling a request is real work — macros over
+    // the whole history, then a BPE pass over everything the context budget can
+    // fit — and it used to run *before* the first notification, so on a long chat
+    // the tap on send did nothing visible for as long as that took. Publishing
+    // the pending turn first is the difference between "instant" and "stuck".
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final client = _OrderClient();
+    final state = AppState(client: client);
+    await state.init();
+    await state.addProvider(Provider(
+      id: 'p',
+      name: 'p',
+      kind: ProviderKind.openai,
+      baseUrl: 'https://example.com/v1',
+      model: 'gpt',
+      apiKey: 'k',
+    ));
+    var notifications = 0;
+    state.addListener(() {
+      notifications++;
+      client.notifications = notifications;
+      client.publishedTurns = state.active.messages.length;
+      client.publishedStreaming = state.streaming;
+    });
+
+    await state.send('Where are we?');
+
+    expect(client.turnsAtRequest, 2,
+        reason: 'the user turn and the turn the reply lands in were both '
+            'published before the request went out');
+    expect(client.streamingAtRequest, isTrue,
+        reason: 'and the composer had already flipped to Stop');
+    expect(client.notificationsAtRequest, greaterThan(0),
+        reason: 'something reached the screen before the work started');
+    expect(notifications, greaterThan(client.notificationsAtRequest),
+        reason: 'and more followed as the reply arrived');
+  });
+}
+
+/// Records what the app had already told its listeners by the time the request
+/// was actually made.
+class _OrderClient extends ChatClient {
+  int notifications = 0;
+  int publishedTurns = 0;
+  bool publishedStreaming = false;
+
+  int turnsAtRequest = -1;
+  bool streamingAtRequest = false;
+  int notificationsAtRequest = -1;
+
+  @override
+  Stream<ChatDelta> streamChat({
+    required Provider provider,
+    required List<ChatMessage> history,
+    GenParams params = const GenParams(),
+  }) async* {
+    turnsAtRequest = publishedTurns;
+    streamingAtRequest = publishedStreaming;
+    notificationsAtRequest = notifications;
+    yield const ChatDelta(text: 'The harbour.');
+  }
+
+  @override
+  Future<List<String>> listModels(Provider provider) async => const [];
 }

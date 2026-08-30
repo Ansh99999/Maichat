@@ -86,18 +86,22 @@ class PromptBuilder {
     // build time. We resolve only the identity macros here — never the full,
     // stateful engine — so {{setvar}}/{{roll}} in old turns are not re-run each
     // generation. Marker/block content still goes through the full engine below.
-    final resolvedHistory = [
-      for (final m in history)
-        m.content.contains('{') || m.content.contains('<')
-            ? m.copyWith(
-                content: Character.resolveMacros(
-                  m.content,
-                  charName: charName,
-                  userName: userName,
-                ),
-              )
-            : m,
-    ];
+    //
+    // A turn with nothing to substitute is passed through untouched rather than
+    // copied: [Character.resolveMacros] hands the same string back, and keeping
+    // the same [ChatMessage] too means the token-count cache sees text it has
+    // already counted instead of a fresh copy of it.
+    final resolvedHistory = <ChatMessage>[];
+    for (final m in history) {
+      final resolved = Character.resolveMacros(
+        m.content,
+        charName: charName,
+        userName: userName,
+      );
+      resolvedHistory.add(
+        identical(resolved, m.content) ? m : m.copyWith(content: resolved),
+      );
+    }
 
     final ctx = MacroContext(
       userName: userName,

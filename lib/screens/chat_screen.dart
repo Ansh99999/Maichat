@@ -1,4 +1,5 @@
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../models/conversation.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
+import '../models/message.dart';
 import '../models/message_image.dart';
 import '../models/provider.dart';
 import '../services/chat_client.dart';
@@ -115,6 +117,18 @@ class _ChatScreenState extends State<ChatScreen> {
   /// perfectly still; it catches up the moment they return to the bottom.
   String? _frozenTail;
   String _frozenTailReasoning = '';
+
+  /// The held-still copy of the newest turn, made once per freeze rather than on
+  /// every repaint. A fresh copy each time would look like a changed message to
+  /// [_bubbles] and rebuild the bubble the freeze exists to leave alone.
+  ChatMessage? _frozenCopy;
+
+  /// Bubbles already built, by message position — see [_CachedBubble].
+  final Map<int, _CachedBubble> _bubbles = <int, _CachedBubble>{};
+
+  /// A cap on [_bubbles]; a screenful is well under this, and going over means a
+  /// long scroll has been through, so the whole lot is dropped rather than aged.
+  static const int _bubbleCacheMax = 64;
 
   @override
   void initState() {
@@ -389,6 +403,58 @@ class _ChatScreenState extends State<ChatScreen> {
     _unread = 0;
     _scrollToEnd(animated: animated);
   }
+
+  // --- a turn without typing one -------------------------------------------
+
+  /// Carries the newest reply on from where it stopped. The strip is put away
+  /// first: what happens next happens in the thread, and it needs the room.
+  Future<void> _continueReply(AppState state) async {
+    setState(() => _showOps = false);
+    _stickToLatest();
+    await state.continueReply();
+    if (mounted) _stickToLatest();
+  }
+
+  /// Asks for another reply with nothing typed.
+  Future<void> _respondAgain(AppState state) async {
+    setState(() => _showOps = false);
+    _stickToLatest();
+    await state.respondAgain();
+    if (mounted) _stickToLatest();
+  }
+
+  /// Has the model write the user's next line into the composer, where it can be
+  /// read, edited or thrown away before it is sent. It arrives as it is written,
+  /// and the send button is a Stop button throughout, so a line going the wrong
+  /// way can be cut short.
+  Future<void> _writeForMe(AppState state) async {
+    setState(() => _showOps = false);
+    final before = _input.text;
+    try {
+      final written = await state.writeForUser(onProgress: _fillComposer);
+      if (!mounted) return;
+      if (written == null) {
+        // Nothing came back: leave the box exactly as it was found.
+        _fillComposer(before);
+        _toast('The model wrote nothing back.');
+        return;
+      }
+      _fillComposer(written);
+    } on ChatApiException catch (e) {
+      if (!mounted) return;
+      _fillComposer(before);
+      _toast(e.message);
+    }
+  }
+
+  /// Puts [text] in the composer with the caret after it, ready to be sent or
+  /// carried on from.
+  void _fillComposer(String text) {
+    _input.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
 // APPEND-MARKER-1
 
   @override
@@ -418,6 +484,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _lastMessageCount = count;
       _unread = 0;
       _stick = true;
+      // Another chat's bubbles are no use here, and their closures point at the
+      // thread they were built for.
+      _bubbles.clear();
       _scrollToEnd();
     } else if (count != _lastMessageCount) {
       final grew = count > _lastMessageCount;
@@ -445,10 +514,12 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_frozenTail == null) {
         _frozenTail = tail.content;
         _frozenTailReasoning = tail.reasoning;
+        _frozenCopy = null;
       }
     } else if (_frozenTail != null) {
       _frozenTail = null;
       _frozenTailReasoning = '';
+      _frozenCopy = null;
     }
 
     final topInset = MediaQuery.paddingOf(context).top;
@@ -613,7 +684,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // The newest turn, held at the text it had when the reader scrolled away
         // mid-stream. Everything else about the turn is live.
         if (isLast && _frozenTail != null) {
-          message = message.copyWith(
+          message = _frozenCopy ??= message.copyWith(
             content: _frozenTail,
             reasoning: _frozenTailReasoning,
           );
@@ -638,20 +709,44 @@ class _ChatScreenState extends State<ChatScreen> {
             conversation.isGroup && message.isUser && message.speakerId != null
                 ? (state.characterFor(conversation, message.speakerId) ?? persona)
                 : persona;
-        return MessageBubble(
+        // The picture each side wears *in this thread*, resolved in the one
+        // place that decides it. Read here rather than inside the bubble so a
+        // per-chat choice cannot be honoured here and forgotten elsewhere — and
+        // so it is part of what tells this bubble apart from the one already
+        // built below.
+        final avatarOverride =
+            speaker == null ? null : state.avatarRefFor(conversation, speaker);
+        final userAvatarOverride = userSpeaker == null
+            ? null
+            : state.avatarRefFor(conversation, userSpeaker);
+        // The waiting state belongs to a reply landing in the thread. A line
+        // being written for the *composer* is a request too, but nothing in the
+        // transcript is waiting on it.
+        final pending = isLast && state.streaming && !state.writingForUser;
+        // Everything the bubble is drawn from. Unchanged since the last build
+        // means the bubble is unchanged, and handing back the very same widget
+        // lets Flutter skip the subtree — see [_CachedBubble].
+        final signature = <Object?>[
+          message,
+          ui,
+          speaker,
+          userSpeaker,
+          avatarOverride,
+          userAvatarOverride,
+          pending,
+          state.streaming,
+        ];
+        final cached = _bubbles[msgIndex];
+        if (cached != null && listEquals(cached.signature, signature)) {
+          return cached.widget;
+        }
+        final bubble = MessageBubble(
           message: message,
           ui: ui,
           character: speaker,
           userPersona: userSpeaker,
-          // The picture each side wears *in this thread*, resolved in the one
-          // place that decides it. Passed down rather than read off the card, so
-          // a per-chat choice cannot be honoured here and forgotten elsewhere.
-          avatarOverride: speaker == null
-              ? null
-              : state.avatarRefFor(conversation, speaker),
-          userAvatarOverride: userSpeaker == null
-              ? null
-              : state.avatarRefFor(conversation, userSpeaker),
+          avatarOverride: avatarOverride,
+          userAvatarOverride: userAvatarOverride,
           onAvatarTap: (isUser) =>
               _openAvatar(state, conversation, isUser ? userSpeaker : speaker),
           onImageTap: (at) => showPictureViewer(
@@ -659,7 +754,7 @@ class _ChatScreenState extends State<ChatScreen> {
             refs: [for (final image in message.images) image.ref],
             index: at,
           ),
-          pending: isLast && state.streaming,
+          pending: pending,
           streaming: state.streaming,
           onAction: (action) =>
               _runMessageAction(state, conversation, msgIndex, action),
@@ -668,6 +763,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ? null
               : () => _showMessageActions(state, conversation, msgIndex),
         );
+        if (_bubbles.length >= _bubbleCacheMax) _bubbles.clear();
+        _bubbles[msgIndex] = _CachedBubble(signature, bubble);
+        return bubble;
       },
     );
   }
@@ -912,36 +1010,61 @@ class _ChatScreenState extends State<ChatScreen> {
             alignment: Alignment.topRight,
             child: !_showOps
                 ? const SizedBox(width: double.infinity)
-                : Align(
-                    alignment: Alignment.centerRight,
+                // Full width on purpose, like the closed state: the composer's
+                // Column centres a child that shrink-wraps, so the strip has to
+                // fill the width and align its own contents to the right — under
+                // the ⋯ button they belong to. It also gives the chips a bounded
+                // width to wrap inside, and leaves AnimatedSize animating the
+                // height alone.
+                : SizedBox(
+                    width: double.infinity,
                     child: Padding(
                       padding: const EdgeInsets.only(bottom: 6, right: 4),
-                      child: Row(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          IconButton(
-                            key: const Key('composer-image-button'),
-                            tooltip: 'Send a picture',
-                            isSelected: _showAttachBar,
-                            onPressed: () => setState(
-                                () => _showAttachBar = !_showAttachBar),
-                            icon: const Icon(Icons.image_outlined),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                key: const Key('composer-image-button'),
+                                tooltip: 'Send a picture',
+                                isSelected: _showAttachBar,
+                                onPressed: () => setState(
+                                    () => _showAttachBar = !_showAttachBar),
+                                icon: const Icon(Icons.image_outlined),
+                              ),
+                              IconButton(
+                                key: const Key('composer-imagegen-button'),
+                                tooltip: 'Image studio',
+                                onPressed: () => _openImageStudio(),
+                                icon: const Icon(Icons.auto_awesome_outlined),
+                              ),
+                              if (groupEnabled)
+                                IconButton(
+                                  tooltip: conversation.isGroup
+                                      ? 'Group participants'
+                                      : 'Start a group chat',
+                                  isSelected: _showGroupBar,
+                                  onPressed: () => _toggleGroupBar(state),
+                                  icon: const Icon(Icons.groups_outlined),
+                                ),
+                            ],
                           ),
-                          IconButton(
-                            key: const Key('composer-imagegen-button'),
-                            tooltip: 'Image studio',
-                            onPressed: () => _openImageStudio(),
-                            icon: const Icon(Icons.auto_awesome_outlined),
+                          // The three ways to get a turn without typing one.
+                          // Named rather than left as bare symbols: "continue"
+                          // and "respond again" are a keystroke apart in effect
+                          // and nothing but a label tells them apart.
+                          _TurnActions(
+                            busy: state.streaming,
+                            canContinue:
+                                state.continuableIndex(conversation) != null,
+                            canRespond: state.canRespondAgain(conversation),
+                            onContinue: () => _continueReply(state),
+                            onRespondAgain: () => _respondAgain(state),
+                            onWriteForMe: () => _writeForMe(state),
                           ),
-                          if (groupEnabled)
-                            IconButton(
-                              tooltip: conversation.isGroup
-                                  ? 'Group participants'
-                                  : 'Start a group chat',
-                              isSelected: _showGroupBar,
-                              onPressed: () => _toggleGroupBar(state),
-                              icon: const Icon(Icons.groups_outlined),
-                            ),
                         ],
                       ),
                     ),
@@ -1072,6 +1195,82 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 // APPEND-MARKER-2
 
+/// A bubble already built, and the inputs it was built from.
+///
+/// A streaming reply repaints the chat about twenty times a second, and every
+/// visible turn used to be rebuilt each time even though only the newest one had
+/// changed — the cost of a repaint grew with how much of the conversation was on
+/// screen. When nothing a bubble is drawn from has changed, handing back the
+/// *same widget instance* lets Flutter skip that subtree outright (an identical
+/// widget short-circuits `Element.updateChild`), so a repaint costs one bubble
+/// instead of a screenful. Anything the bubble reads from its context — the
+/// theme, the app state — still reaches it, because that path marks the element
+/// itself dirty rather than going through its parent.
+class _CachedBubble {
+  const _CachedBubble(this.signature, this.widget);
+
+  final List<Object?> signature;
+  final Widget widget;
+}
+
+/// The composer's three "no typing needed" actions, as labelled M3 action chips
+/// that wrap onto a second line on a narrow phone.
+///
+/// Chips rather than more symbols in the strip above: continue / respond again /
+/// generate for me are three verbs whose difference is entirely in what they do
+/// to the transcript, and an unlabelled icon for each would be a guess every
+/// time. Each is offered only when it means something — nothing to continue in
+/// an empty chat, and nothing at all while a reply is in flight.
+class _TurnActions extends StatelessWidget {
+  const _TurnActions({
+    required this.busy,
+    required this.canContinue,
+    required this.canRespond,
+    required this.onContinue,
+    required this.onRespondAgain,
+    required this.onWriteForMe,
+  });
+
+  final bool busy;
+  final bool canContinue;
+  final bool canRespond;
+  final VoidCallback onContinue;
+  final VoidCallback onRespondAgain;
+  final VoidCallback onWriteForMe;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        ActionChip(
+          key: const Key('turn-continue'),
+          avatar: const Icon(Icons.fast_forward_outlined, size: 18),
+          label: const Text('Continue'),
+          tooltip: 'Have the reply carry on from where it stopped',
+          onPressed: busy || !canContinue ? null : onContinue,
+        ),
+        ActionChip(
+          key: const Key('turn-respond-again'),
+          avatar: const Icon(Icons.add_comment_outlined, size: 18),
+          label: const Text('Respond again'),
+          tooltip: 'Another reply, with nothing typed',
+          onPressed: busy || !canRespond ? null : onRespondAgain,
+        ),
+        ActionChip(
+          key: const Key('turn-write-for-me'),
+          avatar: const Icon(Icons.edit_note_outlined, size: 18),
+          label: const Text('Generate for me'),
+          tooltip: 'Write my next message into the box',
+          onPressed: busy ? null : onWriteForMe,
+        ),
+      ],
+    );
+  }
+}
+
 /// Edits a message in place, right where it sits in the thread — no dialog. A
 /// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
 /// there is room to type.
@@ -1106,17 +1305,17 @@ class _AttachBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // A deliberately dark tray, the way a photo strip reads in every messaging
-    // app — and it keeps thumbnails from bleeding into the composer behind it.
-    // Taken from the scheme rather than hard-coded black, so it is still a
-    // MaiChat surface in either theme.
-    final background = Color.alphaBlend(
-      scheme.inverseSurface.withValues(alpha: 0.92),
-      scheme.surface,
-    );
-    final foreground = scheme.onInverseSurface;
+    // The tray belongs to the composer it grows out of, so it is drawn on the
+    // theme's own raised surface — a step up from the send bar behind it, dark in
+    // a dark theme and light in a light one. It used to be blended out of
+    // `inverseSurface` to read like a photo strip, which inverts with the theme
+    // rather than following it: in a dark theme that is a near-white tray, which
+    // is what the app looked like it was doing wrong.
+    final background = scheme.surfaceContainerHigh;
+    final foreground = scheme.onSurfaceVariant;
 
     return Container(
+      key: const Key('attach-tray'),
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.fromLTRB(10, 10, 4, 6),
@@ -1160,7 +1359,6 @@ class _AttachBar extends StatelessWidget {
                             key: const Key('attach-from-gallery'),
                             icon: Icons.photo_library_outlined,
                             label: 'From gallery',
-                            color: foreground,
                             onTap: onGallery,
                           ),
                           const SizedBox(width: 6),
@@ -1168,7 +1366,6 @@ class _AttachBar extends StatelessWidget {
                             key: const Key('attach-from-device'),
                             icon: Icons.add_photo_alternate_outlined,
                             label: 'From device',
-                            color: foreground,
                             onTap: onDevice,
                           ),
                         ],
@@ -1181,7 +1378,6 @@ class _AttachBar extends StatelessWidget {
                           key: const Key('attach-another'),
                           icon: Icons.add,
                           label: 'Add',
-                          color: foreground,
                           onTap: onGallery,
                         ),
                       ),
@@ -1201,25 +1397,26 @@ class _AttachBar extends StatelessWidget {
   }
 }
 
-/// One of the tray's two sources, as a tappable pill.
+/// One of the tray's two sources, as a tappable pill — an M3 tonal surface, so
+/// it reads as a control on the tray it sits on in either theme.
 class _AttachChoice extends StatelessWidget {
   const _AttachChoice({
     super.key,
     required this.icon,
     required this.label,
-    required this.color,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
-  final Color color;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = scheme.onSecondaryContainer;
     return Material(
-      color: color.withValues(alpha: 0.10),
+      color: scheme.secondaryContainer,
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -1263,6 +1460,7 @@ class _AttachPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final provider = avatarImage(
       image.ref,
       displaySize: side,
@@ -1276,12 +1474,14 @@ class _AttachPreview extends StatelessWidget {
           child: SizedBox(
             width: side,
             height: side,
+            // No picture to show: a plain themed tile, not a black one — this
+            // stands in for the photograph rather than sitting on top of it.
             child: provider == null
-                ? const ColoredBox(
-                    color: Colors.black26,
+                ? ColoredBox(
+                    color: scheme.surfaceContainerHighest,
                     child: Center(
                       child: Icon(Icons.broken_image_outlined,
-                          size: 20, color: Colors.white54),
+                          size: 20, color: scheme.onSurfaceVariant),
                     ),
                   )
                 : Image(image: provider, fit: BoxFit.cover),

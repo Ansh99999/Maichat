@@ -286,4 +286,59 @@ void main() {
     );
     expect(state.active.messages.single.images.single.ref, image.ref);
   });
+
+  /// The tray under a theme of a given brightness, so its background can be
+  /// checked against the scheme it is supposed to be following.
+  Widget themedHost(AppState state, Brightness brightness) =>
+      ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: MaterialApp(
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF6750A4),
+              brightness: brightness,
+            ),
+          ),
+          home: const ChatScreen(),
+        ),
+      );
+
+  /// The tray's own background, and the scheme it was drawn under.
+  (Color, ColorScheme) tray(WidgetTester tester) {
+    final finder = find.byKey(const Key('attach-tray'));
+    final decoration =
+        tester.widget<Container>(finder).decoration! as BoxDecoration;
+    return (
+      decoration.color!,
+      Theme.of(tester.element(finder)).colorScheme,
+    );
+  }
+
+  testWidgets('the tray is drawn on the theme\'s own surface — light',
+      (tester) async {
+    final state = await boot();
+    await tester.pumpWidget(themedHost(state, Brightness.light));
+    await tester.pumpAndSettle();
+    await openTray(tester);
+
+    final (colour, scheme) = tray(tester);
+    expect(colour, scheme.surfaceContainerHigh);
+    expect(ThemeData.estimateBrightnessForColor(colour), Brightness.light);
+  });
+
+  testWidgets('the tray is drawn on the theme\'s own surface — dark',
+      (tester) async {
+    final state = await boot();
+    await tester.pumpWidget(themedHost(state, Brightness.dark));
+    await tester.pumpAndSettle();
+    await openTray(tester);
+
+    final (colour, scheme) = tray(tester);
+    expect(colour, scheme.surfaceContainerHigh);
+    // The whole of the bug: the tray used to be blended out of `inverseSurface`,
+    // which in a dark theme is near-white — a white panel in a black app,
+    // whatever the theme said.
+    expect(ThemeData.estimateBrightnessForColor(colour), Brightness.dark,
+        reason: 'a dark theme must not get a light tray');
+  });
 }

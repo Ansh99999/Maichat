@@ -64,6 +64,34 @@ void main() {
     });
   });
 
+  test('counts are remembered per encoding, never across them', () {
+    // The counts are memoised because a send re-counts the whole prompt and a
+    // real BPE pass over a full context window is hundreds of milliseconds. The
+    // same text counts differently under the two encodings, so the thing worth
+    // pinning is that the memo is keyed by encoding and a switch is honoured.
+    AppTokenizer.clearCountCache();
+    const text = 'The quick brown fox jumps over the lazy dog, twice over.';
+    var model = 'gpt-4o'; // o200k
+    final tok = AppTokenizer(
+        config: () => const TokenizerConfig(kind: TokenizerKind.openai),
+        model: () => model);
+
+    final o200k = tok.estimate(text);
+    expect(tok.estimate(text), o200k, reason: 'a second look agrees');
+
+    model = 'gpt-4'; // cl100k
+    final cl100k = tok.estimate(text);
+    expect(cl100k,
+        Tiktoken.getEncoder(TiktokenEncodingType.cl100k_base)
+            .encodeOrdinary(text)
+            .length);
+    expect(tok.estimate(text), cl100k);
+
+    model = 'gpt-4o';
+    expect(tok.estimate(text), o200k,
+        reason: 'switching back returns the o200k count, not the cached cl100k');
+  });
+
   test('TokenizerConfig round trips', () {
     const original = TokenizerConfig(
         kind: TokenizerKind.custom, customEncoding: BpeEncoding.cl100k);

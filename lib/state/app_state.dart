@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../app_info.dart';
 import '../models/appearance.dart';
@@ -187,6 +188,12 @@ class AppState extends ChangeNotifier {
   ChatInterface get chatInterface => _chatInterface;
   bool get ready => _ready;
   bool get streaming => _streaming;
+
+  /// Whether the request in flight is writing the *user's* next line rather than
+  /// a reply — [writeForUser]. The composer shows its own progress for it, and
+  /// the chat does not: nothing is being added to the transcript.
+  bool _writingForUser = false;
+  bool get writingForUser => _writingForUser;
 
   /// Whether Flutter's performance overlay is shown over the whole app — a
   /// diagnostic the user can flip from Appearance settings. Two stacked graphs:
@@ -3122,6 +3129,168 @@ class AppState extends ChangeNotifier {
     await _generate(conversation);
   }
 
+  // --- asking for a turn without typing one --------------------------------
+  //
+  // Three things Agnai's input bar can do that MaiChat could not: extend the
+  // last reply, ask for another reply with nothing typed, and have the model
+  // write the user's own next line. All three run through the same [_generate]
+  // as a plain send, so budgets, keys, thinking, usage, swipes, summaries and
+  // the stop button behave identically.
+
+  /// The index of the turn [conversation]'s "continue" would extend: its newest
+  /// assistant turn, and only when there is text there to carry on from. Null
+  /// when there is nothing to continue — an empty chat, a chat whose last turn
+  /// is the user's, or a failure notice.
+  int? continuableIndex(Conversation conversation) {
+    final messages = conversation.messages;
+    if (messages.isEmpty) return null;
+    final last = messages.length - 1;
+    final message = messages[last];
+    if (message.isUser || message.error) return null;
+    if (message.content.trim().isEmpty) return null;
+    return last;
+  }
+
+  /// Whether a reply can be asked for right now with nothing typed — the chat
+  /// has something in it and nothing is in flight.
+  bool canRespondAgain(Conversation conversation) =>
+      !_streaming && conversation.messages.isNotEmpty;
+
+  /// Extends the newest reply: the model is handed what it has already written
+  /// and whatever comes back is appended to that same turn. Nothing is replaced,
+  /// so the reply survives a failed or empty continuation.
+  Future<void> continueReply() async {
+    if (_streaming) return;
+    final conversation = active;
+    final index = continuableIndex(conversation);
+    if (index == null) return;
+    final speaker = conversation.isGroup
+        ? characterFor(conversation, conversation.messages[index].speakerId)
+        : null;
+    await _generate(conversation, continueAt: index, responder: speaker);
+  }
+
+  /// Asks for another reply with nothing typed — the character speaks again on
+  /// its own. In a group the usual round-robin picks who is up next, exactly as
+  /// a plain send would.
+  Future<void> respondAgain() async {
+    if (_streaming) return;
+    final conversation = active;
+    if (conversation.messages.isEmpty) return;
+    await _generate(conversation, nudgeNewReply: true);
+  }
+
+  /// Writes the user's next line for them and returns it, **without** putting
+  /// anything in the chat: it lands in the composer, where it can be read, edited
+  /// or thrown away before it is ever sent. Agnai posts its self-generated
+  /// message straight into the conversation; a line you have not seen yet is
+  /// exactly the kind of thing worth looking at first, and an unwanted one then
+  /// costs a keystroke instead of a delete.
+  ///
+  /// [onProgress] receives the text as it arrives, on the same cadence a reply
+  /// paints at, so the composer can fill in as it is written. Returns null when
+  /// nothing came back (a stop, or a model that said nothing); throws
+  /// [ChatApiException] when the request itself failed, with the same wording a
+  /// failed reply carries.
+  Future<String?> writeForUser({void Function(String text)? onProgress}) async {
+    if (_streaming) return null;
+    final conversation = active;
+    final preset = presetFor(conversation);
+    final base = _resolveProvider(preset);
+    if (base == null) return null;
+    final blocked = blockingBudget(base, base.model);
+    if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
+
+    _streaming = true;
+    _writingForUser = true;
+    _stopRequested = false;
+    JankLogger.instance.activity('streaming');
+    notifyListeners();
+    await _letTheFrameLand();
+
+    final provider = _applyKey(base);
+    final buffer = StringBuffer();
+    var inputTokens = 0;
+    var text = '';
+    try {
+      await _refreshMemory(conversation);
+      final assembled = _assemble(conversation);
+      inputTokens = assembled.totalTokens;
+      // The instruction has to be the last thing the model reads, whatever the
+      // preset left at the end of the payload, so it goes on unconditionally
+      // rather than through the "only after a reply" rule a nudge follows.
+      final history = _wirePayload(
+        assembled.messages,
+        instruction: _impersonationInstruction(conversation),
+      );
+      final clock = Stopwatch()..start();
+      var painted = -_streamPaintMs;
+      await for (final delta in _client.streamChat(
+        provider: provider,
+        history: history,
+        params: assembled.params,
+      )) {
+        if (delta.text.isEmpty) continue;
+        buffer.write(delta.text);
+        final now = clock.elapsedMilliseconds;
+        if (now - painted < _streamPaintMs) continue;
+        painted = now;
+        onProgress?.call(buffer.toString().trimLeft());
+      }
+      text = buffer.toString().trim();
+      onProgress?.call(text);
+      return text.isEmpty ? null : text;
+    } on ChatApiException catch (_) {
+      if (_stopRequested) {
+        text = buffer.toString().trim();
+        onProgress?.call(text);
+        return text.isEmpty ? null : text;
+      }
+      _advanceKeyOnError(base);
+      rethrow;
+    } finally {
+      _streaming = false;
+      _writingForUser = false;
+      _stopRequested = false;
+      JankLogger.instance.activity('idle');
+      // Only when a request actually went out: a refusal before that spent
+      // nothing, and a zero-token entry in the ledger would say otherwise.
+      if (inputTokens > 0) {
+        recordUsage(
+          base,
+          provider.model,
+          TokenUsage(
+            inputTokens: inputTokens,
+            outputTokens: _tokenizer.estimate(text),
+            estimated: true,
+          ),
+        );
+        await _persistUsage();
+      }
+      notifyListeners();
+    }
+  }
+
+  /// What the model is told when it is writing the user's line rather than the
+  /// character's. Shaped after the impersonation prompt both SillyTavern and
+  /// Agnai use: whose voice, taken from the conversation, and a clear fence
+  /// against writing the other side of it.
+  String _impersonationInstruction(Conversation conversation) {
+    final persona = impersonationFor(conversation);
+    final character = conversation.isGroup
+        ? nextSpeaker(conversation)
+        : characterFor(conversation, conversation.characterId);
+    final me = persona?.displayName.trim();
+    final them = (character?.displayName ?? conversation.characterName ?? '')
+        .trim();
+    final myName = (me == null || me.isEmpty) ? 'the user' : me;
+    final theirName = them.isEmpty ? 'the character' : them;
+    return '[Write $myName’s next message in this conversation, in their voice '
+        'and in the same style and tense as the rest of it. Write only '
+        '$myName’s message — nothing for $theirName, and no narration of what '
+        '$theirName does or says.]';
+  }
+
   /// The member who should reply to a plain [send] in a group [conversation],
   /// honouring [Conversation.groupResponder]: null when nobody is set (manual —
   /// the user taps a chip), a random member when set to [kGroupResponderRandom],
@@ -3174,12 +3343,23 @@ class AppState extends ChangeNotifier {
   /// is then the history that came *before* that turn: a reply is never part of
   /// its own input.
   ///
+  /// With [continueAt] set, the turn at that index is *extended*: its text stays
+  /// where it is, the model is handed it as the start of its own answer, and
+  /// whatever comes back is appended to it. Nothing is replaced, so a failed or
+  /// empty continuation can never eat the reply it was extending.
+  ///
+  /// [nudgeNewReply] appends a one-line instruction when the payload would
+  /// otherwise end on the character's own words — see [_newReplyNudge].
+  ///
   /// Two kinds of thinking are folded into the same place on the message: what
   /// the provider returns in its own field, and what the model writes inline
   /// between the preset's thinking tags. Either way the reply text stays clean
   /// and the thinking is timed, so the chat can show "Thought for X seconds".
   Future<void> _generate(Conversation conversation,
-      {int? swipeInto, Character? responder}) async {
+      {int? swipeInto,
+      int? continueAt,
+      bool nudgeNewReply = false,
+      Character? responder}) async {
     final preset = presetFor(conversation);
     final base = _resolveProvider(preset);
     if (base == null) return;
@@ -3199,22 +3379,12 @@ class AppState extends ChangeNotifier {
         ? (responder ?? nextSpeaker(conversation))
         : responder;
 
-    // Refresh semantic-recall caches before assembling, so the synchronous
-    // [_assemble] can inject what was retrieved. Best-effort and time-boxed.
-    await _refreshMemory(conversation);
-
-    final assembled = _assemble(conversation, historyEnd: swipeInto, responder: speaker);
-    final history = assembled.messages;
-    final params = assembled.params;
-    final tags = ReasoningTags(
-      start: preset?.thinkStartTag.trim() ?? '',
-      end: preset?.thinkEndTag.trim() ?? '',
-    );
-
     // The turn the reply streams into, and (for a regeneration) the swipe that
     // was live before it, so an aborted attempt can be rolled back cleanly.
     final int target;
-    if (swipeInto == null) {
+    if (continueAt != null) {
+      target = continueAt;
+    } else if (swipeInto == null) {
       conversation.messages.add(ChatMessage(
         role: 'assistant',
         content: '',
@@ -3227,12 +3397,43 @@ class AppState extends ChangeNotifier {
       conversation.messages[target] = conversation.messages[target]
           .addSwipe(const MessageVariant(content: ''));
     }
+    // What a continuation is extending: kept aside so every write below is
+    // "everything that was already there, plus what has arrived since".
+    final existing = continueAt == null ? null : conversation.messages[target];
+    final prefix = existing?.content ?? '';
+    final prefixReasoning = existing?.reasoning ?? '';
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
     _streaming = true;
     _stopRequested = false;
     JankLogger.instance.activity('streaming');
     notifyListeners();
+    // Everything above is bookkeeping; everything below takes real time. Let the
+    // frame that shows the waiting turn reach the screen first, so the tap has a
+    // visible effect immediately instead of after the assembly — which is the
+    // whole of the pause that used to sit between pressing send and seeing the
+    // message.
+    await _letTheFrameLand();
+
+    // Refresh semantic-recall caches before assembling, so the synchronous
+    // [_assemble] can inject what was retrieved. Best-effort and time-boxed.
+    await _refreshMemory(conversation);
+
+    // The placeholder turn added above is not part of its own prompt, so the
+    // window always stops short of [target].
+    final assembled = _assemble(conversation, historyEnd: target, responder: speaker);
+    final history = _wirePayload(
+      assembled.messages,
+      continuation: continueAt == null ? null : prefix,
+      nudge: nudgeNewReply
+          ? _newReplyNudge(conversation, speaker: speaker)
+          : null,
+    );
+    final params = assembled.params;
+    final tags = ReasoningTags(
+      start: preset?.thinkStartTag.trim() ?? '',
+      end: preset?.thinkEndTag.trim() ?? '',
+    );
 
     // Everything the model sent as message text, tags included; the split into
     // answer and thinking is re-derived from it after every delta.
@@ -3265,7 +3466,9 @@ class AppState extends ChangeNotifier {
         thinkingMs = clock.elapsedMilliseconds;
       }
       _replaceAt(conversation, target,
-          content: answer, reasoning: thinking, thinkingMs: thinkingMs);
+          content: prefix + answer,
+          reasoning: _joinThinking(prefixReasoning, thinking),
+          thinkingMs: thinkingMs);
       notifyListeners();
     }
 
@@ -3296,33 +3499,53 @@ class AppState extends ChangeNotifier {
         thinkingMs = clock.elapsedMilliseconds;
       }
       if (answer.trim().isEmpty) {
-        _replaceAt(
-          conversation,
-          target,
-          content: thinking.trim().isEmpty
-              ? 'The model returned an empty response.'
-              // Almost always a thinking budget that left no room for the reply.
-              : 'The model finished thinking but returned no answer.',
-          reasoning: thinking,
-          thinkingMs: thinkingMs,
-          error: true,
-        );
+        // A continuation that came back with nothing leaves the reply it was
+        // extending exactly as it was — overwriting a finished message with a
+        // failure notice would be the worst possible reading of "continue".
+        if (continueAt != null) {
+          _appendErrorTurn(
+              conversation, 'The model had nothing more to add to that reply.');
+        } else {
+          _replaceAt(
+            conversation,
+            target,
+            content: thinking.trim().isEmpty
+                ? 'The model returned an empty response.'
+                // Almost always a thinking budget that left no room for the reply.
+                : 'The model finished thinking but returned no answer.',
+            reasoning: thinking,
+            thinkingMs: thinkingMs,
+            error: true,
+          );
+        }
       } else {
         _replaceAt(conversation, target,
-            content: answer, reasoning: thinking, thinkingMs: thinkingMs);
+            content: prefix + answer,
+            reasoning: _joinThinking(prefixReasoning, thinking),
+            thinkingMs: thinkingMs);
       }
     } on ChatApiException catch (e) {
       if (_stopRequested) {
         // Fold in anything the last paint left behind, so stopping keeps every
         // word that actually arrived rather than the last painted batch.
         paint();
-        _finishStopped(conversation, target, answer,
-            reasoning: thinking, thinkingMs: thinkingMs);
+        _finishStopped(conversation, target, prefix + answer,
+            reasoning: _joinThinking(prefixReasoning, thinking),
+            thinkingMs: thinkingMs);
       } else {
         // A failed request rotates an error-based pool to the next key.
         _advanceKeyOnError(base);
-        _replaceAt(conversation, target,
-            content: e.message, reasoning: '', error: true);
+        // Same again for a failed continuation: the reply stands, and the
+        // failure is reported under it instead of on top of it.
+        if (continueAt != null) {
+          _replaceAt(conversation, target,
+              content: prefix + answer,
+              reasoning: _joinThinking(prefixReasoning, thinking));
+          _appendErrorTurn(conversation, e.message);
+        } else {
+          _replaceAt(conversation, target,
+              content: e.message, reasoning: '', error: true);
+        }
       }
     } finally {
       _streaming = false;
@@ -3344,6 +3567,12 @@ class AppState extends ChangeNotifier {
             ),
       );
       notifyListeners();
+      // The finished reply is on screen the moment that notification is handled;
+      // saving is not. Writing the store means encoding every message of every
+      // chat, which is tens of milliseconds of JSON even on a desktop, so it
+      // waits for the frame carrying the last of the reply rather than holding
+      // it back — the alternative is a visible hitch exactly as a reply lands.
+      await _letTheFrameLand();
       await _saveConversations();
       await _persistUsage();
       // Deliberately *not* saving the macro scopes here. The engine never
@@ -3358,6 +3587,86 @@ class AppState extends ChangeNotifier {
     // Re-index this chat's messages for semantic recall (no-op unless recall is
     // on and embeddings are ready). Off the send path, like the summary.
     unawaited(_indexChat(conversation));
+  }
+
+  /// Waits for the frame that is about to be built to reach the screen, so the
+  /// synchronous work that follows cannot swallow it.
+  ///
+  /// The ceiling matters as much as the wait: where frames are not being
+  /// produced at all — a widget test's fake clock, a headless run — there is no
+  /// end-of-frame to wait for, and a plain `await endOfFrame` would hang the
+  /// send for ever. It is a real timer rather than a `Future.delayed` race so
+  /// that the frame landing first leaves nothing behind (a stray pending timer
+  /// fails a widget test on its own).
+  Future<void> _letTheFrameLand() async {
+    SchedulerBinding? binding;
+    try {
+      binding = SchedulerBinding.instance;
+    } catch (_) {
+      return; // No binding (a pure Dart test): nothing to wait for.
+    }
+    final landed = Completer<void>();
+    final ceiling = Timer(const Duration(milliseconds: 32), () {
+      if (!landed.isCompleted) landed.complete();
+    });
+    binding.endOfFrame.then((_) {
+      if (!landed.isCompleted) landed.complete();
+    });
+    await landed.future;
+    ceiling.cancel();
+  }
+
+  /// The assembled payload with the tails a generation may need added:
+  /// [instruction] always, [nudge] only when the model would otherwise be
+  /// looking at its own last message, and [continuation] when it is being handed
+  /// the reply it is extending. Order matters — the continuation is a prefill and
+  /// must be the very last thing on the wire.
+  List<ChatMessage> _wirePayload(
+    List<ChatMessage> messages, {
+    String? continuation,
+    String? nudge,
+    String? instruction,
+  }) {
+    if (continuation == null && nudge == null && instruction == null) {
+      return messages;
+    }
+    final out = List<ChatMessage>.of(messages);
+    // Only worth saying when the payload would otherwise end on the character's
+    // own words; with a user turn or a preset's trailing block last, the model
+    // already knows a new message is wanted.
+    if (nudge != null && out.isNotEmpty && out.last.role == 'assistant') {
+      out.add(ChatMessage(role: 'user', content: nudge));
+    }
+    if (instruction != null) {
+      out.add(ChatMessage(role: 'user', content: instruction));
+    }
+    if (continuation != null) {
+      // Prefill: the reply so far goes out as the beginning of the model's own
+      // answer, which is how all three dialects are told "keep writing this"
+      // (Anthropic calls it exactly that; OpenAI and Gemini continue a trailing
+      // assistant/model turn the same way). Trailing whitespace has to go —
+      // Anthropic rejects a prefill that ends in it — while the message in the
+      // chat keeps the text it always had.
+      final seed = continuation.trimRight();
+      if (seed.isNotEmpty) {
+        out.add(ChatMessage(role: 'assistant', content: seed));
+      }
+    }
+    // Merge again: the wire never carries two turns of the same role in a row.
+    return mergeSameRole(out);
+  }
+
+  /// The line appended when a reply is asked for with no new user turn in front
+  /// of it. Without it the model is looking at its own last message and will
+  /// often just carry on writing that instead of answering afresh.
+  String _newReplyNudge(Conversation conversation, {Character? speaker}) {
+    final who = speaker?.displayName ??
+        characterFor(conversation, conversation.characterId)?.displayName ??
+        conversation.characterName ??
+        '';
+    final name = who.trim().isEmpty ? 'the character' : who.trim();
+    return '[Write $name’s next message. Begin a new message rather than '
+        'continuing or repeating the previous one.]';
   }
 
   /// Adds an assistant turn that only carries an error, for the failures that

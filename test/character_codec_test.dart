@@ -214,6 +214,29 @@ void main() {
     expect(c.resolvedGreeting(userName: 'Sam'), 'Halt, Sam!');
   });
 
+  test('resolveMacros handles every spelling, and both ecosystems\' brackets',
+      () {
+    expect(
+      Character.resolveMacros('{{Char}} met {{USER}}, then <BOT> waved at <USER>.',
+          charName: 'Nova', userName: 'Sam'),
+      'Nova met Sam, then Nova waved at Sam.',
+    );
+  });
+
+  test('text with no macros comes back as the very same string', () {
+    // Every message of every history runs through here on every send. Handing
+    // back the identical instance is what lets the caches downstream — token
+    // counts, parsed spans — recognise text they have already worked on, so this
+    // is a performance contract, not a detail.
+    const plain = 'Plain prose with <em>markup</em>, { a brace } and 2 < 3.';
+    expect(
+      identical(
+          Character.resolveMacros(plain, charName: 'Nova', userName: 'Sam'),
+          plain),
+      isTrue,
+    );
+  });
+
   test('parseCards reads a JSON array of cards (bulk import)', () {
     final cards = [
       {'name': 'One', 'description': 'first', 'first_mes': 'hi'},

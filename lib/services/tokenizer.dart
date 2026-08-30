@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:tiktoken_tokenizer_gpt4o_o1/tiktoken_tokenizer_gpt4o_o1.dart';
 
 import 'token_estimator.dart';
@@ -117,6 +119,35 @@ class AppTokenizer implements TokenEstimator {
   static const HeuristicTokenEstimator _fallback = HeuristicTokenEstimator();
   static final Map<BpeEncoding, TiktokenEncoder> _cache = {};
 
+  /// Counts already worked out, per encoding, most recently used last.
+  ///
+  /// Assembling a request counts the whole prompt: the preset frame, the
+  /// character sheet, and every history message the context budget can fit. A
+  /// real BPE pass over a 128k-token window costs hundreds of milliseconds, and
+  /// it was being paid again on **every** send — with the UI thread held for all
+  /// of it, which is what a send felt like. The text of a turn never changes once
+  /// it is in the transcript, so counting it once and remembering the answer
+  /// turns every later send into a map lookup. Keyed per encoding because the
+  /// same text counts differently under cl100k and o200k.
+  static final Map<BpeEncoding, LinkedHashMap<String, int>> _counts = {};
+
+  /// How much text each encoding's cache is holding, so it can be trimmed by
+  /// what it actually costs to keep rather than by a count of entries — one
+  /// pasted document and a hundred short turns are not the same thing.
+  static final Map<BpeEncoding, int> _cachedChars = {};
+
+  /// The ceiling on that: several full context windows' worth of text. Most of
+  /// what is in here is the very same string the conversation already holds, so
+  /// the real cost is well under this; the bound is for the copies (text that
+  /// came out of a macro substitution) and for one-off giants.
+  static const int _maxCachedChars = 4 * 1024 * 1024;
+
+  /// Drops the memoised counts, for tests that want a cold count.
+  static void clearCountCache() {
+    _counts.clear();
+    _cachedChars.clear();
+  }
+
   BpeEncoding activeEncoding() {
     final c = config();
     return switch (c.kind) {
@@ -136,10 +167,30 @@ class AppTokenizer implements TokenEstimator {
   @override
   int estimate(String text) {
     if (text.isEmpty) return 0;
+    final encoding = activeEncoding();
+    final memo = _counts.putIfAbsent(encoding, LinkedHashMap<String, int>.new);
+    final cached = memo.remove(text);
+    if (cached != null) {
+      memo[text] = cached; // Re-insert as most recently used.
+      return cached;
+    }
+    final count = _count(text, encoding);
+    memo[text] = count;
+    var held = (_cachedChars[encoding] ?? 0) + text.length;
+    while (held > _maxCachedChars && memo.length > 1) {
+      final oldest = memo.keys.first;
+      held -= oldest.length;
+      memo.remove(oldest);
+    }
+    _cachedChars[encoding] = held;
+    return count;
+  }
+
+  int _count(String text, BpeEncoding encoding) {
     try {
       // encodeOrdinary treats any "<|special|>" text as ordinary, so counting
       // arbitrary user/model content never throws.
-      return _encoder(activeEncoding()).encodeOrdinary(text).length;
+      return _encoder(encoding).encodeOrdinary(text).length;
     } catch (_) {
       return _fallback.estimate(text);
     }

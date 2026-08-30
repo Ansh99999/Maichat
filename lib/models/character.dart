@@ -143,19 +143,34 @@ class Character {
     return '';
   }
 
+  /// The two card macros, compiled once. Built per call previously, which meant
+  /// two regex compilations for every message of every history on every send.
+  static final RegExp _charMacro = RegExp(r'\{\{char\}\}', caseSensitive: false);
+  static final RegExp _userMacro = RegExp(r'\{\{user\}\}', caseSensitive: false);
+
   /// Replaces the card macros both ecosystems use, case-insensitively, so a
   /// prompt reads naturally once it reaches the model.
+  ///
+  /// Each replacement is guarded by a plain substring test first, and text with
+  /// nothing to replace is returned **as it came in** — the same instance. Every
+  /// history message runs through here on every send, so the guards turn four
+  /// full passes over the whole transcript into one cheap scan; and handing the
+  /// identical string back lets the caches downstream (token counts, parsed
+  /// spans) recognise text they have already seen.
   static String resolveMacros(
     String text, {
     required String charName,
     required String userName,
   }) {
     if (text.isEmpty) return text;
-    return text
-        .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false), charName)
-        .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false), userName)
-        .replaceAll('<BOT>', charName)
-        .replaceAll('<USER>', userName);
+    var out = text;
+    // Both regexes need a literal "{{" to match, whatever the case of the word.
+    if (out.contains('{{')) {
+      out = out.replaceAll(_charMacro, charName).replaceAll(_userMacro, userName);
+    }
+    if (out.contains('<BOT>')) out = out.replaceAll('<BOT>', charName);
+    if (out.contains('<USER>')) out = out.replaceAll('<USER>', userName);
+    return out;
   }
 
   /// Builds the system prompt a chat with this character should run under: the
