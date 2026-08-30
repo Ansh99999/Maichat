@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/screens/chat_screen.dart';
@@ -76,13 +77,13 @@ void main() {
   }
 
   bool enabled(WidgetTester tester, String key) =>
-      tester.widget<ActionChip>(find.byKey(Key(key))).onPressed != null;
+      tester.widget<IconButton>(find.byKey(Key(key))).onPressed != null;
 
   testWidgets('the strip stays under the ⋯ button it opens from',
       (tester) async {
     // The composer's Column centres a child that shrink-wraps, so the strip has
-    // to claim the full width and align its own contents right. Centred symbols
-    // would drift away from the button that opened them.
+    // to claim the full width and settle its own contents to the right. Centred
+    // symbols would drift away from the button that opened them.
     final state = await boot();
     await tester.pumpWidget(host(state));
     await tester.pumpAndSettle();
@@ -91,16 +92,73 @@ void main() {
     final width = tester.getSize(find.byType(MaterialApp)).width;
     final studio =
         tester.getRect(find.byKey(const Key('composer-imagegen-button')));
-    final chip = tester.getRect(find.byKey(const Key('turn-write-for-me')));
+    final continues = tester.getRect(find.byKey(const Key('turn-continue')));
 
     expect(studio.center.dx, greaterThan(width / 2),
         reason: 'the symbols sit on the right, not in the middle');
     expect(width - studio.right, lessThan(32),
         reason: 'the strip is flush with the right of the composer, under the '
             'buttons it grew from');
-    expect(chip.right, greaterThan(width / 2),
-        reason: 'and so do the chips below them');
-    expect(width - chip.right, lessThan(32));
+    // One row, all of it: the three new symbols sit beside the tools rather than
+    // stacking a second line of chips over the conversation.
+    expect(continues.center.dy, moreOrLessEquals(studio.center.dy, epsilon: 1),
+        reason: 'asking for a turn is on the same line as the tools');
+    expect(continues.right, lessThanOrEqualTo(studio.left),
+        reason: 'and to their left, so the tools keep their places');
+  });
+
+  testWidgets('every symbol in the strip carries its name for a long press',
+      (tester) async {
+    // The names are how continue / respond again / generate for me are told
+    // apart, and a tooltip is where Material puts a name that would not fit.
+    final state = await boot();
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+    await openStrip(tester);
+
+    for (final name in ['Continue', 'Respond again', 'Generate for me']) {
+      expect(find.byTooltip(name), findsOneWidget, reason: name);
+    }
+
+    // And a long press actually shows one, rather than it being decoration.
+    await tester.longPress(find.byKey(const Key('turn-respond-again')));
+    await tester.pumpAndSettle();
+    expect(find.text('Respond again'), findsOneWidget);
+  });
+
+  testWidgets('a narrow phone with every symbol switched on still fits them',
+      (tester) async {
+    // Seven 48dp targets do not fit across a small screen, and a Row that
+    // overflows clips whatever hangs off the end — silently, in a release build.
+    // The strip slides instead, anchored right so the tools stay put.
+    tester.view.physicalSize = const Size(320 * 3, 640 * 3);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+
+    final state = await boot();
+    await state.updateChatInterface(
+        const ChatInterface(groupChatsEnabled: true));
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+    await openStrip(tester);
+
+    // Laid out without an overflow (which would fail this test on its own), all
+    // on one line, with the group symbol flush right where it has always been.
+    final group = tester.getRect(find.byKey(const Key('composer-group-button')));
+    final continues = tester.getRect(find.byKey(const Key('turn-continue')));
+    final studio =
+        tester.getRect(find.byKey(const Key('composer-imagegen-button')));
+    expect(group.height, greaterThanOrEqualTo(48),
+        reason: 'full touch targets kept, rather than squeezed to fit');
+    expect(continues.height, group.height);
+    for (final rect in [continues, studio]) {
+      expect(rect.center.dy, moreOrLessEquals(group.center.dy, epsilon: 1),
+          reason: 'one row for the whole strip');
+    }
+    expect(320 - group.right, lessThan(32));
+    expect(find.byType(SingleChildScrollView), findsWidgets,
+        reason: 'seven full-size symbols are wider than a 320dp phone, so the '
+            'strip slides rather than clipping the far end away');
   });
 
   testWidgets('the three actions live in the operations strip, and only there',
@@ -113,9 +171,9 @@ void main() {
     expect(find.byKey(const Key('turn-continue')), findsNothing);
 
     await openStrip(tester);
-    expect(find.text('Continue'), findsOneWidget);
-    expect(find.text('Respond again'), findsOneWidget);
-    expect(find.text('Generate for me'), findsOneWidget);
+    expect(find.byKey(const Key('turn-continue')), findsOneWidget);
+    expect(find.byKey(const Key('turn-respond-again')), findsOneWidget);
+    expect(find.byKey(const Key('turn-write-for-me')), findsOneWidget);
   });
 
   testWidgets('an empty chat offers only the one that makes sense there',

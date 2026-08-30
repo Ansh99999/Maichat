@@ -993,9 +993,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     onClose: () => setState(() => _showAttachBar = false),
                   ),
           ),
-          // The operations strip: a row of symbols opened by the composer's ⋯
-          // button. Sending a picture, the image studio, and group chat when the
-          // feature is switched on.
+          // The operations strip: one row of symbols opened by the composer's ⋯
+          // button. Sending a picture, the image studio, group chat when the
+          // feature is switched on, and the three ways to get a turn without
+          // typing one.
           //
           // AnimatedSize expands it open/closed. It is anchored top-right so the
           // strip grows straight down from under the ⋯ button (which lives at the
@@ -1012,60 +1013,76 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? const SizedBox(width: double.infinity)
                 // Full width on purpose, like the closed state: the composer's
                 // Column centres a child that shrink-wraps, so the strip has to
-                // fill the width and align its own contents to the right — under
-                // the ⋯ button they belong to. It also gives the chips a bounded
-                // width to wrap inside, and leaves AnimatedSize animating the
-                // height alone.
+                // fill the width and let its own contents settle to the right —
+                // under the ⋯ button they belong to. It also leaves AnimatedSize
+                // animating the height alone.
                 : SizedBox(
                     width: double.infinity,
                     child: Padding(
                       padding: const EdgeInsets.only(bottom: 6, right: 4),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                key: const Key('composer-image-button'),
-                                tooltip: 'Send a picture',
-                                isSelected: _showAttachBar,
-                                onPressed: () => setState(
-                                    () => _showAttachBar = !_showAttachBar),
-                                icon: const Icon(Icons.image_outlined),
-                              ),
-                              IconButton(
-                                key: const Key('composer-imagegen-button'),
-                                tooltip: 'Image studio',
-                                onPressed: () => _openImageStudio(),
-                                icon: const Icon(Icons.auto_awesome_outlined),
-                              ),
-                              if (groupEnabled)
-                                IconButton(
-                                  tooltip: conversation.isGroup
-                                      ? 'Group participants'
-                                      : 'Start a group chat',
-                                  isSelected: _showGroupBar,
-                                  onPressed: () => _toggleGroupBar(state),
-                                  icon: const Icon(Icons.groups_outlined),
+                      // Seven symbols is more than a narrow phone can fit at a
+                      // full 48dp touch target each, and a Row that overflows
+                      // simply clips whatever hangs off the end. Anchored to the
+                      // right (`reverse`), so the tools keep their places under
+                      // the ⋯ and it is the far end that can be slid into view
+                      // rather than lost.
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        reverse: true,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Asking for a turn: kept together, and to the left
+                            // of the tools so those stay exactly where they have
+                            // always been.
+                            _TurnActions(
+                              busy: state.streaming,
+                              canContinue:
+                                  state.continuableIndex(conversation) != null,
+                              canRespond: state.canRespondAgain(conversation),
+                              onContinue: () => _continueReply(state),
+                              onRespondAgain: () => _respondAgain(state),
+                              onWriteForMe: () => _writeForMe(state),
+                            ),
+                            // Two families of action, told apart by a hairline
+                            // rather than by guesswork.
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: SizedBox(
+                                height: 24,
+                                child: VerticalDivider(
+                                  width: 1,
+                                  thickness: 1,
+                                  color: scheme.outlineVariant,
                                 ),
-                            ],
-                          ),
-                          // The three ways to get a turn without typing one.
-                          // Named rather than left as bare symbols: "continue"
-                          // and "respond again" are a keystroke apart in effect
-                          // and nothing but a label tells them apart.
-                          _TurnActions(
-                            busy: state.streaming,
-                            canContinue:
-                                state.continuableIndex(conversation) != null,
-                            canRespond: state.canRespondAgain(conversation),
-                            onContinue: () => _continueReply(state),
-                            onRespondAgain: () => _respondAgain(state),
-                            onWriteForMe: () => _writeForMe(state),
-                          ),
-                        ],
+                              ),
+                            ),
+                            IconButton(
+                              key: const Key('composer-image-button'),
+                              tooltip: 'Send a picture',
+                              isSelected: _showAttachBar,
+                              onPressed: () => setState(
+                                  () => _showAttachBar = !_showAttachBar),
+                              icon: const Icon(Icons.image_outlined),
+                            ),
+                            IconButton(
+                              key: const Key('composer-imagegen-button'),
+                              tooltip: 'Image studio',
+                              onPressed: () => _openImageStudio(),
+                              icon: const Icon(Icons.auto_awesome_outlined),
+                            ),
+                            if (groupEnabled)
+                              IconButton(
+                                key: const Key('composer-group-button'),
+                                tooltip: conversation.isGroup
+                                    ? 'Group participants'
+                                    : 'Start a group chat',
+                                isSelected: _showGroupBar,
+                                onPressed: () => _toggleGroupBar(state),
+                                icon: const Icon(Icons.groups_outlined),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -1213,14 +1230,15 @@ class _CachedBubble {
   final Widget widget;
 }
 
-/// The composer's three "no typing needed" actions, as labelled M3 action chips
-/// that wrap onto a second line on a narrow phone.
+/// The composer's three "no typing needed" actions, as symbols in the operations
+/// strip alongside the tools.
 ///
-/// Chips rather than more symbols in the strip above: continue / respond again /
-/// generate for me are three verbs whose difference is entirely in what they do
-/// to the transcript, and an unlabelled icon for each would be a guess every
-/// time. Each is offered only when it means something — nothing to continue in
-/// an empty chat, and nothing at all while a reply is in flight.
+/// Symbols rather than labelled chips: three named chips took a row of their own
+/// and wrapped onto a second line on a narrow phone, which is a lot of furniture
+/// over the conversation for three occasional actions. The name is a long press
+/// away on each — Material's own tooltip — and a tap just does the thing. Each is
+/// offered only when it means something: nothing to continue in an empty chat,
+/// and nothing at all while a reply is in flight.
 class _TurnActions extends StatelessWidget {
   const _TurnActions({
     required this.busy,
@@ -1240,30 +1258,25 @@ class _TurnActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      alignment: WrapAlignment.end,
-      spacing: 8,
-      runSpacing: 8,
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        ActionChip(
+        IconButton(
           key: const Key('turn-continue'),
-          avatar: const Icon(Icons.fast_forward_outlined, size: 18),
-          label: const Text('Continue'),
-          tooltip: 'Have the reply carry on from where it stopped',
+          tooltip: 'Continue',
+          icon: const Icon(Icons.fast_forward_outlined),
           onPressed: busy || !canContinue ? null : onContinue,
         ),
-        ActionChip(
+        IconButton(
           key: const Key('turn-respond-again'),
-          avatar: const Icon(Icons.add_comment_outlined, size: 18),
-          label: const Text('Respond again'),
-          tooltip: 'Another reply, with nothing typed',
+          tooltip: 'Respond again',
+          icon: const Icon(Icons.add_comment_outlined),
           onPressed: busy || !canRespond ? null : onRespondAgain,
         ),
-        ActionChip(
+        IconButton(
           key: const Key('turn-write-for-me'),
-          avatar: const Icon(Icons.edit_note_outlined, size: 18),
-          label: const Text('Generate for me'),
-          tooltip: 'Write my next message into the box',
+          tooltip: 'Generate for me',
+          icon: const Icon(Icons.edit_note_outlined),
           onPressed: busy ? null : onWriteForMe,
         ),
       ],
