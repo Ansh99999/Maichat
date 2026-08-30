@@ -133,10 +133,11 @@ Map<String, dynamic> _agnaiBackup() => <String, dynamic>{
     };
 void main() {
   group('an Agnai backup', () {
-    test('reads every drawer out of the JSON export', () {
+    test('reads every drawer out of the JSON export', () async {
       final bytes = Uint8List.fromList(utf8.encode(jsonEncode(_agnaiBackup())));
 
-      final backup = readForeignBackup(bytes, fileName: 'agnai-backup.json');
+      final backup =
+          await readForeignBackupBytes(bytes, fileName: 'agnai-backup.json');
 
       expect(backup.source, ForeignSource.agnai);
       expect(backup.characters.single.name, 'Aqua');
@@ -156,22 +157,22 @@ void main() {
       expect(backup.pictures, isEmpty);
     });
 
-    test('binds each chat to its character by name', () {
-      final backup = readForeignBackup(
+    test('binds each chat to its character by name', () async {
+      final backup = await readForeignBackupBytes(
         Uint8List.fromList(utf8.encode(jsonEncode(_agnaiBackup()))),
       );
 
       final chat = backup.chats.single;
-      expect(chat.conversation.title, 'The quest');
-      expect(chat.conversation.characterName, 'Aqua');
-      expect(chat.conversation.messages.first.content, 'I am Aqua!');
-      expect(chat.conversation.messages[1].content, 'hello there');
-      expect(chat.conversation.messages[1].role, 'user');
-      expect(chat.conversation.messages.last.role, 'assistant');
+      expect(chat.characterName, 'Aqua');
+      expect(chat.chat.conversation.title, 'The quest');
+      expect(chat.chat.conversation.messages.first.content, 'I am Aqua!');
+      expect(chat.chat.conversation.messages[1].content, 'hello there');
+      expect(chat.chat.conversation.messages[1].role, 'user');
+      expect(chat.chat.conversation.messages.last.role, 'assistant');
     });
 
-    test('brings the provider and its whole key pool', () {
-      final backup = readForeignBackup(
+    test('brings the provider and its whole key pool', () async {
+      final backup = await readForeignBackupBytes(
         Uint8List.fromList(utf8.encode(jsonEncode(_agnaiBackup()))),
       );
 
@@ -182,95 +183,43 @@ void main() {
       expect(provider.apiKeys, ['sk-a', 'sk-b']);
     });
 
-    test('takes the pictures out of the .zip and files them by character', () {
+    test('takes the pictures out of the .zip and files them by character',
+        () async {
+      final pictures = Directory.systemTemp.createTempSync('agnai-pics');
+      addTearDown(() {
+        pictures.deleteSync(recursive: true);
+        avatarDirectory = null;
+      });
+      final store = AvatarStore(pictures);
       final bytes = _zip(<String, Object>{
         'backup.json': jsonEncode(_agnaiBackup()),
         'assets/aqua.png': _png,
         'assets/gallery-1.png': _png,
       });
 
-      final backup = readForeignBackup(bytes, fileName: 'agnai.zip');
+      final backup = await readForeignBackupBytes(
+        bytes,
+        fileName: 'agnai.zip',
+        storePicture: store.write,
+      );
 
       expect(backup.source, ForeignSource.agnai);
-      expect(backup.characters.single.avatar, base64Encode(_png));
+      // The picture is a file already — base64 never reaches the store.
+      expect(avatarIsLocal(backup.characters.single.avatar), isTrue);
+      expect(
+        avatarRefFile(backup.characters.single.avatar)!.readAsBytesSync(),
+        _png,
+      );
       expect(backup.pictures.single.characterName, 'Aqua');
       expect(backup.pictures.single.title, 'Beach');
-      expect(backup.pictures.single.bytes, _png);
+      expect(avatarRefFile(backup.pictures.single.ref)!.existsSync(), isTrue);
     });
   });
-  group('a SillyTavern data folder', () {
-    Uint8List archive() => _zip(<String, Object>{
-          'data/default-user/characters/Aqua.png': _cardPng(<String, dynamic>{
-            'spec': 'chara_card_v2',
-            'data': {
-              'name': 'Aqua',
-              'description': 'A goddess',
-              'first_mes': 'I am Aqua!',
-            },
-          }),
-          // A transcript with SillyTavern's header line.
-          'data/default-user/chats/Aqua/2026-01-01.jsonl':
-              '${jsonEncode({'user_name': 'You', 'character_name': 'Aqua'})}\n'
-                  '${jsonEncode({'name': 'You', 'is_user': true, 'mes': 'hi'})}\n'
-                  '${jsonEncode({'name': 'Aqua', 'is_user': false, 'mes': 'hello'})}',
-          // …and one with no header at all, where the folder is the only record
-          // of whose chat it is.
-          'data/default-user/chats/Megumin/old.jsonl':
-              jsonEncode({'name': 'You', 'is_user': true, 'mes': 'explosion?'}),
-          'data/default-user/worlds/Axel.json': jsonEncode({
-            'entries': {
-              '0': {
-                'key': ['guild'],
-                'content': 'Where quests are taken',
-                'comment': 'guild',
-                'enabled': true,
-              },
-            },
-          }),
-          'data/default-user/OpenAI Settings/Marinara.json': jsonEncode({
-            'temperature': 0.9,
-            'prompts': <dynamic>[],
-            'prompt_order': <dynamic>[],
-          }),
-          // Not content: skipped, and said so.
-          'data/default-user/settings.json': '{"power_user":{}}',
-          'data/default-user/secrets.json': '{"api_key_openai":"sk-nope"}',
-          // Not importable, and not worth a note either.
-          'data/default-user/backgrounds/city.jpg': _png,
-          'data/default-user/themes/dark.json': '{"name":"dark"}',
-        });
+  // A SillyTavern data folder has a test file of its own — see
+  // backup_sillytavern_test.dart, which builds the real layout.
 
-    test('is recognised and read piece by piece', () {
-      final backup = readForeignBackup(archive(), fileName: 'st-backup.zip');
-
-      expect(backup.source, ForeignSource.sillyTavern);
-      expect(backup.characters.single.name, 'Aqua');
-      expect(backup.lorebooks.single.entries.single.content,
-          'Where quests are taken');
-      expect(backup.presets.single.name, 'Marinara');
-      expect(backup.chats.length, 2);
-    });
-
-    test('takes the character a chat belongs to from its folder', () {
-      final backup = readForeignBackup(archive());
-
-      final names = backup.chats
-          .map((chat) => chat.conversation.characterName)
-          .toList();
-      expect(names, containsAll(<String>['Aqua', 'Megumin']));
-    });
-
-    test('says what it left alone, and stays quiet about wallpaper', () {
-      final backup = readForeignBackup(archive());
-
-      expect(backup.notes.join(' '), contains('settings.json'));
-      expect(backup.notes.join(' '), contains('secrets.json'));
-      expect(backup.notes.join(' '), isNot(contains('city.jpg')));
-      expect(backup.notes.join(' '), isNot(contains('dark.json')));
-    });
-  });
   group('a bag of files, which is what a Chub export is', () {
-    test('reads the cards and the lorebooks in it', () {
+    test('reads the cards and the lorebooks in it', () async {
       final bytes = _zip(<String, Object>{
         'Aqua.json': jsonEncode({
           'name': 'Aqua',
@@ -295,14 +244,14 @@ void main() {
         }),
       });
 
-      final backup = readForeignBackup(bytes, fileName: 'chub.zip');
+      final backup = await readForeignBackupBytes(bytes, fileName: 'chub.zip');
 
       expect(backup.characters.map((c) => c.name), containsAll(['Aqua', 'Megumin']));
       expect(backup.lorebooks.single.name, 'Axel');
       expect(backup.chats, isEmpty);
     });
 
-    test('a single card on its own, whatever it is called', () {
+    test('a single card on its own, whatever it is called', () async {
       final png = _cardPng(<String, dynamic>{
         'name': 'Aqua',
         'description': 'A goddess',
@@ -310,15 +259,15 @@ void main() {
       });
 
       // No extension at all: the bytes are sniffed, not the name.
-      final backup = readForeignBackup(png, fileName: 'download');
+      final backup = await readForeignBackupBytes(png, fileName: 'download');
 
       expect(backup.source, ForeignSource.file);
       expect(backup.characters.single.name, 'Aqua');
     });
 
-    test('and a file with nothing in it complains', () {
-      expect(
-        () => readForeignBackup(
+    test('and a file with nothing in it complains', () async {
+      await expectLater(
+        readForeignBackupBytes(
           Uint8List.fromList(utf8.encode('{"unrelated":true}')),
           fileName: 'thing.json',
         ),
@@ -343,7 +292,7 @@ void main() {
         () async {
       final state = AppState(avatars: AvatarStore(pictures));
       await state.init();
-      final backup = readForeignBackup(_zip(<String, Object>{
+      final backup = await state.readForeignBytes(_zip(<String, Object>{
         'backup.json': jsonEncode(_agnaiBackup()),
         'assets/aqua.png': _png,
         'assets/gallery-1.png': _png,
@@ -375,7 +324,7 @@ void main() {
     test('two files at once are applied together', () async {
       final state = AppState(avatars: AvatarStore(pictures));
       await state.init();
-      final cards = readForeignBackup(
+      final cards = await state.readForeignBytes(
         _cardPng(<String, dynamic>{
           'name': 'Megumin',
           'description': 'An archwizard',
@@ -383,7 +332,7 @@ void main() {
         }),
         fileName: 'Megumin.png',
       );
-      final chat = readForeignBackup(
+      final chat = await state.readForeignBytes(
         Uint8List.fromList(utf8.encode(
           '${jsonEncode({'user_name': 'You', 'character_name': 'Megumin'})}\n'
           '${jsonEncode({'name': 'You', 'is_user': true, 'mes': 'again?'})}',

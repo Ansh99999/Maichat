@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../models/character.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
+import '../models/message_image.dart';
 
 /// Reads and writes whole conversations in the shapes the apps around this one
 /// actually use, so a chat can be carried in or out without being retyped.
@@ -683,14 +684,22 @@ class _ChatBuilder {
     List<MessageVariant>? swipes,
     int swipeIndex = 0,
     DateTime? at,
+    List<MessageImage> images = const <MessageImage>[],
   }) {
-    if (text.trim().isEmpty && (swipes == null || swipes.isEmpty)) return;
+    // A turn that is only a picture is still a turn — SillyTavern writes an
+    // empty `mes` for one.
+    if (text.trim().isEmpty &&
+        (swipes == null || swipes.isEmpty) &&
+        images.isEmpty) {
+      return;
+    }
     final trimmed = name?.trim() ?? '';
     _messages.add(ChatMessage(
       role: isUser ? 'user' : 'assistant',
       content: text,
       swipes: swipes,
       swipeIndex: swipeIndex,
+      images: images,
       // The turn's own attributed name is kept so a group log stays
       // attributable turn-by-turn (and re-exports the same way); it is promoted
       // to a real participant in [build] when several speakers appear.
@@ -722,8 +731,14 @@ class _ChatBuilder {
       }
       return;
     }
-    final variants = _variantsOf(turn, text);
-    if (variants.isEmpty) return;
+    final images = _imagesOf(turn);
+    var variants = _variantsOf(turn, text);
+    if (variants.isEmpty) {
+      // A turn can be nothing but a picture — SillyTavern writes an empty `mes`
+      // for one — and dropping it would lose the picture with the words.
+      if (images.isEmpty) return;
+      variants = <MessageVariant>[MessageVariant(content: '')];
+    }
     addTurn(
       isUser: role == 'user',
       text: variants.first.content,
@@ -734,7 +749,58 @@ class _ChatBuilder {
       swipes: variants,
       swipeIndex: _indexOf(turn, variants.length),
       at: ChatCodec._when(turn['send_date'] ?? turn['createdAt'] ?? turn['time']),
+      images: images,
     );
+  }
+
+  /// The pictures a turn carries.
+  ///
+  /// SillyTavern keeps them in `extra.media: [{url, type}]`, and in
+  /// `extra.image` / `extra.image_swipes` in files written by older builds; a
+  /// MaiChat file writes `images` directly.
+  ///
+  /// Only a reference this app can resolve is kept. A path into another app's
+  /// data folder would draw nothing, so it is dropped instead of stored as a
+  /// broken attachment — an importer holding the archive rewrites such a path
+  /// into a real file first (see `services/foreign_backup.dart`).
+  static List<MessageImage> _imagesOf(Map<String, dynamic> turn) {
+    final images = <MessageImage>[];
+    void add(Object? value) {
+      final ref = value?.toString().trim() ?? '';
+      if (ref.isEmpty || !refIsResolvable(ref)) return;
+      final image = MessageImage(ref: ref, mime: mimeForRef(ref));
+      if (!images.contains(image)) images.add(image);
+    }
+
+    final own = turn['images'];
+    if (own is List) {
+      for (final item in own) {
+        if (item is Map<String, dynamic>) {
+          add(MessageImage.fromJson(item).ref);
+        } else {
+          add(item);
+        }
+      }
+    }
+    final extra = turn['extra'];
+    if (extra is Map) {
+      final media = extra['media'];
+      if (media is List) {
+        for (final item in media) {
+          if (item is! Map) continue;
+          final type = item['type']?.toString() ?? 'image';
+          if (type == 'image') add(item['url']);
+        }
+      }
+      add(extra['image']);
+      final swipes = extra['image_swipes'];
+      if (swipes is List) {
+        for (final swipe in swipes) {
+          add(swipe);
+        }
+      }
+    }
+    return images;
   }
 
   /// Who spoke, by whichever marker the format uses.

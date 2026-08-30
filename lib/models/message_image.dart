@@ -72,6 +72,20 @@ class MessageImage {
   String toString() => 'MessageImage($ref, $mime)';
 }
 
+/// Whether [ref] names a picture this app can actually find: a file in its own
+/// pictures directory, or a URL.
+///
+/// A relative path out of another app's data folder is not one. An importer that
+/// has the archive to hand resolves such a path into a real file first (see
+/// `services/foreign_backup.dart`); anything left unresolved is dropped rather
+/// than stored as an attachment that draws a hole.
+bool refIsResolvable(String ref) {
+  final trimmed = ref.trim();
+  return trimmed.startsWith('local:') ||
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://');
+}
+
 /// The media type for a picture reference, from its file extension. Used when a
 /// picture is chosen from the gallery, where the bytes are not to hand — a
 /// wrong-but-plausible type is far better than none, and every provider sniffs

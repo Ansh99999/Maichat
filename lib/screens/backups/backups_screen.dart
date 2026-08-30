@@ -1,10 +1,9 @@
-import 'dart:typed_data';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/backup.dart';
+import '../../services/backup_store.dart';
 import '../../services/storage_report.dart';
 import '../../state/app_state.dart';
 import '../chats_screen.dart' show relativeTime;
@@ -49,23 +48,27 @@ class _BackupsScreenState extends State<BackupsScreen> {
       content: Text('Reading the backup…'),
       duration: Duration(seconds: 2),
     ));
-    Uint8List? bytes;
+    final LocalBackup? local;
     try {
-      bytes = await state.readBackup(record);
+      local = await state.fetchBackup(record);
     } catch (error) {
       messenger.showSnackBar(
         SnackBar(content: Text('That backup could not be read ($error).')),
       );
       return;
     }
-    if (bytes == null) {
+    if (local == null) {
       messenger.showSnackBar(const SnackBar(
         content: Text('That backup is no longer where it was.'),
       ));
       return;
     }
-    if (!mounted) return;
-    await restoreMaiChatBackup(context, bytes, name: record.name);
+    try {
+      if (!mounted) return;
+      await restoreMaiChatBackupFile(context, local.path, name: record.name);
+    } finally {
+      await local.dispose();
+    }
   }
 
   Future<void> _saveCopy(AppState state, BackupRecord record) async {

@@ -68,6 +68,27 @@ class BackupStore {
     return name;
   }
 
+  /// Moves [file] into the folder under [name] and returns where it landed.
+  ///
+  /// A rename where the platform allows one, a copy where it does not: an export
+  /// is built in a temporary file and this is how it becomes a kept backup
+  /// without the bytes ever passing through memory.
+  Future<File> adopt(File file, String name) async {
+    final target = '${directory.path}/${_unique(_safe(name))}';
+    try {
+      return await file.rename(target);
+    } catch (_) {
+      // A different filesystem (or a platform that will not rename): copy.
+      final copy = await file.copy(target);
+      try {
+        await file.delete();
+      } catch (_) {
+        // The temporary file is swept up by the caller either way.
+      }
+      return copy;
+    }
+  }
+
   /// Reads a backup by the path recorded against it, or null when it is gone —
   /// the user may have cleared the app's storage since.
   Future<Uint8List?> readPath(String path) async {
@@ -141,4 +162,36 @@ String backupFileName(DateTime at, {bool automatic = false}) {
   final stamp = '${at.year}-${two(at.month)}-${two(at.day)}'
       '-${two(at.hour)}${two(at.minute)}${two(at.second)}';
   return 'maichat-backup-$stamp${automatic ? '-auto' : ''}.zip';
+}
+
+/// A backup within reach on this device: a file the app is holding, or a
+/// temporary copy pulled down from Drive that goes away once it has been read.
+///
+/// It exists so that restoring never means "hold the whole archive in memory":
+/// whatever the source, the restore reads a path.
+class LocalBackup {
+  LocalBackup(this.path, {this.temporary = false, this.folder});
+
+  final String path;
+
+  /// Whether [dispose] should delete it again.
+  final bool temporary;
+
+  /// The scratch directory to remove with it, when there is one.
+  final Directory? folder;
+
+  Future<void> dispose() async {
+    if (!temporary) return;
+    try {
+      final directory = folder;
+      if (directory != null && directory.existsSync()) {
+        await directory.delete(recursive: true);
+        return;
+      }
+      final file = File(path);
+      if (file.existsSync()) await file.delete();
+    } catch (error) {
+      debugPrint('MaiChat: a temporary backup copy was left behind ($error)');
+    }
+  }
 }

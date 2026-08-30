@@ -270,15 +270,19 @@ void main() {
   });
 
   group('the four calls', () {
-    test('an upload sends the metadata and the archive in one request',
+    test('an upload streams the metadata and the archive in one request',
         () async {
       final drive = DriveClient(client: client, endpoints: google.endpoints);
       final bytes = Uint8List.fromList(const [80, 75, 3, 4, 9, 9, 9]);
+      final directory = Directory.systemTemp.createTempSync('drive-upload');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final archive = File('${directory.path}/maichat-backup.zip')
+        ..writeAsBytesSync(bytes);
 
-      final file = await drive.upload(
+      final file = await drive.uploadFile(
         auth: auth,
         name: 'maichat-backup.zip',
-        bytes: bytes,
+        file: archive,
       );
 
       expect(file.id, 'file-1');
@@ -311,10 +315,18 @@ void main() {
       expect(files.first.createdAt, DateTime.utc(2026, 8, 30, 12));
     });
 
-    test('a download hands back the bytes', () async {
+    test('a download is streamed into a file', () async {
       google.download = const [1, 2, 3, 4];
       final drive = DriveClient(client: client, endpoints: google.endpoints);
+      final directory = Directory.systemTemp.createTempSync('drive-download');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final target = File('${directory.path}/deep/backup.zip');
 
+      await drive.downloadToFile(auth, 'file-1', target);
+
+      // The directory is made on the way, and the bytes arrive whole.
+      expect(target.readAsBytesSync(), [1, 2, 3, 4]);
+      // The in-memory read is still there for a caller with nowhere to write.
       expect(await drive.download(auth, 'file-1'), [1, 2, 3, 4]);
     });
 

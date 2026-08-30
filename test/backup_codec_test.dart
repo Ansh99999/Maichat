@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/services/backup_codec.dart';
 
-/// A store shaped like the real one: a JSON list, a JSON envelope, and a scalar.
+/// A store shaped like the real one: JSON lists, a JSON envelope, and a scalar.
 Map<String, StoreEntry> _store() => <String, StoreEntry>{
       'characters': StoreEntry.of(jsonEncode([
         {'id': 'c1', 'name': 'Aqua'},
@@ -44,34 +46,83 @@ Map<String, StoreEntry> _store() => <String, StoreEntry>{
       'activeConversation': StoreEntry.of('k1'),
       'somethingNew': StoreEntry.of('a future version wrote this'),
     };
-
-BackupSnapshot _snapshot({bool includesKeys = true}) => BackupSnapshot(
-      store: includesKeys ? _store() : stripSecrets(_store()),
-      pictures: <String, Uint8List>{
-        'pic.png': Uint8List.fromList(const [1, 2, 3, 4]),
-      },
-      vectors: <String, String>{'doc-1.json': '{"model":"m","records":[]}'},
-      createdAt: DateTime.utc(2026, 8, 30, 12),
-      appVersion: '1.17.0',
-      includesKeys: includesKeys,
-    );
 void main() {
+  late Directory root;
+  late Directory pictures;
+  late Directory vectors;
+  late File picture;
+  late File vector;
+
+  /// A picture big enough to cross the stream's buffers a few times, so the
+  /// streaming write is really exercised rather than a single chunk.
+  Uint8List big() {
+    final random = Random(7);
+    return Uint8List.fromList(
+      List<int>.generate(300 * 1024, (_) => random.nextInt(256)),
+    );
+  }
+
+  setUp(() {
+    root = Directory.systemTemp.createTempSync('codec');
+    pictures = Directory('${root.path}/pictures')..createSync();
+    vectors = Directory('${root.path}/vectors')..createSync();
+    picture = File('${pictures.path}/pic.png')..writeAsBytesSync(big());
+    vector = File('${vectors.path}/chat-k1.json')
+      ..writeAsStringSync('{"model":"m","records":[]}');
+  });
+
+  tearDown(() => root.deleteSync(recursive: true));
+
+  BackupPlan plan({bool includesKeys = true}) => BackupPlan(
+        store: includesKeys ? _store() : stripSecrets(_store()),
+        pictures: <File>[picture],
+        vectors: <File>[vector],
+        createdAt: DateTime.utc(2026, 8, 30, 12),
+        appVersion: '1.17.0',
+        includesKeys: includesKeys,
+      );
+
+  Future<File> archiveOf([BackupPlan? source]) async {
+    final file = File('${root.path}/backup.zip');
+    await writeBackupFile(source ?? plan(), file.path);
+    return file;
+  }
+
   group('the archive', () {
-    test('round-trips the store, the pictures and the vectors', () {
-      final bytes = encodeBackup(_snapshot());
-      final read = decodeBackup(bytes);
+    test('round-trips the store, the pictures and the vectors', () async {
+      final file = await archiveOf();
+      final read = BackupArchive.openFile(file.path);
+      addTearDown(read.close);
 
       expect(read.appVersion, '1.17.0');
       expect(read.createdAt, DateTime.utc(2026, 8, 30, 12));
       expect(read.includesKeys, isTrue);
       expect(read.store.keys, containsAll(_store().keys));
-      expect(read.pictures['pic.png'], [1, 2, 3, 4]);
-      expect(read.vectors['doc-1.json'], contains('"model":"m"'));
+      expect(read.pictureNames, ['pic.png']);
+      expect(read.vectorNames, ['chat-k1.json']);
+
+      // Extraction goes back to a *different* pair of directories, which is what
+      // restoring onto another device amounts to.
+      final toPictures = Directory('${root.path}/back-pictures');
+      final toVectors = Directory('${root.path}/back-vectors');
+      expect(
+        await read.extractFiles(pictures: toPictures, vectors: toVectors),
+        2,
+      );
+      expect(
+        File('${toPictures.path}/pic.png').readAsBytesSync(),
+        picture.readAsBytesSync(),
+      );
+      expect(
+        File('${toVectors.path}/chat-k1.json').readAsStringSync(),
+        '{"model":"m","records":[]}',
+      );
     });
 
-    test('an entry comes back byte-identical to what the store held', () {
+    test('an entry comes back byte-identical to what the store held', () async {
       final original = _store();
-      final read = decodeBackup(encodeBackup(_snapshot()));
+      final read = BackupArchive.openFile((await archiveOf()).path);
+      addTearDown(read.close);
 
       for (final key in original.keys) {
         expect(read.store[key]!.stored, original[key]!.stored,
@@ -79,28 +130,29 @@ void main() {
       }
     });
 
-    test('a key nobody has heard of is carried anyway', () {
-      final read = decodeBackup(encodeBackup(_snapshot()));
+    test('a key nobody has heard of is carried anyway', () async {
+      final read = BackupArchive.openFile((await archiveOf()).path);
+      addTearDown(read.close);
       expect(read.store['somethingNew']!.stored, 'a future version wrote this');
     });
 
-    test('the backup settings and history are never in a backup', () {
-      final store = _store()
-        ..['backupPrefs'] = StoreEntry.of('{"schedule":"daily"}')
-        ..['backups'] = StoreEntry.of('[]');
-      final snapshot = BackupSnapshot(
-        store: store,
+    test('the backup settings and history are never in a backup', () async {
+      final source = BackupPlan(
+        store: _store()
+          ..['backupPrefs'] = StoreEntry.of('{"schedule":"daily"}')
+          ..['backups'] = StoreEntry.of('[]'),
         createdAt: DateTime.utc(2026),
       );
-      // They are excluded on the way in as well as on the way out, so a
-      // hand-edited manifest cannot smuggle them back either.
-      final read = decodeBackup(encodeBackup(snapshot));
+      // The manifest carries them (the plan was handed them), but a reader
+      // refuses to hand them back, so a hand-edited file cannot smuggle them in.
+      final read = BackupArchive.openFile((await archiveOf(source)).path);
+      addTearDown(read.close);
       expect(read.store.containsKey('backupPrefs'), isFalse);
       expect(read.store.containsKey('backups'), isFalse);
     });
 
     test('counts what is in it, messages included', () {
-      final counts = _snapshot().counts;
+      final counts = plan().counts;
       expect(counts.characters, 2);
       expect(counts.chats, 1);
       expect(counts.messages, 2);
@@ -113,22 +165,27 @@ void main() {
     });
 
     test('a bare manifest is a backup too', () {
-      final json = jsonEncode(backupManifest(_snapshot()));
-      final read = decodeBackup(Uint8List.fromList(utf8.encode(json)));
+      final json = jsonEncode(plan().manifest);
+      final read = BackupArchive.openBytes(
+        Uint8List.fromList(utf8.encode(json)),
+      );
+      addTearDown(read.close);
       expect(read.counts.characters, 2);
-      expect(read.pictures, isEmpty);
+      // Nothing to stream out of a manifest on its own.
+      expect(read.extractFiles(pictures: pictures), completion(0));
     });
   });
   group('what it refuses', () {
     test('an empty file', () {
-      expect(() => decodeBackup(Uint8List(0)),
+      expect(() => BackupArchive.openBytes(Uint8List(0)),
           throwsA(isA<BackupFormatException>()));
     });
 
     test('somebody else\'s JSON', () {
-      final bytes = Uint8List.fromList(utf8.encode('{"kind":"agnai-user-backup"}'));
+      final bytes =
+          Uint8List.fromList(utf8.encode('{"kind":"agnai-user-backup"}'));
       expect(
-        () => decodeBackup(bytes),
+        () => BackupArchive.openBytes(bytes),
         throwsA(isA<BackupFormatException>().having(
           (e) => e.message,
           'message',
@@ -138,9 +195,11 @@ void main() {
     });
 
     test('a backup from a newer app', () {
-      final json = backupManifest(_snapshot())..['formatVersion'] = 99;
+      final json = plan().manifest..['formatVersion'] = 99;
       expect(
-        () => decodeBackup(Uint8List.fromList(utf8.encode(jsonEncode(json)))),
+        () => BackupArchive.openBytes(
+          Uint8List.fromList(utf8.encode(jsonEncode(json))),
+        ),
         throwsA(isA<BackupFormatException>().having(
           (e) => e.message,
           'message',
@@ -149,15 +208,23 @@ void main() {
       );
     });
 
-    test('and it recognises one of ours without parsing it all', () {
-      expect(looksLikeMaiChatBackup(encodeBackup(_snapshot())), isTrue);
+    test('a file that is not there', () {
       expect(
-        looksLikeMaiChatBackup(Uint8List.fromList(utf8.encode('{"a":1}'))),
-        isFalse,
+        () => BackupArchive.openFile('${root.path}/nothing.zip'),
+        throwsA(isA<BackupFormatException>()),
       );
     });
-  });
 
+    test('and it recognises one of ours by looking at the file', () async {
+      final ours = await archiveOf();
+      expect(looksLikeOurBackupFile(ours.path), isTrue);
+
+      final theirs = File('${root.path}/theirs.json')
+        ..writeAsStringSync('{"characters":[]}');
+      expect(looksLikeOurBackupFile(theirs.path), isFalse);
+      expect(looksLikeOurBackupFile('${root.path}/gone.zip'), isFalse);
+    });
+  });
   group('API keys', () {
     test('are blanked but kept in shape when left out', () {
       final store = stripSecrets(_store());

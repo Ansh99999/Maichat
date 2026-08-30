@@ -198,11 +198,41 @@ eaten by the drawer's edge-swipe region.
   (`preserveSecrets`). Every export goes through `AppState.exportBackup`, which
   is also what the schedule calls — there is no background worker, so
   `runDueBackup()` runs from `init()` when one is owed, and only the in-app and
-  Drive destinations can run without a save dialog. **Foreign** imports are a
-  different mechanism: `readForeignBackup` walks an archive and routes each entry
-  through the codec that already reads it, so a chat binds to its character *by
-  name* (the folder name, in SillyTavern's case) and nothing here parses a format
-  twice. Drive is OAuth with the user's own "Desktop app" client, PKCE, and a
+  Drive destinations can run without a save dialog.
+- **A backup is never held in memory whole**, and that is the invariant the whole
+  feature is built around: the first version read the picked file with
+  `withData: true` and inflated every picture into a map, which on a real gallery
+  is hundreds of megabytes and killed the process — a crash with no Dart error to
+  show for it. So: the picker is called **without `withData`** and everything
+  works from the path it returns; an export is written to a temp file with
+  `writeBackupFile` (pictures *stored*, not deflated — they are already
+  compressed) and then moved into place or streamed to Drive
+  (`DriveClient.uploadFile` builds the multipart body from a file stream, and
+  `downloadToFile` streams the other way); a restore opens `BackupArchive` from
+  the path, which inflates only the manifest, and `extractFiles` writes one entry
+  at a time. `looksLikeOurBackupFile` is how the import screen tells one of ours
+  from somebody else's without reading it twice.
+- **Foreign imports** are a different mechanism (`services/foreign_backup.dart`):
+  the archive is opened from disk, every entry is routed through the codec that
+  already reads it, and pictures go straight into the pictures directory through
+  an injected `PictureStore` sink as they are read (so nothing accumulates, and a
+  picture used in a message *and* in the gallery is one file). The SillyTavern
+  layout is taken from its own repo, not guessed: `USER_DIRECTORY_TEMPLATE` in
+  `src/constants.js` for the folders, and `chats.js` for the fact that a chat
+  lives in `chats/<card file name>/` (from `avatar_url` minus `.png`) — which is
+  the *only* record of whose chat it is, so the cards are read first and indexed
+  by file name. `settings.json` carries the personas (`power_user.personas`, keyed
+  by avatar file, with `persona_descriptions` and `default_persona`) and the tag
+  names (`tags` + `tag_map`); `groups/*.json` + `group chats/*.jsonl` are the two
+  halves of a group chat; a turn's pictures are `extra.media[].url` (plus legacy
+  `extra.image`/`image_swipes`) pointing into `user/images`, and those paths are
+  rewritten to `local:` refs *before* `ChatCodec` parses the transcript, which is
+  what puts a generated picture back on the turn that made it. Everything with no
+  home here (themes, quick replies, extensions, wallpapers, `secrets.json`) is
+  counted in `ForeignBackup.skipped` and reported. `test/backup_sillytavern_test.dart`
+  builds that layout file by file, with a real world-info fixture and a real
+  chat-completion preset out of SillyTavern's own `default/content`.
+  Drive is OAuth with the user's own "Desktop app" client, PKCE, and a
   loopback listener — deliberately no custom scheme, so no native plugin and no
   AGP-9 hook.
 - **Gallery:** `models/gallery_image.dart` (a record + the sort/zoom enums),

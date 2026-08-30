@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
@@ -8,22 +6,22 @@ import '../../services/backup_codec.dart';
 import '../../services/storage_report.dart';
 import '../../state/app_state.dart';
 
-/// Restoring a MaiChat backup: read what is in the archive, say so, ask how it
+/// Restoring a MaiChat backup: open the archive, say what is in it, ask how it
 /// should land, then do it. Shared by the Backups list and the Import screen so
 /// the question is asked the same way wherever a restore starts.
 ///
-/// The archive is decoded *before* the question, so the dialog can name what is
-/// actually inside rather than what the file is called.
-Future<bool> restoreMaiChatBackup(
+/// The archive is opened from a *path* and read entry by entry — a backup with a
+/// gallery in it is far too large to hold in memory, and doing so is what made
+/// an import kill the app.
+Future<bool> restoreMaiChatBackupFile(
   BuildContext context,
-  Uint8List bytes, {
+  String path, {
   String name = '',
 }) async {
-  final state = context.read<AppState>();
   final messenger = ScaffoldMessenger.of(context);
-  BackupSnapshot snapshot;
+  final BackupArchive archive;
   try {
-    snapshot = decodeBackup(bytes);
+    archive = BackupArchive.openFile(path);
   } on BackupFormatException catch (error) {
     messenger.showSnackBar(SnackBar(content: Text(error.message)));
     return false;
@@ -33,12 +31,27 @@ Future<bool> restoreMaiChatBackup(
     );
     return false;
   }
+  try {
+    return await restoreMaiChatBackup(context, archive, name: name);
+  } finally {
+    archive.close();
+  }
+}
+
+/// The same for an archive the caller has already opened (and will close).
+Future<bool> restoreMaiChatBackup(
+  BuildContext context,
+  BackupArchive archive, {
+  String name = '',
+}) async {
+  final state = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
 
   final replace = await showDialog<bool>(
     context: context,
     builder: (context) => _RestoreDialog(
       name: name.isEmpty ? 'this backup' : name,
-      snapshot: snapshot,
+      archive: archive,
     ),
   );
   if (replace == null || !context.mounted) return false;
@@ -48,7 +61,7 @@ Future<bool> restoreMaiChatBackup(
     duration: Duration(seconds: 2),
   ));
   try {
-    final counts = await state.restoreSnapshot(snapshot, replace: replace);
+    final counts = await state.restoreArchive(archive, replace: replace);
     messenger.showSnackBar(SnackBar(
       content: Text('${replace ? 'Restored' : 'Merged in'} '
           '${counts.summary(limit: 4)}.'),
@@ -72,16 +85,16 @@ Future<bool> restoreMaiChatBackup(
 /// Asks the one question a restore has: should the app become exactly what is in
 /// the file, or should the file be added to what is here?
 class _RestoreDialog extends StatelessWidget {
-  const _RestoreDialog({required this.name, required this.snapshot});
+  const _RestoreDialog({required this.name, required this.archive});
 
   final String name;
-  final BackupSnapshot snapshot;
+  final BackupArchive archive;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final counts = snapshot.counts;
+    final counts = archive.counts;
     return AlertDialog(
       title: const Text('Restore this backup?'),
       content: SingleChildScrollView(
@@ -92,16 +105,16 @@ class _RestoreDialog extends StatelessWidget {
             Text(name, style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
             Text(
-              'Taken ${_when(snapshot.createdAt)}'
-              '${snapshot.appVersion.isEmpty ? '' : ' · MaiChat '
-                  '${snapshot.appVersion}'}',
+              'Taken ${_when(archive.createdAt)}'
+              '${archive.appVersion.isEmpty ? '' : ' · MaiChat '
+                  '${archive.appVersion}'}',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 12),
             for (final part in counts.parts.where((p) => p.$2 > 0))
               Text('${part.$2} ${part.$1}'),
-            if (!snapshot.includesKeys) ...[
+            if (!archive.includesKeys) ...[
               const SizedBox(height: 12),
               Text(
                 'No API keys in this one — the keys on this device are left '

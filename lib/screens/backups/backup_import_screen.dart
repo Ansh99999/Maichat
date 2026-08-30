@@ -6,6 +6,7 @@ import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/backup.dart';
 import '../../services/backup_codec.dart';
+import '../../services/backup_store.dart';
 import '../../services/drive_client.dart';
 import '../../services/foreign_backup.dart';
 import '../../services/storage_report.dart';
@@ -62,9 +63,13 @@ const List<_Source> _sources = <_Source>[
   _Source(
     icon: Icons.auto_stories_outlined,
     title: 'SillyTavern',
-    subtitle: 'Its data folder as a .zip (characters, chats, worlds, presets), '
-        'or single files: a card .png, a chat .jsonl, a world .json.',
-    keywords: 'sillytavern silly tavern st jsonl world info png card preset',
+    subtitle: 'Its whole data folder as a .zip — characters and their pictures, '
+        'every chat in the folder it belongs to, group chats and their members, '
+        'worlds, chat-completion presets, your personas and the pictures made '
+        'in a chat. Single files work too: a card .png, a chat .jsonl, a world '
+        '.json.',
+    keywords: 'sillytavern silly tavern st jsonl world info png card preset '
+        'persona group chat data folder default-user backup',
   ),
   _Source(
     icon: Icons.forum_outlined,
@@ -103,9 +108,14 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
     super.dispose();
   }
 
-  /// Picks files and reads them. A MaiChat backup takes the restore path (exact,
-  /// with a replace-or-merge question); anything else is folded together and
-  /// applied once.
+  /// Picks files and reads them.
+  ///
+  /// Deliberately **without** `withData`: a SillyTavern data folder or a MaiChat
+  /// backup with a gallery in it runs to hundreds of megabytes, and asking the
+  /// picker to hand that over as bytes is what killed the app — the platform
+  /// holds one copy, Dart holds another, and the archive reader a third. The
+  /// picker copies the file into the app's cache and gives a path instead;
+  /// everything downstream reads that path one entry at a time.
   Future<void> _pick(AppState state) async {
     if (_busy) return;
     FilePickerResult? result;
@@ -117,10 +127,14 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
         // whatever a custom filter did not list. The content decides.
         type: FileType.any,
         allowMultiple: true,
-        withData: true,
+        withData: false,
       );
-    } catch (_) {
-      result = null;
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('The file picker would not open ($error).')),
+      );
+      return;
     }
     final files = result?.files ?? const <PlatformFile>[];
     if (files.isEmpty || !mounted) return;
@@ -129,27 +143,39 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
     final messenger = ScaffoldMessenger.of(context);
     ForeignBackup? foreign;
     String? firstError;
-    for (final file in files) {
-      final bytes = file.bytes;
-      if (bytes == null || bytes.isEmpty) continue;
-      if (looksLikeMaiChatBackup(bytes)) {
-        setState(() => _busy = false);
-        if (!mounted) return;
-        await restoreMaiChatBackup(context, bytes, name: file.name);
-        return;
-      }
-      try {
-        final read = readForeignBackup(bytes, fileName: file.name);
-        if (foreign == null) {
-          foreign = read;
-        } else {
-          foreign.absorb(read);
+    try {
+      for (final file in files) {
+        // One of ours restores exactly, and takes over the whole import: a
+        // snapshot is not something to merge other files into.
+        final path = file.path;
+        if (path != null && looksLikeOurBackupFile(path)) {
+          setState(() => _busy = false);
+          if (!mounted) return;
+          await restoreMaiChatBackupFile(context, path, name: file.name);
+          return;
         }
-      } on FormatException catch (error) {
-        firstError ??= error.message;
-      } catch (error) {
-        firstError ??= 'Could not read ${file.name} ($error).';
+        try {
+          final read = path != null
+              ? await state.readForeignFile(path, fileName: file.name)
+              : await state.readForeignBytes(
+                  file.bytes ?? Uint8List(0),
+                  fileName: file.name,
+                );
+          if (foreign == null) {
+            foreign = read;
+          } else {
+            foreign.absorb(read);
+          }
+        } on FormatException catch (error) {
+          firstError ??= error.message;
+        } catch (error) {
+          firstError ??= 'Could not read ${file.name} ($error).';
+        }
       }
+    } finally {
+      // The picker leaves its copy in the cache; on a data folder that is a lot
+      // of room to leave behind.
+      FilePicker.clearTemporaryFiles().ignore();
     }
     if (!mounted) return;
     setState(() => _busy = false);
@@ -178,6 +204,15 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(backup.summary()),
+              if (backup.leftOut() != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  backup.leftOut()!,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
               const SizedBox(height: 12),
               Text(
                 'These are added to what you already have; nothing is replaced. '
@@ -238,32 +273,50 @@ class _BackupImportScreenState extends State<BackupImportScreen> {
   /// Restores one of the app's own kept backups, or one sitting in Drive.
   Future<void> _restoreRecord(AppState state, BackupRecord record) async {
     final messenger = ScaffoldMessenger.of(context);
-    final bytes = await state.readBackup(record);
-    if (bytes == null) {
+    final local = await state.fetchBackup(record);
+    if (local == null) {
       messenger.showSnackBar(const SnackBar(
         content: Text('That backup is no longer where it was.'),
       ));
       return;
     }
-    if (!mounted) return;
-    await restoreMaiChatBackup(context, bytes, name: record.name);
+    try {
+      if (!mounted) return;
+      await restoreMaiChatBackupFile(context, local.path, name: record.name);
+    } finally {
+      await local.dispose();
+    }
   }
 
   Future<void> _restoreDrive(AppState state, DriveFile file) async {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
-    Uint8List bytes;
+    final LocalBackup local;
     try {
-      bytes = await state.downloadDriveBackup(file.id);
+      local = await state.fetchDriveFile(file);
     } on DriveException catch (error) {
       if (!mounted) return;
       setState(() => _busy = false);
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
       return;
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      messenger.showSnackBar(
+        SnackBar(content: Text('That backup could not be fetched ($error).')),
+      );
+      return;
     }
-    if (!mounted) return;
+    if (!mounted) {
+      await local.dispose();
+      return;
+    }
     setState(() => _busy = false);
-    await restoreMaiChatBackup(context, bytes, name: file.name);
+    try {
+      await restoreMaiChatBackupFile(context, local.path, name: file.name);
+    } finally {
+      await local.dispose();
+    }
   }
   @override
   Widget build(BuildContext context) {

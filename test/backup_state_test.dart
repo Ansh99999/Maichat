@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/backup.dart';
@@ -157,6 +158,52 @@ void main() {
       // And the vectors.
       expect(File('${vectors.path}/chat-k1.json').existsSync(), isTrue);
     });
+
+    test('restores from the file on disk, which is how the app does it',
+        () async {
+      final source = await seeded();
+      // A picture big enough that holding the whole archive in memory would be
+      // the wrong thing to do — the export streams it in, the restore streams it
+      // back out.
+      final big = Uint8List.fromList(
+        List<int>.generate(400 * 1024, (i) => i % 251),
+      );
+      final added = await source.addGalleryImages([big], characterId: 'c1');
+      final bigRef = added.single.image;
+      final record = await source.exportBackup(
+        destination: BackupDestination.device,
+      );
+      expect(record!.counts.pictures, 3);
+      expect(record.bytes, greaterThan(400 * 1024));
+
+      for (final file in pictures.listSync()) {
+        file.deleteSync();
+      }
+      final fresh = await boot(fresh: true);
+      final counts = await fresh.restoreBackupFile(record.path);
+
+      expect(counts.chats, 1);
+      expect(fresh.conversations.single.id, 'k1');
+      final restored = avatarRefFile(bigRef)!;
+      expect(restored.existsSync(), isTrue);
+      expect(restored.lengthSync(), 400 * 1024);
+      expect(restored.readAsBytesSync()[1000], 1000 % 251);
+    });
+
+    test('one the app is holding is fetched as a file, not as bytes', () async {
+      final state = await seeded();
+      final record = await state.exportBackup(
+        destination: BackupDestination.device,
+      );
+
+      final local = await state.fetchBackup(record!);
+
+      expect(local, isNotNull);
+      expect(local!.path, record.path);
+      // Nothing temporary about it: disposing must not delete the real backup.
+      await local.dispose();
+      expect(File(record.path).existsSync(), isTrue);
+    });
   });
   group('restoring over something', () {
     test('replace makes the app exactly the backup again', () async {
@@ -202,9 +249,10 @@ void main() {
       expect(record!.includesKeys, isFalse);
       final bytes = (await source.readBackup(record))!;
       // Prove the file really carries no key.
+      final read = BackupArchive.openBytes(bytes);
+      addTearDown(read.close);
       expect(
-        (decodeBackup(bytes).store['providers']!.asMap!['providers'] as List)
-            .first,
+        (read.store['providers']!.asMap!['providers'] as List).first,
         containsPair('apiKey', ''),
       );
 
@@ -344,9 +392,10 @@ void main() {
       final record = await state.exportBackup(
         destination: BackupDestination.device,
       );
-      final snapshot = decodeBackup((await state.readBackup(record!))!);
-      expect(snapshot.store.containsKey('backups'), isFalse);
-      expect(snapshot.store.containsKey('backupPrefs'), isFalse);
+      final read = BackupArchive.openFile(record!.path);
+      addTearDown(read.close);
+      expect(read.store.containsKey('backups'), isFalse);
+      expect(read.store.containsKey('backupPrefs'), isFalse);
 
       // So restoring an old one leaves the settings and the history alone.
       await state.restoreBackup((await state.readBackup(record))!);

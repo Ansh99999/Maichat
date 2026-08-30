@@ -1452,15 +1452,15 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (_writable) await _storage.saveBackupPrefs(next);
   }
-  /// Gathers everything a backup carries: the store as it stands, every picture
-  /// file and every vector file.
+  /// Gathers everything a backup carries: the store as it stands, and the
+  /// picture and vector files it goes with — *named*, not read.
   ///
-  /// The store is copied *verbatim* rather than rebuilt from the models. That is
+  /// The store is copied verbatim rather than rebuilt from the models. That is
   /// the whole reason a restore lands exactly where it was — a per-chat override
   /// or a preference added later rides along without this method knowing it
   /// exists. Pending writes are flushed first, or the archive would hold a store
   /// one edit behind the screen.
-  Future<BackupSnapshot> collectBackup({
+  Future<BackupPlan> planBackup({
     bool? includeKeys,
     bool? includePictures,
     bool? includeVectors,
@@ -1478,44 +1478,34 @@ class AppState extends ChangeNotifier {
     }
     if (!keys) store = stripSecrets(store);
 
-    return BackupSnapshot(
+    return BackupPlan(
       store: store,
-      pictures: withPictures
-          ? await _readDirectoryBytes(imageDirectory)
-          : const <String, Uint8List>{},
-      vectors: withVectors
-          ? (await _readDirectoryBytes(_vectors?.directory)).map(
-              (name, bytes) => MapEntry(name, utf8.decode(bytes,
-                  allowMalformed: true)),
-            )
-          : const <String, String>{},
+      pictures: withPictures ? _filesIn(imageDirectory) : const <File>[],
+      vectors: withVectors ? _filesIn(_vectors?.directory) : const <File>[],
       createdAt: DateTime.now(),
       appVersion: kAppVersion,
       includesKeys: keys,
     );
   }
 
-  /// Every file in [directory] by name. Best-effort per file: one unreadable
-  /// picture must not cost the user the whole backup.
-  Future<Map<String, Uint8List>> _readDirectoryBytes(Directory? directory) async {
-    final out = <String, Uint8List>{};
-    if (directory == null || !directory.existsSync()) return out;
+  /// The files in [directory], or nothing when there is no such directory.
+  List<File> _filesIn(Directory? directory) {
+    if (directory == null || !directory.existsSync()) return const <File>[];
     try {
-      for (final entity in directory.listSync()) {
-        if (entity is! File) continue;
-        try {
-          out[entity.uri.pathSegments.last] = await entity.readAsBytes();
-        } catch (error) {
-          debugPrint('MaiChat: a file was left out of the backup ($error)');
-        }
-      }
+      return directory.listSync().whereType<File>().toList();
     } catch (error) {
       debugPrint('MaiChat: could not list a directory for the backup ($error)');
+      return const <File>[];
     }
-    return out;
   }
-  /// The one path every export takes: build the archive, deliver it, write down
-  /// what happened, then drop whatever the retention setting says is surplus.
+  /// The one path every export takes: build the archive on disk, deliver it,
+  /// write down what happened, then drop whatever the retention setting says is
+  /// surplus.
+  ///
+  /// The archive is written to a temporary file rather than assembled in memory,
+  /// and each destination takes it from there — moved into the app's folder,
+  /// streamed to Drive, or handed to the save dialog. A backup is the largest
+  /// thing this app ever produces; building one in RAM is how it would die.
   ///
   /// [save] is how a file leaves the app — the screen hands in the system save
   /// dialog, which keeps `file_picker` out of the state layer and lets a test
@@ -1529,65 +1519,79 @@ class AppState extends ChangeNotifier {
     Future<String?> Function(String name, Uint8List bytes)? save,
     bool automatic = false,
   }) async {
-    final snapshot = await collectBackup();
-    final bytes = encodeBackup(snapshot);
-    var name = backupFileName(snapshot.createdAt, automatic: automatic);
+    final plan = await planBackup();
+    var name = backupFileName(plan.createdAt, automatic: automatic);
+    final scratch = await Directory.systemTemp.createTemp('maichat-backup');
+    final archive = File('${scratch.path}/$name');
     var path = '';
     var driveFileId = '';
+    try {
+      await writeBackupFile(plan, archive.path);
+      // Measured now: a destination may move the file out from under us.
+      final size = archive.lengthSync();
 
-    switch (destination) {
-      case BackupDestination.file:
-        if (save == null) {
-          throw const BackupFormatException(
-            'Saving to a file needs the save dialog.',
-          );
-        }
-        final where = await save(name, bytes);
-        if (where == null) return null;
-        path = where;
-      case BackupDestination.device:
-        final store = _backups;
-        if (store == null) {
-          throw const BackupFormatException(
-            'This device would not give the app a folder to keep backups in. '
-            'Export to a file instead.',
-          );
-        }
-        final file = await store.write(name, bytes);
-        path = file.path;
-        // The folder may have stepped the name aside (two backups inside one
-        // second); the record names the file that actually exists.
-        name = file.uri.pathSegments.last;
-      case BackupDestination.drive:
-        final auth = await _drive.ensureFolder(_backupPrefs.drive);
-        driveFileId = (await _drive.upload(
-          auth: auth,
-          name: name,
-          bytes: bytes,
-        )).id;
-        if (auth.folderId != _backupPrefs.drive.folderId) {
-          await updateBackupPrefs(_backupPrefs.copyWith(drive: auth));
-        }
+      switch (destination) {
+        case BackupDestination.file:
+          if (save == null) {
+            throw const BackupFormatException(
+              'Saving to a file needs the save dialog.',
+            );
+          }
+          // The save dialog wants the bytes; this is the one destination that
+          // cannot be streamed, and the user asked for it by name.
+          final where = await save(name, await archive.readAsBytes());
+          if (where == null) return null;
+          path = where;
+        case BackupDestination.device:
+          final store = _backups;
+          if (store == null) {
+            throw const BackupFormatException(
+              'This device would not give the app a folder to keep backups in. '
+              'Export to a file instead.',
+            );
+          }
+          final kept = await store.adopt(archive, name);
+          path = kept.path;
+          // The folder may have stepped the name aside (two backups inside one
+          // second); the record names the file that actually exists.
+          name = kept.uri.pathSegments.last;
+        case BackupDestination.drive:
+          final auth = await _drive.ensureFolder(_backupPrefs.drive);
+          driveFileId = (await _drive.uploadFile(
+            auth: auth,
+            name: name,
+            file: archive,
+          )).id;
+          if (auth.folderId != _backupPrefs.drive.folderId) {
+            await updateBackupPrefs(_backupPrefs.copyWith(drive: auth));
+          }
+      }
+
+      final record = BackupRecord(
+        id: '${plan.createdAt.microsecondsSinceEpoch}',
+        name: name,
+        createdAt: plan.createdAt,
+        bytes: size,
+        destination: destination,
+        counts: plan.counts,
+        path: path,
+        driveFileId: driveFileId,
+        automatic: automatic,
+        appVersion: kAppVersion,
+        includesKeys: plan.includesKeys,
+      );
+      _backupRecords.insert(0, record);
+      await _pruneBackups(destination);
+      notifyListeners();
+      if (_writable) await _storage.saveBackupRecords(_backupRecords);
+      return record;
+    } finally {
+      try {
+        if (scratch.existsSync()) scratch.deleteSync(recursive: true);
+      } catch (error) {
+        debugPrint('MaiChat: a temporary backup file was left behind ($error)');
+      }
     }
-
-    final record = BackupRecord(
-      id: '${snapshot.createdAt.microsecondsSinceEpoch}',
-      name: name,
-      createdAt: snapshot.createdAt,
-      bytes: bytes.length,
-      destination: destination,
-      counts: snapshot.counts,
-      path: path,
-      driveFileId: driveFileId,
-      automatic: automatic,
-      appVersion: kAppVersion,
-      includesKeys: snapshot.includesKeys,
-    );
-    _backupRecords.insert(0, record);
-    await _pruneBackups(destination);
-    notifyListeners();
-    if (_writable) await _storage.saveBackupRecords(_backupRecords);
-    return record;
   }
   /// Keeps only the newest [BackupPrefs.keep] backups at [destination] and
   /// forgets the records that pointed at what went. A backup folder that grows
@@ -1631,18 +1635,43 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Reads a recorded backup back: from the app's folder, or from Drive. Null
-  /// when it cannot be reached — a file handed to the save dialog is the user's,
-  /// and the app has no lasting access to it (they can import it by hand).
-  Future<Uint8List?> readBackup(BackupRecord record) async {
+  /// Brings a recorded backup within reach: the file the app is already holding,
+  /// or a temporary copy pulled down from Drive. Null when it cannot be reached —
+  /// a file handed to the save dialog belongs to the user, and the app has no
+  /// lasting access to it (they can import it by hand).
+  ///
+  /// The caller must [LocalBackup.dispose] it, which deletes a temporary copy.
+  Future<LocalBackup?> fetchBackup(BackupRecord record) async {
     switch (record.destination) {
       case BackupDestination.device:
-        return _backups?.readPath(record.path);
+        if (record.path.isEmpty || !File(record.path).existsSync()) return null;
+        return LocalBackup(record.path);
       case BackupDestination.drive:
         if (record.driveFileId.isEmpty) return null;
-        return _drive.download(_backupPrefs.drive, record.driveFileId);
+        return _driveToTemp(record.driveFileId, record.name);
       case BackupDestination.file:
         return null;
+    }
+  }
+
+  /// Streams a Drive backup down to a temporary file, so restoring one never
+  /// depends on holding the whole archive in memory.
+  Future<LocalBackup> _driveToTemp(String fileId, String name) async {
+    final scratch = await Directory.systemTemp.createTemp('maichat-drive');
+    final file = File('${scratch.path}/${name.isEmpty ? 'backup.zip' : name}');
+    await _drive.downloadToFile(_backupPrefs.drive, fileId, file);
+    return LocalBackup(file.path, temporary: true, folder: scratch);
+  }
+
+  /// The bytes of a recorded backup — only for handing one to the save dialog,
+  /// which has no other way to take a file.
+  Future<Uint8List?> readBackup(BackupRecord record) async {
+    final local = await fetchBackup(record);
+    if (local == null) return null;
+    try {
+      return await File(local.path).readAsBytes();
+    } finally {
+      await local.dispose();
     }
   }
 
@@ -1678,16 +1707,46 @@ class AppState extends ChangeNotifier {
   /// Files are written before the store, so nothing is ever referenced by a
   /// picture that has not arrived yet. Keys blanked out of a keyless backup fall
   /// back to whatever is live on the device rather than wiping it.
+  /// Puts a MaiChat backup back, reading it from disk one entry at a time.
+  ///
+  /// With [replace] (what restoring a snapshot means) the store becomes exactly
+  /// what the archive holds: an entry the archive does not mention is removed,
+  /// so a character deleted after the backup was taken does not survive the
+  /// restore. Without it the archive is merged in — lists reconcile by id and
+  /// settings are left alone.
+  ///
+  /// Files are written before the store, so nothing is ever referenced by a
+  /// picture that has not arrived yet. Keys blanked out of a keyless backup fall
+  /// back to whatever is live on the device rather than wiping it.
+  Future<BackupCounts> restoreBackupFile(
+    String path, {
+    bool replace = true,
+  }) async {
+    final archive = BackupArchive.openFile(path);
+    try {
+      return await restoreArchive(archive, replace: replace);
+    } finally {
+      archive.close();
+    }
+  }
+
+  /// The same from bytes in hand — a bare manifest, or a platform with no paths.
   Future<BackupCounts> restoreBackup(
     Uint8List bytes, {
     bool replace = true,
-  }) =>
-      restoreSnapshot(decodeBackup(bytes), replace: replace);
+  }) async {
+    final archive = BackupArchive.openBytes(bytes);
+    try {
+      return await restoreArchive(archive, replace: replace);
+    } finally {
+      archive.close();
+    }
+  }
 
-  /// Puts an already-decoded backup back — what the screens call, since they
-  /// decode first to show what is in the archive before asking to go ahead.
-  Future<BackupCounts> restoreSnapshot(
-    BackupSnapshot snapshot, {
+  /// Puts an already-opened backup back — what the screens call, since they open
+  /// it first to show what is inside before asking to go ahead.
+  Future<BackupCounts> restoreArchive(
+    BackupArchive archive, {
     bool replace = true,
   }) async {
     if (!_writable) {
@@ -1696,14 +1755,17 @@ class AppState extends ChangeNotifier {
         'Restart the app and try again.',
       );
     }
-    await _restoreFiles(snapshot);
+    await archive.extractFiles(
+      pictures: imageDirectory,
+      vectors: _vectors?.directory,
+    );
 
     final current = <String, StoreEntry>{};
     for (final entry in (await _storage.dump()).entries) {
       if (kBackupExcludedKeys.contains(entry.key)) continue;
       current[entry.key] = StoreEntry.of(entry.value);
     }
-    var incoming = preserveSecrets(current: current, incoming: snapshot.store);
+    var incoming = preserveSecrets(current: current, incoming: archive.store);
     if (!replace) incoming = mergeStores(current, incoming);
 
     await _storage.writeEntries(
@@ -1716,30 +1778,7 @@ class AppState extends ChangeNotifier {
     await reloadFromStore();
     // Anything on disk the restored store does not reference is a leftover.
     await _sweepAvatars();
-    return snapshot.counts;
-  }
-
-  /// Writes a backup's pictures and vectors back into the directories they came
-  /// from, under their original names — which is what makes a `local:<name>`
-  /// reference in a message resolve to the same picture again.
-  Future<void> _restoreFiles(BackupSnapshot snapshot) async {
-    Future<void> write(Directory? dir, String name, List<int> bytes) async {
-      if (dir == null) return;
-      if (name.isEmpty || name.contains('/') || name.contains('\\')) return;
-      try {
-        if (!dir.existsSync()) dir.createSync(recursive: true);
-        await File('${dir.path}/$name').writeAsBytes(bytes, flush: true);
-      } catch (error) {
-        debugPrint('MaiChat: could not restore $name ($error)');
-      }
-    }
-
-    for (final picture in snapshot.pictures.entries) {
-      await write(imageDirectory, picture.key, picture.value);
-    }
-    for (final vector in snapshot.vectors.entries) {
-      await write(_vectors?.directory, vector.key, utf8.encode(vector.value));
-    }
+    return archive.counts;
   }
 
   /// Re-reads every store entry into memory. A restore writes the store from
@@ -1810,15 +1849,40 @@ class AppState extends ChangeNotifier {
     return _drive.list(auth);
   }
 
-  /// Downloads one of [driveBackups] by id.
-  Future<Uint8List> downloadDriveBackup(String fileId) =>
-      _drive.download(_backupPrefs.drive, fileId);
+  /// Downloads one of [driveBackups] to a temporary file, ready to restore.
+  Future<LocalBackup> fetchDriveFile(DriveFile file) =>
+      _driveToTemp(file.id, file.name);
+  /// Reads a backup another app wrote, from a file on disk.
+  ///
+  /// The path rather than the bytes: a SillyTavern data folder is the largest
+  /// file this app is ever handed, and reading one into memory is what made an
+  /// import kill the process instead of finishing. Pictures go straight into the
+  /// pictures directory as they are found — [storePicture] is the sink.
+  Future<ForeignBackup> readForeignFile(String path, {String fileName = ''}) =>
+      readForeignBackupFile(
+        path,
+        fileName: fileName,
+        storePicture: storePicture,
+      );
+
+  /// The same for bytes already in hand, when the platform would not give a path.
+  Future<ForeignBackup> readForeignBytes(
+    Uint8List bytes, {
+    String fileName = '',
+  }) =>
+      readForeignBackupBytes(
+        bytes,
+        fileName: fileName,
+        storePicture: storePicture,
+      );
+
   /// Puts a backup from another app into place.
   ///
-  /// Order matters: the characters land first, because the one binding a foreign
-  /// file carries is *which character a chat belongs to*, and it carries it by
-  /// name. A chat whose character is in the same file therefore arrives already
-  /// attached to it — persona and all — instead of as an orphan transcript.
+  /// Order matters: the characters land first, because the bindings a foreign
+  /// file carries are by *name* — which character a chat belongs to, who was in
+  /// a group, whose gallery a picture is in. A chat whose character is in the
+  /// same file therefore arrives already attached to it, persona and all,
+  /// instead of as an orphan transcript.
   Future<void> applyForeignBackup(ForeignBackup backup) async {
     if (!_writable) {
       throw const BackupFormatException(
@@ -1835,36 +1899,85 @@ class AppState extends ChangeNotifier {
       await addProvider(provider);
     }
 
+    // The persona the other app was speaking as becomes the one new chats use,
+    // but only when the user has not already chosen one of their own.
+    final persona = _characterNamed(backup.defaultPersonaName);
+    if (persona != null && _defaultPersonaId == null) {
+      await setDefaultPersona(persona.id);
+    }
+
     if (backup.chats.isNotEmpty) {
       final imported = <Conversation>[];
+      var group = false;
       for (final chat in backup.chats) {
-        final conversation = chat.conversation;
-        final owner = _characterNamed(conversation.characterName);
+        final conversation = chat.chat.conversation;
+        final owner = _characterNamed(chat.characterName);
         if (owner != null) {
           conversation
             ..characterId = owner.id
             ..characterName = owner.displayName
             ..systemPrompt = _mergedPrompt(owner, conversation.systemPrompt);
         }
+        // A group chat knows who was in the room; the ids only exist here.
+        for (final name in chat.participantNames) {
+          final member = _characterNamed(name);
+          if (member != null && !conversation.participantIds.contains(member.id)) {
+            conversation.participantIds.add(member.id);
+          }
+        }
+        if (conversation.participantIds.isNotEmpty) group = true;
         imported.add(conversation);
       }
       await importConversations(imported);
+      // A group chat with the group feature switched off is a chat whose other
+      // members cannot speak, which is not what was imported. This is the one
+      // setting an import changes, and only ever from off to on.
+      if (group && !_chatInterface.groupChatsEnabled) {
+        await updateChatInterface(
+          _chatInterface.copyWith(groupChatsEnabled: true),
+        );
+      }
     }
 
-    // Pictures are filed per character in one pass each, so a gallery of fifty
-    // does not rewrite the gallery entry fifty times.
+    // Pictures arrive as files already (the reader wrote them as it read), so
+    // this is only the records — one write per owner rather than per picture.
     final byOwner = <String?, List<ForeignPicture>>{};
     for (final picture in backup.pictures) {
       final owner = _characterNamed(picture.characterName);
       (byOwner[owner?.id] ??= <ForeignPicture>[]).add(picture);
     }
     for (final group in byOwner.entries) {
-      await addGalleryImages(
-        group.value.map((p) => p.bytes).toList(),
+      await addGalleryRefs(
+        group.value
+            .map((p) => (ref: p.ref, title: p.title, tags: p.tags))
+            .toList(),
         characterId: group.key,
-        title: group.value.length == 1 ? group.value.first.title : '',
       );
     }
+  }
+
+  /// Files pictures that are already files: the gallery records for references
+  /// an importer has just written into the pictures directory.
+  Future<List<GalleryImage>> addGalleryRefs(
+    List<({String ref, String title, List<String> tags})> pictures, {
+    String? characterId,
+  }) async {
+    if (pictures.isEmpty || !_writable) return const <GalleryImage>[];
+    final added = <GalleryImage>[];
+    for (final picture in pictures) {
+      if (picture.ref.trim().isEmpty) continue;
+      added.add(GalleryImage.create(
+        image: picture.ref,
+        title: picture.title,
+        tags: List<String>.from(picture.tags),
+        characterId: characterId,
+      ));
+    }
+    if (added.isEmpty) return added;
+    _gallery.insertAll(0, added);
+    notifyListeners();
+    await _persistGallery();
+    return added;
   }
 
   /// The saved character with this display name, ignoring case — how a foreign

@@ -542,5 +542,80 @@ void main() {
       }
     });
   });
-// APPEND-MARKER
+  group('pictures on a turn', () {
+    /// SillyTavern keeps a turn's pictures in `extra.media`, with the url
+    /// pointing at its own `user/images` folder. An importer that holds the
+    /// archive rewrites those paths into this app's own files first; anything
+    /// still pointing into somebody else's folder is not an attachment.
+    String jsonl(Object header, List<Object> turns) =>
+        [header, ...turns].map(jsonEncode).join('\n');
+
+    test('a resolved reference becomes an attachment', () {
+      final text = jsonl(
+        {'user_name': 'You', 'character_name': 'Mai'},
+        [
+          {
+            'name': 'Mai',
+            'is_user': false,
+            'mes': 'Look.',
+            'extra': {
+              'media': [
+                {'url': 'local:00042.png', 'type': 'image', 'title': 'a shot'},
+              ],
+            },
+          },
+        ],
+      );
+
+      final chat = ChatCodec.parse(text, fileName: 'chat').single;
+
+      expect(chat.conversation.messages.single.images.single.ref,
+          'local:00042.png');
+    });
+
+    test('an unresolved path is dropped rather than stored broken', () {
+      final text = jsonl(
+        {'user_name': 'You', 'character_name': 'Mai'},
+        [
+          {
+            'name': 'Mai',
+            'is_user': false,
+            'mes': 'Look.',
+            'extra': {
+              'image': 'user/images/Mai/00042.png',
+              'image_swipes': ['user/images/Mai/00043.png'],
+            },
+          },
+        ],
+      );
+
+      final chat = ChatCodec.parse(text, fileName: 'chat').single;
+
+      expect(chat.conversation.messages.single.images, isEmpty);
+    });
+
+    test('a turn that is only a picture is still a turn', () {
+      final text = jsonl(
+        {'user_name': 'You', 'character_name': 'Mai'},
+        [
+          {
+            'name': 'You',
+            'is_user': true,
+            'mes': '',
+            'extra': {
+              'media': [
+                {'url': 'local:sent.png', 'type': 'image'},
+              ],
+            },
+          },
+        ],
+      );
+
+      final chat = ChatCodec.parse(text, fileName: 'chat').single;
+
+      expect(chat.conversation.messages.single.images.single.ref,
+          'local:sent.png');
+      expect(chat.conversation.messages.single.content, isEmpty);
+    });
+  });
 }

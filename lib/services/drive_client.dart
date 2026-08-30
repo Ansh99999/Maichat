@@ -324,13 +324,15 @@ class DriveClient {
     }
     return auth.copyWith(folderId: id);
   }
-  /// Uploads [bytes] as [name] into the app's folder. One multipart request:
-  /// the metadata and the archive together, which is the shape Drive documents
-  /// for anything small enough to send in one go.
-  Future<DriveFile> upload({
+  /// Uploads the archive at [file] as [name] into the app's folder.
+  ///
+  /// One multipart request — the metadata and the archive together, which is the
+  /// shape Drive documents — but *streamed* from disk: a backup is far too large
+  /// to hold in memory twice, and the body is built as it goes.
+  Future<DriveFile> uploadFile({
     required DriveAuth auth,
     required String name,
-    required Uint8List bytes,
+    required File file,
   }) async {
     final token = await accessToken(auth);
     const boundary = 'maichat-backup-boundary';
@@ -339,29 +341,47 @@ class DriveClient {
       if (auth.folderId.isNotEmpty) 'parents': <String>[auth.folderId],
       'appProperties': <String, String>{'maichat': 'backup'},
     });
-    final body = BytesBuilder()
-      ..add(utf8.encode('--$boundary\r\n'
-          'Content-Type: application/json; charset=UTF-8\r\n\r\n'
-          '$metadata\r\n'
-          '--$boundary\r\n'
-          'Content-Type: application/zip\r\n\r\n'))
-      ..add(bytes)
-      ..add(utf8.encode('\r\n--$boundary--\r\n'));
+    final head = utf8.encode('--$boundary\r\n'
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n'
+        '$metadata\r\n'
+        '--$boundary\r\n'
+        'Content-Type: application/zip\r\n\r\n');
+    final tail = utf8.encode('\r\n--$boundary--\r\n');
+    final length = head.length + await file.length() + tail.length;
 
-    final uri = Uri.parse(endpoints.upload).replace(
-      queryParameters: <String, String>{
-        'uploadType': 'multipart',
-        'fields': 'id,name,size,createdTime',
-      },
-    );
-    final response = await _http.post(
-      uri,
-      headers: <String, String>{
-        'Authorization': 'Bearer $token',
-        'Content-Type': 'multipart/related; boundary=$boundary',
-      },
-      body: body.takeBytes(),
-    );
+    final request = http.StreamedRequest(
+      'POST',
+      Uri.parse(endpoints.upload).replace(
+        queryParameters: <String, String>{
+          'uploadType': 'multipart',
+          'fields': 'id,name,size,createdTime',
+        },
+      ),
+    )
+      ..headers['Authorization'] = 'Bearer $token'
+      ..headers['Content-Type'] = 'multipart/related; boundary=$boundary'
+      ..contentLength = length;
+
+    // The body is fed while the response is awaited; a read error closes the
+    // sink so the request fails rather than hanging.
+    unawaited(() async {
+      try {
+        request.sink.add(head);
+        await file.openRead().forEach(request.sink.add);
+        request.sink.add(tail);
+      } catch (error) {
+        request.sink.addError(error);
+      } finally {
+        await request.sink.close();
+      }
+    }());
+
+    final http.Response response;
+    try {
+      response = await http.Response.fromStream(await _http.send(request));
+    } catch (error) {
+      throw DriveException('The upload did not finish ($error).');
+    }
     return DriveFile.fromJson(_json(response, 'upload the backup'));
   }
 
@@ -387,7 +407,46 @@ class DriveClient {
         .toList();
   }
 
-  /// Reads one backup back out of Drive.
+  /// Reads one backup back out of Drive, straight into [file] — streamed, for
+  /// the same reason the upload is.
+  Future<void> downloadToFile(
+    DriveAuth auth,
+    String fileId,
+    File file,
+  ) async {
+    final token = await accessToken(auth);
+    final request = http.Request(
+      'GET',
+      Uri.parse('${endpoints.files}/$fileId').replace(
+        queryParameters: <String, String>{'alt': 'media'},
+      ),
+    )..headers['Authorization'] = 'Bearer $token';
+    final http.StreamedResponse response;
+    try {
+      response = await _http.send(request);
+    } catch (error) {
+      throw DriveException('Could not reach Google Drive ($error).');
+    }
+    if (response.statusCode >= 400) {
+      throw DriveException(
+        _failure(
+          await http.Response.fromStream(response),
+          'download the backup',
+        ),
+      );
+    }
+    final parent = file.parent;
+    if (!parent.existsSync()) parent.createSync(recursive: true);
+    final sink = file.openWrite();
+    try {
+      await response.stream.pipe(sink);
+    } finally {
+      await sink.close();
+    }
+  }
+
+  /// Reads one backup back out of Drive into memory. Only for a caller that has
+  /// nowhere to put a file.
   Future<Uint8List> download(DriveAuth auth, String fileId) async {
     final token = await accessToken(auth);
     final response = await _http.get(

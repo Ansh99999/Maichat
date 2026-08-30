@@ -21,9 +21,10 @@
 library;
 
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 
-import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/backup.dart';
 
@@ -140,30 +141,34 @@ class StoreEntry {
     return StoreEntry.of(json);
   }
 }
-/// Everything a backup carries, in memory: the store, the pictures and the
-/// vector collections. [encodeBackup] turns one into an archive and
-/// [decodeBackup] reads one back.
-class BackupSnapshot {
-  BackupSnapshot({
+/// What is about to be written into a backup: the store, and the *files* that go
+/// with it — as files, not as bytes.
+///
+/// That distinction is the whole point of this class. A pictures directory runs
+/// to hundreds of megabytes, and this is a phone app: holding every picture in
+/// memory to build an archive is not slow, it is fatal — Android kills the
+/// process. The plan names the files and [writeBackupFile] streams each one
+/// through the encoder in turn, so the peak cost is one picture, not all of them.
+class BackupPlan {
+  BackupPlan({
     required this.store,
-    this.pictures = const <String, Uint8List>{},
-    this.vectors = const <String, String>{},
+    this.pictures = const <File>[],
+    this.vectors = const <File>[],
     required this.createdAt,
     this.appVersion = '',
     this.includesKeys = true,
-    this.formatVersion = kBackupFormatVersion,
   });
 
   /// Every store entry the backup holds, by its `shared_preferences` key.
   final Map<String, StoreEntry> store;
 
-  /// Picture files by name, exactly as they sit in the pictures directory. The
-  /// names matter: a `local:<name>` reference in a chat resolves by name, so
-  /// restoring under the same names is what puts a picture back in its message.
-  final Map<String, Uint8List> pictures;
+  /// The picture files, which keep their names: a `local:<name>` reference in a
+  /// chat resolves by name, so restoring under the same name is what puts a
+  /// picture back into the message that carried it.
+  final List<File> pictures;
 
-  /// Vector collection files by name (`chat-<id>.json`, `doc-<id>.json`, …).
-  final Map<String, String> vectors;
+  /// The vector collection files (`chat-<id>.json`, `doc-<id>.json`, …).
+  final List<File> vectors;
 
   final DateTime createdAt;
   final String appVersion;
@@ -171,10 +176,71 @@ class BackupSnapshot {
   /// Whether provider API keys are in here in plain text.
   final bool includesKeys;
 
-  final int formatVersion;
-
   BackupCounts get counts =>
       countStore(store, pictures: pictures.length, vectors: vectors.length);
+
+  /// The manifest document: the header, the counts, the store itself, and the
+  /// names of the files packed beside it.
+  ///
+  /// Compact JSON on purpose — the conversations entry alone can be megabytes,
+  /// and the archive is deflated anyway, so pretty-printing would buy nothing
+  /// but encoding time.
+  Map<String, dynamic> get manifest => <String, dynamic>{
+        'kind': kBackupKind,
+        'formatVersion': kBackupFormatVersion,
+        'createdAt': createdAt.toIso8601String(),
+        if (appVersion.isNotEmpty) 'appVersion': appVersion,
+        'includesKeys': includesKeys,
+        'counts': counts.toJson(),
+        'store': {
+          for (final entry in store.entries) entry.key: entry.value.toJson(),
+        },
+        'pictures': pictures.map(_fileName).toList(),
+        'vectors': vectors.map(_fileName).toList(),
+      };
+}
+
+String _fileName(File file) => file.uri.pathSegments.last;
+
+/// Writes [plan] to [path] as the zip a user takes away, streaming every file
+/// straight from disk.
+///
+/// Pictures are stored rather than deflated: a PNG or a JPEG is already
+/// compressed, so deflating it again costs seconds of CPU on a phone and saves
+/// nothing. The manifest and the vectors — plain text, and highly compressible —
+/// are deflated as usual.
+Future<void> writeBackupFile(BackupPlan plan, String path) async {
+  final encoder = ZipFileEncoder();
+  encoder.create(path);
+  try {
+    encoder.addArchiveFile(
+      ArchiveFile.string(kBackupManifestName, jsonEncode(plan.manifest)),
+    );
+    for (final file in plan.pictures) {
+      await _addStored(encoder, file, '$kBackupPictureFolder/${_fileName(file)}');
+    }
+    for (final file in plan.vectors) {
+      await encoder.addFile(file, '$kBackupVectorFolder/${_fileName(file)}');
+    }
+  } finally {
+    await encoder.close();
+  }
+}
+
+/// Adds [file] under [name] without recompressing it, reading it as a stream.
+Future<void> _addStored(
+  ZipFileEncoder encoder,
+  File file,
+  String name,
+) async {
+  final stream = InputFileStream(file.path);
+  try {
+    encoder.addArchiveFile(
+      ArchiveFile.stream(name, stream)..compression = CompressionType.none,
+    );
+  } finally {
+    await stream.close();
+  }
 }
 
 /// Counts what a store holds, for the record kept beside a backup and for the
@@ -212,50 +278,9 @@ BackupCounts countStore(
     vectors: vectors,
   );
 }
-/// The manifest document on its own — the whole backup when there are no files
-/// to carry, and the first entry of the zip when there are.
-Map<String, dynamic> backupManifest(BackupSnapshot snapshot) => {
-      'kind': kBackupKind,
-      'formatVersion': kBackupFormatVersion,
-      'createdAt': snapshot.createdAt.toIso8601String(),
-      if (snapshot.appVersion.isNotEmpty) 'appVersion': snapshot.appVersion,
-      'includesKeys': snapshot.includesKeys,
-      'counts': snapshot.counts.toJson(),
-      'store': {
-        for (final entry in snapshot.store.entries)
-          entry.key: entry.value.toJson(),
-      },
-      'pictures': snapshot.pictures.keys.toList(),
-      'vectors': snapshot.vectors.keys.toList(),
-    };
-
-/// Packs [snapshot] into the zip a user takes away. Compact JSON on purpose:
-/// the conversations entry alone can be megabytes, and the archive is deflated
-/// anyway, so pretty-printing would buy nothing but encoding time.
-Uint8List encodeBackup(BackupSnapshot snapshot) {
-  final archive = Archive();
-  archive.add(ArchiveFile.string(
-    kBackupManifestName,
-    jsonEncode(backupManifest(snapshot)),
-  ));
-  for (final picture in snapshot.pictures.entries) {
-    archive.add(ArchiveFile.bytes(
-      '$kBackupPictureFolder/${picture.key}',
-      picture.value,
-    ));
-  }
-  for (final vector in snapshot.vectors.entries) {
-    archive.add(ArchiveFile.string(
-      '$kBackupVectorFolder/${vector.key}',
-      vector.value,
-    ));
-  }
-  return ZipEncoder().encodeBytes(archive);
-}
-
 /// Whether [bytes] begins with a zip's local-file header.
 bool looksLikeZip(Uint8List bytes) =>
-    bytes.length > 4 &&
+    bytes.length >= 4 &&
     bytes[0] == 0x50 &&
     bytes[1] == 0x4B &&
     (bytes[2] == 0x03 || bytes[2] == 0x05 || bytes[2] == 0x07);
@@ -294,51 +319,165 @@ ArchiveFile? _manifestEntry(Archive archive) {
   }
   return null;
 }
-/// Reads an archive (or a bare manifest) back into a [BackupSnapshot]. Throws
-/// [BackupFormatException] with a sentence worth showing when it is not ours.
-BackupSnapshot decodeBackup(Uint8List bytes) {
-  if (bytes.isEmpty) {
-    throw const BackupFormatException('That file is empty.');
+/// A backup being read, one entry at a time.
+///
+/// Opened from a *path* wherever possible: only the manifest is inflated when it
+/// opens, and [extractFiles] streams each picture straight to disk. Reading a
+/// whole archive into memory to restore it is what made a large import kill the
+/// app — this class exists so that path no longer exists.
+class BackupArchive {
+  /// The archive and its file handle come first and positionally: a named
+  /// parameter cannot be private in Dart, and nothing outside this file may
+  /// touch the entries directly.
+  BackupArchive._(
+    this._archive,
+    this._input, {
+    required this.store,
+    required this.createdAt,
+    required this.appVersion,
+    required this.includesKeys,
+    required this.formatVersion,
+    required this.pictureNames,
+    required this.vectorNames,
+  });
+
+  /// Every store entry the backup holds.
+  final Map<String, StoreEntry> store;
+  final DateTime createdAt;
+  final String appVersion;
+
+  /// Whether provider API keys are in here in plain text.
+  final bool includesKeys;
+  final int formatVersion;
+
+  /// What the manifest says is packed alongside — used for the counts before a
+  /// single picture has been touched.
+  final List<String> pictureNames;
+  final List<String> vectorNames;
+
+  final Archive? _archive;
+  final InputFileStream? _input;
+
+  BackupCounts get counts => countStore(
+        store,
+        pictures: pictureNames.length,
+        vectors: vectorNames.length,
+      );
+
+  /// Opens the backup at [path]. Throws [BackupFormatException] when it is not
+  /// one of ours — which is also how the importer tells a MaiChat backup from
+  /// somebody else's file.
+  static BackupArchive openFile(String path) {
+    final file = File(path);
+    if (!file.existsSync()) {
+      throw const BackupFormatException('That file is no longer there.');
+    }
+    final head = file.openSync();
+    Uint8List start;
+    try {
+      start = head.readSync(4);
+    } finally {
+      head.closeSync();
+    }
+    if (!looksLikeZip(start)) {
+      // A bare manifest: no files to stream, and it must be parsed whole anyway.
+      return _fromManifest(_parseManifest(file.readAsBytesSync()));
+    }
+    final input = InputFileStream(path);
+    try {
+      final Archive archive;
+      try {
+        archive = ZipDecoder().decodeStream(input);
+      } catch (error) {
+        throw BackupFormatException(
+          'That archive could not be opened ($error).',
+        );
+      }
+      return _read(archive, input: input);
+    } catch (_) {
+      input.closeSync();
+      rethrow;
+    }
   }
-  if (!looksLikeZip(bytes)) {
-    return _fromManifest(_parseManifest(bytes));
+
+  /// The same for bytes in hand — a small file, or a platform that would not
+  /// give a path.
+  static BackupArchive openBytes(Uint8List bytes) {
+    if (bytes.isEmpty) {
+      throw const BackupFormatException('That file is empty.');
+    }
+    if (!looksLikeZip(bytes)) return _fromManifest(_parseManifest(bytes));
+    final Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes);
+    } catch (error) {
+      throw BackupFormatException('That archive could not be opened ($error).');
+    }
+    return _read(archive);
   }
-  Archive archive;
-  try {
-    archive = ZipDecoder().decodeBytes(bytes);
-  } catch (error) {
-    throw BackupFormatException('That archive could not be opened ($error).');
-  }
-  final manifest = _manifestEntry(archive);
-  if (manifest == null) {
-    throw const BackupFormatException(
-      'That zip has no $kBackupManifestName in it, so it is not a MaiChat '
-      'backup.',
+
+  static BackupArchive _read(Archive archive, {InputFileStream? input}) {
+    final manifest = _manifestEntry(archive);
+    if (manifest == null) {
+      throw const BackupFormatException(
+        'That zip has no $kBackupManifestName in it, so it is not a MaiChat '
+        'backup.',
+      );
+    }
+    return _fromManifest(
+      _parseManifest(manifest.readBytes() ?? Uint8List(0)),
+      archive: archive,
+      input: input,
     );
   }
-  final pictures = <String, Uint8List>{};
-  final vectors = <String, String>{};
-  for (final file in archive.files) {
-    if (!file.isFile) continue;
-    final name = _safeEntryName(file.name, kBackupPictureFolder);
-    if (name != null) {
-      final data = file.readBytes();
-      if (data != null && data.isNotEmpty) pictures[name] = data;
-      continue;
-    }
-    final vector = _safeEntryName(file.name, kBackupVectorFolder);
-    if (vector != null) {
-      final data = file.readBytes();
-      if (data != null && data.isNotEmpty) {
-        vectors[vector] = utf8.decode(data, allowMalformed: true);
+
+  /// Writes the pictures and the vectors back into the directories they came
+  /// from, one entry at a time, under their original names. Returns how many
+  /// files were written.
+  Future<int> extractFiles({Directory? pictures, Directory? vectors}) async {
+    final archive = _archive;
+    if (archive == null) return 0;
+    var written = 0;
+    for (final entry in archive.files) {
+      if (!entry.isFile) continue;
+      var name = _safeEntryName(entry.name, kBackupPictureFolder);
+      var target = pictures;
+      if (name == null) {
+        name = _safeEntryName(entry.name, kBackupVectorFolder);
+        target = vectors;
+      }
+      if (name == null || target == null) continue;
+      try {
+        if (!target.existsSync()) target.createSync(recursive: true);
+        final out = OutputFileStream('${target.path}/$name');
+        try {
+          entry.writeContent(out);
+          written++;
+        } finally {
+          await out.close();
+        }
+      } catch (error) {
+        // One picture that will not write must not cost the user the restore.
+        debugPrint('MaiChat: could not restore $name ($error)');
       }
     }
+    return written;
   }
-  return _fromManifest(
-    _parseManifest(manifest.readBytes() ?? Uint8List(0)),
-    pictures: pictures,
-    vectors: vectors,
-  );
+
+  void close() => _input?.closeSync();
+}
+
+/// Whether the file at [path] is a MaiChat backup. Never throws.
+bool looksLikeOurBackupFile(String path) {
+  BackupArchive? archive;
+  try {
+    archive = BackupArchive.openFile(path);
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    archive?.close();
+  }
 }
 
 /// The entry's bare file name when it sits directly inside [folder], else null.
@@ -380,10 +519,10 @@ Map<String, dynamic> _parseManifest(Uint8List bytes) {
   }
   return json;
 }
-BackupSnapshot _fromManifest(
+BackupArchive _fromManifest(
   Map<String, dynamic> json, {
-  Map<String, Uint8List> pictures = const <String, Uint8List>{},
-  Map<String, String> vectors = const <String, String>{},
+  Archive? archive,
+  InputFileStream? input,
 }) {
   final rawStore = json['store'];
   if (rawStore is! Map) {
@@ -397,15 +536,24 @@ BackupSnapshot _fromManifest(
     if (kBackupExcludedKeys.contains(key)) continue;
     store[key] = StoreEntry.fromJson(entry.value);
   }
-  return BackupSnapshot(
+  List<String> names(String key) {
+    final list = json[key];
+    return list is List
+        ? list.map((e) => e.toString()).toList()
+        : const <String>[];
+  }
+
+  return BackupArchive._(
+    archive,
+    input,
     store: store,
-    pictures: pictures,
-    vectors: vectors,
-    createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
-        DateTime.now(),
+    createdAt:
+        DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime.now(),
     appVersion: json['appVersion'] as String? ?? '',
     includesKeys: json['includesKeys'] as bool? ?? true,
     formatVersion: (json['formatVersion'] as num?)?.toInt() ?? 0,
+    pictureNames: names('pictures'),
+    vectorNames: names('vectors'),
   );
 }
 
