@@ -70,6 +70,8 @@ class PromptBuilder {
     String docsText = '',
     int memoryDepth = 2,
     String? scenario,
+    String hintText = '',
+    int hintDepth = 0,
   }) {
     final charName = character?.displayName ?? '';
     // The caller may resolve a different window than the preset carries (the
@@ -285,6 +287,28 @@ class PromptBuilder {
       fixedTokens += cost(msg);
     }
 
+    // The response hint: a line of steering the reader typed beside the chat,
+    // aimed at the reply that is about to be written rather than at the record of
+    // the conversation. It rides the same depth-injection path as everything
+    // above — so its tokens are reserved before history fills the budget, and
+    // _oneSystemBlock re-tags it to a user turn once it lands inside the
+    // conversation — with the *lowest* injection order of the lot, which keeps it
+    // last at its depth: closest to the reply it is steering. Macros resolve in
+    // it like they do in a preset block, so `{{char}}` in a hint means what it
+    // says.
+    final hint = macros.evaluate(hintText, ctx).trim();
+    if (hint.isNotEmpty) {
+      final depth = hintDepth < 0 ? 0 : hintDepth;
+      final msg = ChatMessage(role: 'system', content: wrapResponseHint(hint));
+      injections.add(_Injection(
+        depth: depth,
+        order: -100,
+        seq: injections.length,
+        part: _Part('Response hint (depth $depth)', msg),
+      ));
+      fixedTokens += cost(msg);
+    }
+
 
     //
     // A heavy preset frame plus a large character sheet can consume the entire
@@ -360,6 +384,14 @@ class PromptBuilder {
     final total = parts.fold<int>(0, (sum, p) => sum + cost(p.msg));
     return BuiltPrompt(messages, total, sections);
   }
+
+  /// How a response hint reads on the wire. A named tag rather than Agnai's bare
+  /// `(Hint: …)`: this app talks to chat-completion hosts, where the hint is a
+  /// message of its own and the tag is what tells the model that the line is
+  /// direction for the coming reply rather than something a speaker said. The one
+  /// place the wording lives, so the builder and the no-preset path agree.
+  static String wrapResponseHint(String text) =>
+      '<response_hint>\n${text.trim()}\n</response_hint>';
 
   /// Whether the preset (or the character fields that override its main/jailbreak
   /// blocks) already references {{summary}} — in which case the macro places the

@@ -85,6 +85,17 @@ unaffected. Two related traps in the same tests: a progress spinner means
 `pumpAndSettle` never settles, and a drag started at the left edge of the chat is
 eaten by the drawer's edge-swipe region.
 
+Two more traps found writing the response-hint and delete tests. **Never
+`await state.send(...)` inside a `testWidgets` body before pumping** — a reply's
+paint-cadence timer only fires when the fake clock is advanced by a `pump`, so the
+await never returns and the test hangs for its full timeout with no failure; seed
+`state.active.messages` directly instead (as `test/turn_actions_ui_test.dart`
+does). And **a long press on a message's text never reaches the bubble's action
+sheet**: the body is a `SelectableText.rich`, whose own long-press recognizer wins
+the arena and opens the text-selection toolbar (which also has a "Copy", so a test
+looking for one is easily fooled). Drive that sheet's actions through the action
+bar or the overflow menu.
+
 ## Critical invariants — do not regress these
 
 - **Exactly one leading `system` message on the wire.** The request must contain
@@ -256,7 +267,25 @@ eaten by the drawer's edge-swipe region.
 - **Chat UI:** `screens/chat_screen.dart`, `widgets/message_bubble.dart`
   (swipes/variants, per-message action bar, name placement, attachments),
   `widgets/thinking_block.dart`, per-chat settings screen,
-  `screens/prompt_view_screen.dart` (View prompt inspector).
+  `screens/prompt_view_screen.dart` (View prompt inspector). Deleting a turn
+  always asks first, and a turn with replies after it offers both deletes —
+  `_ChatScreenState._deleteMessage` is the one dialog behind every route to it
+  (the inline symbol, the overflow menu, the long-press sheet), over
+  `AppState.deleteMessage` / `deleteMessagesFrom`.
+- **Response hint:** a line of steering typed beside a chat and injected into
+  every send until it is erased (Agnai's own hint, plus a depth). Switched on
+  app-wide in Chat Interface (`ChatInterface.responseHintEnabled` /
+  `responseHintDepth`, read from the app-wide interface like `groupChatsEnabled`,
+  never from a per-chat copy); the text is per chat in its own `responseHints`
+  store entry, resolved only through `AppState.activeResponseHint`. It reaches
+  the wire as a depth injection with the *lowest* injection order, so it lands
+  last at its depth — closest to the reply it is steering — wrapped by
+  `PromptBuilder.wrapResponseHint` and re-tagged to a `user` turn by
+  `_oneSystemBlock` like every other in-chat block. The no-preset path in
+  `AppState._assemble` places it by hand, because there is no builder there to do
+  it. The composer keeps the text in its own controller and only writes it to the
+  store on close/send/leaving the chat — a prefs write per keystroke is a file
+  rewrite per keystroke.
 - **Pictures in a chat (sending):** `models/message_image.dart` — a turn's
   `ChatMessage.images` hold a `local:`/URL ref plus a mime; the base64 only exists
   on the copy `AppState._wireImages` builds, capped at `kMaxWireImages` newest.

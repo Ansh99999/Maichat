@@ -376,6 +376,9 @@ class AppState extends ChangeNotifier {
     _summaryFolds
       ..clear()
       ..addAll(await _storage.loadSummaryFolds());
+    _responseHints
+      ..clear()
+      ..addAll(await _storage.loadResponseHints());
     _gallery
       ..clear()
       ..addAll(await _storage.loadGallery());
@@ -414,6 +417,9 @@ class AppState extends ChangeNotifier {
     // Folds are a view preference held apart from the conversations blob, so
     // they are laid back over the summaries once those are in memory.
     _applySummaryFolds();
+    // Hints are held apart from the conversations blob too; drop any belonging to
+    // a chat that is no longer here.
+    _pruneResponseHints();
     _activeId = await _storage.loadActiveId();
     // The persona new chats default to. A card the user deleted between runs
     // leaves a dangling id, which would resolve to nobody — drop it so the
@@ -2968,6 +2974,84 @@ class AppState extends ChangeNotifier {
           if (c.summary != null) c,
       ];
 
+  // --- Response hint --------------------------------------------------------
+  //
+  // A hint is guidance for the reply about to be written, not part of the
+  // transcript: it is typed beside the conversation, injected into every send
+  // for as long as it is there, and never cleared by sending — the reader erases
+  // it themselves, which is the behaviour Agnai's own response hint has.
+  //
+  // Held per chat in its own tiny store entry rather than on the conversation:
+  // see [Storage.loadResponseHints] for why a dozen words must not re-encode
+  // every message of every chat.
+
+  final Map<String, String> _responseHints = <String, String>{};
+
+  /// Whether the composer offers a response hint at all. Read from the app-wide
+  /// interface, as [groupChatsEnabled] is.
+  bool get responseHintEnabled => _chatInterface.responseHintEnabled;
+
+  /// How far from the newest end of the conversation a hint is injected, in
+  /// messages. App-wide, and clamped here so a hand-edited store cannot place a
+  /// hint somewhere the builder has to guess about.
+  int get responseHintDepth => _chatInterface.responseHintDepth
+      .clamp(kMinResponseHintDepth, kMaxResponseHintDepth);
+
+  /// The hint typed for [conversationId], or '' when it has none. Whether it is
+  /// switched on is a separate question — see [activeResponseHint].
+  String responseHint(String conversationId) =>
+      _responseHints[conversationId] ?? '';
+
+  /// The hint that actually reaches the model for [conversation]: empty unless
+  /// the feature is on *and* something has been typed. The single place those two
+  /// halves are put together, so assembly, the prompt inspectors and the composer
+  /// cannot disagree about whether a hint is live.
+  String activeResponseHint(Conversation conversation) =>
+      responseHintEnabled ? responseHint(conversation.id).trim() : '';
+
+  /// Records [text] as [conversationId]'s hint, in memory.
+  ///
+  /// Deliberately no disk write and no [notifyListeners]: this is called as the
+  /// hint is typed, and a prefs write per keystroke is a file rewrite per
+  /// keystroke. The composer owns the text while its box is open and calls
+  /// [saveResponseHints] where losing it would matter (closing the box, sending,
+  /// leaving the chat); assembly reads this map directly, so a hint steers the
+  /// very next send whether or not it has reached disk yet.
+  void setResponseHint(String conversationId, String text) {
+    if (text.trim().isEmpty) {
+      if (_responseHints.remove(conversationId) != null) _hintsDirty = true;
+      return;
+    }
+    if (_responseHints[conversationId] == text) return;
+    _responseHints[conversationId] = text;
+    _hintsDirty = true;
+  }
+
+  /// Whether [_responseHints] has changed since it was last written.
+  bool _hintsDirty = false;
+
+  /// Writes the hints out, when there is anything new to write.
+  Future<void> saveResponseHints() async {
+    if (!_hintsDirty) return;
+    _hintsDirty = false;
+    if (!_writable) return;
+    await _storage.saveResponseHints(_responseHints);
+  }
+
+  /// Forgets hints for chats that are no longer here — a deleted thread, or a
+  /// store restored from a snapshot taken before those chats existed.
+  void _pruneResponseHints() {
+    var stale = false;
+    for (final id in _responseHints.keys.toList()) {
+      if (_conversationById(id) != null) continue;
+      _responseHints.remove(id);
+      stale = true;
+    }
+    if (!stale) return;
+    _hintsDirty = true;
+    unawaited(saveResponseHints());
+  }
+
   // --- Image generation -----------------------------------------------------
   //
   // The studio is deliberately independent of the chat provider list: every chat
@@ -3642,6 +3726,11 @@ class AppState extends ChangeNotifier {
     if (id == active.id && _streaming) stop();
     _conversations.removeWhere((c) => c.id == id);
     if (_activeId == id) _activeId = null;
+    // The chat is gone, so its response hint has nothing left to steer.
+    if (_responseHints.remove(id) != null) {
+      _hintsDirty = true;
+      unawaited(saveResponseHints());
+    }
     notifyListeners();
     await _saveConversations();
   }
@@ -4346,6 +4435,29 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
+  /// Removes the message at [index] **and everything after it** — "delete from
+  /// here on", the other half of the delete confirmation.
+  ///
+  /// Deleting a turn from the middle of a conversation usually means undoing a
+  /// direction the chat took, and the replies that answered it are part of that
+  /// direction: taking out the turn alone leaves the answers to it still sitting
+  /// there, which is what Agnai's "delete the last N messages" avoids. Which of
+  /// the two the reader wants is theirs to say, so both exist.
+  ///
+  /// Guarded exactly as [deleteMessage] is, and a no-op when nothing follows —
+  /// use [deleteMessage] for the tail, so a single-turn delete goes through one
+  /// code path.
+  Future<void> deleteMessagesFrom(String conversationId, int index) async {
+    final conversation = _conversationById(conversationId);
+    if (conversation == null) return;
+    if (_streaming && _activeOrNull()?.id == conversation.id) return;
+    if (index < 0 || index >= conversation.messages.length) return;
+    conversation.messages.removeRange(index, conversation.messages.length);
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
+  }
+
   /// Copies messages [0..index] (inclusive) into a NEW thread, makes it active,
   /// and returns its id — the "branch from here" action. Messages are
   /// deep-copied so the branch and its source diverge independently.
@@ -4377,6 +4489,15 @@ class AppState extends ChangeNotifier {
     // points at the branch it came from, not the original root).
     fork.parentId = source.id;
     fork.forkIndex = end;
+    // A branch carries on from here, so it carries the steering too: the hint the
+    // source chat is running under is copied onto it rather than silently lost at
+    // the split.
+    final hint = _responseHints[source.id];
+    if (hint != null) {
+      _responseHints[fork.id] = hint;
+      _hintsDirty = true;
+      unawaited(saveResponseHints());
+    }
     _conversations.insert(0, fork);
     _activeId = fork.id;
     notifyListeners();
@@ -4759,6 +4880,11 @@ class AppState extends ChangeNotifier {
     final memoryText = _memoryInjection[conversation.id] ?? '';
     final docsText = _docInjection[conversation.id] ?? '';
 
+    // The response hint, when the feature is on and this chat has one typed.
+    // Empty otherwise, so nothing about the payload changes for a chat that is
+    // not using one.
+    final hintText = activeResponseHint(conversation);
+
     // Leading system turns injected by AppState (ahead of the built prompt),
     // each surfaced as its own breakdown section.
     final prefix = <ChatMessage>[];
@@ -4830,6 +4956,8 @@ class AppState extends ChangeNotifier {
         docsText: docsText,
         memoryDepth: _embeddingConfig.depth,
         scenario: scenario,
+        hintText: hintText,
+        hintDepth: responseHintDepth,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently
@@ -4930,13 +5058,37 @@ class AppState extends ChangeNotifier {
       // leading blocks too rather than being retrieved and then discarded.
       addPrefix('Recalled memory', memoryText);
       addPrefix('Related documents', docsText);
-      messages = <ChatMessage>[...prefix, ...history];
+      // The hint is the exception: it is *about* where it sits, so it is placed by
+      // hand at the same depth the builder would have used. Depth d means "d
+      // messages follow it", and it goes out as a `user` turn because a block that
+      // lands after the leading system message must not be `system` — the same
+      // rule PromptBuilder._oneSystemBlock enforces on the preset path.
+      final withHint = <ChatMessage>[...history];
+      ChatMessage? hintMessage;
+      if (hintText.isNotEmpty) {
+        hintMessage = ChatMessage(
+          role: 'user',
+          content: PromptBuilder.wrapResponseHint(hintText),
+        );
+        final at = (withHint.length - responseHintDepth)
+            .clamp(0, withHint.length);
+        withHint.insert(at, hintMessage);
+      }
+      messages = <ChatMessage>[...prefix, ...withHint];
       if (history.isNotEmpty) {
         sections.add(PromptSection(
           label: 'Chat history',
           role: 'mixed',
           tokens: history.fold<int>(0, (s, m) => s + _cost(m)),
           messageCount: history.length,
+        ));
+      }
+      if (hintMessage != null) {
+        sections.add(PromptSection(
+          label: 'Response hint (depth $responseHintDepth)',
+          role: hintMessage.role,
+          tokens: _cost(hintMessage),
+          messageCount: 1,
         ));
       }
     }

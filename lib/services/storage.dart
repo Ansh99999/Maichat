@@ -60,6 +60,7 @@ class Storage {
   static const _viewPrefsKey = 'viewPrefs';
   static const _imageGenKey = 'imageGen';
   static const _summaryFoldsKey = 'summaryFolds';
+  static const _responseHintsKey = 'responseHints';
   static const _backupPrefsKey = 'backupPrefs';
   static const _backupsKey = 'backups';
 
@@ -366,6 +367,40 @@ class Storage {
       _summaryFoldsKey,
       jsonEncode(folds.map((id, ids) => MapEntry(id, ids.toList()))),
     );
+  }
+
+  /// Each chat's response hint, as `{conversationId: hint}`.
+  ///
+  /// Its own small entry for the same reason the folds above are: a hint is
+  /// re-typed a character at a time, and putting it on the conversation would
+  /// re-encode every message of every chat to record a dozen words.
+  Future<Map<String, String>> loadResponseHints() async {
+    final raw = (await _prefs).getString(_responseHintsKey);
+    if (raw == null) return <String, String>{};
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map) {
+        final out = <String, String>{};
+        for (final entry in json.entries) {
+          final text = entry.value;
+          if (text is! String || text.trim().isEmpty) continue;
+          out[entry.key.toString()] = text;
+        }
+        return out;
+      }
+    } catch (_) {
+      // An unreadable entry just means no chat has a hint.
+    }
+    return <String, String>{};
+  }
+
+  Future<void> saveResponseHints(Map<String, String> hints) async {
+    final prefs = await _prefs;
+    if (hints.isEmpty) {
+      await prefs.remove(_responseHintsKey);
+      return;
+    }
+    await prefs.setString(_responseHintsKey, jsonEncode(hints));
   }
 
   /// The pictures the user keeps in the app's gallery — the records only; the

@@ -102,6 +102,28 @@ class _ChatScreenState extends State<ChatScreen> {
   /// from the operations strip's picture symbol.
   bool _showAttachBar = false;
 
+  /// Whether the response-hint box is showing above the operations strip. Its ✕
+  /// only *closes* it: the hint itself stays, and stays in force, until the
+  /// reader erases it — see [_hint].
+  bool _showHintBar = false;
+
+  /// The response hint for the chat on screen, held here while the box is open so
+  /// typing into it costs nothing but a rebuild of the box. Loaded from
+  /// [AppState.responseHint] when the chat changes and pushed back on every
+  /// change; written to disk only at the points where it could be lost (see
+  /// [_saveHint]).
+  final TextEditingController _hint = TextEditingController();
+
+  /// Which chat [_hint] was loaded for, so switching chats swaps the hint over
+  /// rather than carrying one thread's steering into another.
+  String? _hintConvId;
+
+  /// Whether a hint is currently in force — drives the lit symbol in the strip,
+  /// which is the only sign a *closed* box leaves that the next reply is being
+  /// steered. Kept as state rather than read off [_hint] in build, so the symbol
+  /// can update without a listener rebuilding the whole screen per keystroke.
+  bool _hintActive = false;
+
   /// Pictures already chosen for the next send, in the order they were picked.
   final List<MessageImage> _attachments = <MessageImage>[];
 
@@ -146,10 +168,48 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _scroll.removeListener(_onScroll);
+    // Leaving the chat is one of the points a hint must survive; the box may well
+    // still be open with something typed in it.
+    _flushHint();
+    _hint.dispose();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
   }
+
+  /// Reads [conversationId]'s hint into the box, when it is not already the one
+  /// showing. Called from build, so it only touches the controller and the two
+  /// fields that track it — never [setState].
+  void _adoptHint(AppState state, String conversationId) {
+    if (_hintConvId == conversationId) return;
+    _hintConvId = conversationId;
+    final text = state.responseHint(conversationId);
+    _hint.text = text;
+    _hintActive = text.trim().isNotEmpty;
+  }
+
+  /// Records what has been typed and, when the box has just become (or stopped
+  /// being) empty, relights the strip's symbol.
+  void _onHintChanged(AppState state, String text) {
+    final id = _hintConvId;
+    if (id == null) return;
+    state.setResponseHint(id, text);
+    final active = text.trim().isNotEmpty;
+    if (active != _hintActive) setState(() => _hintActive = active);
+  }
+
+  /// Writes the hint out. Called where losing it would matter — closing the box,
+  /// sending, and leaving the chat — rather than on every keystroke, which would
+  /// be a preferences write per character typed.
+  void _flushHint() => _persistHints?.call();
+
+  /// [AppState.saveResponseHints], bound during build.
+  ///
+  /// Held as a closure so [dispose] can write the hint out without reaching for
+  /// the provider — by then this element is on its way out of the tree and a
+  /// lookup is no longer allowed. The state outlives the screen, so the bound
+  /// method stays good.
+  Future<void> Function()? _persistHints;
 
   /// Shows or hides the jump-to-latest button as the thread is scrolled, and
   /// tracks whether the reader is at the bottom (so streaming keeps following)
@@ -191,6 +251,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _attachments.clear();
       _showAttachBar = false;
     });
+    // Sending never clears the hint — it goes out with this reply and stays for
+    // the next — but it is a good moment to make sure it has reached disk.
+    _flushHint();
     _stickToLatest();
     await state.send(text, images: images);
     _stickToLatest();
@@ -473,6 +536,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     final conversation = state.active;
+    // The hint belongs to the chat on screen, and [dispose] needs a way to write
+    // it out; both are settled here, before anything draws.
+    _persistHints = state.saveResponseHints;
+    _adoptHint(state, conversation.id);
     // Follow new content, but only for a reader who is already at the bottom.
     // Someone scrolled up to re-read stays put; a turn that arrives while they
     // are away bumps the unread badge on the jump-to-latest button instead of
@@ -799,7 +866,7 @@ class _ChatScreenState extends State<ChatScreen> {
       case MessageAction.edit:
         setState(() => _editingIndex = index);
       case MessageAction.delete:
-        state.deleteMessage(conversation.id, index);
+        _deleteMessage(state, conversation, index);
       case MessageAction.copy:
         Clipboard.setData(
             ClipboardData(text: conversation.messages[index].content));
@@ -815,9 +882,74 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Confirms a message delete, and — when there are turns after it — asks which
+  /// of the two deletes was meant.
+  ///
+  /// A turn is never removed on one tap: a mistap on a bar of small symbols used
+  /// to take a message out of the transcript with nothing to undo it. And a turn
+  /// from the middle of a conversation is rarely wanted on its own — deleting it
+  /// usually means undoing the direction the chat took, of which the replies that
+  /// answered it are part. So the dialog offers both, the way Agnai's does:
+  /// "Delete one" beside "delete the last N", with the sweeping one marked as the
+  /// destructive choice. The tail of the conversation has nothing to follow it, so
+  /// there it is a plain confirmation.
+  Future<void> _deleteMessage(
+    AppState state,
+    Conversation conversation,
+    int index,
+  ) async {
+    if (index < 0 || index >= conversation.messages.length) return;
+    // Everything from this turn to the end, this one included — the count the
+    // sweeping button offers to remove.
+    final span = conversation.messages.length - index;
+    final scheme = Theme.of(context).colorScheme;
+    final choice = await showDialog<_DeleteScope>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Delete message?'),
+        content: Text(
+          span <= 1
+              ? 'This message will be removed permanently.'
+              : 'There ${span - 1 == 1 ? 'is' : 'are'} ${span - 1} '
+                  '${span - 1 == 1 ? 'message' : 'messages'} after this one. '
+                  'Delete this message on its own, or everything from here to '
+                  'the end of the chat?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(),
+            child: const Text('Cancel'),
+          ),
+          if (span > 1)
+            TextButton(
+              key: const Key('delete-this-only'),
+              onPressed: () =>
+                  Navigator.of(dialog).pop(_DeleteScope.thisMessage),
+              child: const Text('This one only'),
+            ),
+          FilledButton(
+            key: const Key('delete-confirm'),
+            style: FilledButton.styleFrom(
+              backgroundColor: scheme.error,
+              foregroundColor: scheme.onError,
+            ),
+            onPressed: () => Navigator.of(dialog).pop(
+                span > 1 ? _DeleteScope.fromHere : _DeleteScope.thisMessage),
+            child: Text(span > 1 ? 'Delete $span' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null) return;
+    if (choice == _DeleteScope.thisMessage) {
+      await state.deleteMessage(conversation.id, index);
+      return;
+    }
+    await state.deleteMessagesFrom(conversation.id, index);
+  }
+
   Future<void> _forkFrom(
-      AppState state, Conversation conversation, int index) async {
-    await state.forkConversation(conversation.id, index);
+      AppState state, Conversation conversation, int index) async {    await state.forkConversation(conversation.id, index);
     if (!mounted) return;
     // The fork joins this chat's tree rather than becoming a separate row in the
     // lists, so the toast points at where it can be found.
@@ -951,7 +1083,7 @@ class _ChatScreenState extends State<ChatScreen> {
               enabled: !state.streaming,
               onTap: () {
                 Navigator.of(sheet).pop();
-                state.deleteMessage(conversation.id, index);
+                _deleteMessage(state, conversation, index);
               },
             ),
           ],
@@ -991,6 +1123,27 @@ class _ChatScreenState extends State<ChatScreen> {
                     onDevice: () => _attachFromDevice(state),
                     onRemove: (i) => setState(() => _attachments.removeAt(i)),
                     onClose: () => setState(() => _showAttachBar = false),
+                  ),
+          ),
+          // The response-hint box: above the operations strip that opens it, so
+          // the steering for the next reply reads as part of what is about to be
+          // sent rather than as another control. Below the attachment tray for
+          // the same reason the tray is where it is — pictures pile up, and they
+          // grow away from the thumb.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomCenter,
+            child: !(_showHintBar && state.responseHintEnabled)
+                ? const SizedBox(width: double.infinity)
+                : _HintBar(
+                    controller: _hint,
+                    depth: state.responseHintDepth,
+                    onChanged: (text) => _onHintChanged(state, text),
+                    onClose: () {
+                      _flushHint();
+                      setState(() => _showHintBar = false);
+                    },
                   ),
           ),
           // The operations strip: one row of symbols opened by the composer's ⋯
@@ -1057,6 +1210,26 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ),
                               ),
                             ),
+                            // Steering for the next reply. Placed at the left of
+                            // the tools rather than the right: the strip is
+                            // anchored to the ⋯ button, so growing it leftwards
+                            // leaves every symbol that was already here exactly
+                            // where the thumb learned to find it.
+                            if (state.responseHintEnabled)
+                              IconButton(
+                                key: const Key('composer-hint-button'),
+                                tooltip: 'Response hint',
+                                isSelected: _showHintBar,
+                                onPressed: () => setState(() {
+                                  _showHintBar = !_showHintBar;
+                                  if (!_showHintBar) _flushHint();
+                                }),
+                                // Lit when something is typed, so a closed box
+                                // still says the next reply is being steered.
+                                icon: Icon(_hintActive
+                                    ? Icons.tips_and_updates
+                                    : Icons.tips_and_updates_outlined),
+                              ),
                             IconButton(
                               key: const Key('composer-image-button'),
                               tooltip: 'Send a picture',
@@ -1212,6 +1385,15 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 // APPEND-MARKER-2
 
+/// Which delete the reader picked in the confirmation — see [_deleteMessage].
+enum _DeleteScope {
+  /// The one turn they long-pressed, leaving what follows in place.
+  thisMessage,
+
+  /// That turn and every turn after it.
+  fromHere,
+}
+
 /// A bubble already built, and the inputs it was built from.
 ///
 /// A streaming reply repaints the chat about twenty times a second, and every
@@ -1284,9 +1466,111 @@ class _TurnActions extends StatelessWidget {
   }
 }
 
-/// Edits a message in place, right where it sits in the thread — no dialog. A
-/// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
-/// there is room to type.
+/// The composer's response-hint box: a line of steering for the reply that is
+/// about to be written, sitting directly above the operations strip that opens
+/// it.
+///
+/// A strip rather than a dialog, for the reason the attachment tray is one too —
+/// what is about to be sent belongs beside the conversation it is being sent to,
+/// not over it. The ✕ **closes** the box and nothing else: the hint keeps
+/// steering every reply until it is erased, which is how Agnai's own response
+/// hint behaves, so a sheet that looked like a one-off prompt would be a lie
+/// about what it does. The caption says where the hint lands, because that is a
+/// setting made somewhere else entirely.
+class _HintBar extends StatelessWidget {
+  const _HintBar({
+    required this.controller,
+    required this.depth,
+    required this.onChanged,
+    required this.onClose,
+  });
+
+  final TextEditingController controller;
+
+  /// How many messages from the newest end the hint is injected at — the
+  /// app-wide Chat Interface setting, echoed here so the box says what it does.
+  final int depth;
+
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    return Container(
+      key: const Key('hint-box'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 10),
+      decoration: BoxDecoration(
+        // The theme's own raised surface, so the box reads as a control on the
+        // composer it grows out of in either theme.
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tips_and_updates_outlined,
+                  size: 18, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Response hint',
+                  style: theme.textTheme.labelLarge
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+              IconButton(
+                key: const Key('hint-close'),
+                tooltip: 'Close',
+                visualDensity: VisualDensity.compact,
+                color: scheme.onSurfaceVariant,
+                onPressed: onClose,
+                icon: const Icon(Icons.close, size: 20),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextField(
+              key: const Key('hint-field'),
+              controller: controller,
+              onChanged: onChanged,
+              minLines: 1,
+              maxLines: 4,
+              textInputAction: TextInputAction.newline,
+              keyboardType: TextInputType.multiline,
+              decoration: const InputDecoration(
+                hintText: 'Guide the next reply…',
+                isDense: true,
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 2),
+            child: Text(
+              depth == 0
+                  ? 'Sent with every reply, just before it'
+                  : 'Sent with every reply, $depth '
+                      '${depth == 1 ? 'message' : 'messages'} back',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The composer's attachment tray: a strip that rises above the operations strip
 /// showing exactly what is about to be sent — a **tall** band of thumbnails, each
 /// with its own ✕ — over a row carrying the two places a picture can come from.
@@ -1787,6 +2071,9 @@ class _GroupChip extends StatelessWidget {
   }
 }
 
+/// Edits a message in place, right where it sits in the thread — no dialog. A
+/// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
+/// there is room to type.
 class _InlineMessageEditor extends StatefulWidget {  const _InlineMessageEditor({
     super.key,
     required this.initial,

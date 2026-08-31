@@ -351,6 +351,47 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
             onTap: () => _pickGroupBarImage(context, ui, update),
           ),
           const Divider(height: 24),
+          _header(context, 'Response hint'),
+          if (scope == null) ...[
+            SettingHighlight(
+              active: highlight == SettingAnchor.responseHint,
+              child: SwitchListTile(
+                dense: true,
+                value: ui.responseHintEnabled,
+                onChanged: (v) {
+                  update(ui.copyWith(responseHintEnabled: v));
+                  notify(v ? 'Response hints on' : 'Response hints off');
+                },
+                secondary: const Icon(Icons.tips_and_updates_outlined),
+                title: const Text('Enable response hints'),
+                subtitle: const Text('Steer the next reply from the composer, '
+                    'without the note becoming a message'),
+              ),
+            ),
+            if (ui.responseHintEnabled)
+              _SliderRow(
+                icon: Icons.vertical_align_bottom_outlined,
+                label: 'Injection depth',
+                value: ui.responseHintDepth.toDouble(),
+                min: kMinResponseHintDepth.toDouble(),
+                max: kMaxResponseHintDepth.toDouble(),
+                divisions: kMaxResponseHintDepth - kMinResponseHintDepth,
+                suffix: ui.responseHintDepth == 0
+                    ? 'Just before the reply'
+                    : '${ui.responseHintDepth} '
+                        '${ui.responseHintDepth == 1 ? 'message' : 'messages'} '
+                        'back',
+                onChanged: (v) =>
+                    update(ui.copyWith(responseHintDepth: v.round())),
+              ),
+          ] else
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('Response hints are switched on for the whole app, in '
+                  'Settings ▸ Chat Interface. The hint itself is written per '
+                  'chat, in the composer.'),
+            ),
+          const Divider(height: 24),
           _header(context, 'Text wrapping'),
           _TextWrapSection(
             rules: ui.textWrapRules,
@@ -873,6 +914,7 @@ class _SliderRow extends StatelessWidget {
     required this.max,
     required this.suffix,
     required this.onChanged,
+    this.divisions,
   });
 
   final IconData icon;
@@ -882,6 +924,10 @@ class _SliderRow extends StatelessWidget {
   final double max;
   final String suffix;
   final ValueChanged<double> onChanged;
+
+  /// Notches for a setting that is really a whole number (an injection depth is
+  /// a count of messages), so the thumb cannot land between two of them.
+  final int? divisions;
 
   @override
   Widget build(BuildContext context) {
@@ -907,6 +953,7 @@ class _SliderRow extends StatelessWidget {
             value: value.clamp(min, max),
             min: min,
             max: max,
+            divisions: divisions,
             onChanged: onChanged,
           ),
         ],

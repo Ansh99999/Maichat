@@ -43,6 +43,15 @@ const double kMinGroupBarHeight = 44;
 const double kMaxGroupBarHeight = 160;
 const double kDefaultGroupBarHeight = 64;
 
+/// How deep into the conversation a response hint may be injected, counted in
+/// messages from the newest end. 0 puts it after the last turn — right in front
+/// of the reply it is steering, which is where Agnai puts its own hint. The
+/// ceiling is a whole screenful of turns back, past which a hint stops reading
+/// as guidance for *this* reply.
+const int kMinResponseHintDepth = 0;
+const int kMaxResponseHintDepth = 20;
+const int kDefaultResponseHintDepth = 0;
+
 /// Where a sender's name label sits across the message row. The label spans the
 /// whole row, so this aligns it against the *screen*, not against the message it
 /// belongs to: "Right" really means the right edge of the chat.
@@ -640,6 +649,8 @@ class ChatInterface {
     this.groupBarHeight = kDefaultGroupBarHeight,
     this.groupBarColor,
     this.groupBarImage,
+    this.responseHintEnabled = false,
+    this.responseHintDepth = kDefaultResponseHintDepth,
   });
 
   final AvatarStyle botAvatar;
@@ -736,6 +747,22 @@ class ChatInterface {
   /// `local:<file>` reference (or an `http(s)` URL); null draws none.
   final String? groupBarImage;
 
+  /// Whether the composer offers a **response hint**: a line of steering typed
+  /// beside the conversation and injected into the prompt on every send, so a
+  /// reply can be nudged ("she is lying", "keep it short") without that nudge
+  /// becoming a turn in the transcript. Off by default.
+  ///
+  /// Read from the app-wide interface like [groupChatsEnabled] — a per-chat copy
+  /// only inherits whatever it was frozen at, so this behaves as a feature flag
+  /// rather than something a single thread can silently disagree about.
+  final bool responseHintEnabled;
+
+  /// How far from the newest end of the conversation the hint is injected, in
+  /// messages: 0 places it after the last turn, 2 places it two turns back.
+  /// Bounded by [kMinResponseHintDepth]/[kMaxResponseHintDepth]; read from the
+  /// app-wide interface, as [responseHintEnabled] is.
+  final int responseHintDepth;
+
   /// The inline actions, in order.
   List<MessageAction> get inlineActions => [
         for (final p in messageActions)
@@ -784,6 +811,8 @@ class ChatInterface {
     double? groupBarHeight,
     Object? groupBarColor = _unset,
     Object? groupBarImage = _unset,
+    bool? responseHintEnabled,
+    int? responseHintDepth,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -819,6 +848,8 @@ class ChatInterface {
         groupBarImage: identical(groupBarImage, _unset)
             ? this.groupBarImage
             : groupBarImage as String?,
+        responseHintEnabled: responseHintEnabled ?? this.responseHintEnabled,
+        responseHintDepth: responseHintDepth ?? this.responseHintDepth,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -884,6 +915,8 @@ class ChatInterface {
         if (groupBarColor != null) 'groupBarColor': groupBarColor,
         if (groupBarImage != null && groupBarImage!.isNotEmpty)
           'groupBarImage': groupBarImage,
+        'responseHintEnabled': responseHintEnabled,
+        'responseHintDepth': responseHintDepth,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -950,6 +983,10 @@ class ChatInterface {
       groupBarImage: (json['groupBarImage'] as String?)?.trim().isEmpty ?? true
           ? null
           : (json['groupBarImage'] as String).trim(),
+      responseHintEnabled: json['responseHintEnabled'] as bool? ?? false,
+      responseHintDepth: ((json['responseHintDepth'] as num?)?.toInt() ??
+              kDefaultResponseHintDepth)
+          .clamp(kMinResponseHintDepth, kMaxResponseHintDepth),
     );
   }
 
@@ -1023,7 +1060,9 @@ class ChatInterface {
       other.groupChatsEnabled == groupChatsEnabled &&
       other.groupBarHeight == groupBarHeight &&
       other.groupBarColor == groupBarColor &&
-      other.groupBarImage == groupBarImage;
+      other.groupBarImage == groupBarImage &&
+      other.responseHintEnabled == responseHintEnabled &&
+      other.responseHintDepth == responseHintDepth;
 
   @override
   int get hashCode => Object.hash(
@@ -1049,9 +1088,11 @@ class ChatInterface {
         Object.hash(quoteColor, Object.hashAll(textWrapRules)),
         Object.hash(messageActionsEnabled, actionBarPlacement),
         // Folded together because Object.hash caps at 20 arguments: the message
-        // action list plus the group-bar settings share this final slot.
+        // action list, the group-bar settings and the response-hint pair share
+        // this final slot.
         Object.hash(Object.hashAll(messageActions), groupChatsEnabled,
-            groupBarHeight, groupBarColor, groupBarImage),
+            groupBarHeight, groupBarColor, groupBarImage,
+            responseHintEnabled, responseHintDepth),
       );
 }
 

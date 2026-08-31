@@ -301,6 +301,14 @@ const List<_SearchEntry> _searchIndex = [
     builder: _groupChatsPage,
   ),
   _SearchEntry(
+    title: 'Response hint',
+    section: 'Chat Interface',
+    icon: Icons.tips_and_updates_outlined,
+    keywords: 'response hint guide steer nudge direction instruction inject '
+        'depth realtime live author note ooc guidance next reply',
+    builder: _responseHintPage,
+  ),
+  _SearchEntry(
     title: 'Storage',
     section: 'Storage',
     icon: Icons.sd_storage_outlined,
@@ -364,6 +372,8 @@ Widget _chatColoursPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
 Widget _groupChatsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.groupChats);
+Widget _responseHintPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.responseHint);
 Widget _storagePage() => const StorageSettingsPage();
 Widget _backupsPage() => const BackupsScreen();
 Widget _backupImportPage() => const BackupImportScreen();
