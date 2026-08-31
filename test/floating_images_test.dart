@@ -73,6 +73,27 @@ void main() {
       .firstWhere((f) => f.imageId == imageId)
       .copyWith();
 
+  /// The picture's own box: what it was laid out at, and where it is painted.
+  Finder pictureBox() => find
+      .descendant(
+        of: find.byType(FloatingImagesLayer),
+        matching: find.byType(RawGestureDetector),
+      )
+      .first;
+
+  /// The **drawn picture** inside that box, which is not the same rectangle: the
+  /// box carries a fixed 10px of padding for the ✕ in its corner, so anything
+  /// that scaled the box rather than resizing it moved this rect without moving
+  /// the box. Both the framed and the bare picture put an `AspectRatio` here (the
+  /// placeholder these fixtures draw, since nothing decodes), so it can be
+  /// measured across the swap on touch-down and release.
+  Finder drawnPicture() => find
+      .descendant(
+        of: find.byType(FloatingImagesLayer),
+        matching: find.byType(AspectRatio),
+      )
+      .first;
+
   testWidgets('a chat with nothing floating draws no layer', (tester) async {
     final state = await chatWithFloats(count: 0);
     await pumpChat(tester, state);
@@ -345,21 +366,20 @@ void main() {
     expect(after.rotation, isNot(0));
   });
 
-  testWidgets('a pinch scales on the transform, without relaying out the picture',
+  testWidgets('a pinch resizes the picture itself, with no transform scale',
       (tester) async {
-    // The resize/rotate freeze: changing the picture's *layout* width every pinch
-    // frame re-rasterised it and its blurred shadow each time. Now the width is
-    // fixed for the gesture and the size rides a transform scale — so the laid-out
-    // box does not change mid-pinch (no relayout, no re-raster), only the painted
-    // rect grows. The real width is committed once, on release.
+    // The reported size disparity, and the corners changing along with it. A
+    // pinch used to hold the laid-out width fixed for the whole touch and ride a
+    // `Transform` scale off it, baking the width in on release — but a transform
+    // scales *everything* under it, including the two fixed pixel sizes the frame
+    // is made of. So the 12px corner radius swelled with the picture and snapped
+    // back the instant the fingers left, and the 10px padding that keeps room for
+    // the ✕ scaled too, which made the picture jump by 10·(scale−1) px on
+    // release. The size a pinch aims at is now the real laid-out width: drawn
+    // size and settled size are one number the whole way through.
     final state = await chatWithFloats();
     await pumpChat(tester, state);
-    final box = find
-        .descendant(
-          of: find.byType(FloatingImagesLayer),
-          matching: find.byType(RawGestureDetector),
-        )
-        .first;
+    final box = pictureBox();
 
     final layoutBefore = tester.getSize(box);
     final paintedBefore = tester.getRect(box);
@@ -368,26 +388,53 @@ void main() {
         tester.getCenter(find.byIcon(Icons.close)) + const Offset(-40, 60);
     final left = await tester.startGesture(centre - const Offset(40, 0));
     final right = await tester.startGesture(centre + const Offset(40, 0));
+    // Straight apart, with no turn in it: `getRect` is an axis-aligned bounding
+    // box, so comparing it against the laid-out size only means anything while the
+    // picture is upright. Turned pinches are the matrix further down.
     for (var i = 0; i < 8; i++) {
-      await left.moveBy(const Offset(-6, -3));
-      await right.moveBy(const Offset(6, 3));
+      await left.moveBy(const Offset(-6, 0));
+      await right.moveBy(const Offset(6, 0));
       await tester.pump();
     }
 
-    // Mid-pinch: the box is the same size it was laid out at (nothing relaid
-    // out), but it is painted larger (the transform scaled it).
-    expect(tester.getSize(box), layoutBefore,
-        reason: 'the picture is not re-laid-out during a pinch');
-    expect(tester.getRect(box).width, greaterThan(paintedBefore.width + 1),
-        reason: 'it grows on the transform instead');
+    // Mid-pinch: the box really is laid out bigger, and it is painted at exactly
+    // the size it was laid out at — no scale left in the matrix to multiply a
+    // radius or a padding by.
+    final layoutDuring = tester.getSize(box);
+    final paintedDuring = tester.getRect(box);
+    final pictureElement = tester.element(drawnPicture());
+    expect(layoutDuring.width, greaterThan(layoutBefore.width + 1),
+        reason: 'the pinch changes the real laid-out width');
+    expect(paintedDuring.width, greaterThan(paintedBefore.width + 1),
+        reason: 'and it is visibly bigger');
+    expect(paintedDuring.width, closeTo(layoutDuring.width, 0.5),
+        reason: 'drawn at the size it is laid out at, not a scaled version of a '
+            'smaller layout');
+
+    // Resizing for real relayouts the picture; it must still never *rebuild* it.
+    // The width lives on the `SizedBox` inside the AnimatedBuilder's own builder,
+    // above the child it hands straight back — so ten more frames of pinching
+    // reach the same element, with the same gesture recogniser.
+    for (var i = 0; i < 10; i++) {
+      await left.moveBy(const Offset(-6, 0));
+      await right.moveBy(const Offset(6, 0));
+      await tester.pump();
+    }
+    expect(tester.element(drawnPicture()), same(pictureElement),
+        reason: 'a resize relayouts the picture, it does not rebuild it');
+    expect(tester.getSize(box).width, greaterThan(layoutDuring.width),
+        reason: 'and it kept growing');
+    final paintedLast = tester.getRect(box);
 
     await left.up();
     await right.up();
     await tester.pump();
     await tester.pump();
 
-    // On release the scale is baked into a real width.
+    // Nothing left to bake in, so the release changes nothing at all.
     expect(state.active.floatingImages.single.width, greaterThan(180));
+    expect(tester.getRect(box).width, closeTo(paintedLast.width, 0.5),
+        reason: 'letting go is not a size change');
   });
 
   testWidgets('resizing stops at the bounds rather than vanishing',
@@ -737,6 +784,64 @@ void main() {
       expect(duringDrag, baseline,
           reason: 'retained chat content is never re-rasterised by a float drag');
     });
+
+    testWidgets('pinching a float does not re-rasterise the chat behind it',
+        (tester) async {
+      // The same guard for the gesture that now does real layout work. A pinch
+      // changes the float's laid-out width every frame, which is what keeps the
+      // corners and the ✕'s padding from being multiplied by a scale — the cost is
+      // a relayout, and it must stay inside the float. The layer's tight
+      // full-screen constraints make each float's `OverflowBox` a relayout
+      // boundary, so the enclosing `Stack` is never laid out again and the chat's
+      // retained content is never re-rasterised. If that ever escapes, this
+      // painter starts counting.
+      final state = await chatWithFloats();
+      await tester.binding.setSurfaceSize(const Size(400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      var paints = 0;
+      await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                RepaintBoundary(
+                  child: CustomPaint(
+                    painter: _CountingPainter(() => paints++),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+                Positioned.fill(
+                  child: FloatingImagesLayer(conversationId: state.active.id),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+
+      final baseline = paints;
+      final centre = tester.getRect(pictureBox()).center;
+      final left = await tester.startGesture(centre - const Offset(40, 0));
+      final right = await tester.startGesture(centre + const Offset(40, 0));
+      for (var i = 0; i < 20; i++) {
+        await left.moveBy(const Offset(-5, -2));
+        await right.moveBy(const Offset(5, 2));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final duringPinch = paints;
+      await left.up();
+      await right.up();
+      await tester.pump();
+
+      expect(state.active.floatingImages.single.width, greaterThan(180),
+          reason: 'the picture did resize');
+      expect(duringPinch, baseline,
+          reason: 'a resize relayouts the float, not the chat behind it');
+    });
   });
 
   testWidgets('the chat has no backdrop filter to re-blur every frame',
@@ -752,13 +857,157 @@ void main() {
     expect(find.byType(BackdropFilter), findsNothing);
   });
 
-  /// The picture's own box: what it was laid out at, and where it is painted.
-  Finder pictureBox() => find
-      .descendant(
-        of: find.byType(FloatingImagesLayer),
-        matching: find.byType(RawGestureDetector),
-      )
-      .first;
+  group('a float is drawn the same while held as once it is placed', () {
+    // "Suppose a picture is small and I enlarge it — when I leave my fingers the
+    // size changes slightly." A pinch rode a transform scale off a layout width
+    // pinned for the whole touch, and that scale also multiplied the 10px padding
+    // the ✕ needs: held, the picture was (w − 10)·s wide; placed, it was
+    // w·s − 10. Every release therefore resized it by 10·(s − 1) px and slid it
+    // by half that. Now the pinch changes the laid-out width itself, so there is
+    // nothing to bake in and nothing to jump.
+    //
+    // Grown and shrunk, upright and turned: the discrepancy has the opposite
+    // sign either side of scale 1, and a rotation puts it on both axes at once.
+    for (final grow in <bool>[true, false]) {
+      for (final degrees in <double>[0, 30]) {
+        testWidgets('${grow ? 'grown' : 'shrunk'} at $degrees°', (tester) async {
+          final state = await chatWithFloats();
+          await state.settleFloatingImage(
+            state.active.id,
+            state.active.floatingImages.single,
+            x: 0.5,
+            y: 0.5,
+            width: 300,
+            rotation: degrees * 3.1415926535 / 180,
+          );
+          await pumpChat(tester, state);
+
+          final centre = tester.getRect(pictureBox()).center;
+          final left = await tester.startGesture(centre - const Offset(70, 0));
+          final right = await tester.startGesture(centre + const Offset(70, 0));
+          final step = grow ? -8.0 : 6.0;
+          for (var i = 0; i < 6; i++) {
+            await left.moveBy(Offset(step, 0));
+            await right.moveBy(Offset(-step, 0));
+            await tester.pump();
+          }
+          final held = tester.getRect(drawnPicture());
+
+          await left.up();
+          await right.up();
+          await tester.pump();
+          await tester.pump();
+          final placed = tester.getRect(drawnPicture());
+
+          expect(
+            state.active.floatingImages.single.width,
+            grow ? greaterThan(300) : lessThan(300),
+            reason: 'the pinch really did resize it',
+          );
+          expect(placed.width, closeTo(held.width, 1),
+              reason: 'the size it was let go at is the size it keeps');
+          expect(placed.height, closeTo(held.height, 1),
+              reason: 'in both directions');
+          expect((placed.center - held.center).distance, lessThan(1),
+              reason: 'and it does not slide as it settles');
+        });
+      }
+    }
+  });
+
+  /// A chat with one float whose picture has a real provider behind it — needed
+  /// by anything that has to find the rounded *clip* while a finger is down,
+  /// because a float with no usable picture draws a placeholder with no corners
+  /// to round.
+  Future<AppState> chatWithRealPicture(
+    WidgetTester tester, {
+    double width = 200,
+  }) async {
+    imageCache.clear();
+    imageCache.clearLiveImages();
+    clearAvatarImageCache();
+    final state = AppState()..debounceFloatSaves = false;
+    await state.init();
+    final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
+    await state.addCharacter(character);
+    state.startChatWithCharacter(character);
+    await state.floatPictureRef(state.active.id, _png);
+    await state.settleFloatingImage(
+      state.active.id,
+      state.active.floatingImages.single,
+      x: 0.5,
+      y: 0.5,
+      width: width,
+    );
+    await pumpChat(tester, state);
+    // A widget test's codec never produces an image, so let the decode run to its
+    // failure in the real zone: the `Image` then falls back to its error box,
+    // which has the area a pinch needs to land on.
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 80)));
+    await tester.pump();
+    return state;
+  }
+
+  /// The float's rounded corner as it reaches the **screen**: the radius the clip
+  /// asks for, times the scale of every transform above it. This is the figure
+  /// the eye judges — a 12px radius under a 1.7× transform draws a 20px corner.
+  double cornerOnScreen(WidgetTester tester) {
+    final clip = find
+        .descendant(
+          of: find.byType(FloatingImagesLayer),
+          matching: find.byType(ClipRRect),
+        )
+        .first;
+    final radius = tester
+        .widget<ClipRRect>(clip)
+        .borderRadius
+        .resolve(TextDirection.ltr)
+        .topLeft
+        .x;
+    return radius *
+        tester.renderObject(clip).getTransformTo(null).getMaxScaleOnAxis();
+  }
+
+  for (final grow in <bool>[true, false]) {
+    testWidgets(
+        'the corners keep their radius while a float is ${grow ? 'grown' : 'shrunk'}',
+        (tester) async {
+      // The reported "it constantly redraws it to make the corners… the corners
+      // were different (since those were the corners of it being small) and the
+      // corners also suddenly change". A pinch scaled the whole picture on a
+      // matrix, and the rounded clip was inside it — so the radius grew with the
+      // picture while the fingers were down and snapped back to 12 the moment
+      // they left. Resizing for real leaves the radius alone.
+      final state = await chatWithRealPicture(tester);
+      expect(cornerOnScreen(tester), closeTo(12, 0.01), reason: 'at rest');
+
+      final centre = tester.getRect(pictureBox()).center;
+      final left = await tester.startGesture(centre - const Offset(60, 0));
+      final right = await tester.startGesture(centre + const Offset(60, 0));
+      final step = grow ? -8.0 : 5.0;
+      for (var i = 0; i < 6; i++) {
+        await left.moveBy(Offset(step, 0));
+        await right.moveBy(Offset(-step, 0));
+        await tester.pump();
+      }
+      expect(cornerOnScreen(tester), closeTo(12, 0.5),
+          reason: 'the corners do not swell or shrink with the picture');
+
+      await left.up();
+      await right.up();
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        state.active.floatingImages.single.width,
+        grow ? greaterThan(200) : lessThan(200),
+        reason: 'it really was resized',
+      );
+      expect(cornerOnScreen(tester), closeTo(12, 0.01),
+          reason: 'and nothing snaps back when the fingers leave');
+    });
+  }
 
   group('a drag follows the finger, whatever the picture is turned to', () {
     // The reported "it doesn't even move diagonally", and the displacement left
@@ -848,13 +1097,12 @@ void main() {
 
   testWidgets('placing an oversized float does not change its size',
       (tester) async {
-    // The other half of the same bug, and the one that was visible: the live
-    // size rides a transform scale of `width / _baseWidth`. Once the layout was
-    // clamped to the chat width but `_baseWidth` was not, the drawn size stopped
-    // matching the geometry — so every release re-baked a width the layout would
-    // not honour and the picture snapped to a different size. Here a big float is
-    // pinched smaller; what it is drawn at while held must be what it is drawn at
-    // once let go.
+    // The other half of the same bug, and the one that was visible: a float wider
+    // than the chat was laid out at the chat's width, so the width the geometry
+    // asked for and the width the layout honoured came apart and every release
+    // snapped the picture to a different size. Here a big float is pinched
+    // smaller; what it is drawn at while held must be what it is drawn at once let
+    // go — exactly, now that the drawn size *is* the laid-out size.
     final state = await chatWithFloats();
     await state.settleFloatingImage(
       state.active.id,
@@ -882,7 +1130,7 @@ void main() {
 
     expect(state.active.floatingImages.single.width, lessThan(900),
         reason: 'it really did shrink');
-    expect(tester.getRect(pictureBox()).width, closeTo(heldWidth, 8),
+    expect(tester.getRect(pictureBox()).width, closeTo(heldWidth, 0.5),
         reason: 'the size it was let go at is the size it keeps');
   });
 

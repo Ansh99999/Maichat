@@ -19,9 +19,10 @@ import 'avatar_image.dart';
 /// * **Write to [AppState].** Both the raise-to-front and the position used to,
 ///   and `_editConversation` notifies every listener and re-encodes the whole
 ///   conversation store. Now nothing is written until the fingers stop.
-/// * **Trigger layout.** Position is a [Transform], not `Positioned.left/top`:
-///   changing a Positioned relays out the whole [Stack] every frame, while a
-///   transform only changes a matrix.
+/// * **Move or turn by layout.** Position and rotation are a [Transform], not
+///   `Positioned.left/top`: changing a Positioned relays out the whole [Stack]
+///   every frame, while a transform only changes a matrix. Its *size* is real
+///   layout, deliberately — see [_FloatingPictureState.build].
 /// * **Rebuild its subtree.** The picture, frame and ✕ are built once and passed
 ///   to [AnimatedBuilder] as `child`, so a pointer-move rebuilds one Transform and
 ///   nothing beneath it.
@@ -222,11 +223,6 @@ class _FloatingPictureState extends State<_FloatingPicture> {
   /// image decoder for a new bitmap mid-gesture.
   late double _decodeWidth;
 
-  /// The width the picture is *laid out* at. Held fixed for the whole touch, so a
-  /// pinch never relayouts: the live size rides a transform scale off this. Baked
-  /// to the final width once, when the touch ends.
-  late double _baseWidth;
-
   /// How many fingers are currently on *this* float, whether it has been a
   /// two-finger gesture at any point in the current touch, and whether the touch
   /// actually moved the picture. Tracked from raw pointer events (a [Listener])
@@ -267,7 +263,6 @@ class _FloatingPictureState extends State<_FloatingPicture> {
       rotation: float.rotation,
     ));
     _decodeWidth = float.width;
-    _baseWidth = float.width;
   }
 
   @override
@@ -280,7 +275,6 @@ class _FloatingPictureState extends State<_FloatingPicture> {
         live.y != float.y ||
         live.width != float.width ||
         live.rotation != float.rotation) {
-      _baseWidth = float.width;
       _live.value = _Geometry(
         x: float.x,
         y: float.y,
@@ -364,12 +358,10 @@ class _FloatingPictureState extends State<_FloatingPicture> {
 
   void _onPointerDown() {
     if (_activePointers == 0) {
-      // A fresh touch. Pin the layout width for its whole duration so the live
-      // size can ride a transform scale off it. No visual change yet — the swap
-      // to the bare picture waits for the first actual move, so a tap on the ✕
-      // still hits the framed control.
+      // A fresh touch. No visual change yet — the swap to the bare picture waits
+      // for the first actual move, so a tap on the ✕ still hits the framed
+      // control.
       _moved = false;
-      _baseWidth = _live.value.width;
       // TEMP placement trace: begin a fresh capture for this touch.
       _touchDownAt = DateTime.now();
       _lastUpdateAt = _touchDownAt;
@@ -386,22 +378,22 @@ class _FloatingPictureState extends State<_FloatingPicture> {
   void _onPointerUp() {
     _activePointers = (_activePointers - 1).clamp(0, 10);
     if (_activePointers > 0) return;
-    // The whole touch is over. Bake the transform-scale into a real layout width
-    // (and re-decode for a big size change), swap back to the framed picture, and
-    // persist exactly **once** — here, not on every finger change. Settling calls
-    // notifyListeners and schedules a whole-store save; doing that on each
-    // finger-lift during a manipulation is what froze the app every few seconds
-    // (and the mid-manipulation rebuild is what made it shift).
+    // The whole touch is over. Swap back to the framed picture, re-decode for a
+    // big size change, and persist exactly **once** — here, not on every finger
+    // change. Settling calls notifyListeners and schedules a whole-store save;
+    // doing that on each finger-lift during a manipulation is what froze the app
+    // every few seconds (and the mid-manipulation rebuild is what made it shift).
+    //
+    // Nothing about the picture's geometry changes here: the live width *is* the
+    // laid-out width throughout, so releasing only puts the shadow and the ✕
+    // back.
     final g = _live.value;
     final redecode = g.width > _decodeWidth * 1.6 || g.width < _decodeWidth / 2;
     // TEMP placement trace: record what the final frames did, before the guard
     // state is reset. Only for a touch that actually moved the picture.
     if (_moved) _emitPlacement();
     _hadTwoFingers = false;
-    setState(() {
-      _manipulating = false;
-      _baseWidth = g.width;
-    });
+    setState(() => _manipulating = false);
     // Sharper (or smaller) bitmap for the new size, applied only once it has
     // decoded — see [_stepDecodeWidth].
     if (redecode) _stepDecodeWidth(g.width);
@@ -561,15 +553,15 @@ class _FloatingPictureState extends State<_FloatingPicture> {
     // already caps the decode at the display bucket (never source resolution),
     // and a GPU's cost for a scaled blit is per destination pixel, which does not
     // change with the size of the texture behind it. What actually cost 16ms a
-    // frame was re-rasterising the rounded clip and the blurred shadow under a
-    // changing scale, and that is what [_BarePicture] still drops.
+    // frame was re-rasterising the rounded clip and the blurred shadow while the
+    // picture's size changed, and that is what [_BarePicture] still drops.
     final provider = _providerFor(_decodeWidth);
 
     // The inner boundary keeps the picture and the ✕ as a retained layer of its
-    // own. A [Listener] wraps the gesture detector purely to count fingers on
-    // this float (raw pointer events survive the scale recogniser restarting
-    // itself when a finger lifts), which is what lets [_onUpdate] ignore the lone
-    // finger left over from a pinch.
+    // own while nothing is happening to it. A [Listener] wraps the gesture
+    // detector purely to count fingers on this float (raw pointer events survive
+    // the scale recogniser restarting itself when a finger lifts), which is what
+    // lets [_onUpdate] ignore the lone finger left over from a pinch.
     final target = Listener(
       onPointerDown: (_) => _onPointerDown(),
       onPointerUp: (_) => _onPointerUp(),
@@ -597,15 +589,16 @@ class _FloatingPictureState extends State<_FloatingPicture> {
           ),
         },
         // While a touch is in progress the picture is drawn as its **bare bitmap**
-        // — no blurred shadow, no ✕ — so moving/scaling/rotating it is just a GPU
-        // sample of a texture (drawImageRect under the transform) with no
-        // per-frame re-rasterisation. A benchmark on Linux measured the framed
-        // version at ~16ms raster (120/250 frames over budget, spikes to 36ms+)
-        // and this bare version at ~5ms (0 sustained over-budget frames). The
-        // shadow — the expensive part to re-raster under a scale — comes back the
+        // — no blurred shadow, no ✕ — so moving, resizing or turning it is a GPU
+        // sample of a texture (drawImageRect under the transform) rather than a
+        // re-rasterised shadow. A benchmark on Linux measured the framed version at
+        // ~16ms raster (120/250 frames over budget, spikes to 36ms+) and this bare
+        // version at ~5ms (0 sustained over-budget frames). The shadow — the
+        // expensive part to re-raster while the size changes — comes back the
         // instant the fingers leave. Nothing is captured or re-captured (unlike a
-        // SnapshotWidget), so it behaves the same on Skia and Impeller. Both
-        // states draw the *same* provider, so the swap cannot blink.
+        // SnapshotWidget), so it behaves the same on Skia and Impeller. Both states
+        // draw the *same* provider at the *same* size, so the swap can neither
+        // blink nor resize anything.
         child: _manipulating
             ? _BarePicture(provider: provider)
             : RepaintBoundary(
@@ -621,22 +614,38 @@ class _FloatingPictureState extends State<_FloatingPicture> {
     );
 
     final animated = AnimatedBuilder(
-      // Only these paint-only transforms rebuild per frame. The picture, shadow
-      // and ✕ are a retained layer of their own (the boundary in `target`), so
-      // this re-record is just "push a few transforms, re-add a cached layer".
+      // Only the position, the turn and the width rebuild per frame. The picture,
+      // shadow and ✕ are handed straight back as `child`, so a moving float never
+      // rebuilds them — a resize relayouts that subtree, but never rebuilds it.
       animation: _live,
       child: target,
       builder: (context, child) {
-        // Resize rides the transform, not the layout: the picture is laid out at
-        // the fixed [_baseWidth] and the matrix scales it to the live width. So a
-        // pinch is a matrix change on an already-rasterised layer — no relayout,
-        // no re-rasterising the picture per frame. The scale is baked back into
-        // the width once, on gesture end.
         final geometry = _live.value;
-        final scale = _baseWidth <= 0 ? 1.0 : geometry.width / _baseWidth;
-        // The float is anchored by its **centre**, and rotation/scale pivot about
-        // that same centre — the two must agree or the picture jumps the instant
-        // the fingers leave. Here is why it used to jump: a pinch scaled about the
+        // **The live width is the laid-out width.** A pinch used to hold the
+        // layout fixed and ride a `Transform` scale off it, baking the scale into
+        // a real width on release — which meant the drawn picture and the settled
+        // picture were never quite the same thing, because a scale multiplies
+        // *everything* under it and this frame is made of two fixed pixel sizes:
+        //
+        // * the 12px rounded corner, which swelled to 12·scale while the fingers
+        //   were down and snapped back the moment they left — the reported
+        //   "the corners were different… and the corners also suddenly change";
+        // * the 10px padding that keeps room for the ✕, which made the held
+        //   picture (w − 10)·scale wide against a placed w·scale − 10, so every
+        //   release resized it by 10·(scale − 1) px and slid it half as far.
+        //
+        // Resizing the box for real costs a relayout per pinch frame, and that is
+        // affordable in a way it was not when this rode a transform: the layer's
+        // tight full-screen constraints make the [OverflowBox] below a relayout
+        // boundary, so the work stops there — the [Stack], the thread and the rest
+        // of the chat are never laid out again — and the expensive part of the old
+        // per-frame re-raster was the blurred shadow, which a manipulated float
+        // already drops (see [_BarePicture]). A one-finger drag passes the same
+        // width through and so relayouts nothing at all.
+        //
+        // The float is anchored by its **centre**, and the turn pivots about that
+        // same centre — the two must agree or the picture jumps the instant the
+        // fingers leave. Here is why it used to jump: a pinch scaled about the
         // centre (right), but the stored anchor was the top-left corner, so on
         // release the picture was re-laid-out pinned to that corner and slid by
         // half the size change. Anchoring the centre removes the mismatch.
@@ -644,7 +653,7 @@ class _FloatingPictureState extends State<_FloatingPicture> {
         // The centre is placed without ever needing the picture's height:
         // [FractionalTranslation] shifts the box by half of *its own* laid-out
         // size, so `translate(centre)` then `-0.5,-0.5` lands the box's middle on
-        // the point whatever its dimensions. All paint-only — nothing relayouts.
+        // the point whatever its dimensions.
         return OverflowBox(
           // Loosen the tight full-screen constraints so the box below takes its
           // own intrinsic size; the transforms then move it from the top-left.
@@ -653,14 +662,10 @@ class _FloatingPictureState extends State<_FloatingPicture> {
           // constraints, which keeps their maxima — and `SizedBox` enforces its
           // width against what it is given, so a float wider than the chat was
           // silently laid out at the chat's width instead. That is the reported
-          // "it stops getting bigger at a certain size", and it also broke the
-          // pinch: the live scale is `width / _baseWidth`, so once `_baseWidth`
-          // ran past the clamped layout the drawn size no longer matched the
-          // geometry, and every release re-baked a width the layout would not
-          // honour — the picture snapping to a different size each touch. An
-          // OverflowBox hands the child genuinely unbounded constraints (and
-          // still sizes *itself* to the layer, so the hit gate below is
-          // unchanged), so the laid-out width is the width.
+          // "it stops getting bigger at a certain size". An OverflowBox hands the
+          // child genuinely unbounded constraints (and still sizes *itself* to the
+          // layer, so the hit gate below is unchanged), so the laid-out width is
+          // the width however far a pinch takes it.
           alignment: Alignment.topLeft,
           minWidth: 0,
           maxWidth: double.infinity,
@@ -673,11 +678,9 @@ class _FloatingPictureState extends State<_FloatingPicture> {
             ),
             child: FractionalTranslation(
               translation: const Offset(-0.5, -0.5),
-              child: Transform(
-                alignment: Alignment.center,
-                transform: Matrix4.rotationZ(geometry.rotation)
-                  ..scaleByDouble(scale, scale, scale, 1),
-                child: SizedBox(width: _baseWidth, child: child),
+              child: Transform.rotate(
+                angle: geometry.rotation,
+                child: SizedBox(width: geometry.width, child: child),
               ),
             ),
           ),
@@ -689,12 +692,23 @@ class _FloatingPictureState extends State<_FloatingPicture> {
   }
 }
 
+/// The gap kept above and to the right of the picture for the ✕ that hangs over
+/// its corner, and the radius its corners are rounded to.
+///
+/// **Both are fixed logical pixels, and both are shared by [_Frame] and
+/// [_BarePicture] on purpose.** They are the reason a float's size is real layout
+/// rather than a transform scale: a scale would multiply them, so the corners
+/// swelled during a pinch and the padding made the picture jump the moment it was
+/// let go (see [_FloatingPictureState.build]). And they have to match across the
+/// two widgets, or the swap between them on touch-down would move the picture.
+const double _kFramePad = 10;
+const double _kFrameRadius = 12;
+
 /// The picture with no shadow and no ✕, shown *only while a touch is in
-/// progress*. Drawing a bare bitmap under the live transform is a GPU texture
-/// sample with no per-frame re-rasterisation, which is what makes the
-/// manipulation buttery. It keeps the same top/right padding as [_Frame] so the
-/// picture does not shift when the framed and bare versions swap on touch
-/// start/end.
+/// progress*. Drawing a bare bitmap is a GPU texture sample rather than a
+/// re-rasterised shadow, which is what makes the manipulation buttery. Its
+/// padding and corner radius are [_Frame]'s, so the picture neither shifts nor
+/// changes shape when the framed and bare versions swap on touch start/end.
 class _BarePicture extends StatelessWidget {
   const _BarePicture({required this.provider});
 
@@ -703,7 +717,7 @@ class _BarePicture extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 10, right: 10),
+      padding: const EdgeInsets.only(top: _kFramePad, right: _kFramePad),
       child: provider == null
           ? const AspectRatio(
               aspectRatio: 4 / 3,
@@ -715,14 +729,14 @@ class _BarePicture extends StatelessWidget {
           // is far lighter than the shadow it omits, and on Impeller (this app's
           // renderer) a rounded clip is a stencil op, not an offscreen layer.
           : ClipRRect(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(_kFrameRadius),
               child: Image(
                 image: provider!,
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
                 // Bilinear — what a GPU's texture unit does in hardware, so it
-                // costs the same as no filtering at all while a scale or rotation
-                // is live. This used to be [FilterQuality.none]
+                // costs the same as no filtering at all while the picture is
+                // being resized or turned. This used to be [FilterQuality.none]
                 // (nearest-neighbour) on the same reasoning photo_view uses it,
                 // but nearest-neighbour is exactly what made a touched float look
                 // blocky, and the saving it bought is not measurable next to the
@@ -741,7 +755,7 @@ class _BarePicture extends StatelessWidget {
 /// The drawn float: the picture, a rounded frame, and the ✕.
 ///
 /// Deliberately free of geometry, so one instance survives a whole gesture and
-/// only its ancestor transform changes.
+/// only what it is laid out against changes.
 class _Frame extends StatelessWidget {
   const _Frame({required this.provider, required this.onDismiss});
 
@@ -757,16 +771,16 @@ class _Frame extends StatelessWidget {
         Padding(
           // Room for the ✕ hanging over the corner, or half of it would sit
           // outside its own hit region.
-          padding: const EdgeInsets.only(top: 10, right: 10),
+          padding: const EdgeInsets.only(top: _kFramePad, right: _kFramePad),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(_kFrameRadius),
               color: scheme.surfaceContainerHighest,
               // A plain shadow rather than a Material elevation: an elevation is
               // an implicitly-animated, separately-composited layer, and that is
-              // not what a picture being dragged needs. The blur is cheap here
-              // because during a manipulation the whole frame is captured to a
-              // texture (see the SnapshotWidget) and only that texture is moved.
+              // not what a picture being dragged needs. The blur is only ever
+              // rasterised at rest — a float under a finger drops the whole frame
+              // for [_BarePicture].
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.32),
@@ -776,7 +790,7 @@ class _Frame extends StatelessWidget {
               ],
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(_kFrameRadius),
               child: provider == null
                   ? const AspectRatio(
                       aspectRatio: 4 / 3,
