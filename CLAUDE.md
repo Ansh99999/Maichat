@@ -138,6 +138,14 @@ bar or the overflow menu.
   milliseconds of JSON on the UI thread. Memory-block folds live in their own
   `summaryFolds` entry and are laid back over the summaries on load
   (`AppState._applySummaryFolds`); `browseLayout` does the same via `viewPrefs`.
+  Where a write to that blob is unavoidable but the frame matters — selecting a
+  swipe — it goes through `_saveConversationsSoon()` instead.
+- **`ChatScreen.build` reads `MediaQuery.viewPaddingOf`, never `paddingOf`.**
+  `padding` is `viewPadding` minus the keyboard's insets, so it changes on every
+  frame of the keyboard's animation: depending on it rebuilt the whole chat —
+  thread, composer, drawer — when the keyboard only needed to relayout it, which is
+  what made tapping into the message box feel grainy. `test/chat_keyboard_test.dart`
+  fails if it comes back.
 
 ## Architecture map (where things live)
 
@@ -271,7 +279,13 @@ bar or the overflow menu.
   always asks first, and a turn with replies after it offers both deletes —
   `_ChatScreenState._deleteMessage` is the one dialog behind every route to it
   (the inline symbol, the overflow menu, the long-press sheet), over
-  `AppState.deleteMessage` / `deleteMessagesFrom`.
+  `AppState.deleteMessage` / `deleteMessagesFrom`. A turn's alternatives are a
+  **ring**: the ‹ 1/2 › arrows wrap at both ends, and a sideways drag across the
+  turn steps through them (left = next). Editing happens **in the turn itself** —
+  `MessageBubble(editing:)` makes the words editable where they sit and swaps the
+  action bar for ✕/✓; the avatar, name, pictures and layout do not move. Both of
+  those have sharp edges worth reading before touching them (gesture-arena order,
+  field height, deferred save): `developer notes/feature-notes-and-test-traps.md`.
 - **Response hint:** a line of steering typed beside a chat and injected into
   every send until it is erased (Agnai's own hint, plus a depth). Switched on
   app-wide in Chat Interface (`ChatInterface.responseHintEnabled` /

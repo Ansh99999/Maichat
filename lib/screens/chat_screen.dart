@@ -58,6 +58,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// The index of the message currently being edited in place, or null.
   int? _editingIndex;
 
+  /// The text of the turn being edited. One controller for the whole screen: only
+  /// one turn is ever edited at a time, and a long-lived controller cannot be
+  /// disposed out from under the field that is still using it.
+  final TextEditingController _edit = TextEditingController();
+
   /// The last summary-notice sequence shown, so a completed background summary
   /// toasts exactly once (see [AppState.summaryNoticeSeq]).
   int _lastSummarySeq = 0;
@@ -172,6 +177,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // still be open with something typed in it.
     _flushHint();
     _hint.dispose();
+    _edit.dispose();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -546,6 +552,12 @@ class _ChatScreenState extends State<ChatScreen> {
     // dragging them down. Reference-only: no setState — this all runs inside a
     // build already triggered by the state change that grew the thread.
     final count = conversation.messages.length;
+    // An editor cannot outlive what it is editing: a chat switched away from, or a
+    // turn deleted (or rolled back by a regenerate) out from under it, closes it.
+    if (_editingIndex != null &&
+        (conversation.id != _lastConvId || _editingIndex! >= count)) {
+      _editingIndex = null;
+    }
     if (conversation.id != _lastConvId) {
       _lastConvId = conversation.id;
       _lastMessageCount = count;
@@ -589,7 +601,15 @@ class _ChatScreenState extends State<ChatScreen> {
       _frozenCopy = null;
     }
 
-    final topInset = MediaQuery.paddingOf(context).top;
+    // The status-bar inset, read from **viewPadding** rather than padding. They
+    // are the same number here, but `padding` shrinks as the soft keyboard rises
+    // (it is `viewPadding` minus the keyboard's insets), so depending on it made
+    // every frame of the keyboard's animation rebuild this whole screen — the
+    // composer, the thread and all — which is exactly the grain the reader feels
+    // when tapping into the box. `viewPadding` does not move when the keyboard
+    // does, so the keyboard now only *relayouts* the chat instead of rebuilding
+    // it, and the subtrees below are handed back unchanged.
+    final topInset = MediaQuery.viewPaddingOf(context).top;
     // A chat can carry chat-style settings of its own; otherwise the app-wide
     // ones apply.
     final ui = state.interfaceFor(conversation);
@@ -704,7 +724,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         )
                       : const SizedBox(width: double.infinity),
                 ),
-                _composer(state),
+                // Its own retained layer. The caret in the message box blinks
+                // twice a second and the strips above it animate open and shut;
+                // without a boundary each of those repaints re-records the layer
+                // it shares with the chat's background picture and everything
+                // floating over the thread.
+                RepaintBoundary(child: _composer(state)),
               ],
             ),
           ),
@@ -756,17 +781,10 @@ class _ChatScreenState extends State<ChatScreen> {
             reasoning: _frozenTailReasoning,
           );
         }
-        if (msgIndex == _editingIndex) {
-          return _InlineMessageEditor(
-            key: ValueKey('edit-${conversation.id}-$msgIndex'),
-            initial: message.content,
-            onCancel: () => setState(() => _editingIndex = null),
-            onSave: (text) async {
-              setState(() => _editingIndex = null);
-              await state.editMessage(conversation.id, msgIndex, text);
-            },
-          );
-        }
+        // Being edited: the very same bubble, with the words editable in place —
+        // see [MessageBubble.editing]. Never the cache: the editor holds a live
+        // controller, and a cached widget would hand it to the wrong turn.
+        final editing = msgIndex == _editingIndex;
         // In a group, a turn is spoken by whoever it names; in a one-to-one chat
         // the bound character and the impersonated persona apply throughout.
         final speaker = conversation.isGroup && message.speakerId != null
@@ -803,11 +821,12 @@ class _ChatScreenState extends State<ChatScreen> {
           pending,
           state.streaming,
         ];
-        final cached = _bubbles[msgIndex];
+        final cached = editing ? null : _bubbles[msgIndex];
         if (cached != null && listEquals(cached.signature, signature)) {
           return cached.widget;
         }
         final bubble = MessageBubble(
+          key: editing ? ValueKey('edit-${conversation.id}-$msgIndex') : null,
           message: message,
           ui: ui,
           character: speaker,
@@ -823,6 +842,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           pending: pending,
           streaming: state.streaming,
+          editing: editing,
+          editController: editing ? _edit : null,
+          onEditCancel: _stopEditing,
+          onEditSave: () => _saveEdit(state, conversation, msgIndex),
           onAction: (action) =>
               _runMessageAction(state, conversation, msgIndex, action),
           onSwipe: (swipe) => state.setSwipe(conversation.id, msgIndex, swipe),
@@ -830,11 +853,37 @@ class _ChatScreenState extends State<ChatScreen> {
               ? null
               : () => _showMessageActions(state, conversation, msgIndex),
         );
+        if (editing) return bubble;
         if (_bubbles.length >= _bubbleCacheMax) _bubbles.clear();
         _bubbles[msgIndex] = _CachedBubble(signature, bubble);
         return bubble;
       },
     );
+  }
+
+  /// Starts editing the turn at [index] in place: its own bubble becomes the
+  /// editor (avatar, name, pictures and layout all untouched) and its action bar
+  /// becomes ✕/✓.
+  void _startEditing(Conversation conversation, int index) {
+    if (index < 0 || index >= conversation.messages.length) return;
+    _edit.value = TextEditingValue(
+      text: conversation.messages[index].content,
+    );
+    setState(() => _editingIndex = index);
+  }
+
+  /// Leaves the editor, keeping nothing.
+  void _stopEditing() {
+    if (_editingIndex == null) return;
+    setState(() => _editingIndex = null);
+  }
+
+  /// Commits what was typed and leaves the editor.
+  Future<void> _saveEdit(
+      AppState state, Conversation conversation, int index) async {
+    final text = _edit.text;
+    _stopEditing();
+    await state.editMessage(conversation.id, index, text);
   }
 
   /// Opens [who]'s picture full size, with their other pictures to swipe through.
@@ -864,7 +913,7 @@ class _ChatScreenState extends State<ChatScreen> {
         state.regenerateMessage(conversation.id, index);
         _stickToLatest();
       case MessageAction.edit:
-        setState(() => _editingIndex = index);
+        _startEditing(conversation, index);
       case MessageAction.delete:
         _deleteMessage(state, conversation, index);
       case MessageAction.copy:
@@ -1022,7 +1071,7 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('Edit'),
               onTap: () {
                 Navigator.of(sheet).pop();
-                setState(() => _editingIndex = index);
+                _startEditing(conversation, index);
               },
             ),
             if (isAssistant)
@@ -1272,6 +1321,7 @@ class _ChatScreenState extends State<ChatScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: TextField(
+                  key: const Key('composer-field'),
                   controller: _input,
                   minLines: 1,
                   maxLines: 5,
@@ -1475,8 +1525,13 @@ class _TurnActions extends StatelessWidget {
 /// not over it. The ✕ **closes** the box and nothing else: the hint keeps
 /// steering every reply until it is erased, which is how Agnai's own response
 /// hint behaves, so a sheet that looked like a one-off prompt would be a lie
-/// about what it does. The caption says where the hint lands, because that is a
-/// setting made somewhere else entirely.
+/// about what it does.
+///
+/// Deliberately quiet: one line with a symbol at its left and a ✕ at its right,
+/// and no heading. A titled panel over the composer read as a mode being entered
+/// rather than as a line being typed — the symbol it grows out of already says
+/// what it is. Under the line sits where the hint lands, in as few words as it
+/// takes, because that is a setting made somewhere else entirely.
 class _HintBar extends StatelessWidget {
   const _HintBar({
     required this.controller,
@@ -1498,72 +1553,67 @@ class _HintBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context);
+    final faded = scheme.onSurfaceVariant;
     return Container(
       key: const Key('hint-box'),
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(12, 6, 4, 10),
+      padding: const EdgeInsets.fromLTRB(10, 2, 2, 6),
       decoration: BoxDecoration(
         // The theme's own raised surface, so the box reads as a control on the
         // composer it grows out of in either theme.
         color: scheme.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(Icons.tips_and_updates_outlined,
-                  size: 18, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Response hint',
-                  style: theme.textTheme.labelLarge
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Icon(Icons.tips_and_updates_outlined, size: 16, color: faded),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  key: const Key('hint-field'),
+                  controller: controller,
+                  onChanged: onChanged,
+                  minLines: 1,
+                  maxLines: 4,
+                  textInputAction: TextInputAction.newline,
+                  keyboardType: TextInputType.multiline,
+                  style: theme.textTheme.bodyMedium,
+                  // No frame of its own: the box around it is the frame, and a
+                  // second outline made one line of steering look like a form.
+                  decoration: const InputDecoration(
+                    hintText: 'Guide the next reply…',
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 8),
+                  ),
                 ),
-              ),
-              IconButton(
-                key: const Key('hint-close'),
-                tooltip: 'Close',
-                visualDensity: VisualDensity.compact,
-                color: scheme.onSurfaceVariant,
-                onPressed: onClose,
-                icon: const Icon(Icons.close, size: 20),
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: TextField(
-              key: const Key('hint-field'),
-              controller: controller,
-              onChanged: onChanged,
-              minLines: 1,
-              maxLines: 4,
-              textInputAction: TextInputAction.newline,
-              keyboardType: TextInputType.multiline,
-              decoration: const InputDecoration(
-                hintText: 'Guide the next reply…',
-                isDense: true,
-                border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
+                Text(
+                  depth == 0
+                      ? 'Just before the reply'
+                      : '$depth ${depth == 1 ? 'message' : 'messages'} back',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: faded.withValues(alpha: 0.8),
+                  ),
+                ),
+              ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 6, left: 2),
-            child: Text(
-              depth == 0
-                  ? 'Sent with every reply, just before it'
-                  : 'Sent with every reply, $depth '
-                      '${depth == 1 ? 'message' : 'messages'} back',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-            ),
+          IconButton(
+            key: const Key('hint-close'),
+            tooltip: 'Close',
+            visualDensity: VisualDensity.compact,
+            color: faded,
+            onPressed: onClose,
+            icon: const Icon(Icons.close, size: 18),
           ),
         ],
       ),
@@ -2070,88 +2120,6 @@ class _GroupChip extends StatelessWidget {
     );
   }
 }
-
-/// Edits a message in place, right where it sits in the thread — no dialog. A
-/// cancel (✕) and save (✓) sit at the top-right; the text field fills the row so
-/// there is room to type.
-class _InlineMessageEditor extends StatefulWidget {  const _InlineMessageEditor({
-    super.key,
-    required this.initial,
-    required this.onSave,
-    required this.onCancel,
-  });
-
-  final String initial;
-  final ValueChanged<String> onSave;
-  final VoidCallback onCancel;
-
-  @override
-  State<_InlineMessageEditor> createState() => _InlineMessageEditorState();
-}
-
-class _InlineMessageEditorState extends State<_InlineMessageEditor> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-      padding: const EdgeInsets.fromLTRB(12, 4, 8, 12),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: scheme.primary, width: 1.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              IconButton(
-                tooltip: 'Cancel',
-                iconSize: 20,
-                visualDensity: VisualDensity.compact,
-                onPressed: widget.onCancel,
-                icon: const Icon(Icons.close),
-              ),
-              IconButton(
-                tooltip: 'Save',
-                iconSize: 20,
-                visualDensity: VisualDensity.compact,
-                color: scheme.primary,
-                onPressed: () => widget.onSave(_controller.text),
-                icon: const Icon(Icons.check),
-              ),
-            ],
-          ),
-          TextField(
-            controller: _controller,
-            autofocus: false,
-            minLines: 1,
-            maxLines: null,
-            keyboardType: TextInputType.multiline,
-            decoration: const InputDecoration(
-              isDense: true,
-              border: InputBorder.none,
-              hintText: 'Edit message',
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 
 /// The lone bit of chat chrome: a small, frosted, semi-transparent circle that
 /// carries the menu icon. Translucent enough to let the thread show through,

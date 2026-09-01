@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -42,6 +43,10 @@ class MessageBubble extends StatelessWidget {
     this.userAvatarOverride,
     this.onImageTap,
     this.streaming = false,
+    this.editing = false,
+    this.editController,
+    this.onEditSave,
+    this.onEditCancel,
   });
 
   final ChatMessage message;
@@ -101,6 +106,29 @@ class MessageBubble extends StatelessWidget {
   /// Whether a reply is currently streaming — disables mutating actions.
   final bool streaming;
 
+  /// Whether this turn is being edited **in place**.
+  ///
+  /// Editing changes as little as possible: the avatar, the sender name, the
+  /// pictures, the bubble and every one of the layout choices stay exactly where
+  /// they were, the words themselves become editable where they sit, and the only
+  /// thing that swaps out is the action bar — ✕ and ✓ take its place. The turn
+  /// used to be replaced wholesale by a boxed editor, which meant the avatar and
+  /// the name vanished the moment Edit was tapped and the chat jumped as the
+  /// replacement took a different amount of room.
+  final bool editing;
+
+  /// The text being edited, owned by the caller so it survives this turn being
+  /// rebuilt (a streaming reply rebuilds the thread on a cadence). Required for
+  /// [editing] to take effect.
+  final TextEditingController? editController;
+
+  /// Commits the edit (✓) and abandons it (✕).
+  final VoidCallback? onEditSave;
+  final VoidCallback? onEditCancel;
+
+  /// Whether this turn is drawing an editor rather than its text.
+  bool get _isEditing => editing && editController != null;
+
   /// The message text with the identity macros resolved for display, so a
   /// greeting stored as "Hello {{user}}, I am {{char}}" shows the live names —
   /// and updates the instant the user starts impersonating. Mirrors the
@@ -147,7 +175,13 @@ class MessageBubble extends StatelessWidget {
 
     // The action bar is suppressed for a still-streaming caret-only turn
     // (nothing to act on yet) and whenever no dispatcher is wired (the preview).
-    final actionsBar = showCaret ? null : _actionsBar(context, isUser);
+    // While this turn is being edited, ✕/✓ stand in its place — in the same slot,
+    // wherever the reader has put that slot.
+    final actionsBar = _isEditing
+        ? _editBar(context, isUser)
+        : showCaret
+            ? null
+            : _actionsBar(context, isUser);
     var placement = ui.actionBarPlacement;
     // Fall back to below-message when the chosen anchor isn't available.
     if (placement == ActionBarPlacement.besideAvatar &&
@@ -424,13 +458,37 @@ class MessageBubble extends StatelessWidget {
           maxWidth: ui.contentWidth.maxWidthFor(MediaQuery.sizeOf(context).width),
         ),
         child: GestureDetector(
-          onLongPress: onLongPress ??
-              (message.content.isEmpty
-                  ? null
-                  : () => _copy(context, _displayContent)),
-          child: outer,
+          // A long press on a turn being edited belongs to the editor's own
+          // text-selection handles, not to the message action sheet.
+          onLongPress: _isEditing
+              ? null
+              : (onLongPress ??
+                  (message.content.isEmpty
+                      ? null
+                      : () => _copy(context, _displayContent))),
+          child: _swipeGestures(outer),
         ),
       ),
+    );
+  }
+
+  /// Wraps the assembled turn in the sideways swipe gesture, when there is
+  /// anything to swipe between. Left steps forward through the alternatives and
+  /// right steps back, both wrapping round the ends like the arrows do.
+  Widget _swipeGestures(Widget child) {
+    final swipe = onSwipe;
+    if (swipe == null || !message.hasSwipes || streaming || _isEditing) {
+      return child;
+    }
+    void step(int by) {
+      final target = _swipeStep(by);
+      if (target != null) swipe(target);
+    }
+
+    return _SwipeGestureArea(
+      onNext: () => step(1),
+      onPrevious: () => step(-1),
+      child: child,
     );
   }
 
@@ -498,6 +556,65 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  /// The ✕/✓ pair that stands in for the action bar while this turn is being
+  /// edited: the same icon size, padding and hit boxes as the bar it replaces, so
+  /// tapping Edit swaps two symbols and moves nothing else on the turn. Drawn
+  /// wherever the action bar is configured to sit, and drawn even when message
+  /// actions are switched off entirely — there has to be a way back out.
+  ///
+  /// The bar it replaces is kept behind it, invisible but still measured: an
+  /// overflow menu makes the action bar taller and wider than a pair of symbols,
+  /// and a slot that changed size would shift the words above it — and, in a
+  /// reversed thread, every message above those. So the slot keeps whatever size
+  /// this turn's real bar has, whatever the reader has configured into it.
+  Widget _editBar(BuildContext context, bool isUser) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget button(Key key, String tooltip, IconData icon, Color color,
+            VoidCallback? onPressed) =>
+        IconButton(
+          key: key,
+          tooltip: tooltip,
+          iconSize: 17,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          color: color,
+          onPressed: onPressed,
+          icon: Icon(icon),
+        );
+
+    final Widget bar = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        button(const Key('edit-cancel'), 'Cancel', Icons.close,
+            scheme.onSurfaceVariant, onEditCancel),
+        button(const Key('edit-save'), 'Save', Icons.check, scheme.primary,
+            onEditSave),
+      ],
+    );
+
+    // The same padding the action bar wears, so ✕ and ✓ land exactly where its
+    // first two symbols were.
+    const inset = EdgeInsets.only(top: 1, left: 2, right: 2);
+    final replaced = _actionsBar(context, isUser);
+    if (replaced == null) return Padding(padding: inset, child: bar);
+    return Stack(
+      alignment: AlignmentDirectional.centerStart,
+      children: [
+        // Invisible, inert, and still measured — it is what gives the slot its
+        // size.
+        Visibility(
+          visible: false,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: replaced,
+        ),
+        Padding(padding: inset, child: bar),
+      ],
+    );
+  }
+
   /// The name band for [ActionBarPlacement.oppositeName]: the label at its own
   /// aligned edge and the action bar hard against the *opposite* edge of the
   /// full-width row. A left name puts the bar on the right and a right name puts
@@ -527,13 +644,15 @@ class MessageBubble extends StatelessWidget {
   /// The swipe selector: `‹ 1 / 2 ›`, centred at the bottom of the message.
   ///
   /// Only reached when the turn holds more than one alternative — a turn with a
-  /// single reply shows nothing at all, so the chat stays clean. The arrow at
-  /// each end is disabled rather than wrapping, and both are disabled while a
-  /// reply is streaming (the incoming swipe is still being written).
+  /// single reply shows nothing at all, so the chat stays clean. The ends **wrap**:
+  /// forward from the last alternative comes back to the first and back from the
+  /// first goes to the last, so a turn's alternatives are a ring rather than a
+  /// dead end at each end. Both arrows are inert while a reply is streaming (the
+  /// incoming swipe is still being written) and while the turn is being edited.
   Widget _swipeBar(BuildContext context, Color color) {
     final index = message.swipeIndex;
     final count = message.swipeCount;
-    final live = onSwipe != null && !streaming;
+    final live = onSwipe != null && !streaming && !_isEditing;
     final faded = color.withValues(alpha: 0.75);
     final size = (ui.fontSize * 0.82).clamp(10.0, 18.0);
 
@@ -554,7 +673,7 @@ class MessageBubble extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          arrow(Icons.chevron_left, 'Previous', index > 0 ? index - 1 : null),
+          arrow(Icons.chevron_left, 'Previous', _swipeStep(-1)),
           Text(
             '${index + 1} / $count',
             style: TextStyle(
@@ -563,11 +682,18 @@ class MessageBubble extends StatelessWidget {
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
-          arrow(Icons.chevron_right, 'Next',
-              index < count - 1 ? index + 1 : null),
+          arrow(Icons.chevron_right, 'Next', _swipeStep(1)),
         ],
       ),
     );
+  }
+
+  /// The alternative [by] steps from the live one, wrapping round both ends;
+  /// null when there is nothing to step to.
+  int? _swipeStep(int by) {
+    final count = message.swipeCount;
+    if (count <= 1) return null;
+    return (message.swipeIndex + by + count) % count;
   }
 
   /// This turn's sender name, as the label that fills the name band: its own
@@ -762,6 +888,10 @@ class MessageBubble extends StatelessWidget {
     final style = TextStyle(color: color, fontSize: ui.fontSize, height: 1.35);
     final content = _displayContent;
 
+    // Being edited: the words become editable exactly where they sit, in the same
+    // font, size and colour, inside the same bubble. Nothing around them changes.
+    if (_isEditing) return _editor(style, color, leading: leading);
+
     // Full HTML + CSS engine for any message that contains HTML — or a picture
     // the cheap inline renderer has nowhere to draw.
     if (ui.markdown && content.isNotEmpty && messageNeedsHtml(content)) {
@@ -826,6 +956,44 @@ class MessageBubble extends StatelessWidget {
           ...spans,
         ],
       ),
+    );
+  }
+
+  /// The turn's words, editable in place.
+  ///
+  /// Deliberately undecorated — no frame, no fill, no field padding — so the caret
+  /// simply appears in the text the reader was looking at, in the same font, size
+  /// and colour, taking up the same room.
+  Widget _editor(TextStyle style, Color color, {Widget? leading}) {
+    // [IntrinsicWidth] asks the field how wide its text wants to be — which
+    // already includes the few pixels a caret needs at the end of a line — and
+    // lays it out at exactly that, so a short turn's bubble stays the size it was.
+    // A bare [TextField] stretches to every pixel it is offered, which made a
+    // three-word message balloon to the full width of the thread.
+    final field = IntrinsicWidth(
+      child: TextField(
+        key: const Key('message-editor'),
+        controller: editController,
+        style: style,
+        cursorColor: color,
+        // No decoration **at all**, rather than a stripped-down one: a decorated
+        // field is 44 logical pixels tall however its padding is set, which made
+        // the turn — and, in a reversed list, the whole conversation stacked above
+        // it — jump the moment Edit was tapped.
+        decoration: null,
+        minLines: 1,
+        maxLines: null,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+      ),
+    );
+    // A caret cannot be floated inside wrapping text, so the "around" placement
+    // sits the avatar beside the editor — the same thing the HTML path does.
+    if (leading == null) return field;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [leading, const SizedBox(width: 10), Flexible(child: field)],
     );
   }
 
@@ -915,6 +1083,155 @@ class MessageBubble extends StatelessWidget {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)),
+    );
+  }
+}
+
+/// Sideways swiping over a turn: drag it left for the next alternative, right for
+/// the previous one.
+///
+/// The turn follows the finger — with resistance, so it never runs away — and
+/// settles back the moment the finger lifts. Only *horizontal* drags are claimed,
+/// so the vertical drag that scrolls the thread still reaches the list (a pan
+/// would have taken both and made the conversation feel stuck).
+///
+/// The offset is held in a [ValueNotifier] and applied by a [Transform] that is
+/// always in the tree: the message subtree is handed through untouched as the
+/// builder's `child`, so a drag repaints the turn instead of rebuilding it —
+/// rebuilding a bubble per frame (markdown, HTML, avatar, layout) is exactly the
+/// per-frame cost that made the chat stutter. A pure translation needs no layer
+/// either, so an idle turn pays nothing for having this wrapper.
+class _SwipeGestureArea extends StatefulWidget {
+  const _SwipeGestureArea({
+    required this.onNext,
+    required this.onPrevious,
+    required this.child,
+  });
+
+  final VoidCallback onNext;
+  final VoidCallback onPrevious;
+  final Widget child;
+
+  @override
+  State<_SwipeGestureArea> createState() => _SwipeGestureAreaState();
+}
+
+class _SwipeGestureAreaState extends State<_SwipeGestureArea>
+    with SingleTickerProviderStateMixin {
+  /// How far the turn is currently held from where it lives.
+  final ValueNotifier<double> _shift = ValueNotifier<double>(0);
+
+  late final AnimationController _settle = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 160),
+  );
+
+  /// Where the settle-back started from, so the turn eases home rather than
+  /// snapping.
+  double _from = 0;
+
+  /// How far the finger has travelled across this turn.
+  double _travel = 0;
+
+  /// The furthest the turn is ever pulled, however hard it is dragged.
+  static const double _maxShift = 40;
+
+  /// How far a deliberate drag has to travel to change the alternative — and how
+  /// far a *flick* has to, which is less, because the speed already says the
+  /// reader means it. Distance decides which way it goes; a velocity that
+  /// disagrees with the travel is a flick that changed its mind, and the travel
+  /// wins. A gesture that only just cleared the touch slop and was let go moves
+  /// nothing, whatever velocity the tracker made of it.
+  static const double _commitDistance = 40;
+  static const double _flickDistance = 20;
+  static const double _commitVelocity = 200;
+
+  @override
+  void initState() {
+    super.initState();
+    _settle.addListener(() {
+      _shift.value = _from * (1 - Curves.easeOutCubic.transform(_settle.value));
+    });
+  }
+
+  @override
+  void dispose() {
+    _settle.dispose();
+    _shift.dispose();
+    super.dispose();
+  }
+
+  void _start(DragStartDetails details) {
+    _settle.stop();
+    _travel = 0;
+    _shift.value = 0;
+  }
+
+  void _update(DragUpdateDetails details) {
+    _travel += details.delta.dx;
+    // Resistance rather than a hard stop: the turn always answers the finger, it
+    // just answers a long pull less and less.
+    final pulled = _travel.abs();
+    final eased = _maxShift * pulled / (pulled + _maxShift);
+    _shift.value = _travel.isNegative ? -eased : eased;
+  }
+
+  void _end(DragEndDetails details) {
+    final fast = (details.primaryVelocity ?? 0).abs() > _commitVelocity;
+    final needed = fast ? _flickDistance : _commitDistance;
+    if (_travel <= -needed) {
+      widget.onNext();
+    } else if (_travel >= needed) {
+      widget.onPrevious();
+    }
+    _settleHome();
+  }
+
+  void _settleHome() {
+    _from = _shift.value;
+    _travel = 0;
+    if (_from == 0) return;
+    _settle.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: _shift,
+      // The turn is handed through as the builder's child, so a drag never
+      // rebuilds the message — it only re-offsets the layer it is painted on.
+      child: Stack(
+        children: [
+          widget.child,
+          // The gesture lives in a **transparent sheet over** the turn rather
+          // than in a detector around it, and that is the whole trick. On Android
+          // a message's own selectable text installs a horizontal drag of its own
+          // (to drag-select) which takes victory the instant the touch slop is
+          // cleared; a detector wrapped *around* the turn is offered the pointer
+          // second and always loses, so a sideways drag across the words selected
+          // text and the turn never moved. A translucent overlay sitting last in
+          // this stack is hit first, so its recognizer is offered the pointer
+          // first and wins the tie at the ordinary threshold — no lowered slop, no
+          // change to the per-axis race the thread's vertical scrolling wins.
+          //
+          // Translucent, so everything underneath stays live: taps on a picture,
+          // the ‹ 1/2 › arrows, and the long press that still selects text (a long
+          // press is a different gesture, and this claims only sideways drags).
+          Positioned.fill(
+            child: GestureDetector(
+              // From the moment the finger goes down, so the turn tracks it from
+              // the first pixel instead of jumping once the slop is cleared.
+              dragStartBehavior: DragStartBehavior.down,
+              onHorizontalDragStart: _start,
+              onHorizontalDragUpdate: _update,
+              onHorizontalDragEnd: _end,
+              onHorizontalDragCancel: _settleHome,
+            ),
+          ),
+        ],
+      ),
+      builder: (context, shift, child) =>
+          Transform.translate(offset: Offset(shift, 0), child: child),
     );
   }
 }

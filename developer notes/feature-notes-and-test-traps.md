@@ -73,6 +73,46 @@ app_version_test.dart` fails on drift — that guard is the real fix; keep it.
   `FloatingImage.imageRef`. A miss deletes a picture that's on screen. Deleting a
   *character* keeps their photos (unlike Agnai).
 
+## The chat turn: sideways swipe, and editing in place
+
+- **A swipe over a message has to be won from the text.** On Android a
+  `SelectableText` (and a `SelectionArea`) installs a
+  `TapAndHorizontalDragGestureRecognizer` with `eagerVictoryOnDrag`, so it claims
+  every horizontal drag as soon as the touch slop is cleared — and being the
+  deeper widget it is offered the pointer first, so a detector *wrapped around*
+  the turn can never win. `_SwipeGestureArea` (in `message_bubble.dart`) instead
+  puts the gesture in a **translucent `Positioned.fill` sheet as the last child of
+  a `Stack` over the turn**: the last child is hit first, so its recognizer is
+  offered the pointer first and wins the tie at the ordinary threshold. Do not
+  "fix" this by lowering the recognizer's slop — the per-axis race with the
+  thread's vertical scroll is what keeps scrolling reliable, and a lowered slop
+  starts stealing scrolls. The cost of the sheet: dragging across a message no
+  longer *selects* text (long-press still does).
+- The turn follows the finger through a `ValueNotifier` + a permanently-present
+  `Transform.translate`. Both halves matter: a `setState` per drag frame would
+  rebuild the bubble (markdown/HTML/avatar) 90 times a second, and inserting or
+  removing the `Transform` would re-parent — and so rebuild — the whole subtree.
+- **Editing is the same bubble, not a replacement.** `MessageBubble(editing: ...)`
+  swaps the words for an undecorated `TextField` and the action bar for ✕/✓;
+  everything else (avatar, name, pictures, layout, swipe control) is untouched.
+  Two things keep it from jumping: `decoration: null` (a *decorated* field is 44 px
+  tall whatever its padding says) and the real action bar kept behind the ✕/✓,
+  invisible but still measured (an overflow menu makes it 48 px, a plain row 40).
+  `IntrinsicWidth` is what stops a short turn's bubble from ballooning to the full
+  thread width. One caveat that cannot be fixed: a line ending within ~3 px of the
+  thread's maximum width rewraps, because a caret needs those pixels.
+- **A view preference is not the only thing that must stay off the hot path:**
+  `setSwipe` saves through `_saveConversationsSoon()`. Re-encoding the whole
+  `conversations` blob on the frame that swapped the text is what made stepping
+  through alternatives feel choppy. In a `testWidgets` body, pump past the 400 ms
+  timer or the test fails with a pending timer.
+- **Never read `MediaQuery.padding` in `ChatScreen.build`.** `padding` is
+  `viewPadding` minus `viewInsets`, so it *changes on every frame of the keyboard's
+  animation* — which rebuilt the whole chat (thread, composer, drawer) when the
+  keyboard only ever needed to relayout it. `viewPaddingOf` is the same number and
+  does not move. `test/chat_keyboard_test.dart` pins this by comparing widget
+  identity across a keyboard frame.
+
 ## Recurring Flutter / test traps
 - **`Transform.translate` moves paint, not hit-testing** — a box is only hit
   inside its own layout bounds, so a translated control freezes after one use
@@ -83,6 +123,11 @@ app_version_test.dart` fails on drift — that guard is the real fix; keep it.
 - **`GestureDetector.onPanUpdate` loses the arena** to an enclosing scrollable for
   a mostly-vertical drag. Preview/drag hosts must not be scrollable where a
   vertical drag matters.
+- **A drag in a test is not a drag on a phone.** `tester.drag` sends the touch slop
+  as one jump, so two recognizers with thresholds a couple of pixels apart both
+  trip in the same event and the deeper one wins; a real finger arrives in small
+  moves. Drag on the *words* (`find.text`), not the bubble's centre — the centre
+  can land on the ‹ 1/2 › arrows, where a short drag is simply a tap on one.
 - **`ChatInterface.hashCode` is at the `Object.hash` 20-arg limit** — new fields
   must fold into an existing slot, not add an arg.
 - **Anything layout-conditional: write the full matrix** (TextPlacement ×

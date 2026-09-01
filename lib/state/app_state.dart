@@ -4540,8 +4540,15 @@ class AppState extends ChangeNotifier {
   }
 
   /// Selects the swipe at [swipeIndex] on the message at [index] — the ‹ 1/2 ›
-  /// control under a turn that has alternatives. The selected variant is what
-  /// the chat shows and what later requests send; the others are kept.
+  /// control under a turn that has alternatives, and the sideways swipe over the
+  /// turn itself. The selected variant is what the chat shows and what later
+  /// requests send; the others are kept.
+  ///
+  /// The store is written **shortly after** rather than on this frame: re-encoding
+  /// every message of every chat is tens of milliseconds of JSON on the UI thread,
+  /// and paying it on the same frame as the tap is what made stepping through a
+  /// turn's alternatives feel choppy. Nothing is lost — the save still lands, just
+  /// after the frame that showed the new text.
   Future<void> setSwipe(
       String conversationId, int index, int swipeIndex) async {
     if (_streaming) return;
@@ -4557,7 +4564,7 @@ class AppState extends ChangeNotifier {
     conversation.messages[index] = message.withSwipe(swipeIndex);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    _saveConversationsSoon();
   }
 
   /// The provider a request runs on. The user's active provider selection is

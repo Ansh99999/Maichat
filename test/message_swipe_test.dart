@@ -4,9 +4,11 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
+import 'package:maichat/screens/chat_screen.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:maichat/widgets/message_bubble.dart';
+import 'package:provider/provider.dart' hide Provider;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Replies with a different text on each call, so a regeneration is
@@ -338,22 +340,36 @@ void main() {
 
       expect(find.text('1 / 2'), findsOneWidget);
       expect(find.text('first'), findsOneWidget);
-      // At the first swipe, back is disabled and forward moves on.
-      expect(buttonFor(tester, Icons.chevron_left).onPressed, isNull);
       await tester.tap(find.byIcon(Icons.chevron_right));
       expect(picked, 1);
     });
 
-    testWidgets('stops at the last alternative', (tester) async {
+    testWidgets('the ends wrap round into a ring', (tester) async {
+      var picked = -1;
+      final three = ChatMessage(role: 'assistant', content: 'one')
+          .addSwipe(const MessageVariant(content: 'two'))
+          .addSwipe(const MessageVariant(content: 'three'));
+      // Sitting on the last of three: forward comes back to the first.
       await tester.pumpWidget(host(MessageBubble(
-        message: ChatMessage(role: 'assistant', content: 'first')
-            .addSwipe(const MessageVariant(content: 'second')),
+        message: three,
         ui: const ChatInterface(),
-        onSwipe: (_) {},
+        onSwipe: (i) => picked = i,
       )));
-      expect(find.text('2 / 2'), findsOneWidget);
-      expect(buttonFor(tester, Icons.chevron_right).onPressed, isNull);
+      expect(find.text('3 / 3'), findsOneWidget);
+      expect(buttonFor(tester, Icons.chevron_right).onPressed, isNotNull);
+      await tester.tap(find.byIcon(Icons.chevron_right));
+      expect(picked, 0);
+
+      // And back from the first goes to the last.
+      await tester.pumpWidget(host(MessageBubble(
+        message: three.withSwipe(0),
+        ui: const ChatInterface(),
+        onSwipe: (i) => picked = i,
+      )));
+      expect(find.text('1 / 3'), findsOneWidget);
       expect(buttonFor(tester, Icons.chevron_left).onPressed, isNotNull);
+      await tester.tap(find.byIcon(Icons.chevron_left));
+      expect(picked, 2);
     });
 
     testWidgets('is inert while a reply is streaming', (tester) async {
@@ -386,6 +402,216 @@ void main() {
           expect(find.text('2 / 2'), findsOneWidget);
         }
       }
+    });
+  });
+
+  group('swiping the turn itself', () {
+    Widget host(Widget child) => MaterialApp(
+          home: Scaffold(body: SizedBox(width: 400, height: 600, child: child)),
+        );
+
+    ChatMessage three() => ChatMessage(role: 'assistant', content: 'one')
+        .addSwipe(const MessageVariant(content: 'two'))
+        .addSwipe(const MessageVariant(content: 'three'))
+        .withSwipe(1);
+
+    /// Drags across the turn's **words** — the place a reader's finger actually
+    /// lands, and the place where the text's own selection gestures live to
+    /// compete with. Anywhere else risks landing on the ‹ 1/2 › arrows, where a
+    /// short drag is simply a tap.
+    Future<int?> dragBy(WidgetTester tester, Offset by,
+        {ChatMessage? message,
+        String on = 'two',
+        bool streaming = false,
+        bool editing = false,
+        ChatInterface ui = const ChatInterface()}) async {
+      int? picked;
+      await tester.pumpWidget(host(MessageBubble(
+        message: message ?? three(),
+        ui: ui,
+        streaming: streaming,
+        editing: editing,
+        editController: editing ? TextEditingController(text: 'two') : null,
+        onSwipe: (i) => picked = i,
+      )));
+      await tester.drag(find.text(on), by);
+      await tester.pumpAndSettle();
+      return picked;
+    }
+
+    testWidgets('a drag to the left takes the next alternative',
+        (tester) async {
+      expect(await dragBy(tester, const Offset(-120, 0)), 2);
+    });
+
+    testWidgets('a drag to the right takes the previous one', (tester) async {
+      expect(await dragBy(tester, const Offset(120, 0)), 0);
+    });
+
+    testWidgets('it wraps at both ends, like the arrows', (tester) async {
+      expect(
+          await dragBy(tester, const Offset(-120, 0),
+              message: three().withSwipe(2), on: 'three'),
+          0,
+          reason: 'forward off the end comes back to the first');
+      expect(
+          await dragBy(tester, const Offset(120, 0),
+              message: three().withSwipe(0), on: 'one'),
+          2,
+          reason: 'back off the start goes to the last');
+    });
+
+    testWidgets('a small nudge changes nothing', (tester) async {
+      expect(await dragBy(tester, const Offset(-12, 0)), isNull);
+    });
+
+    testWidgets('a vertical drag is left to the thread', (tester) async {
+      expect(await dragBy(tester, const Offset(0, -160)), isNull);
+    });
+
+    testWidgets('a turn with one reply has nothing to swipe', (tester) async {
+      expect(
+          await dragBy(tester, const Offset(-120, 0),
+              message: ChatMessage(role: 'assistant', content: 'only'),
+              on: 'only'),
+          isNull);
+    });
+
+    testWidgets('nothing swipes while a reply streams in', (tester) async {
+      expect(await dragBy(tester, const Offset(-120, 0), streaming: true),
+          isNull);
+    });
+
+    testWidgets('nothing swipes while the turn is being edited',
+        (tester) async {
+      expect(
+          await dragBy(tester, const Offset(-120, 0), editing: true), isNull);
+    });
+
+    testWidgets('the turn follows the finger and settles back', (tester) async {
+      await tester.pumpWidget(host(MessageBubble(
+        message: three(),
+        ui: const ChatInterface(),
+        onSwipe: (_) {},
+      )));
+      final home = tester.getTopLeft(find.text('two'));
+
+      final gesture = await tester.startGesture(tester.getCenter(find.text('two')));
+      await gesture.moveBy(const Offset(-60, 0));
+      await tester.pump();
+      final held = tester.getTopLeft(find.text('two'));
+      expect(held.dx, lessThan(home.dx), reason: 'the turn is pulled along');
+      expect(home.dx - held.dx, lessThan(60),
+          reason: 'with resistance, never as far as the finger');
+      expect(held.dy, home.dy, reason: 'and never up or down');
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.text('two')).dx, home.dx,
+          reason: 'and eases home once let go');
+    });
+
+    testWidgets('a drag never scrolls the thread out from under itself',
+        (tester) async {
+      var picked = -1;
+      final controller = ScrollController();
+      await tester.pumpWidget(host(ListView(
+        controller: controller,
+        reverse: true,
+        children: [
+          for (var i = 0; i < 12; i++)
+            MessageBubble(
+              message: three(),
+              ui: const ChatInterface(),
+              onSwipe: (v) => picked = v,
+            ),
+        ],
+      )));
+      await tester.drag(find.text('two').first, const Offset(-120, 0));
+      await tester.pumpAndSettle();
+      expect(picked, 2);
+      expect(controller.position.pixels, 0);
+    });
+
+    testWidgets('the thread still scrolls when dragged up the words',
+        (tester) async {
+      var picked = -1;
+      final controller = ScrollController();
+      await tester.pumpWidget(host(ListView(
+        controller: controller,
+        reverse: true,
+        children: [
+          for (var i = 0; i < 12; i++)
+            MessageBubble(
+              message: three(),
+              ui: const ChatInterface(),
+              onSwipe: (v) => picked = v,
+            ),
+        ],
+      )));
+      await tester.drag(find.text('two').first, const Offset(0, 220));
+      await tester.pumpAndSettle();
+      expect(controller.position.pixels, greaterThan(0),
+          reason: 'the sheet over each turn takes sideways drags only');
+      expect(picked, -1);
+    });
+
+    testWidgets('a long press on the words still belongs to the text',
+        (tester) async {
+      var sheetOpened = false;
+      await tester.pumpWidget(host(MessageBubble(
+        message: three(),
+        ui: const ChatInterface(),
+        onSwipe: (_) {},
+        onLongPress: () => sheetOpened = true,
+      )));
+      await tester.longPress(find.text('two'));
+      await tester.pumpAndSettle();
+      // The selectable text's own long press still wins it — the sheet over the
+      // turn claims sideways drags and nothing else.
+      expect(sheetOpened, isFalse);
+    });
+  });
+
+  group('swiping a turn in the real chat', () {
+    testWidgets('a drag across the reply picks the next alternative',
+        (tester) async {
+      final state = await _state(_SequenceClient(['reply']));
+      final alice = Character(id: 'alice', name: 'Alice');
+      await state.addCharacter(alice);
+      state.startChatWithCharacter(alice);
+      // Seeded rather than sent: a reply's paint cadence never ticks inside a
+      // widget test, so awaiting send() would hang.
+      state.active.messages
+        ..clear()
+        ..add(ChatMessage(role: 'user', content: 'Which birds?'))
+        ..add(ChatMessage(role: 'assistant', content: 'Gulls, mostly.')
+            .addSwipe(const MessageVariant(content: 'Terns, mostly.'))
+            .withSwipe(0));
+
+      await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: const MaterialApp(home: ChatScreen()),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('1 / 2'), findsOneWidget);
+
+      await tester.drag(find.text('Gulls, mostly.'), const Offset(-120, 0));
+      await tester.pumpAndSettle();
+
+      expect(state.active.messages[1].swipeIndex, 1);
+      expect(find.text('Terns, mostly.'), findsOneWidget);
+      expect(find.text('2 / 2'), findsOneWidget);
+
+      // And round the ring, back to the first.
+      await tester.drag(find.text('Terns, mostly.'), const Offset(-120, 0));
+      await tester.pumpAndSettle();
+      expect(state.active.messages[1].swipeIndex, 0);
+
+      // The store is written a beat later, off the frame that showed the swap —
+      // let that land rather than leaving a timer behind.
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
     });
   });
 }
