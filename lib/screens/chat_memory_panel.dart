@@ -310,7 +310,7 @@ class _SummarySection extends StatelessWidget {
                               busy
                                   ? 'Summarising…'
                                   : '${cfg!.totalTokens} tokens · to message '
-                                      '${cfg.lastSummarizedIndex}',
+                                      '${state.summaryCoverage(conversation.id)}',
                               style: theme.textTheme.labelMedium
                                   ?.copyWith(color: scheme.onSurfaceVariant),
                             ),

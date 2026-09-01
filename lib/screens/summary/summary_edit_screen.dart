@@ -30,6 +30,10 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   final _model = TextEditingController();
   final _title = TextEditingController();
 
+  /// The summary's start line — the message an incremental run counts forward
+  /// from. Held as text so "0" and an empty field can both be typed through.
+  final _base = TextEditingController();
+
   String? _providerId;
   SummaryMethod _method = SummaryMethod.rolling;
   bool _notify = false;
@@ -41,6 +45,12 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   final List<SummarySegment> _segments = [];
   final List<TextEditingController> _segTitle = [];
   final List<TextEditingController> _segBody = [];
+
+  /// The range each block declares, as text. Editable on a hand-written block —
+  /// that declaration is what stops a run re-reading history the block already
+  /// describes — and shown read-only on a generated one.
+  final List<TextEditingController> _segStart = [];
+  final List<TextEditingController> _segEnd = [];
 
   /// Which segment indices are currently in edit mode (typing in place).
   final Set<int> _editing = {};
@@ -60,6 +70,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   void _loadFrom(ChatSummary cfg) {
     _title.text = cfg.title;
     _interval.text = '${cfg.interval}';
+    _base.text = '${cfg.effectiveBase}';
     _budget.text = cfg.budget?.toString() ?? '';
     _prompt.text = cfg.prompt ?? '';
     _model.text = cfg.model ?? '';
@@ -74,6 +85,8 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     for (final s in _segments) {
       _segTitle.add(TextEditingController(text: s.title));
       _segBody.add(TextEditingController(text: s.content));
+      _segStart.add(TextEditingController(text: '${s.startIndex}'));
+      _segEnd.add(TextEditingController(text: '${s.endIndex}'));
     }
     _editing.clear();
     _collapsed.clear();
@@ -90,13 +103,22 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     for (final c in _segBody) {
       c.dispose();
     }
+    for (final c in _segStart) {
+      c.dispose();
+    }
+    for (final c in _segEnd) {
+      c.dispose();
+    }
     _segTitle.clear();
     _segBody.clear();
+    _segStart.clear();
+    _segEnd.clear();
   }
 
   @override
   void dispose() {
     _interval.dispose();
+    _base.dispose();
     _budget.dispose();
     _prompt.dispose();
     _model.dispose();
@@ -119,6 +141,8 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
         _segments[i].copyWith(
           title: _segTitle[i].text.trim(),
           content: _segBody[i].text.trim(),
+          startIndex: int.tryParse(_segStart[i].text.trim()) ?? 0,
+          endIndex: int.tryParse(_segEnd[i].text.trim()) ?? 0,
           tokens: state.estimateTokens(_segBody[i].text.trim()),
         ),
     ];
@@ -128,6 +152,9 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     return current.copyWith(
       title: title,
       interval: int.tryParse(_interval.text.trim()) ?? current.interval,
+      // An empty field reads as 0 rather than as "undecided": the page has shown
+      // the user a number, so leaving it blank is a choice, not a gap.
+      baseIndex: int.tryParse(_base.text.trim()) ?? 0,
       budget:
           _budget.text.trim().isEmpty ? null : int.tryParse(_budget.text.trim()),
       providerId: _providerId,
@@ -167,13 +194,15 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       _toast('The memory already covers every message.');
       return;
     }
+    final runs = cfg.pendingRanges(to, force: true).length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Summarise now'),
         content: Text(cfg.method == SummaryMethod.rolling
             ? 'Re-condense the whole chat (messages 1–$to) into the summary now?'
-            : 'Summarise messages ${from + 1}–$to and add them to the memory now?'),
+            : 'Summarise messages ${from + 1}–$to and add them to the memory '
+                'now?${_runCost(runs)}'),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -189,17 +218,29 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     _afterRun(state);
   }
 
+  /// " That is about N summary requests." — spelled out whenever a run is more
+  /// than one request, so an expensive rebuild announces itself before it starts
+  /// rather than in the provider's bill.
+  static String _runCost(int runs) =>
+      runs > 1 ? ' That is about $runs summary requests.' : '';
+
   Future<void> _resummarize() async {
     final state = context.read<AppState>();
     await state.setSummary(widget.conversationId, _draftSummary(state));
     if (!mounted) return;
+    final c = state.conversationById(widget.conversationId);
+    final cfg = c?.summary;
+    if (c == null || cfg == null) return;
+    final runs =
+        cfg.pendingRanges(c.messages.length, force: true, fromStart: true).length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Re-summarise from the start?'),
-        content: const Text(
-          'This deletes the current summary and rebuilds it from the very first '
-          'message. Any manual edits you made to the segments will be lost.',
+        content: Text(
+          'This deletes the generated blocks and rebuilds the memory from the '
+          'very first message, ignoring the start line (your own notes are '
+          'kept).${_runCost(runs)}',
         ),
         actions: [
           TextButton(
@@ -344,6 +385,8 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     setState(() {
       _segTitle.removeAt(i).dispose();
       _segBody.removeAt(i).dispose();
+      _segStart.removeAt(i).dispose();
+      _segEnd.removeAt(i).dispose();
       _segments.removeAt(i);
       // Indices shifted; rebuild the edit/collapse sets from the segments that
       // remain (collapse rides on the segment itself, so it is preserved).
@@ -359,6 +402,10 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
   /// Adds an empty, hand-written block (the pencil button) and drops straight
   /// into editing it. It is treated exactly like a generated block, but is never
   /// wiped by a re-summarise.
+  ///
+  /// Its range starts undeclared. A note about a character is not a claim to have
+  /// summarised anything, so declaring what it covers — and thereby moving where
+  /// the next run starts — stays the user's own call.
   void _addManual() {
     setState(() {
       _segments.add(SummarySegment(
@@ -367,9 +414,47 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
       ));
       _segTitle.add(TextEditingController());
       _segBody.add(TextEditingController());
+      _segStart.add(TextEditingController(text: '0'));
+      _segEnd.add(TextEditingController(text: '0'));
       _editing.add(_segments.length - 1);
       _dirty = true;
     });
+  }
+
+  /// Deletes every generated block, keeping the user's own notes — the way back
+  /// from a memory that filled up with blocks it should never have made.
+  Future<void> _clearGenerated() async {
+    final state = context.read<AppState>();
+    final count = _segments.where((s) => !s.manual).length;
+    if (count == 0) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(count == 1
+            ? 'Delete the generated block?'
+            : 'Delete $count generated blocks?'),
+        content: const Text(
+            'Your own notes and the start line are kept. Nothing is summarised '
+            'again until the next interval.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    // Save the draft first so the config edits on screen are not lost, then let
+    // AppState do the removal and reload from what it stored.
+    await state.setSummary(widget.conversationId, _draftSummary(state));
+    await state.clearGeneratedSummary(widget.conversationId);
+    if (!mounted) return;
+    final cfg = state.conversationById(widget.conversationId)?.summary;
+    if (cfg != null) setState(() => _loadFrom(cfg));
+    _toast(count == 1 ? 'Generated block deleted.' : '$count blocks deleted.');
   }
 
   /// A snackbar. [BrandedText] so "not a MaiChat summary" carries the mark, the
@@ -453,7 +538,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  _configPanel(state),
+                  _configPanel(state, c.messages.length),
                   const SizedBox(height: 8),
                   const Divider(height: 1),
                   const SizedBox(height: 12),
@@ -488,7 +573,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
                               SizedBox(height: 24),
                             ],
                           )
-                        : _segmentsView(theme, scheme),
+                        : _segmentsView(theme, scheme, c.messages.length),
                   ),
                 ],
               ),
@@ -496,17 +581,60 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     );
   }
 
-  Widget _segmentsView(ThemeData theme, ColorScheme scheme) {
+  /// Where the memory reaches according to the *draft* — the start line typed in
+  /// the config fold, or the furthest block that declares a range. Computed from
+  /// the controllers rather than from [_draftSummary] so it costs nothing to ask
+  /// on every build, and so the warning below reacts as the user types.
+  int _draftCoverage(int count) {
+    var covered = int.tryParse(_base.text.trim()) ?? 0;
+    for (var i = 0; i < _segments.length; i++) {
+      final end = int.tryParse(_segEnd[i].text.trim()) ?? 0;
+      if (end > covered) covered = end;
+    }
+    return covered.clamp(0, count);
+  }
+
+  Widget _segmentsView(ThemeData theme, ColorScheme scheme, int count) {
+    final generated = _segments.where((s) => !s.manual).length;
+    final interval = int.tryParse(_interval.text.trim()) ?? 0;
+    // The trap this whole feature exists to close: an incremental memory that
+    // starts at message 1 on a chat that arrived with a history will condense the
+    // lot, a window at a time. Say so where it can be fixed in one tap.
+    final wouldBackfill = _method == SummaryMethod.incremental &&
+        interval > 0 &&
+        count > interval &&
+        _draftCoverage(count) == 0;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: OutlinedButton.icon(
-            onPressed: _addManual,
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Write your own'),
+        if (wouldBackfill) ...[
+          _BackfillWarning(
+            messages: count,
+            runs: count ~/ interval,
+            onUseLatest: () {
+              setState(() => _base.text = '$count');
+              _markDirty();
+            },
           ),
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: _addManual,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('Write your own'),
+            ),
+            const Spacer(),
+            if (generated > 0)
+              TextButton(
+                onPressed: _clearGenerated,
+                child: Text(generated == 1
+                    ? 'Clear 1 generated'
+                    : 'Clear $generated generated'),
+              ),
+          ],
         ),
         const SizedBox(height: 4),
         if (_segments.isEmpty)
@@ -626,6 +754,7 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
               ],
             ),
             const SizedBox(height: 4),
+            if (!collapsed) _rangeRow(i, theme, scheme, editing, manual),
             AnimatedSize(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeInOut,
@@ -666,7 +795,70 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
     );
   }
 // CONFIG-MARKER
-  Widget _configPanel(AppState state) {
+  /// What a block says it covers. On a hand-written block being edited these are
+  /// two number fields — declaring a range here is what tells an incremental run
+  /// it has nothing to do for those messages, which is how a summary brought in
+  /// from elsewhere stops the memory re-reading the history it describes. On a
+  /// generated block the range is read-only: its indices are real.
+  Widget _rangeRow(int i, ThemeData theme, ColorScheme scheme, bool editing,
+      bool manual) {
+    final start = int.tryParse(_segStart[i].text.trim()) ?? 0;
+    final end = int.tryParse(_segEnd[i].text.trim()) ?? 0;
+    final caption = theme.textTheme.labelSmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+    );
+
+    if (!(manual && editing)) {
+      if (end <= 0) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(left: 12, bottom: 6),
+        child: Text('Covers messages ${start + 1}–$end', style: caption),
+      );
+    }
+
+    Widget field(TextEditingController controller, String label) => SizedBox(
+          width: 84,
+          child: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall,
+            onChanged: (_) => _markDirty(),
+            decoration: InputDecoration(
+              isDense: true,
+              labelText: label,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('Covers messages', style: caption),
+              const SizedBox(width: 8),
+              field(_segStart[i], 'from'),
+              const SizedBox(width: 8),
+              field(_segEnd[i], 'to'),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            end <= 0
+                ? 'Leave at 0 if this note is not a summary of a stretch of chat.'
+                : 'A run will start after message $end.',
+            style: caption,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _configPanel(AppState state, int count) {
     final providerIds = state.providers.map((p) => p.id).toSet();
     final providerValue =
         (_providerId != null && providerIds.contains(_providerId))
@@ -707,6 +899,36 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
                 _interval.text = '$v';
                 _markDirty();
               },
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _base,
+                keyboardType: TextInputType.number,
+                onChanged: (_) => _markDirty(),
+                decoration: const InputDecoration(
+                  labelText: 'Already summarised up to',
+                  helperText: 'Runs count forward from this message. 0 '
+                      'summarises the chat from its first.',
+                  helperMaxLines: 3,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: TextButton(
+                onPressed: () {
+                  setState(() => _base.text = '$count');
+                  _markDirty();
+                },
+                child: Text('Use latest ($count)'),
+              ),
             ),
           ],
         ),
@@ -808,6 +1030,67 @@ class _SummaryEditScreenState extends State<SummaryEditScreen> {
               : const SizedBox(width: double.infinity),
         ),
       ],
+    );
+  }
+}
+
+/// The card that heads off the bug this feature was built for: an incremental
+/// memory whose start line is still message 1 on a chat that arrived with a
+/// history behind it. Left alone, the next run condenses the whole transcript a
+/// window at a time; the action moves the line to the end of the chat, which is
+/// what "continue from where it left off" was meant to mean.
+class _BackfillWarning extends StatelessWidget {
+  const _BackfillWarning({
+    required this.messages,
+    required this.runs,
+    required this.onUseLatest,
+  });
+
+  final int messages;
+  final int runs;
+  final VoidCallback onUseLatest;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.history_toggle_off,
+                  size: 20, color: scheme.onTertiaryContainer),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'This chat has $messages messages and the memory starts at '
+                  'message 1, so a run would summarise all of them — about '
+                  '$runs requests. If the history is already covered, or you '
+                  'only want the memory from here on, start it at $messages.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: scheme.onTertiaryContainer),
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: onUseLatest,
+              child: Text('Start at $messages'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

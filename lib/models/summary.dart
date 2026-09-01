@@ -46,9 +46,13 @@ class SummarySegment {
   String content;
 
   /// The message range this segment covers, as indices into
-  /// `Conversation.messages` (start inclusive, end exclusive). Advisory — indices
-  /// shift if earlier turns are deleted, so the stored [content] is the source of
-  /// truth, not the range.
+  /// `Conversation.messages` (start inclusive, end exclusive). A generated block
+  /// always has one; on a hand-written block it is the user's own declaration of
+  /// what their text already describes, and `0` means "not declared".
+  ///
+  /// It drives [ChatSummary.coveredIndex] — so it decides where the next run
+  /// starts — but the stored [content] is still what reaches the prompt, and the
+  /// indices go stale if earlier turns are deleted.
   int startIndex;
   int endIndex;
   DateTime createdAt;
@@ -129,6 +133,7 @@ class ChatSummary {
     this.title = '',
     List<SummarySegment>? segments,
     this.lastSummarizedIndex = 0,
+    this.baseIndex,
   }) : segments = segments ?? <SummarySegment>[];
 
   /// Whether summarisation is active for this chat.
@@ -162,6 +167,30 @@ class ChatSummary {
   /// The exclusive message index up to which the chat has been summarised.
   int lastSummarizedIndex;
 
+  /// The message index an incremental run counts forward from — the summary's
+  /// start line. It is what makes "continue from where it left off" mean it: a
+  /// chat that already had 2000 messages when the memory was switched on (or
+  /// whose summary was pasted in from somewhere else) starts at 2000 rather than
+  /// condensing the whole transcript a window at a time.
+  ///
+  /// `null` means "never decided" — a config written before this field existed;
+  /// [AppState.maybeSummarize] settles it once, on the next run. `0` means "from
+  /// the first message", explicitly. Read it through [effectiveBase].
+  int? baseIndex;
+
+  /// [baseIndex] with the undecided case folded away, so the pure range logic
+  /// never has to think about null.
+  int get effectiveBase => baseIndex ?? 0;
+
+  /// True when nothing anchors this summary yet: no baseline, no progress mark,
+  /// and no block that declares a range. Only then may a baseline be stamped —
+  /// otherwise switching the feature off and on again would move the start line
+  /// forward and orphan every message in between.
+  bool get unanchored =>
+      baseIndex == null &&
+      lastSummarizedIndex == 0 &&
+      segments.every((s) => s.endIndex <= 0);
+
   /// The instruction actually sent to the model.
   String get effectivePrompt => useCustomPrompt && (prompt?.trim().isNotEmpty ?? false)
       ? prompt!.trim()
@@ -188,16 +217,21 @@ class ChatSummary {
     return sum;
   }
 
-  /// The highest message index actually covered by a *generated* segment (0 if
-  /// none). Unlike [lastSummarizedIndex] — a running high-water mark that a run
-  /// advances — this is recomputed from the segments that still exist, so
-  /// deleting a block un-covers its range. It is what a manual "Summarise now"
+  /// The highest message index this chat's memory actually covers (never below
+  /// [effectiveBase]). Unlike [lastSummarizedIndex] — a running high-water mark
+  /// that a run advances — this is recomputed from the blocks that still exist,
+  /// so deleting a block un-covers its range. It is what a manual "Summarise now"
   /// works from, which is why deleting a memory block and re-summarising refills
   /// exactly that gap.
+  ///
+  /// A block counts here only if it declares a range. A generated block always
+  /// does; a hand-written one counts once the user says what it covers, which is
+  /// how a summary pasted in from another app stops the memory re-reading the
+  /// history it already describes.
   int coveredIndex(int count) {
-    var covered = 0;
+    var covered = effectiveBase;
     for (final s in segments) {
-      if (s.manual) continue;
+      if (s.endIndex <= 0) continue;
       if (s.endIndex > covered) covered = s.endIndex;
     }
     return covered.clamp(0, count);
@@ -209,20 +243,34 @@ class ChatSummary {
   /// threshold and works from [coveredIndex] rather than [lastSummarizedIndex],
   /// so it always picks up whatever is not already in the memory — even a single
   /// new message, or the gap left by a deleted block. An automatic run only
-  /// fires once a full [interval] of new messages has accrued.
-  List<(int, int)> pendingRanges(int count, {required bool force}) {
+  /// fires once a full [interval] of new messages has accrued, and returns **at
+  /// most one window**: a chat that somehow falls a long way behind catches up a
+  /// window per reply instead of firing a hundred requests at once.
+  ///
+  /// [fromStart] is the explicit "rebuild from the very first message" route
+  /// (the Re-summarise button). It overrides the baseline without erasing it, so
+  /// the user's own start line survives the rebuild.
+  List<(int, int)> pendingRanges(int count,
+      {required bool force, bool fromStart = false}) {
     if (interval <= 0 || count <= 0) return const <(int, int)>[];
     if (method == SummaryMethod.rolling) {
       if (!force && count - lastSummarizedIndex < interval) {
         return const <(int, int)>[];
       }
+      // Rolling means what it says: the whole chat, every time. It deliberately
+      // ignores the baseline — the start line is the incremental method's.
       return <(int, int)>[(0, count)];
     }
     final out = <(int, int)>[];
-    var s = (force ? coveredIndex(count) : lastSummarizedIndex).clamp(0, count);
+    var s = 0;
+    if (!fromStart) {
+      final progress = force ? coveredIndex(count) : lastSummarizedIndex;
+      s = (progress > effectiveBase ? progress : effectiveBase).clamp(0, count);
+    }
     while (count - s >= interval) {
       out.add((s, s + interval));
       s += interval;
+      if (!force) break;
     }
     if (force && s < count) out.add((s, count));
     return out;
@@ -241,6 +289,7 @@ class ChatSummary {
     String? title,
     List<SummarySegment>? segments,
     int? lastSummarizedIndex,
+    Object? baseIndex = _unset,
   }) =>
       ChatSummary(
         enabled: enabled ?? this.enabled,
@@ -257,6 +306,8 @@ class ChatSummary {
         segments: segments ??
             this.segments.map((s) => s.copyWith()).toList(),
         lastSummarizedIndex: lastSummarizedIndex ?? this.lastSummarizedIndex,
+        baseIndex:
+            identical(baseIndex, _unset) ? this.baseIndex : baseIndex as int?,
       );
 
   static const Object _unset = Object();
@@ -277,6 +328,9 @@ class ChatSummary {
         if (title.isNotEmpty) 'title': title,
         'segments': segments.map((s) => s.toJson()).toList(),
         'lastSummarizedIndex': lastSummarizedIndex,
+        // Written even when 0 — "explicitly from the first message" and "never
+        // decided" have to stay distinguishable across a reload.
+        if (baseIndex != null) 'baseIndex': baseIndex,
       };
 
   factory ChatSummary.fromJson(Map<String, dynamic> json) => ChatSummary(
@@ -300,6 +354,7 @@ class ChatSummary {
                 .toList() ??
             <SummarySegment>[],
         lastSummarizedIndex: (json['lastSummarizedIndex'] as num?)?.toInt() ?? 0,
+        baseIndex: (json['baseIndex'] as num?)?.toInt(),
       );
 }
 

@@ -101,8 +101,7 @@ void main() {
             segments: segments,
           );
 
-      test('coveredIndex tracks the generated segments, not the high-water mark',
-          () {
+      test('coveredIndex tracks the blocks that declare a range', () {
         final cfg = incremental(
           lastSummarizedIndex: 60,
           segments: [
@@ -115,10 +114,27 @@ void main() {
         // even though lastSummarizedIndex still reads 60.
         cfg.segments.removeWhere((s) => s.id == 'b');
         expect(cfg.coveredIndex(60), 50);
-        // Manual (hand-written) blocks never count towards coverage.
+        // A hand-written note that declares nothing anchors nothing.
+        cfg.segments
+            .add(SummarySegment(id: 'note', content: 'a fact', manual: true));
+        expect(cfg.coveredIndex(60), 50);
+        // One that declares a range does count — that is how a summary pasted in
+        // from another app tells the memory what it already covers. Clamped to
+        // the messages that exist.
         cfg.segments.add(SummarySegment(
             id: 'm', startIndex: 0, endIndex: 999, manual: true));
-        expect(cfg.coveredIndex(60), 50);
+        expect(cfg.coveredIndex(60), 60);
+      });
+
+      test('the baseline is a floor under coverage', () {
+        final cfg = incremental(interval: 30)..baseIndex = 2000;
+        expect(cfg.coveredIndex(2000), 2000);
+        // A stale block below the line does not drag coverage back down.
+        cfg.segments.add(SummarySegment(id: 'old', endIndex: 40));
+        expect(cfg.coveredIndex(2000), 2000);
+        // A generated block above it wins.
+        cfg.segments.add(SummarySegment(id: 'new', endIndex: 2030));
+        expect(cfg.coveredIndex(2035), 2030);
       });
 
       test('a forced run re-covers the gap left by a deleted block', () {
@@ -167,6 +183,101 @@ void main() {
         expect(cfg.pendingRanges(42, force: false), isEmpty);
         expect(cfg.pendingRanges(42, force: true), [(0, 42)]);
       });
+
+      test('rolling ignores the baseline — it means the whole chat', () {
+        final cfg = ChatSummary(enabled: true, interval: 10)..baseIndex = 2000;
+        expect(cfg.pendingRanges(2010, force: true), [(0, 2010)]);
+        expect(cfg.pendingRanges(2010, force: false), [(0, 2010)]);
+      });
+    });
+
+    group('the start line (a chat that arrived with a history)', () {
+      ChatSummary imported({int interval = 30, int? baseIndex}) => ChatSummary(
+            enabled: true,
+            method: SummaryMethod.incremental,
+            interval: interval,
+            baseIndex: baseIndex,
+          );
+
+      test('a summary that already covers the chat has nothing to do', () {
+        // The reported bug: 2000 imported messages, a pasted summary covering
+        // them, "continue from where it left off" — and 67 windows came back.
+        final cfg = imported(baseIndex: 2000);
+        expect(cfg.pendingRanges(2000, force: false), isEmpty);
+        expect(cfg.pendingRanges(2000, force: true), isEmpty);
+      });
+
+      test('it counts forward from the line, not from the first message', () {
+        final cfg = imported(baseIndex: 2000);
+        expect(cfg.pendingRanges(2035, force: false), [(2000, 2030)]);
+        expect(cfg.pendingRanges(2035, force: true), [(2000, 2030), (2030, 2035)]);
+      });
+
+      test('a declared manual range moves the line on its own', () {
+        final cfg = imported()
+          ..segments.add(SummarySegment(
+              id: 'pasted', content: 'the story so far', manual: true,
+              startIndex: 0, endIndex: 1350));
+        // Forced runs work from coverage, which the declaration now sets.
+        expect(cfg.pendingRanges(1380, force: true), [(1350, 1380)]);
+      });
+
+      test('an automatic run never emits more than one window', () {
+        final cfg = imported(baseIndex: 0);
+        // Before the fix this walked 0→1980 in 66 windows, in one burst.
+        expect(cfg.pendingRanges(2000, force: false), [(0, 30)]);
+        // A forced run still offers the whole backlog; the button says so.
+        expect(cfg.pendingRanges(2000, force: true).length, 67);
+      });
+
+      test('progress past the line wins, and a stale line never rewinds it', () {
+        final cfg = imported(baseIndex: 2000)..lastSummarizedIndex = 2060;
+        expect(cfg.pendingRanges(2090, force: false), [(2060, 2090)]);
+        // …and a line ahead of stale progress still holds.
+        final behind = imported(baseIndex: 2000)..lastSummarizedIndex = 40;
+        expect(behind.pendingRanges(2030, force: false), [(2000, 2030)]);
+      });
+
+      test('fromStart overrides the line without erasing it', () {
+        final cfg = imported(baseIndex: 2000);
+        final ranges = cfg.pendingRanges(2000, force: true, fromStart: true);
+        expect(ranges.first, (0, 30));
+        expect(ranges.length, 67);
+        expect(cfg.baseIndex, 2000, reason: 'the rebuild must not wipe the mark');
+      });
+
+      test('unanchored says whether a line may be stamped', () {
+        expect(imported().unanchored, isTrue);
+        expect(imported(baseIndex: 0).unanchored, isFalse,
+            reason: '0 is a decision, not an absence');
+        expect((imported()..lastSummarizedIndex = 30).unanchored, isFalse);
+        // A note with no declared range still leaves the summary unanchored.
+        final noted = imported()
+          ..segments.add(SummarySegment(id: 'n', content: 'x', manual: true));
+        expect(noted.unanchored, isTrue);
+        final declared = imported()
+          ..segments.add(SummarySegment(id: 'd', endIndex: 12, manual: true));
+        expect(declared.unanchored, isFalse);
+      });
+
+      test('the line round-trips, and 0 stays distinct from unset', () {
+        expect(imported().toJson().containsKey('baseIndex'), isFalse);
+        expect(ChatSummary.fromJson(imported().toJson()).baseIndex, isNull);
+        expect(imported(baseIndex: 0).toJson()['baseIndex'], 0);
+        expect(ChatSummary.fromJson(imported(baseIndex: 0).toJson()).baseIndex, 0);
+        expect(
+            ChatSummary.fromJson(imported(baseIndex: 2000).toJson()).baseIndex,
+            2000);
+      });
+
+      test('copyWith and clone carry the line, and can clear it', () {
+        final cfg = imported(baseIndex: 2000);
+        expect(cfg.copyWith(interval: 10).baseIndex, 2000);
+        expect(cfg.clone().baseIndex, 2000);
+        expect(cfg.copyWith(baseIndex: 40).baseIndex, 40);
+        expect(cfg.copyWith(baseIndex: null).baseIndex, isNull);
+      });
+
     });
   });
 

@@ -65,12 +65,14 @@ class AppState extends ChangeNotifier {
     EmbeddingStore? embeddings,
     BackupStore? backups,
     DriveClient? drive,
+    Summarizer? summarizer,
     this.loadTimeout = const Duration(seconds: 30),
   })  : _storage = storage ?? Storage(),
         _client = client ?? ChatClient(),
         _imageClient = imageClient ?? ImageClient(),
         _updateService = updateService ?? UpdateService(),
-        _drive = drive ?? DriveClient() {
+        _drive = drive ?? DriveClient(),
+        _summarizer = summarizer ?? Summarizer() {
     _avatars = avatars;
     _vectors = embeddings;
     _backups = backups;
@@ -136,7 +138,7 @@ class AppState extends ChangeNotifier {
   late final WorldInfoScanner _world = WorldInfoScanner(tokens: _tokenizer);
 
   /// Generates chat summaries in the background, off the chat's streaming path.
-  final Summarizer _summarizer = Summarizer();
+  final Summarizer _summarizer;
 
   /// Where embedding vectors are kept (files, like [AvatarStore]); null when the
   /// platform would not name a directory, in which case embeddings stay off.
@@ -2823,11 +2825,18 @@ class AppState extends ChangeNotifier {
   /// Turns the summary feature on/off for a chat, creating the config on first
   /// enable. Does not itself summarise — that happens on the next send (or via
   /// [summarizeNow]).
+  ///
+  /// Switching it on part-way through a chat stamps the summary's start line at
+  /// the message the chat is on, so "continue from where it left off" counts
+  /// forward from here rather than condensing the whole history a window at a
+  /// time. The number is shown, and editable, on the memory page — setting it to
+  /// 0 (or pressing Re-summarise) is how the history gets summarised after all.
   Future<void> setSummaryEnabled(String conversationId, bool enabled) async {
     final c = _conversationById(conversationId);
     if (c == null) return;
     final cfg = c.summary ?? ChatSummary();
     cfg.enabled = enabled;
+    if (enabled && cfg.unanchored) cfg.baseIndex = c.messages.length;
     if (cfg.title.trim().isEmpty) cfg.title = '${c.title} summary';
     c.summary = cfg;
     c.updatedAt = DateTime.now();
@@ -2853,10 +2862,31 @@ class AppState extends ChangeNotifier {
     final cfg = conversation.summary;
     if (cfg == null || !cfg.enabled || cfg.interval <= 0) return;
     if (_summarizing.contains(conversation.id)) return;
+    if (_settleBaseline(conversation, cfg)) return;
     if (conversation.messages.length - cfg.lastSummarizedIndex < cfg.interval) {
       return;
     }
     await _runSummary(conversation, cfg, force: false);
+  }
+
+  /// Decides a start line for a summary written before there was one, and reports
+  /// whether that alone was the work for this run.
+  ///
+  /// A config from an older build has no [ChatSummary.baseIndex] at all, and
+  /// nothing distinguishes "this chat was already 2000 messages long when the
+  /// memory arrived" from "this chat has grown to 25 messages under a memory that
+  /// has not fired yet". The backlog tells them apart: more than one interval's
+  /// worth of unsummarised history means the chat predates the memory, so the
+  /// start line lands at the end and nothing is condensed this time. Anything
+  /// smaller is a chat that really should have its own history summarised, so the
+  /// line lands at 0 and the run proceeds.
+  bool _settleBaseline(Conversation conversation, ChatSummary cfg) {
+    if (cfg.baseIndex != null) return false;
+    final count = conversation.messages.length;
+    final predatesTheMemory = cfg.unanchored && count >= cfg.interval * 2;
+    cfg.baseIndex = predatesTheMemory ? count : 0;
+    _saveConversationsSoon();
+    return predatesTheMemory;
   }
 
   /// Summarises the messages since the last run right now, even if the interval
@@ -2870,13 +2900,31 @@ class AppState extends ChangeNotifier {
 
   /// Wipes the summary and rebuilds it from the start (the "Re-summarise" button).
   /// The user's own hand-written blocks are kept.
+  ///
+  /// This is the one route that walks the history from message 1. It overrides the
+  /// summary's start line without erasing it, so a mark the user set by hand
+  /// survives the rebuild.
   Future<void> resummarize(String conversationId) async {
     final c = _conversationById(conversationId);
     final cfg = c?.summary;
     if (c == null || cfg == null) return;
     cfg.segments.removeWhere((s) => !s.manual);
     cfg.lastSummarizedIndex = 0;
-    await _runSummary(c, cfg, force: true);
+    await _runSummary(c, cfg, force: true, fromStart: true);
+  }
+
+  /// Drops every generated block, keeping the user's own notes and their start
+  /// line — the way out of a memory that filled up with blocks it should never
+  /// have made. Unlike [resummarize] it does not then generate anything.
+  Future<void> clearGeneratedSummary(String conversationId) async {
+    final c = _conversationById(conversationId);
+    final cfg = c?.summary;
+    if (c == null || cfg == null) return;
+    cfg.segments.removeWhere((s) => !s.manual);
+    cfg.lastSummarizedIndex = 0;
+    c.updatedAt = DateTime.now();
+    notifyListeners();
+    await _saveConversations();
   }
 
   /// Removes a chat's summary entirely (the full-screen "delete" action).
@@ -2889,9 +2937,10 @@ class AppState extends ChangeNotifier {
     await _saveConversations();
   }
 
-  /// The highest message index a chat's memory actually covers right now,
-  /// recomputed from the segments that still exist (so a deleted block is no
-  /// longer counted). The memory editor uses this to describe, and gate, a
+  /// The highest message index a chat's memory actually covers right now: its
+  /// start line, or the furthest block that declares a range, whichever is
+  /// higher (so a deleted block is no longer counted). The memory editor and the
+  /// drawer's readout both describe the chat with this, and it is what gates a
   /// manual "Summarise now".
   int summaryCoverage(String conversationId) {
     final c = _conversationById(conversationId);
@@ -4616,12 +4665,12 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _runSummary(Conversation c, ChatSummary cfg,
-      {required bool force}) async {
+      {required bool force, bool fromStart = false}) async {
     if (_summarizing.contains(c.id)) return;
     final provider = _summaryProvider(cfg, c);
     if (provider == null) return;
     final count = c.messages.length;
-    final ranges = cfg.pendingRanges(count, force: force);
+    final ranges = cfg.pendingRanges(count, force: force, fromStart: fromStart);
     if (ranges.isEmpty) return;
 
     final requests = <SummaryRequest>[];
