@@ -1527,11 +1527,12 @@ class _TurnActions extends StatelessWidget {
 /// hint behaves, so a sheet that looked like a one-off prompt would be a lie
 /// about what it does.
 ///
-/// Deliberately quiet: one line with a symbol at its left and a ✕ at its right,
-/// and no heading. A titled panel over the composer read as a mode being entered
-/// rather than as a line being typed — the symbol it grows out of already says
-/// what it is. Under the line sits where the hint lands, in as few words as it
-/// takes, because that is a setting made somewhere else entirely.
+/// Deliberately quiet: no heading, no symbol, no panel of its own. What the
+/// reader sees is a **prompt box** — an outlined field with a ✕ beside it — over
+/// whatever the chat's own background is, rather than a tinted card announcing a
+/// mode being entered; the symbol in the strip it grows out of already says what
+/// it is. Under the field sits where the hint lands, in as few words as it takes,
+/// because that is a setting made somewhere else entirely.
 class _HintBar extends StatelessWidget {
   const _HintBar({
     required this.controller,
@@ -1551,60 +1552,42 @@ class _HintBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context);
-    final faded = scheme.onSurfaceVariant;
+    final faded = theme.colorScheme.onSurfaceVariant;
     return Container(
       key: const Key('hint-box'),
       width: double.infinity,
+      // No fill and no frame of its own: the box is the field's own outline, and
+      // behind it is the same background the rest of the chat has.
       margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(10, 2, 2, 6),
-      decoration: BoxDecoration(
-        // The theme's own raised surface, so the box reads as a control on the
-        // composer it grows out of in either theme.
-        color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(16),
-      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Icon(Icons.tips_and_updates_outlined, size: 16, color: faded),
-          ),
-          const SizedBox(width: 8),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  key: const Key('hint-field'),
-                  controller: controller,
-                  onChanged: onChanged,
-                  minLines: 1,
-                  maxLines: 4,
-                  textInputAction: TextInputAction.newline,
-                  keyboardType: TextInputType.multiline,
-                  style: theme.textTheme.bodyMedium,
-                  // No frame of its own: the box around it is the frame, and a
-                  // second outline made one line of steering look like a form.
-                  decoration: const InputDecoration(
-                    hintText: 'Guide the next reply…',
-                    isDense: true,
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(vertical: 8),
-                  ),
-                ),
-                Text(
-                  depth == 0
-                      ? 'Just before the reply'
-                      : '$depth ${depth == 1 ? 'message' : 'messages'} back',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: faded.withValues(alpha: 0.8),
-                  ),
-                ),
-              ],
+            child: TextField(
+              key: const Key('hint-field'),
+              controller: controller,
+              onChanged: onChanged,
+              minLines: 1,
+              maxLines: 4,
+              textInputAction: TextInputAction.newline,
+              keyboardType: TextInputType.multiline,
+              style: theme.textTheme.bodyMedium,
+              decoration: InputDecoration(
+                hintText: 'Guide the next reply…',
+                isDense: true,
+                border: const OutlineInputBorder(),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                // Where the hint lands, as the field's own helper line — so it
+                // lines up under the words it belongs to without a layout of its
+                // own, and the box does not change height when the depth does.
+                helperText: depth == 0
+                    ? 'Just before the reply'
+                    : '$depth ${depth == 1 ? 'message' : 'messages'} back',
+                helperStyle: theme.textTheme.bodySmall
+                    ?.copyWith(color: faded.withValues(alpha: 0.8)),
+              ),
             ),
           ),
           IconButton(

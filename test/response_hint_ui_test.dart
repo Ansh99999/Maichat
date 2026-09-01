@@ -115,6 +115,38 @@ void main() {
     expect(boxBottom, lessThanOrEqualTo(stripTop));
   });
 
+  testWidgets('the box is an outlined prompt over the chat, nothing more',
+      (tester) async {
+    // Asked for twice: a plain prompt box. No heading, no symbol inside it, no
+    // tinted card of its own — the outline is the box, and behind it is the same
+    // background the rest of the chat has.
+    final state = await boot();
+    await state.updateChatInterface(
+        state.chatInterface.copyWith(responseHintDepth: 2));
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+    await openBox(tester);
+
+    final box = find.byKey(const Key('hint-box'));
+    expect(tester.widget<Container>(box).decoration, isNull,
+        reason: 'no fill and no frame of its own');
+    expect(
+        find.descendant(
+            of: box, matching: find.byIcon(Icons.tips_and_updates_outlined)),
+        findsNothing,
+        reason: 'the symbol belongs in the strip, not in the box');
+    expect(find.descendant(of: box, matching: find.text('Response hint')),
+        findsNothing);
+
+    final field = tester.widget<TextField>(find.byKey(const Key('hint-field')));
+    expect(field.decoration?.border, isA<OutlineInputBorder>());
+    // Where it lands, in as few words as it takes.
+    expect(field.decoration?.helperText, '2 messages back');
+    expect(find.text('2 messages back'), findsOneWidget);
+    // And the one control it has is still there.
+    expect(find.byKey(const Key('hint-close')), findsOneWidget);
+  });
+
   testWidgets('the ✕ closes the box and keeps the hint', (tester) async {
     final state = await boot();
     await tester.pumpWidget(host(state));
