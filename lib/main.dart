@@ -74,9 +74,9 @@ class MaiChatApp extends StatelessWidget {
                 debugShowCheckedModeBanner: false,
                 showPerformanceOverlay: state.perfOverlay,
                 themeMode: _themeMode(appearance.mode),
-                theme: _theme(wanted ? lightDynamic : null, Brightness.light,
+                theme: themeFor(wanted ? lightDynamic : null, Brightness.light,
                     seed, fontFamily: appearance.fontFamily),
-                darkTheme: _theme(
+                darkTheme: themeFor(
                   wanted ? darkDynamic : null,
                   Brightness.dark,
                   seed,
@@ -104,7 +104,10 @@ class MaiChatApp extends StatelessWidget {
   /// than clashing with it. [seed] is the user's chosen colour, used when there
   /// is no dynamic scheme. When [amoled] is set on a dark theme the surfaces are
   /// pushed to true black so OLED panels can switch those pixels off.
-  static ThemeData _theme(
+  ///
+  /// Public because the screenshot generator (`test/screenshots/`) dresses the
+  /// screens it photographs in the app's real theme rather than a lookalike.
+  static ThemeData themeFor(
     ColorScheme? dynamicScheme,
     Brightness brightness,
     Color seed, {

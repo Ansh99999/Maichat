@@ -19,6 +19,13 @@ the code are the source of truth — verify file:line claims before relying on t
   or emulator available**, so tests + a Linux build are the only end-to-end check.
 - Linux smoke test runs headless under `xvfb-run` (e.g. build `--release` for
   linux and launch briefly). Use it to eyeball UI changes.
+- **README screenshots** are generated, never hand-collected:
+  `flutter test test/screenshots/generate.dart --update-goldens` pumps the real
+  screens at 1080×2340 and writes `docs/screenshots/`. Those files are *not*
+  `_test.dart`, so the suite never runs them and CI never diffs the pixels. See
+  `developer notes/screenshots.md` for the traps (test fonts render as black
+  boxes, `debugDisableShadows` draws shadows as hard outlines, image decode needs
+  `runAsync`) and for how a real phone photo is swapped in over a generated file.
 - Android release APK: `flutter build apk --release` (or
   `--split-per-abi` + a universal build, as CI does).
 

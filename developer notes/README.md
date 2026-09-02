@@ -29,4 +29,7 @@ learned this / do not regress this" layer underneath it.
 - [feature-notes-and-test-traps.md](feature-notes-and-test-traps.md) — per-feature
   gotchas (per-chat overrides, lorebooks, group chats, gallery) and the recurring
   Flutter/test traps.
+- [screenshots.md](screenshots.md) — how the README's pictures are generated
+  headlessly (`test/screenshots/`), what a generated shot is not, and how to
+  swap in a photograph from a real phone.
 

@@ -12,6 +12,34 @@ cost you a server, a text editor, or a laptop. Nothing here is configured by edi
 — every knob is a knob you reach with a thumb, and the app is designed for one person on
 one device rather than scaled down from something multi-user.
 
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/01-chat.png" alt="A chat: bubbles, names, a collapsed thinking block, and a reply kept as one of two alternatives"></td>
+<td width="33%"><img src="docs/screenshots/02-chat-styled.png" alt="The same chat in document mode, with large square portraits, coloured names above each turn and a picture behind the thread"></td>
+<td width="33%"><img src="docs/screenshots/03-discover.png" alt="Discover: a grid of catalogue listings with download and token counts"></td>
+</tr>
+<tr>
+<td align="center"><b>A chat</b><br>swipes, thinking, edit in place</td>
+<td align="center"><b>The same chat</b><br>every bit of it is a setting</td>
+<td align="center"><b>Discover</b><br>a catalogue inside the app</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/04-interface.png" alt="The Chat Interface settings page: switches, segmented controls and sliders"></td>
+<td><img src="docs/screenshots/05-costs.png" alt="A provider's Costs tab: tokens and money in and out, a per-model breakdown, and usage charted by day"></td>
+<td><img src="docs/screenshots/06-gallery.png" alt="The gallery: pictures grouped by date, each labelled with its title and owner"></td>
+</tr>
+<tr>
+<td align="center"><b>Chat Interface</b><br>the part with the most knobs</td>
+<td align="center"><b>Costs</b><br>what the provider actually charged</td>
+<td align="center"><b>Gallery</b><br>pictures, by date and by character</td>
+</tr>
+</table>
+
+<sup>Generated from the real screens on a headless host, so the palette is the default violet
+rather than a wallpaper's, and the art is a stand-in — see
+<a href="developer%20notes/screenshots.md">developer notes/screenshots.md</a>.</sup>
+
+
 ---
 
 ## Install
@@ -70,6 +98,13 @@ Most of the app's surface area is here, and none of it is a theme preset:
 A live preview sits under your finger the whole time you tune it. Then any of it — plus the
 preset, the persona, the scenario, the lorebooks, its own background image — can be
 **overridden for a single chat** without disturbing the rest.
+
+<p align="center">
+  <img src="docs/screenshots/07-preview.png" width="270" alt="The live preview: a mock chat whose avatar and name labels are dragged into position by hand, with quick controls underneath">
+  <br>
+  <sup>An avatar and a name label are <b>dragged</b> into place, not typed as coordinates.</sup>
+</p>
+
 
 ### The prompt is yours, and you can see it
 
@@ -239,6 +274,17 @@ per-chat override rules, the reverse-list chat, the Android build workarounds, a
 widget-test traps that have each cost a day — are written down in
 [`CLAUDE.md`](CLAUDE.md) and [`developer notes/`](developer%20notes/). Read those before a
 non-trivial change; they exist because something shipped broken first.
+
+The screenshots above are generated, not hand-collected:
+
+```bash
+flutter test test/screenshots/generate.dart --update-goldens
+```
+
+That pumps the real screens at phone size and writes `docs/screenshots/`. It is not part of
+the test suite (no `_test.dart` suffix, so CI never diffs the pixels), and any file it
+produces can be replaced with a photograph from a real phone without touching the README —
+[developer notes/screenshots.md](developer%20notes/screenshots.md) explains both.
 
 This project is partly vibe-coded, and openly so. What keeps that honest is the test suite:
 1,700+ unit and widget tests, `flutter analyze` clean, both enforced in CI on every push.
