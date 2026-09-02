@@ -1,0 +1,258 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1864" height="1080" viewBox="0 0 1864 1080">
+<rect x="0" y="0" width="1864" height="1080" rx="0" fill="#E9E3F0"/>
+<text x="56" y="74" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="30" fill="#241F33" font-weight="600" text-anchor="start">MaiChat · Chat Interface, reorganised</text>
+<text x="56" y="104" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#5C566B" font-weight="400" text-anchor="start">Hub and spoke (A) + folded avatar/name symmetry (D) + the two non-interface sections moved out (F).</text>
+<text x="56" y="126" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="13" fill="#9C4256" font-weight="500" text-anchor="start">A mock, not a screenshot — nothing in the app has changed.</text>
+<text x="56" y="142" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="17" fill="#241F33" font-weight="600" text-anchor="start">Now</text>
+<text x="56" y="162" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5C566B" font-weight="400" text-anchor="start">One page · 9 sections · ~66 rows</text>
+<rect x="59" y="181" width="384" height="812" rx="26" fill="#00000018"/>
+<rect x="56" y="176" width="384" height="812" rx="24" fill="#F8F4FC" stroke="#B9B1C6" stroke-width="1.5"/>
+<text x="78" y="223" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="21" fill="#1C1B1F" font-weight="400" text-anchor="start">Chat Interface</text>
+<path d="M397.0 216 q11.0 -9.9 22.0 0 q-11.0 9.9 -22.0 0 z" fill="none" stroke="#1C1B1F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="408" cy="216" r="3.2" fill="#1C1B1F"/>
+<rect x="82" y="258" width="332" height="56.0" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="290.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Chat style</text>
+<text x="402" y="290.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">7 rows</text>
+<rect x="82" y="316.0" width="332" height="24" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="332.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Floating buttons</text>
+<text x="402" y="332.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">2 rows</text>
+<rect x="82" y="342.0" width="332" height="144.0" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="418.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Names</text>
+<text x="402" y="418.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">18 rows</text>
+<rect x="82" y="488.0" width="332" height="80.0" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="532.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Message actions</text>
+<text x="402" y="532.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">10 rows</text>
+<rect x="82" y="570.0" width="332" height="120.0" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="634.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Avatars</text>
+<text x="402" y="634.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">15 rows</text>
+<rect x="82" y="692.0" width="332" height="56.0" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="724.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Colours</text>
+<text x="402" y="724.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">7 rows</text>
+<rect x="82" y="750.0" width="332" height="32.0" rx="6" fill="#EFE4E9" stroke="#9C4256" stroke-width="1"/>
+<text x="94" y="770.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#9C4256" font-weight="500" text-anchor="start">Group chat</text>
+<text x="402" y="770.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#9C4256" font-weight="400" text-anchor="end">4 rows</text>
+<rect x="82" y="784.0" width="332" height="24" rx="6" fill="#EFE4E9" stroke="#9C4256" stroke-width="1"/>
+<text x="94" y="800.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#9C4256" font-weight="500" text-anchor="start">Response hint</text>
+<text x="402" y="800.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#9C4256" font-weight="400" text-anchor="end">2 rows</text>
+<rect x="82" y="810.0" width="332" height="24" rx="6" fill="#E5DEF7" stroke="#C9BFE4" stroke-width="1"/>
+<text x="94" y="826.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3F3663" font-weight="500" text-anchor="start">Text wrapping</text>
+<text x="402" y="826.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11" fill="#6A619B" font-weight="400" text-anchor="end">2 rows</text>
+<line x1="74" y1="341" x2="422" y2="341" stroke="#9C4256" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="94" y="359" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="10.5" fill="#9C4256" font-weight="600" text-anchor="start">one screenful ends here</text>
+<line x1="82" y1="846.0" x2="414" y2="846.0" stroke="#CBC4D3" stroke-width="1"/>
+<text x="82" y="870.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#4A4553" font-weight="400" text-anchor="start">Reaching the bottom is eight flings.</text>
+<text x="82" y="888.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#9C4256" font-weight="400" text-anchor="start">Two of these nine sections are inert</text>
+<text x="82" y="904.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#9C4256" font-weight="400" text-anchor="start">when opened from a chat.</text>
+<text x="512" y="142" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="17" fill="#241F33" font-weight="600" text-anchor="start">Proposed hub</text>
+<text x="512" y="162" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5C566B" font-weight="400" text-anchor="start">Six rows · every one a live summary</text>
+<rect x="515" y="181" width="384" height="812" rx="26" fill="#00000018"/>
+<rect x="512" y="176" width="384" height="812" rx="24" fill="#F8F4FC" stroke="#B9B1C6" stroke-width="1.5"/>
+<text x="534" y="223" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="21" fill="#1C1B1F" font-weight="400" text-anchor="start">Chat Interface</text>
+<path d="M853.0 216 q11.0 -9.9 22.0 0 q-11.0 9.9 -22.0 0 z" fill="none" stroke="#1C1B1F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="864" cy="216" r="3.2" fill="#1C1B1F"/>
+<text x="538" y="266" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="10.5" fill="#4A4553" font-weight="600" text-anchor="start">STYLE</text>
+<rect x="538" y="276" width="72.19999999999999" height="30" rx="15" fill="#E5DEF7" stroke="#5B4E9B" stroke-width="1"/>
+<text x="574.1" y="296" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#5B4E9B" font-weight="500" text-anchor="middle">Bubbles</text>
+<rect x="618.2" y="276" width="78.8" height="30" rx="15" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="657.6" y="296" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#1C1B1F" font-weight="400" text-anchor="middle">Document</text>
+<rect x="705.0" y="276" width="72.19999999999999" height="30" rx="15" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="741.1" y="296" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#1C1B1F" font-weight="400" text-anchor="middle">Compact</text>
+<rect x="785.2" y="276" width="78.8" height="30" rx="15" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="824.6" y="296" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#1C1B1F" font-weight="400" text-anchor="middle">Roleplay</text>
+<circle cx="554" cy="355.0" r="20" fill="#E3DCF2"/>
+<rect x="543.0" y="346.2" width="22.0" height="6.82" rx="2" fill="#3B3552"/>
+<rect x="543.0" y="356.98" width="22.0" height="6.82" rx="2" fill="#3B3552"/>
+<text x="588" y="352.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#1C1B1F" font-weight="500" text-anchor="start">Layout &amp; spacing</text>
+<text x="588" y="371.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Bubbles · Beside · Medium · 14 px</text>
+<rect x="790" y="343.0" width="68.92" height="18" rx="9" fill="#E5DEF7"/>
+<text x="824.46" y="356.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="10.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">2 changed</text>
+<path d="M862 350.0 l5 5 l-5 5" fill="None" stroke="#7A757F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="554" cy="429.0" r="20" fill="#E3DCF2"/>
+<circle cx="554" cy="425.15" r="3.6" fill="#3B3552"/>
+<path d="M546.08 438.35 q7.92 -10.45 15.84 0" fill="#3B3552"/>
+<path d="M546.08 438.35 q7.92 -10.45 15.84 0" fill="none" stroke="#3B3552" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="588" y="426.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#1C1B1F" font-weight="500" text-anchor="start">Avatars</text>
+<text x="588" y="445.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Both shown · 56 px · Circle</text>
+<path d="M862 424.0 l5 5 l-5 5" fill="None" stroke="#7A757F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="554" cy="503.0" r="20" fill="#E3DCF2"/>
+<rect x="543.0" y="496.18" width="22.0" height="13.64" rx="3" fill="none" stroke="#3B3552" stroke-width="1.6"/>
+<line x1="547.95" y1="503.0" x2="560.05" y2="503.0" stroke="#3B3552" stroke-width="1.6"/>
+<text x="588" y="500.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#1C1B1F" font-weight="500" text-anchor="start">Names</text>
+<text x="588" y="519.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Shown · synced · above the message</text>
+<rect x="790" y="491.0" width="68.92" height="18" rx="9" fill="#E5DEF7"/>
+<text x="824.46" y="504.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="10.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">1 changed</text>
+<path d="M862 498.0 l5 5 l-5 5" fill="None" stroke="#7A757F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="554" cy="577.0" r="20" fill="#E3DCF2"/>
+<circle cx="554" cy="577.0" r="9.9" fill="none" stroke="#3B3552" stroke-width="1.6"/>
+<circle cx="550.26" cy="573.92" r="1.9" fill="#3B3552"/>
+<circle cx="557.74" cy="573.92" r="1.9" fill="#3B3552"/>
+<circle cx="554" cy="580.96" r="1.9" fill="#3B3552"/>
+<text x="588" y="574.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#1C1B1F" font-weight="500" text-anchor="start">Colours</text>
+<text x="588" y="593.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Theme, with 2 overridden</text>
+<path d="M862 572.0 l5 5 l-5 5" fill="None" stroke="#7A757F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="554" cy="651.0" r="20" fill="#E3DCF2"/>
+<text x="554" y="657.82" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="17.0" fill="#3B3552" font-weight="600" text-anchor="middle">A</text>
+<text x="588" y="648.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#1C1B1F" font-weight="500" text-anchor="start">Text</text>
+<text x="588" y="667.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">16 px · Markdown on · 1 wrapping rule</text>
+<path d="M862 646.0 l5 5 l-5 5" fill="None" stroke="#7A757F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="554" cy="725.0" r="20" fill="#E3DCF2"/>
+<circle cx="547.95" cy="725.0" r="1.9" fill="#3B3552"/>
+<circle cx="554" cy="725.0" r="1.9" fill="#3B3552"/>
+<circle cx="560.05" cy="725.0" r="1.9" fill="#3B3552"/>
+<text x="588" y="722.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#1C1B1F" font-weight="500" text-anchor="start">Message actions</text>
+<text x="588" y="741.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">3 inline · 5 in the menu</text>
+<path d="M862 720.0 l5 5 l-5 5" fill="None" stroke="#7A757F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="538" y1="772" x2="870" y2="772" stroke="#CBC4D3" stroke-width="1"/>
+<circle cx="554" cy="817.0" r="20" fill="#EFEBF6"/>
+<circle cx="549.6" cy="817.0" r="6.16" fill="none" stroke="#A29DAC" stroke-width="1.6"/>
+<circle cx="558.4" cy="817.0" r="6.16" fill="none" stroke="#A29DAC" stroke-width="1.6"/>
+<text x="588" y="814.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="15" fill="#8F8A99" font-weight="500" text-anchor="start">Group chat bar</text>
+<text x="588" y="833.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#A29DAC" font-weight="400" text-anchor="start">Hidden — group chats are off</text>
+<text x="538" y="880" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#9C4256" font-weight="400" text-anchor="start">Response hint and the group-chats switch</text>
+<text x="538" y="896" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#9C4256" font-weight="400" text-anchor="start">move out — neither is an interface setting.</text>
+<text x="968" y="142" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="17" fill="#241F33" font-weight="600" text-anchor="start">Avatars</text>
+<text x="968" y="162" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5C566B" font-weight="400" text-anchor="start">One editor, a side selector — not two cards</text>
+<rect x="971" y="181" width="384" height="812" rx="26" fill="#00000018"/>
+<rect x="968" y="176" width="384" height="812" rx="24" fill="#F8F4FC" stroke="#B9B1C6" stroke-width="1.5"/>
+<path d="M1006.8 216 h-17.6 m0 0 l7.699999999999999 -7.699999999999999 m-7.699999999999999 7.699999999999999 l7.699999999999999 7.699999999999999" fill="none" stroke="#1C1B1F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1020" y="223" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="21" fill="#1C1B1F" font-weight="400" text-anchor="start">Avatars</text>
+<path d="M1309.0 216 q11.0 -9.9 22.0 0 q-11.0 9.9 -22.0 0 z" fill="none" stroke="#1C1B1F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1320" cy="216" r="3.2" fill="#1C1B1F"/>
+<rect x="994" y="260" width="332" height="40" rx="20.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="1049.3333333333333" y="284.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="13" fill="#1C1B1F" font-weight="400" text-anchor="middle">Character</text>
+<line x1="1104.6666666666667" y1="260" x2="1104.6666666666667" y2="300" stroke="#7A757F" stroke-width="1"/>
+<text x="1160.0" y="284.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="13" fill="#1C1B1F" font-weight="400" text-anchor="middle">You</text>
+<path d="M1215.3333333333333 260 h90.66666666666667 a20.0 20.0 0 0 1 0 40 h-90.66666666666667 z" fill="#E5DEF7"/>
+<line x1="1215.3333333333333" y1="260" x2="1215.3333333333333" y2="300" stroke="#7A757F" stroke-width="1"/>
+<text x="1270.6666666666665" y="284.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="13" fill="#5B4E9B" font-weight="500" text-anchor="middle">Both</text>
+<rect x="994" y="260" width="332" height="40" rx="20.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="998" y="320" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Synced, so both sides move together.</text>
+<text x="1322" y="320" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#5B4E9B" font-weight="500" text-anchor="end">Unsync</text>
+<path d="M991.0 361.0 q11.0 -9.9 22.0 0 q-11.0 9.9 -22.0 0 z" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1002" cy="361.0" r="3.2" fill="#4A4553"/>
+<text x="1030" y="366.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Show avatar</text>
+<rect x="1286" y="348.0" width="44" height="26" rx="13" fill="#5B4E9B"/>
+<circle cx="1316" cy="361.0" r="9" fill="#FFFFFF"/>
+<circle cx="1002" cy="406.15" r="3.6" fill="#4A4553"/>
+<path d="M994.08 419.35 q7.92 -10.45 15.84 0" fill="#4A4553"/>
+<path d="M994.08 419.35 q7.92 -10.45 15.84 0" fill="none" stroke="#4A4553" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1030" y="415" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Size</text>
+<rect x="1256" y="396" width="70" height="28" rx="4" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="1318" y="415" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#1C1B1F" font-weight="400" text-anchor="end">56  px</text>
+<rect x="998" y="438" width="324" height="4" rx="2" fill="#DDD7E6"/>
+<rect x="998" y="438" width="58.32" height="4" rx="2" fill="#5B4E9B"/>
+<circle cx="1056.32" cy="440" r="9" fill="#5B4E9B"/>
+<path d="M993.75 486.25 v-8.25 q0 -8.25 8.25 -8.25 h8.25" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1030" y="483" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Corners</text>
+<rect x="994" y="494" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="1049.3333333333333" y="517.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Circle</text>
+<rect x="1104.6666666666667" y="494" width="110.66666666666667" height="38" rx="0" fill="#E5DEF7"/>
+<line x1="1104.6666666666667" y1="494" x2="1104.6666666666667" y2="532" stroke="#7A757F" stroke-width="1"/>
+<text x="1160.0" y="517.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">Rounded</text>
+<line x1="1215.3333333333333" y1="494" x2="1215.3333333333333" y2="532" stroke="#7A757F" stroke-width="1"/>
+<text x="1270.6666666666665" y="517.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Square</text>
+<rect x="994" y="494" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="1030" y="556" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#4A4553" font-weight="400" text-anchor="start">Roundness</text>
+<text x="1322" y="556" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="13" fill="#5B4E9B" font-weight="500" text-anchor="end">M  ▾</text>
+<path d="M993.2 587.05 h13.75 v13.75 M997.05 583.2 v13.75 h13.75" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1030" y="597" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Image fit</text>
+<rect x="994" y="608" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<path d="M1013.0 608 h91.66666666666667 v38 h-91.66666666666667 a19.0 19.0 0 0 1 0 -38 z" fill="#E5DEF7"/>
+<text x="1049.3333333333333" y="631.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">Fill</text>
+<line x1="1104.6666666666667" y1="608" x2="1104.6666666666667" y2="646" stroke="#7A757F" stroke-width="1"/>
+<text x="1160.0" y="631.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Fit</text>
+<line x1="1215.3333333333333" y1="608" x2="1215.3333333333333" y2="646" stroke="#7A757F" stroke-width="1"/>
+<text x="1270.6666666666665" y="631.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Free</text>
+<rect x="994" y="608" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<path d="M992.65 660 h18.7 M1006.95 655.6 l4.4 4.4 l-4.4 4.4 M997.05 655.6 l-4.4 4.4 l4.4 4.4" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1030" y="665" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Side</text>
+<rect x="994" y="676" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<path d="M1013.0 676 h147.0 v38 h-147.0 a19.0 19.0 0 0 1 0 -38 z" fill="#E5DEF7"/>
+<text x="1077.0" y="699.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">Left</text>
+<line x1="1160.0" y1="676" x2="1160.0" y2="714" stroke="#7A757F" stroke-width="1"/>
+<text x="1243.0" y="699.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Right</text>
+<rect x="994" y="676" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<path d="M1002 736.65 v18.7 M992.65 746 h18.7 M998.15 740.5 l3.8499999999999996 -3.8499999999999996 l3.8499999999999996 3.8499999999999996 M998.15 751.5 l3.8499999999999996 3.8499999999999996 l3.8499999999999996 -3.8499999999999996" fill="none" stroke="#4A4553" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1030" y="734" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Position</text>
+<text x="1030" y="753" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Drag here, or on the preview</text>
+<rect x="1256" y="718" width="66" height="66" rx="8" fill="#F1ECF8" stroke="#CBC4D3" stroke-width="1"/>
+<line x1="1256" y1="751" x2="1322" y2="751" stroke="#CBC4D3" stroke-width="1" opacity="0.6"/>
+<line x1="1289" y1="718" x2="1289" y2="784" stroke="#CBC4D3" stroke-width="1" opacity="0.6"/>
+<circle cx="1278" cy="759" r="7" fill="#5B4E9B"/>
+<rect x="994" y="796" width="215.0" height="38" rx="19" fill="#E3DCF2"/>
+<text x="1101.5" y="820" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3B3552" font-weight="500" text-anchor="middle">Reset avatars to defaults</text>
+<text x="994" y="864" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#5B4E9B" font-weight="400" text-anchor="start">Sliders, corners, fit and side collapse from</text>
+<text x="994" y="880" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#5B4E9B" font-weight="400" text-anchor="start">two identical cards into one.</text>
+<text x="1424" y="142" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="17" fill="#241F33" font-weight="600" text-anchor="start">Layout &amp; spacing</text>
+<text x="1424" y="162" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5C566B" font-weight="400" text-anchor="start">The floating buttons come home here</text>
+<rect x="1427" y="181" width="384" height="812" rx="26" fill="#00000018"/>
+<rect x="1424" y="176" width="384" height="812" rx="24" fill="#F8F4FC" stroke="#B9B1C6" stroke-width="1.5"/>
+<path d="M1462.8 216 h-17.6 m0 0 l7.699999999999999 -7.699999999999999 m-7.699999999999999 7.699999999999999 l7.699999999999999 7.699999999999999" fill="none" stroke="#1C1B1F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1476" y="223" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="21" fill="#1C1B1F" font-weight="400" text-anchor="start">Layout &amp; spacing</text>
+<path d="M1765.0 216 q11.0 -9.9 22.0 0 q-11.0 9.9 -22.0 0 z" fill="none" stroke="#1C1B1F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1776" cy="216" r="3.2" fill="#1C1B1F"/>
+<rect x="1447.0" y="276.2" width="22.0" height="14.850000000000001" rx="3" fill="none" stroke="#4A4553" stroke-width="1.6"/>
+<path d="M1452.5 291.05 l0 5.5 l5.5 -5.5" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1486" y="283.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Bubbles</text>
+<text x="1486" y="300.0" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="400" text-anchor="start">Tinted bubbles per turn</text>
+<rect x="1742" y="272.0" width="44" height="26" rx="13" fill="#5B4E9B"/>
+<circle cx="1772" cy="285.0" r="9" fill="#FFFFFF"/>
+<rect x="1447.0" y="321.2" width="22.0" height="6.82" rx="2" fill="#4A4553"/>
+<rect x="1447.0" y="331.98" width="22.0" height="6.82" rx="2" fill="#4A4553"/>
+<text x="1486" y="335" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Text placement</text>
+<rect x="1450" y="346" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<path d="M1469.0 346 h91.66666666666667 v38 h-91.66666666666667 a19.0 19.0 0 0 1 0 -38 z" fill="#E5DEF7"/>
+<text x="1505.3333333333333" y="369.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">Beside</text>
+<line x1="1560.6666666666667" y1="346" x2="1560.6666666666667" y2="384" stroke="#7A757F" stroke-width="1"/>
+<text x="1616.0" y="369.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Below</text>
+<line x1="1671.3333333333333" y1="346" x2="1671.3333333333333" y2="384" stroke="#7A757F" stroke-width="1"/>
+<text x="1726.6666666666665" y="369.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Around</text>
+<rect x="1450" y="346" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<rect x="1449.2" y="390.3" width="3.96" height="15.399999999999999" rx="1.5" fill="#4A4553"/>
+<rect x="1456.02" y="390.3" width="3.96" height="15.399999999999999" rx="1.5" fill="#4A4553"/>
+<rect x="1462.84" y="390.3" width="3.96" height="15.399999999999999" rx="1.5" fill="#4A4553"/>
+<text x="1486" y="403" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Content width</text>
+<rect x="1450" y="414" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<text x="1491.5" y="437.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Narrow</text>
+<rect x="1533.0" y="414" width="83.0" height="38" rx="0" fill="#E5DEF7"/>
+<line x1="1533.0" y1="414" x2="1533.0" y2="452" stroke="#7A757F" stroke-width="1"/>
+<text x="1574.5" y="437.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#5B4E9B" font-weight="500" text-anchor="middle">Medium</text>
+<line x1="1616.0" y1="414" x2="1616.0" y2="452" stroke="#7A757F" stroke-width="1"/>
+<text x="1657.5" y="437.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Wide</text>
+<line x1="1699.0" y1="414" x2="1699.0" y2="452" stroke="#7A757F" stroke-width="1"/>
+<text x="1740.5" y="437.5" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#1C1B1F" font-weight="400" text-anchor="middle">Full</text>
+<rect x="1450" y="414" width="332" height="38" rx="19.0" fill="none" stroke="#7A757F" stroke-width="1"/>
+<path d="M1458 460.65 q8.8 9.9 3.3 13.75 q-6.050000000000001 4.4 -6.6 0 q-5.5 -3.8499999999999996 3.3 -13.75 z" fill="#4A4553"/>
+<text x="1486" y="475" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Bubble opacity</text>
+<text x="1786" y="475" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="500" text-anchor="end">100%</text>
+<rect x="1454" y="494" width="324" height="4" rx="2" fill="#DDD7E6"/>
+<rect x="1454" y="494" width="324.0" height="4" rx="2" fill="#5B4E9B"/>
+<circle cx="1778.0" cy="496" r="9" fill="#5B4E9B"/>
+<path d="M1458 524.65 v18.7 M1453.6 538.95 l4.4 4.4 l4.4 -4.4 M1453.6 529.05 l4.4 -4.4 l4.4 4.4" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1486" y="539" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Message spacing</text>
+<text x="1786" y="539" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="500" text-anchor="end">14 px</text>
+<rect x="1454" y="558" width="324" height="4" rx="2" fill="#DDD7E6"/>
+<rect x="1454" y="558" width="93.96" height="4" rx="2" fill="#5B4E9B"/>
+<circle cx="1547.96" cy="560" r="9" fill="#5B4E9B"/>
+<line x1="1450" y1="590" x2="1782" y2="590" stroke="#CBC4D3" stroke-width="1"/>
+<text x="1450" y="612" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="13" fill="#5B4E9B" font-weight="600" text-anchor="start">Floating buttons</text>
+<circle cx="1451.95" cy="646" r="1.9" fill="#4A4553"/>
+<circle cx="1458" cy="646" r="1.9" fill="#4A4553"/>
+<circle cx="1464.05" cy="646" r="1.9" fill="#4A4553"/>
+<text x="1486" y="651" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Menu button</text>
+<text x="1786" y="651" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="500" text-anchor="end">50%</text>
+<rect x="1454" y="670" width="324" height="4" rx="2" fill="#DDD7E6"/>
+<rect x="1454" y="670" width="162.0" height="4" rx="2" fill="#5B4E9B"/>
+<circle cx="1616.0" cy="672" r="9" fill="#5B4E9B"/>
+<path d="M1458 700.65 v18.7 M1453.6 714.95 l4.4 4.4 l4.4 -4.4 M1453.6 705.05 l4.4 -4.4 l4.4 4.4" fill="none" stroke="#4A4553" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1486" y="715" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="14.5" fill="#1C1B1F" font-weight="400" text-anchor="start">Jump to latest</text>
+<text x="1786" y="715" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#4A4553" font-weight="500" text-anchor="end">50%</text>
+<rect x="1454" y="734" width="324" height="4" rx="2" fill="#DDD7E6"/>
+<rect x="1454" y="734" width="162.0" height="4" rx="2" fill="#5B4E9B"/>
+<circle cx="1616.0" cy="736" r="9" fill="#5B4E9B"/>
+<rect x="1450" y="762" width="208.0" height="38" rx="19" fill="#E3DCF2"/>
+<text x="1554.0" y="786" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12.5" fill="#3B3552" font-weight="500" text-anchor="middle">Reset layout to defaults</text>
+<text x="1450" y="834" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#5B4E9B" font-weight="400" text-anchor="start">Everything that decides the shape of a turn,</text>
+<text x="1450" y="850" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="11.5" fill="#5B4E9B" font-weight="400" text-anchor="start">in one place you can see at once.</text>
+<text x="56" y="1046" font-family="Roboto, 'Segoe UI', 'DejaVu Sans', sans-serif" font-size="12" fill="#6E687C" font-weight="400" text-anchor="start">Drawn by docs/mocks/gen_interface_mock.py · palette is the app's own M3 light scheme from seed #7C5CFF.</text>
+</svg>
