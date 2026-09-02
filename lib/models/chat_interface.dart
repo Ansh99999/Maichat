@@ -806,6 +806,16 @@ class ChatInterface {
   AvatarStyle avatarFor(bool isUser) => isUser ? userAvatar : botAvatar;
 
   NameStyle nameFor(bool isUser) => isUser ? userNameStyle : botNameStyle;
+
+  /// Every picture file this look refers to.
+  ///
+  /// One place, named once, because two callers need it and both are the kind
+  /// that fails silently when a field is forgotten: the sweep's keep-list, which
+  /// deletes any picture nothing claims, and a look's export, which has to carry
+  /// its pictures for the file to mean anything on another device.
+  Iterable<String> get pictureRefs => [
+        if (groupBarImage != null && groupBarImage!.isNotEmpty) groupBarImage!,
+      ];
 // APPEND-CI-2
 
   ChatInterface copyWith({

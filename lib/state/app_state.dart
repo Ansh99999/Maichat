@@ -1324,9 +1324,15 @@ class AppState extends ChangeNotifier {
   /// Deletes picture files nothing refers to any more. The keep-list has to name
   /// every place a picture can be referenced from — a chat's background, a
   /// per-chat character override, a gallery entry, a character's extra avatars, a
-  /// per-chat avatar choice and a picture attached to a message all live outside
-  /// the roster's `avatar` field, and a sweep that forgot one would delete a
-  /// picture still on screen.
+  /// per-chat avatar choice, a picture attached to a message and any picture the
+  /// interface itself holds all live outside the roster's `avatar` field, and a
+  /// sweep that forgot one would delete a picture still on screen.
+  ///
+  /// The interface's own pictures were the one this list did forget: a
+  /// participant-bar picture is stored like every other picture and referred to
+  /// only from `ChatInterface`, so until it was named here the next sweep threw it
+  /// away — and, because a backup ships the pictures directory as it finds it, a
+  /// backup taken afterwards could not carry it either.
   Future<void> _sweepAvatars() async {
     final store = _avatars;
     if (store == null || !_writable) return;
@@ -1335,11 +1341,15 @@ class AppState extends ChangeNotifier {
       ..._characters.expand((c) => c.avatars),
       ..._lorebooks.map((b) => b.thumbnail),
       ..._gallery.map((g) => g.image),
+      ..._chatInterface.pictureRefs,
       for (final c in _conversations) ...[
         c.backgroundImage ?? '',
         ...c.characterOverrides.values.map((o) => o.avatar),
         ...c.characterOverrides.values.expand((o) => o.avatars),
         ...c.avatarOverrides.values,
+        // A chat with its own copy of the interface has its own copy of whatever
+        // pictures that copy names.
+        ...?c.interfaceOverride?.pictureRefs,
         // A float can carry a picture the gallery never held (an avatar off an
         // imported card), and it is on screen right now.
         ...c.floatingImages.map((f) => f.imageRef),
