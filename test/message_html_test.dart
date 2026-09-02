@@ -361,5 +361,76 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(HtmlInlineImage), findsOneWidget);
     });
+
+    // `![](…)` is valid markdown — an empty description is the ordinary way to
+    // write a picture that needs no label, and it is what models emit. It was
+    // reported as not showing while `![something](…)` did, so both spellings are
+    // pinned here, side by side, at every step they could diverge: the HTML,
+    // the widget, and what is left when the picture cannot be fetched.
+    group('an empty description draws the same picture as a named one', () {
+      const url = 'https://files.catbox.moe/abc.png';
+
+      test('the HTML differs only in the alt attribute', () {
+        expect(messageToHtml('![]($url)'),
+            contains('<img src="$url" alt="" />'));
+        expect(messageToHtml('![stuff]($url)'),
+            contains('<img src="$url" alt="stuff" />'));
+        expect(messageNeedsHtml('![]($url)'), isTrue);
+      });
+
+      for (final (name, content) in [
+        ('empty', '![]($url)'),
+        ('named', '![stuff]($url)'),
+        ('empty, in prose', 'Here you go.\n\n![]($url)'),
+        ('empty, after dialogue', '*She smiles.* "Look."\n\n![]($url)'),
+      ]) {
+        testWidgets('$name reaches the picture widget', (tester) async {
+          await tester.pumpWidget(host(
+            SingleChildScrollView(
+              child: MessageBubble(
+                message: ChatMessage(role: 'assistant', content: content),
+                ui: const ChatInterface(),
+              ),
+            ),
+          ));
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(tester.takeException(), isNull);
+          expect(find.byType(HtmlInlineImage), findsOneWidget);
+          expect(find.textContaining('files.catbox.moe'), findsNothing,
+              reason: 'the link is the picture now, not text');
+        });
+      }
+
+      // A picture that cannot be drawn must leave a mark whether or not the
+      // author wrote a description. Returning an empty box for `![](…)` hid the
+      // failure completely, which is the whole reason the markdown got blamed.
+      for (final (name, alt) in [('no', ''), ('a', 'stuff')]) {
+        testWidgets('a failed picture with $name description is still visible',
+            (tester) async {
+          await tester.pumpWidget(MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 300,
+                  child: HtmlInlineImage(
+                    src: 'https://x.tld/gone.png',
+                    alt: alt,
+                    declaredWidth: null,
+                    color: const Color(0xFFFFFFFF),
+                  ),
+                ),
+              ),
+            ),
+          ));
+          // The mock HTTP client every widget test gets answers 400, so the
+          // fetch fails for real rather than being simulated.
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.byIcon(Icons.broken_image_outlined), findsOneWidget);
+          expect(
+              tester.getSize(find.byType(HtmlInlineImage)).height, greaterThan(0));
+          if (alt.isNotEmpty) expect(find.text(alt), findsOneWidget);
+        });
+      }
+    });
   });
 }

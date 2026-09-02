@@ -70,9 +70,29 @@ class HtmlInlineImage extends StatelessWidget {
     );
   }
 
-  Widget _altText() => alt.trim().isEmpty
-      ? const SizedBox.shrink()
-      : Text(alt, style: TextStyle(color: color.withValues(alpha: 0.7)));
+  /// What a picture that could not be drawn leaves behind.
+  ///
+  /// Never nothing. `![](…)` — the usual way a model writes a picture, and
+  /// perfectly good markdown — carries no alt text, so falling back to an empty
+  /// box made a failed fetch indistinguishable from the app having ignored the
+  /// line altogether. That is what made this look like a parsing bug: the same
+  /// URL with a word in the brackets showed *something*, so the brackets got the
+  /// blame. A marker says what is true — a picture belongs here and it did not
+  /// arrive — which is what a browser shows too.
+  Widget _altText() {
+    final faded = color.withValues(alpha: 0.7);
+    final label = alt.trim();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.broken_image_outlined, size: 18, color: faded),
+        if (label.isNotEmpty) ...[
+          const SizedBox(width: 6),
+          Flexible(child: Text(label, style: TextStyle(color: faded))),
+        ],
+      ],
+    );
+  }
 }
 
 /// The `<img>` handler to install on an [Html] widget, so every picture in the
