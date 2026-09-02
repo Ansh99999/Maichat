@@ -39,9 +39,16 @@ import 'presets/preset_pickers.dart';
 import 'section_screen.dart';
 import 'settings_screen.dart';
 
+/// The two buttons that float over a conversation. Named so a test can reach
+/// the painted surface whose look is a setting — [ChatInterface.menuButtonOpacity]
+/// and [ChatInterface.jumpButtonOpacity] — rather than guess at which of the
+/// several `Material`s or fades around them is the one that carries it.
+const Key chatMenuButtonKey = ValueKey('chat-menu-button');
+const Key jumpToLatestKey = ValueKey('jump-to-latest');
+
 /// A single conversation: the thread and a composer. The chat is deliberately
 /// chrome-light — instead of a full app bar it carries a single translucent,
-/// non-intrusive hamburger at the top-left that opens the chat sidebar, where
+/// non-intrusive soft square at the top-left that opens the chat sidebar, where
 /// every option lives (provider/model, edit, export, restart, delete, and the
 /// jumps to the other sections).
 class ChatScreen extends StatefulWidget {
@@ -683,6 +690,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               child: _JumpToLatestButton(
                                 visible: _showJumpToEnd || _unread > 0,
                                 unread: _unread,
+                                opacity: ui.jumpButtonOpacity,
                                 // A reply is still being written down there, and
                                 // while the reader is away the newest turn is held
                                 // still on purpose — so the button says so rather
@@ -733,13 +741,14 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
-          // The one piece of chrome: a translucent hamburger that floats over
+          // The one piece of chrome: a translucent soft square that floats over
           // the thread without boxing it in.
           Positioned(
             top: topInset + 6,
             left: 8,
             child: Builder(
-              builder: (ctx) => _TranslucentMenuButton(
+              builder: (ctx) => _ChatMenuButton(
+                opacity: ui.menuButtonOpacity,
                 onTap: () => Scaffold.of(ctx).openDrawer(),
               ),
             ),
@@ -2104,32 +2113,48 @@ class _GroupChip extends StatelessWidget {
   }
 }
 
-/// The lone bit of chat chrome: a small, frosted, semi-transparent circle that
-/// carries the menu icon. Translucent enough to let the thread show through,
-/// so it never boxes the conversation in.
-class _TranslucentMenuButton extends StatelessWidget {
-  const _TranslucentMenuButton({required this.onTap});
+/// The lone bit of chat chrome: a small, semi-transparent **soft square** that
+/// carries the menu icon. How visible it is comes from the chat's own interface
+/// settings ([ChatInterface.menuButtonOpacity]) — translucent by default, so it
+/// never boxes the conversation in.
+class _ChatMenuButton extends StatelessWidget {
+  const _ChatMenuButton({required this.onTap, required this.opacity});
 
   final VoidCallback onTap;
+
+  /// 0..1, from the chat's interface settings.
+  final double opacity;
+
+  /// The corner radius that makes a 48-pixel square read as *soft* rather than
+  /// as a box or as a circle.
+  static const double _radius = 15;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // A solid, mostly-opaque circle — deliberately **not** a `BackdropFilter`.
-    // The frosted version re-ran a full backdrop blur, with a framebuffer
-    // readback that stalls mobile GPUs, on *every composited frame*. So it janked
-    // every drag, pinch and even a scroll for as long as they produced frames —
-    // this button, always on screen, was the per-frame cost behind the floating
-    // pictures never feeling smooth however cheap their own painting became. A
-    // translucent fill reads the same at a glance and costs nothing per frame.
+    final alpha = opacity.clamp(kMinChromeOpacity, kMaxChromeOpacity);
+    // The opacity is folded into each colour rather than wrapped in an
+    // `Opacity`, and the fill is a plain colour — deliberately **not** a
+    // `BackdropFilter`. The frosted version re-ran a full backdrop blur, with a
+    // framebuffer readback that stalls mobile GPUs, on *every composited frame*.
+    // So it janked every drag, pinch and even a scroll for as long as they
+    // produced frames — this button, always on screen, was the per-frame cost
+    // behind the floating pictures never feeling smooth however cheap their own
+    // painting became. Alpha in the colours reads the same at a glance and costs
+    // nothing per frame, not even an offscreen layer.
     return Material(
-      color: scheme.surface.withValues(alpha: 0.88),
-      shape: const CircleBorder(),
+      key: chatMenuButtonKey,
+      color: scheme.surface.withValues(alpha: alpha),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(_radius)),
+      ),
       elevation: 2,
-      shadowColor: Colors.black.withValues(alpha: 0.3),
+      // The shadow fades with the button; a solid drop shadow under a barely
+      // visible square is what gives a ghost button away.
+      shadowColor: Colors.black.withValues(alpha: 0.3 * alpha),
       child: IconButton(
         tooltip: 'Menu',
-        icon: Icon(Icons.menu, color: scheme.onSurface.withValues(alpha: 0.9)),
+        icon: Icon(Icons.menu, color: scheme.onSurface.withValues(alpha: alpha)),
         onPressed: onTap,
       ),
     );
@@ -2139,17 +2164,22 @@ class _TranslucentMenuButton extends StatelessWidget {
 /// A small floating "jump to latest" affordance for the bottom-right of the
 /// thread. It fades and scales in only when the conversation is scrolled well
 /// above its newest message, so a deep scroll back doesn't have to be undone by
-/// dragging. Tapping it glides straight to the last message.
+/// dragging. Tapping it glides straight to the last message. How visible it is
+/// while shown is the chat's own [ChatInterface.jumpButtonOpacity].
 class _JumpToLatestButton extends StatelessWidget {
   const _JumpToLatestButton({
     required this.visible,
     required this.onTap,
+    required this.opacity,
     this.unread = 0,
     this.live = false,
   });
 
   final bool visible;
   final VoidCallback onTap;
+
+  /// 0..1 while [visible], from the chat's interface settings.
+  final double opacity;
 
   /// Turns that arrived while scrolled away; shown as a count badge when > 0.
   final int unread;
@@ -2167,7 +2197,14 @@ class _JumpToLatestButton extends StatelessWidget {
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
         child: AnimatedOpacity(
-          opacity: visible ? 1 : 0,
+          // The setting rides the fade that was already here: showing the button
+          // animates it to the reader's chosen opacity instead of to solid, and
+          // hiding it still goes to nothing. The badge fades with the button —
+          // half an unread marker over a solid arrow would read as a glitch.
+          key: jumpToLatestKey,
+          opacity: visible
+              ? opacity.clamp(kMinChromeOpacity, kMaxChromeOpacity)
+              : 0,
           duration: const Duration(milliseconds: 160),
           child: Stack(
             clipBehavior: Clip.none,

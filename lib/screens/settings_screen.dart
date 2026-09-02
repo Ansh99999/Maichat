@@ -286,6 +286,15 @@ const List<_SearchEntry> _searchIndex = [
     builder: _messageActionsPage,
   ),
   _SearchEntry(
+    title: 'Floating buttons',
+    section: 'Chat Interface',
+    icon: Icons.opacity_outlined,
+    keywords: 'floating buttons opacity transparent translucent see through '
+        'faint hide chrome menu hamburger square top left drawer sidebar jump '
+        'to latest newest scroll to bottom arrow down fab',
+    builder: _floatingButtonsPage,
+  ),
+  _SearchEntry(
     title: 'Message colours',
     section: 'Chat Interface',
     icon: Icons.format_color_fill_outlined,
@@ -368,6 +377,8 @@ Widget _namesPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.names);
 Widget _messageActionsPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.messageActions);
+Widget _floatingButtonsPage() =>
+    const ChatInterfaceSettingsPage(highlight: SettingAnchor.floatingButtons);
 Widget _chatColoursPage() =>
     const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
 Widget _groupChatsPage() =>

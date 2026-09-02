@@ -160,6 +160,40 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
           ),
 // APPEND-CHILDREN
           const Divider(height: 24),
+          _header(context, 'Floating buttons'),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text('The two buttons that float over a conversation: the '
+                'menu square at the top-left, and the arrow at the bottom-right '
+                'that jumps to the newest turn. Turn either down to let the chat '
+                'read through it.'),
+          ),
+          SettingHighlight(
+            active: highlight == SettingAnchor.floatingButtons,
+            child: Column(
+              children: [
+                _SliderRow(
+                  icon: Icons.menu,
+                  label: 'Menu button opacity',
+                  value: ui.menuButtonOpacity,
+                  min: kMinChromeOpacity,
+                  max: kMaxChromeOpacity,
+                  suffix: '${(ui.menuButtonOpacity * 100).round()}%',
+                  onChanged: (v) => update(ui.copyWith(menuButtonOpacity: v)),
+                ),
+                _SliderRow(
+                  icon: Icons.arrow_downward,
+                  label: 'Jump-to-latest opacity',
+                  value: ui.jumpButtonOpacity,
+                  min: kMinChromeOpacity,
+                  max: kMaxChromeOpacity,
+                  suffix: '${(ui.jumpButtonOpacity * 100).round()}%',
+                  onChanged: (v) => update(ui.copyWith(jumpButtonOpacity: v)),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 24),
           _header(context, 'Names'),
           SwitchListTile(
             dense: true,

@@ -43,6 +43,18 @@ const double kMinGroupBarHeight = 44;
 const double kMaxGroupBarHeight = 160;
 const double kDefaultGroupBarHeight = 64;
 
+/// Bounds for the opacity of the two buttons that float over a conversation —
+/// the menu square at the top-left and the jump-to-latest arrow at the
+/// bottom-right. Literal opacity: 1 is a solid button, the default is half
+/// visible, so the chat reads through its own chrome.
+///
+/// The floor is deliberately *not* 0. Both buttons are the plain way to reach
+/// what they do, and a control that cannot be seen but still swallows the tap
+/// meant for the message underneath is worse than a faint one.
+const double kMinChromeOpacity = 0.1;
+const double kMaxChromeOpacity = 1;
+const double kDefaultChromeOpacity = 0.5;
+
 /// How deep into the conversation a response hint may be injected, counted in
 /// messages from the newest end. 0 puts it after the last turn — right in front
 /// of the reply it is steering, which is where Agnai puts its own hint. The
@@ -651,6 +663,8 @@ class ChatInterface {
     this.groupBarImage,
     this.responseHintEnabled = false,
     this.responseHintDepth = kDefaultResponseHintDepth,
+    this.menuButtonOpacity = kDefaultChromeOpacity,
+    this.jumpButtonOpacity = kDefaultChromeOpacity,
   });
 
   final AvatarStyle botAvatar;
@@ -763,6 +777,15 @@ class ChatInterface {
   /// app-wide interface, as [responseHintEnabled] is.
   final int responseHintDepth;
 
+  /// How visible the menu square that floats at the top-left of a chat is,
+  /// 0..1. Bounded by [kMinChromeOpacity]/[kMaxChromeOpacity]; unlike the
+  /// feature flags above this one *is* honoured per chat, since it is a matter
+  /// of what suits the picture behind a particular thread.
+  final double menuButtonOpacity;
+
+  /// The same, for the arrow at the bottom-right that jumps to the newest turn.
+  final double jumpButtonOpacity;
+
   /// The inline actions, in order.
   List<MessageAction> get inlineActions => [
         for (final p in messageActions)
@@ -813,6 +836,8 @@ class ChatInterface {
     Object? groupBarImage = _unset,
     bool? responseHintEnabled,
     int? responseHintDepth,
+    double? menuButtonOpacity,
+    double? jumpButtonOpacity,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -850,6 +875,8 @@ class ChatInterface {
             : groupBarImage as String?,
         responseHintEnabled: responseHintEnabled ?? this.responseHintEnabled,
         responseHintDepth: responseHintDepth ?? this.responseHintDepth,
+        menuButtonOpacity: menuButtonOpacity ?? this.menuButtonOpacity,
+        jumpButtonOpacity: jumpButtonOpacity ?? this.jumpButtonOpacity,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -917,6 +944,8 @@ class ChatInterface {
           'groupBarImage': groupBarImage,
         'responseHintEnabled': responseHintEnabled,
         'responseHintDepth': responseHintDepth,
+        'menuButtonOpacity': menuButtonOpacity,
+        'jumpButtonOpacity': jumpButtonOpacity,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -987,8 +1016,16 @@ class ChatInterface {
       responseHintDepth: ((json['responseHintDepth'] as num?)?.toInt() ??
               kDefaultResponseHintDepth)
           .clamp(kMinResponseHintDepth, kMaxResponseHintDepth),
+      menuButtonOpacity: _chromeOpacity(json['menuButtonOpacity']),
+      jumpButtonOpacity: _chromeOpacity(json['jumpButtonOpacity']),
     );
   }
+
+  /// A stored floating-button opacity, defaulted when absent (a config saved
+  /// before the setting existed) and clamped into range.
+  static double _chromeOpacity(Object? value) =>
+      ((value as num?)?.toDouble() ?? kDefaultChromeOpacity)
+          .clamp(kMinChromeOpacity, kMaxChromeOpacity);
 
   /// Reads one role's [NameStyle], migrating the pre-nested flat keys
   /// (`botNameSize`/`botNameAlign`/`botNamePosition` and the `user` pair) when
@@ -1062,7 +1099,9 @@ class ChatInterface {
       other.groupBarColor == groupBarColor &&
       other.groupBarImage == groupBarImage &&
       other.responseHintEnabled == responseHintEnabled &&
-      other.responseHintDepth == responseHintDepth;
+      other.responseHintDepth == responseHintDepth &&
+      other.menuButtonOpacity == menuButtonOpacity &&
+      other.jumpButtonOpacity == jumpButtonOpacity;
 
   @override
   int get hashCode => Object.hash(
@@ -1088,11 +1127,12 @@ class ChatInterface {
         Object.hash(quoteColor, Object.hashAll(textWrapRules)),
         Object.hash(messageActionsEnabled, actionBarPlacement),
         // Folded together because Object.hash caps at 20 arguments: the message
-        // action list, the group-bar settings and the response-hint pair share
-        // this final slot.
+        // action list, the group-bar settings, the response-hint pair and the
+        // floating buttons' opacity share this final slot.
         Object.hash(Object.hashAll(messageActions), groupChatsEnabled,
             groupBarHeight, groupBarColor, groupBarImage,
-            responseHintEnabled, responseHintDepth),
+            responseHintEnabled, responseHintDepth,
+            Object.hash(menuButtonOpacity, jumpButtonOpacity)),
       );
 }
 

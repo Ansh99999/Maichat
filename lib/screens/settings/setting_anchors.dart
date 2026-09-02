@@ -15,6 +15,7 @@ enum SettingAnchor {
   spacing,
   names,
   messageActions,
+  floatingButtons,
   chatColours,
   groupChats,
   responseHint,
