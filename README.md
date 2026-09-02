@@ -1,255 +1,285 @@
 # MaiChat
 
-**A mobile-first, UI-driven AI frontend — inspired by SillyTavern, Agnaistic, RisuAI and the
-rest of the family, rebuilt for a phone.**
+**SillyTavern-class customisation and control, with the ease of a UI built for a thumb.**
 
-MaiChat is a Flutter app. Android is the primary target, and it also builds and runs on
-Linux desktop. It follows Android's Material You design (wallpaper-derived colours, light /
-dark / AMOLED, your own accent), is provider-agnostic, and is built to be driven from the
-UI rather than from config files.
+[![Release](https://img.shields.io/github/v/release/Ansh99999/Maichat?label=release)](https://github.com/Ansh99999/Maichat/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![Build](https://github.com/Ansh99999/Maichat/actions/workflows/build-apk.yml/badge.svg)](https://github.com/Ansh99999/Maichat/actions/workflows/build-apk.yml)
 
-If you're on mobile, there is no server to run. MaiChat is **single-user focused**: grab an
-APK from [Releases](https://github.com/Ansh99999/Maichat/releases), enter an API key, and
-chat. Open an [issue](https://github.com/Ansh99999/Maichat/issues) if you want a feature
-added.
-
-This project is partly vibe-coded — but it is actively maintained, and each change is kept
-under test (550+ unit and widget tests, `flutter analyze` clean, enforced in CI on every
-push).
+MaiChat is an Android app for talking to AI characters, written from scratch in Flutter. It
+is built around one idea: the depth SillyTavern, Agnaistic and RisuAI give you shouldn't
+cost you a server, a text editor, or a laptop. Nothing here is configured by editing a file
+— every knob is a knob you reach with a thumb, and the app is designed for one person on
+one device rather than scaled down from something multi-user.
 
 ---
 
 ## Install
 
 1. Download the latest `MaiChat-<version>.apk` from
-   [Releases](https://github.com/Ansh99999/Maichat/releases). It's a single universal APK —
-   no ABI to pick.
-2. Allow install from unknown sources and open it.
-3. Open **Providers** in the navigation drawer, add one, paste your API key, pick a model.
+   [Releases](https://github.com/Ansh99999/Maichat/releases) — one universal APK, no ABI to
+   pick.
+2. Allow installs from unknown sources, open it.
+3. Add a provider from the drawer, paste your key, pick a model. That's setup.
 
-Notes:
+No account, no telemetry, no backend of any kind. Keys and chats live in the app's own
+storage on your device, and requests go straight from your phone to whichever provider you
+configured.
 
-- Releases from **v1.2.0** onward are signed with the project's real key. If you installed
-  a v1.0.x/v1.1.x build (debug-signed), **uninstall it first** — Android will refuse the
-  upgrade otherwise.
-- No account, no telemetry, no backend. Your keys and chats live in the app's own storage
-  on your device, and requests go straight to whichever provider you configured.
-
-## Updating
-
-Updates are **sporadic and frequent** — sometimes 2–3 in a day. Each one adds a feature or
-fixes a bug, and each one carries some chance of introducing a new minor bug. MaiChat checks
-the GitHub Releases API and shows an update icon in the navigation drawer when a newer
-version exists.
-
-**Recommendation: update when the app tells you to**, not by watching the tag list.
+Two notes: releases from **v1.2.0** onward are signed with the project's real key, so if you
+still have a v1.0.x/v1.1.x build you have to uninstall it first — Android refuses the
+upgrade otherwise. And updates land **often**, sometimes two or three in a day; the app
+checks GitHub itself and puts an icon in the drawer when there's a newer one, so update when
+it says so rather than watching the tag list.
 
 ---
 
-## Features
+## What makes it MaiChat
 
-**Providers** — bring your own key, any of four wire formats:
+### Discover — a character catalogue *inside* the app
 
-| Format | Speaks to | Notes |
-| --- | --- | --- |
-| OpenAI chat/completions | OpenAI, OpenRouter, DeepSeek, Groq, Nvidia NIM, most proxies | Just change the base URL |
-| OpenAI `v1/responses` | OpenAI's newer endpoint | Input items, instructions, reasoning effort |
-| Anthropic | Claude | Native `/messages`, extended thinking, exact token counting |
-| Google Gemini | Gemini, AI Studio | Native `streamGenerateContent`, thinking budgets |
-| Local LLM (HTTP) | llama.cpp, Ollama, LM Studio on your LAN | Cleartext allowed, key optional |
-| KoboldCPP | A local KoboldCPP server | Its OpenAI-compatible endpoint |
+Eight community sites browsable from the drawer — Chub, JanitorAI/JannyAI, Character Tavern,
+RisuRealm, Botbooru, Pygmalion, Wyvern and DataCat — each with its own search, sort and tag
+list. Tap a tag once to require it, twice to exclude it; adult content is a switch, not a
+default. A listing then opens on **the same page a character in your own library gets**: art
+at its natural ratio, tags, creator notes, and the card's own HTML and CSS rendered rather
+than dumped as markup. You decide before importing, not after. The same shelf is wired for
+lorebooks and presets wherever a site publishes them.
 
-- Providers are their own destination in the drawer: search the roster, tap the ring to
-  switch which one answers, long-press to select for export or deletion.
-- **Ready-made templates** for Nvidia NIM, Google AI Studio, OpenRouter, Ollama, LM Studio
-  and KoboldCPP fill in the base URL for you.
-- **Multiple API keys per provider** with round-robin, random or error-based rotation — each
-  key hides, reveals and tests itself, or test the whole pool in one pass.
-- Model list fetched from the provider and searchable (cached, refresh on demand).
-- **Per-model prices, a fallback chain and arbitrary headers** per provider.
-- **Costs**: tokens and money in and out, a per-model breakdown, usage over time, and
-  budgets that warn or refuse. Counts come off the wire where the host reports them and
-  from the app's own tokenizer where it doesn't, labelled as estimates either way.
-- **Import/export** providers as JSON — keys stripped unless you ask for them.
-- Streaming with a stop button — and a real non-streaming mode when you turn streaming off.
+No browser tab, no download folder, no "copy JSON and paste it in".
 
-**Characters**
+### A chat interface you actually design
 
-- Import from **file, pasted JSON, a direct URL, or a JannyAI/JanitorAI link**.
-- Reads SillyTavern **v1 / v2 / v3** cards, **Agnai** characters, character JSON **embedded
-  in a PNG** (`chara` / `ccv3` chunks), and RisuAI **CharX** (`.charx`, including cards
-  appended after a JPEG) — with the card's own art kept as the avatar.
-- Full card editor: description, personality, scenario, first message, alternate greetings,
-  example dialogue, system prompt, post-history instructions, creator notes, tags.
-- Library with search, tag filter, sort, starred shelf, grid/list toggle, multi-select,
-  duplicate, and bulk export as SillyTavern v2 cards.
-- **Impersonation**: pick any character as *you*, per chat — their name, avatar and persona
-  are used for your turns and injected into the prompt.
+Most of the app's surface area is here, and none of it is a theme preset:
 
-**Prompts, presets and macros** — the SillyTavern generation model, presented Agnai-style:
+- **Turns**: bubbles or flat document mode, content width, font size, spacing between
+  messages, bubble opacity, and explicit colours for user and bot text, bubbles and
+  background.
+- **Avatars**: per-role size (up to very large), shape, corner roundness, fit, which side
+  they sit on — and **dragged into position** with a finger rather than nudged by a number.
+- **Name labels**: their own font, size, colour and alignment per role, above or below the
+  turn, positioned the same way.
+- **Actions**: whether each per-message action is an inline icon or lives in the overflow
+  menu, in your order, with the bar itself placed where you want it — or switched off so
+  only the long-press sheet remains.
+- **Text wrapping rules**: give *any* symbol pair a colour and decide whether the markers
+  stay visible. `*italics*` and `"quotes"` are just the two rules that ship with it.
+- **Floating buttons**: how visible the menu square and the jump-to-newest arrow are, per
+  chat, because it depends on the picture behind the thread.
 
-- Reorderable **prompt blocks** with enable/disable, roles, and absolute-depth injection.
-- Samplers and budget: temperature, top-p/top-k, penalties, seed, stop sequences, max
-  response tokens, max context.
-- **Macros**: a full `{{...}}` engine — nesting, `{{if}}/{{else}}`, scoped blocks,
-  `{{setvar}}`/`{{getvar}}` with per-chat and global variables, `{{char}}`/`{{user}}`
-  identity, escaping.
-- Import/export presets as **SillyTavern**, **Agnai**, or MaiChat's own format; unknown
-  fields are preserved on round-trip.
-- Per-chat preset override, or a library default.
-- **Real token counting** (tiktoken `cl100k`/`o200k`, offline) — plus exact counts from
-  Anthropic's `count_tokens` when a Claude key is set.
-- **Prompt inspector**: see exactly what will be sent, section by section, with token
-  totals, per-message info, and "copy raw request".
+A live preview sits under your finger the whole time you tune it. Then any of it — plus the
+preset, the persona, the scenario, the lorebooks, its own background image — can be
+**overridden for a single chat** without disturbing the rest.
 
-**Chat**
+### The prompt is yours, and you can see it
 
-- **Message swipes** — alternate greetings from the card, and regenerations kept as
-  variants you can swipe back to instead of losing.
-- Per-message actions (regenerate, edit in place, delete, copy, fork, view prompt, info),
-  each placeable inline or in an overflow menu, with a choice of where the bar sits.
-- **Thinking / reasoning** support: Anthropic extended thinking, Gemini thinking budgets,
-  OpenAI-style `reasoning_effort`, and `<think>`-tag splitting for models that inline it —
-  shown in a collapsible block with elapsed time.
-- Markdown and inline HTML in messages, including code blocks.
-- Fork, restart, rename, delete a chat; export the transcript to the clipboard.
+The generation half is SillyTavern's model, presented the way a phone can handle it:
+**reorderable prompt blocks** you can enable, disable, re-role or inject at an absolute
+depth; samplers and budgets; and a **full `{{macro}}` engine** — the legacy built-ins plus
+the recursive superset, so nesting, `{{if}}` blocks, per-chat and global variables and
+escaping all behave as they do upstream.
 
-**Looks** — the part that gets the most attention:
+Two things make that usable rather than merely present. Token counts are **real** — proper
+BPE counting offline, and exact counts from Anthropic when a Claude key is set — so the
+budget readout isn't a character-count guess. And the **prompt inspector** shows what will
+actually be sent, block by block, with per-message totals and a copy-raw-request button, so
+"why did it forget the character sheet" is a question you can answer by looking instead of
+by theorising.
 
-- Material You: wallpaper colours on Android 12+, or your own seed colour with a built-in
-  HSV picker; System / Light / Dark / **AMOLED** (true black).
-- Any Google Font, app-wide or per name label.
-- Chat style: bubbles or document mode, content width, font size, message spacing, bubble
-  opacity, and explicit colours for user/bot text, bubbles and background.
-- Avatars: per-role size (up to very large), shape, corner roundness, fit, side, and
-  drag-to-nudge position.
-- Name labels: per-role size, colour, font, alignment, above/below, drag-to-nudge.
-- **Text wrapping rules**: give any symbol pair a colour, and choose whether the markers
-  stay visible — the general form of what `*italics*` and `"quotes"` already do.
-- A live preview of all of it while you tune.
+### Being someone
+
+Pick any character as **you**, per chat: their name, avatar and persona label your turns and
+go into the prompt. Your profile holds a default persona for new chats, so the common case is
+already set, and the uncommon case is one tap away in the chat you want it in.
+
+### Material You, taken seriously
+
+The whole app follows Android's design language rather than approximating it: the palette is
+derived from your wallpaper on Android 12+, or from your own seed colour with a built-in HSV
+picker; System / Light / Dark / **AMOLED** true black; any Google Font, app-wide or just for
+name labels. Material 3 components, sheets that drag, and motion that means something —
+that's the point, not a skin over a cross-platform grey.
+
+### Providers with a bill attached
+
+A provider isn't just a base URL and a key here. It has **prices per model, a spend ledger
+and budgets**: tokens and money in and out, a per-model breakdown, usage charted over time,
+and ceilings — per provider or per model, per period — that either warn you or refuse the
+send. Where the host reports real token counts they're used; where it doesn't, the app's own
+tokenizer estimates them and **says that it estimated**, because a guess presented as a bill
+is worse than no number. Alongside that: several keys per provider with round-robin, random
+or error-based rotation, a fallback chain, and per-provider headers.
+
+### Memory that isn't just a bigger context window
+
+Four mechanisms, each optional, each switchable for one chat without touching the others:
+
+- A **running summary** made on an interval — rolling (recondense everything) or incremental
+  (append the newest window). Its blocks are yours: retitle, edit, fold, reorder, write one
+  by hand, or regenerate from where the conversation actually is.
+- **Semantic recall** — earlier turns come back because they *mean* something relevant, not
+  because a keyword matched.
+- A **Data Bank** — drop documents into the Library (PDFs included) and let a chat draw on
+  them.
+- **Lorebooks / world info** — keyword activation as the desktop apps do it, with optional
+  vector activation on top.
+
+### Pictures are part of the conversation
+
+A gallery per character and per chat, with date grouping and a pinch ladder to zoom the grid
+itself. An **image studio** reachable from any chat, drawer or turn — it carries its own
+endpoint and key, deliberately separate from the chat provider, which is what makes "any
+chat can make a picture" true even when you're talking to a model that can't draw. Anything
+it makes is filed under that chat's character. You can send pictures *to* a model that
+accepts them, and pull any picture out of the gallery to **float over the thread**, dragged,
+resized and rotated with your fingers.
+
+### Steering a reply without saying it
+
+A **response hint** is a line you type beside the conversation — "she's lying", "keep it
+short", "don't resolve this yet" — that is injected into every send until you erase it, at a
+depth you choose. It never becomes a turn in the transcript, so the nudge doesn't end up in
+the story the model is telling back to you.
+
+### Branches drawn as a tree
+
+Fork any turn and the branch is a real conversation of its own, but your chat list still
+shows **one row per family** — named after its root, previewing whichever branch you touched
+last, so twenty experiments don't bury the twenty other chats. The **Chat Graph** draws the
+whole tree when you want to see where you are.
+
+### Turn-level craft
+
+Editing a message happens **in the turn itself** — the words become editable where they sit,
+the avatar, name and pictures don't move, and the action bar turns into ✕ / ✓. A regenerated
+reply is kept as an alternative rather than thrown away, and the alternatives are a **ring**:
+the arrows wrap, and a sideways drag across the turn steps through them with your finger.
+Deleting always asks first, and offers to take the replies after it too. Reasoning arrives in
+a collapsible block with the time it took, whether the model reports it properly or inlines
+it in `<think>` tags.
+
+### Backups you own
+
+A whole-app snapshot — every chat, character, preset, lorebook, picture and setting — written
+to a file you choose, the app's own folder, or **Google Drive**, on a schedule if you want
+one. Restores can replace or merge, and a keyless backup falls back to the keys already on
+the device rather than blanking them.
+
+It also reads **somebody else's** backup: point it at a SillyTavern user-data archive and it
+places the cards, chats, personas, tags, world info, presets, group chats — and the pictures
+a turn generated, back onto the turn that generated them — then tells you plainly what it
+couldn't place.
+
+Nothing is ever held in memory whole, which is why a gallery of hundreds of megabytes backs
+up on a phone at all. And a storage screen says where the space actually went — category by
+category, each one openable and clearable — instead of leaving you to guess at an app that
+has quietly grown to a gigabyte.
 
 ---
 
 ## Coming from SillyTavern, Agnai, RisuAI or JanitorAI
 
-MaiChat aims to read what those ecosystems produce. Concretely:
+Your library should not be a reason to stay. MaiChat reads what those ecosystems produce, and
+writes files they can read back.
 
-**Comes in cleanly**
+| | Comes in | Goes out |
+| --- | --- | --- |
+| **Characters** | SillyTavern v1 / v2 / v3, character PNGs (`chara` / `ccv3`), Agnai, RisuAI `.charx` | SillyTavern v2 cards, single or in bulk |
+| **Presets** | SillyTavern and Agnai, prompt order and samplers included | SillyTavern or Agnai |
+| **Lorebooks** | SillyTavern world info, a card's own book, Agnai memory books | one file all three read |
+| **Scenarios** | Agnai scenarios, a card's scenario, or plain prose | MaiChat and Agnai |
+| **Chats** | SillyTavern `.jsonl`, Agnai, oobabooga, Character.AI, RisuAI, Kobold, plain logs | one file SillyTavern, Agnai and MaiChat all read |
+| **Everything at once** | a whole SillyTavern user-data archive | MaiChat's own backup |
 
-- Character cards — SillyTavern v1/v2/v3 JSON, character PNGs, Agnai characters, RisuAI
-  CharX.
-- Chat-completion presets — SillyTavern and Agnai preset files, including their prompt
-  order, samplers and reasoning settings.
-- Character links — RisuAI realm and JannyAI/JanitorAI URLs (JanitorAI sits behind a bot
-  wall that sometimes blocks a direct download; when it does, MaiChat tells you to download
-  the file and import it from disk).
+Characters also import straight from a URL — RisuRealm and JanitorAI links included — and
+unknown fields survive a round trip instead of being quietly dropped.
 
-**Does not come in (yet)**
+**What doesn't travel:** instruct and context templates, because they frame a *text*
+completion prompt and MaiChat speaks chat completions only — importing them would paste
+markup into your prompt. Nor do themes, quick replies, extensions, wallpapers or
+`secrets.json`. The importer counts and reports every one of those rather than failing
+silently.
 
-- **Chat histories.** There is no `.jsonl` chat-log import, so past conversations do not
-  travel. Characters and presets do.
-- **Lorebooks / world info.** The prompt blocks exist and are ordered correctly, but there
-  is no lorebook system behind them yet, so those blocks render empty.
-- Group chats, extensions, image generation, TTS.
+MaiChat and SillyTavern are **different kinds of thing**, and this isn't a drop-in
+replacement: one is a Flutter app for one person on one phone, the other is a Node server
+with an extension ecosystem. Expect the shapes to differ. Also not here: TTS, an extension
+API, and any form of account, sync service or telemetry.
 
-**Going the other way**
-
-- Characters export as SillyTavern v2 cards (single or bulk), presets export as SillyTavern
-  or Agnai, chats export as a plain-text transcript. So cards and presets travel back out;
-  chats do not, in a form another app will read.
-
-MaiChat and SillyTavern are **inherently different things**. MaiChat is a Flutter/Dart app
-built for one person on one device; SillyTavern is a Node.js server with scale and an
-extension ecosystem built in. Expect differences in functionality, not a drop-in
-replacement.
-
-If a platform you use is open source and you want compatibility with it, open an issue.
+If a platform you use is open source and you want its files to load, open an issue.
 
 ## Platform support
 
 | Platform | State |
 | --- | --- |
-| **Android** | Primary target. Signed universal APK on every release. |
-| **Linux** | Builds and runs (`flutter run -d linux`); used for development and UI checks. |
-| **Windows / macOS** | Nothing in the app is Android-only, but the desktop scaffolding isn't in the repo yet — run `flutter create --platforms=windows,macos .` first. Untested; reports welcome. |
-| **iOS** | Not scaffolded. No signing story. |
+| **Android** | The target. Signed universal APK on every release. |
+| **Linux** | Builds and runs; used for development and UI checks. |
+| **Windows / macOS** | Nothing is Android-only, but the desktop scaffolding isn't committed — run `flutter create --platforms=windows,macos .` first. Untested; reports welcome. |
+| **iOS** | Not scaffolded, no signing story, not planned. |
 
 ---
 
-## For developers
+## Building it yourself
 
-**Prerequisites**
-
-- Flutter **3.44.9** (the version CI pins) with Dart SDK `^3.12.2`
-- JDK **17** and the Android SDK, for Android builds
-- Nothing else — no server, no database, no codegen step
-
-**Build and run**
+Flutter 3.44.9 (the version CI pins), JDK 17 and the Android SDK. No server, no database, no
+codegen.
 
 ```bash
 flutter pub get
-flutter analyze          # must be clean
-flutter test             # 550+ tests, all must pass
-flutter run -d linux     # fastest loop for UI work
+flutter analyze        # must be clean
+flutter test           # must be green
 flutter build apk --release
 ```
 
-**Recommended: let GitHub Actions build the APK.** `.github/workflows/build-apk.yml` runs
-`analyze` + `test` and builds a universal release APK on every push and PR to `main`, on
-manual dispatch, and on `v*` tags — a tag also attaches the APK to a GitHub Release. Fork
-the repo and the workflow works as-is; without the signing secrets
-(`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS`) it falls back to
-debug signing. This is easier than keeping a local Android toolchain healthy, especially on
-a small machine.
+Easier still: fork it and let GitHub Actions build the APK — the workflow runs analyze and
+tests on every push and attaches signed APKs to a release on a `v*` tag (falling back to
+debug signing when the signing secrets aren't set).
 
-**Layout**
+The parts of this codebase that will bite you — the prompt-assembly invariants, the
+per-chat override rules, the reverse-list chat, the Android build workarounds, and the
+widget-test traps that have each cost a day — are written down in
+[`CLAUDE.md`](CLAUDE.md) and [`developer notes/`](developer%20notes/). Read those before a
+non-trivial change; they exist because something shipped broken first.
 
-```
-lib/
-  models/     Character, Preset, PromptBlock, Provider, Conversation, ChatInterface, …
-  services/   chat_client (the wire), prompt_builder, macro_engine, tokenizer,
-              character_codec (card formats), preset_io, storage, usage_ledger,
-              update_service
-  screens/    home, chats, chat, characters, presets/, providers/, settings/
-  widgets/    message_bubble, thinking_block, avatars, pickers
-  state/      app_state.dart — the single ChangeNotifier everything reads
-test/         one file per concern; ~half are widget tests driving real screens
-```
-
-**Gotchas worth knowing before you build**
-
-- Some plugins don't compile under AGP 9 unless the Kotlin plugin is applied to them by
-  hand; `android/build.gradle.kts` has a `subprojects` hook naming the affected ones. Add
-  to it if you add a native plugin and hit "cannot find symbol …Plugin".
-- `android/gradle.properties` lowers `org.gradle.jvmargs` on purpose — the Flutter
-  template's `-Xmx8G` gets OOM-killed on small hosts.
-- Release builds need `android.permission.INTERNET` declared explicitly in
-  `android/app/src/main/AndroidManifest.xml`; Flutter only injects it for debug.
-- `version:` in `pubspec.yaml` and `kAppVersion` in `lib/app_info.dart` must stay in step —
-  the in-app update check compares the latter against the latest release tag.
-- The app's own `Provider` model collides with the `provider` package, so UI files import it
-  as `import 'package:provider/provider.dart' hide Provider;`.
+This project is partly vibe-coded, and openly so. What keeps that honest is the test suite:
+1,700+ unit and widget tests, `flutter analyze` clean, both enforced in CI on every push.
 
 ## Contributing
 
 Pull requests are welcome, with a few asks:
 
-- **Don't change core features.** Rework of the send pipeline, storage shape or provider
-  wire needs discussion in an issue first.
-- Priority goes to **cosmetic changes, customisability, and logic features** — in that
-  spirit.
-- Keep `flutter analyze` clean and the test suite green, and add tests for what you change.
+- **Don't rework core features.** The send pipeline, the storage shape and the provider wire
+  need an issue and a conversation first.
+- Cosmetic work, customisability and self-contained logic features get priority — that's the
+  spirit of the app.
+- Keep `flutter analyze` clean and the suite green, and add tests for what you change.
 - For anything layout-conditional, test the **matrix**, not the one configuration you were
-  looking at. Several bugs here shipped because a fix was verified in the default layout
-  only.
+  looking at. Several bugs here shipped because a fix was verified in the default layout only.
 
-Feature requests and bug reports both belong in
-[Issues](https://github.com/Ansh99999/Maichat/issues). Please say which provider and model
-you were using for anything generation-related.
+Bugs and feature requests both belong in
+[Issues](https://github.com/Ansh99999/Maichat/issues). For anything generation-related, say
+which provider and model you were using.
+
+## License
+
+MaiChat is free software under the **GNU General Public License, version 3** — see
+[`LICENSE`](LICENSE) for the full text.
+
+In short: use it, study it, change it, share it. If you distribute a modified build, its
+source has to be available under the same terms, so a fork of MaiChat stays as open as
+MaiChat is. There is no warranty.
+
+Copyright (C) 2026 Ansh Raj.
+
+One dependency has its own terms worth knowing about if you plan to sell a fork:
+`syncfusion_flutter_pdf` (PDF text extraction for the Data Bank) is free under Syncfusion's
+community licence for individuals and small organisations, but it is not open source. It
+governs itself, not MaiChat's code.
 
 ## Credits
 
 Standing on the shoulders of [SillyTavern](https://github.com/SillyTavern/SillyTavern),
-[Agnaistic](https://github.com/agnaistic/agnai) and [RisuAI](https://github.com/kwaroran/RisuAI)
-— their card, preset and prompt formats are the reason MaiChat can read your existing
-library at all.
+[Agnaistic](https://github.com/agnaistic/agnai) and
+[RisuAI](https://github.com/kwaroran/RisuAI). Their card, preset, lorebook and chat formats
+are the reason MaiChat can read the library you already have — and the reason it made sense
+to build this at all.
+
