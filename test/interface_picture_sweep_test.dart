@@ -76,6 +76,26 @@ void main() {
         reason: 'a per-chat copy names its own pictures');
   });
 
+  test("a saved look's picture is kept until the look is dropped", () async {
+    final state = await boot();
+    final ref = await state.storePicture(_png);
+    await state.updateChatInterface(
+        state.chatInterface.copyWith(backgroundImage: ref));
+    final saved = await state.saveInterfacePreset('With a background');
+    // Hand the app-wide settings back to the defaults: now the *look* is the only
+    // thing referring to the picture.
+    await state.updateChatInterface(const ChatInterface());
+    expect(state.chatInterface.backgroundImage, isNull);
+
+    final reopened = await boot();
+    expect(reopened.savedInterfacePresets.single.ui.backgroundImage, ref);
+    expect(filesOnDisk(), 1, reason: 'a saved look claims its own pictures');
+
+    // Drop the look and the picture goes with it — the sweep runs on delete.
+    await reopened.deleteInterfacePreset(saved!.id);
+    expect(filesOnDisk(), 0);
+  });
+
   test('a picture nothing refers to is still swept', () async {
     final state = await boot();
     await state.storePicture(_png);
@@ -92,6 +112,13 @@ void main() {
     expect(
       const ChatInterface(groupBarImage: 'local:bar.png').pictureRefs,
       ['local:bar.png'],
+    );
+    expect(
+      const ChatInterface(
+        groupBarImage: 'local:bar.png',
+        backgroundImage: 'local:bg.png',
+      ).pictureRefs,
+      ['local:bar.png', 'local:bg.png'],
     );
     // An empty string is not a reference, and must not become a keep-list entry
     // that matches a file name of its own.

@@ -279,9 +279,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(menuRow, findsOneWidget);
+      expect(find.text('Looks button opacity'), findsOneWidget);
       expect(find.text('Jump-to-latest opacity'), findsOneWidget);
-      expect(find.text('50%'), findsNWidgets(2),
-          reason: 'both read out their own current value');
+      expect(find.text('50%'), findsNWidgets(3),
+          reason: 'all three read out their own current value');
 
       // Drag the menu slider to its floor and the setting follows.
       final slider = find
@@ -295,7 +296,8 @@ void main() {
 
       expect(state.chatInterface.menuButtonOpacity, kMinChromeOpacity);
       expect(state.chatInterface.jumpButtonOpacity, kDefaultChromeOpacity,
-          reason: 'one slider must not move the other button');
+          reason: 'one slider must not move the other buttons');
+      expect(state.chatInterface.looksButtonOpacity, kDefaultChromeOpacity);
       expect(find.text('${(kMinChromeOpacity * 100).round()}%'), findsOneWidget);
     });
   });

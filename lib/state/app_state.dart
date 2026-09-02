@@ -18,6 +18,7 @@ import '../models/embedding.dart';
 import '../models/floating_image.dart';
 import '../models/gallery_image.dart';
 import '../models/image_gen.dart';
+import '../models/interface_preset.dart';
 import '../models/lorebook.dart';
 import '../models/message.dart';
 import '../models/message_image.dart';
@@ -374,6 +375,9 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(await _storage.loadScenarios());
     _viewPrefs = await _storage.loadViewPrefs();
+    _interfacePresets
+      ..clear()
+      ..addAll(await _storage.loadInterfacePresets());
     _imageGen = await _storage.loadImageGen();
     _summaryFolds
       ..clear()
@@ -685,6 +689,109 @@ class AppState extends ChangeNotifier {
     if (!_writable) return;
     await _storage.saveChatInterface(next);
   }
+
+  // --- Saved looks ---------------------------------------------------------
+
+  final List<InterfacePreset> _interfacePresets = [];
+
+  /// Every look on offer: the four the app ships with, then whatever has been
+  /// saved or imported, newest first.
+  List<InterfacePreset> get interfacePresets =>
+      List.unmodifiable([...kBuiltInInterfacePresets, ..._interfacePresets]);
+
+  /// Only the saved ones — the looks that can be renamed, exported or deleted.
+  List<InterfacePreset> get savedInterfacePresets =>
+      List.unmodifiable(_interfacePresets);
+
+  /// Whether [preset] is the look currently in force for [conversationId] (or
+  /// app-wide when that is null). Compared on appearance alone, so the Chat
+  /// behaviour switches do not make every look look unselected.
+  bool isInterfacePresetActive(InterfacePreset preset, {String? conversationId}) {
+    final current = conversationId == null
+        ? _chatInterface
+        : interfaceFor(_conversationById(conversationId));
+    return current.lookOnly == preset.ui.lookOnly;
+  }
+
+  /// Saves the look currently in force as [name]. [from] overrides what is
+  /// captured, which is how the sheet saves a chat's own look rather than the
+  /// app-wide one.
+  Future<InterfacePreset?> saveInterfacePreset(
+    String name, {
+    ChatInterface? from,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return null;
+    final preset = InterfacePreset(
+      id: 'look-${DateTime.now().microsecondsSinceEpoch}',
+      name: trimmed,
+      ui: (from ?? _chatInterface).lookOnly,
+      createdAt: DateTime.now(),
+    );
+    _interfacePresets.insert(0, preset);
+    notifyListeners();
+    await _persistInterfacePresets();
+    return preset;
+  }
+  /// Files an imported look, keeping its name but never its id — an imported file
+  /// must not be able to claim a built-in's identity or overwrite a saved look.
+  Future<InterfacePreset> addInterfacePreset(InterfacePreset preset) async {
+    final filed = InterfacePreset(
+      id: 'look-${DateTime.now().microsecondsSinceEpoch}',
+      name: preset.name,
+      ui: preset.ui.lookOnly,
+      createdAt: DateTime.now(),
+    );
+    _interfacePresets.insert(0, filed);
+    notifyListeners();
+    await _persistInterfacePresets();
+    return filed;
+  }
+
+  /// Puts [preset]'s appearance in force — app-wide, or for one thread when
+  /// [conversationId] is given.
+  ///
+  /// The Chat behaviour switches are carried over from the settings already in
+  /// force rather than taken from the look: switching to Document must not also
+  /// switch off group chats.
+  Future<void> applyInterfacePreset(
+    InterfacePreset preset, {
+    String? conversationId,
+  }) async {
+    final next = _chatInterface.applyLook(preset.ui);
+    if (conversationId == null) {
+      await updateChatInterface(next);
+      return;
+    }
+    await saveChatInterfaceOverride(conversationId, next);
+  }
+
+  Future<void> renameInterfacePreset(String id, String name) async {
+    final trimmed = name.trim();
+    final index = _interfacePresets.indexWhere((p) => p.id == id);
+    if (trimmed.isEmpty || index < 0) return;
+    _interfacePresets[index] = _interfacePresets[index].copyWith(name: trimmed);
+    notifyListeners();
+    await _persistInterfacePresets();
+  }
+
+  /// Drops a saved look. A built-in cannot be deleted — it is code, not data.
+  /// The sweep runs afterwards because the look may have been the last thing
+  /// referring to a background or a participant-bar picture.
+  Future<void> deleteInterfacePreset(String id) async {
+    final before = _interfacePresets.length;
+    _interfacePresets.removeWhere((p) => p.id == id && !p.isBuiltIn);
+    if (_interfacePresets.length == before) return;
+    notifyListeners();
+    await _persistInterfacePresets();
+    await _sweepAvatars();
+  }
+
+  Future<void> _persistInterfacePresets() async {
+    if (!_writable) return;
+    await _storage.saveInterfacePresets(_interfacePresets);
+  }
+
 
   // --- Presets -------------------------------------------------------------
 
@@ -1342,6 +1449,9 @@ class AppState extends ChangeNotifier {
       ..._lorebooks.map((b) => b.thumbnail),
       ..._gallery.map((g) => g.image),
       ..._chatInterface.pictureRefs,
+      // A saved look holds its own background and participant-bar picture, and
+      // is the only thing referring to them until it is applied.
+      ..._interfacePresets.expand((p) => p.ui.pictureRefs),
       for (final c in _conversations) ...[
         c.backgroundImage ?? '',
         ...c.characterOverrides.values.map((o) => o.avatar),

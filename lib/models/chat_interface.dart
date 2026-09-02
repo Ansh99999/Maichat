@@ -670,6 +670,9 @@ class ChatInterface {
     this.responseHintDepth = kDefaultResponseHintDepth,
     this.menuButtonOpacity = kDefaultChromeOpacity,
     this.jumpButtonOpacity = kDefaultChromeOpacity,
+    this.looksButtonOpacity = kDefaultChromeOpacity,
+    this.backgroundImage,
+    this.backgroundOpacity = 1,
   });
 
   final AvatarStyle botAvatar;
@@ -791,6 +794,19 @@ class ChatInterface {
   /// The same, for the arrow at the bottom-right that jumps to the newest turn.
   final double jumpButtonOpacity;
 
+  /// The same, for the square at the top-right that raises the looks sheet.
+  final double looksButtonOpacity;
+
+  /// A picture behind the whole conversation: a `local:<file>` reference, or an
+  /// `http(s)` URL. [backgroundOpacity] fades it towards [backgroundColor],
+  /// because a full-strength photo makes a transcript unreadable.
+  ///
+  /// A thread may also carry its own background on `Conversation`, which is the
+  /// older and more specific choice and therefore wins. This one is what a look
+  /// can carry, and so what a saved look can hand to every chat at once.
+  final String? backgroundImage;
+  final double backgroundOpacity;
+
   /// The inline actions, in order.
   List<MessageAction> get inlineActions => [
         for (final p in messageActions)
@@ -807,6 +823,28 @@ class ChatInterface {
 
   NameStyle nameFor(bool isUser) => isUser ? userNameStyle : botNameStyle;
 
+  /// The appearance half of these settings, with the Chat behaviour switches put
+  /// back to their defaults — what a saved look is allowed to carry.
+  ///
+  /// Whether group chats exist and whether a response hint is offered are not
+  /// matters of appearance; they only live on this class because it is where the
+  /// per-chat override machinery already was. A look that carried them would turn
+  /// "try the Document look" into "and also switch off group chats", which is not
+  /// what anybody asked for.
+  ChatInterface get lookOnly => copyWith(
+        groupChatsEnabled: false,
+        responseHintEnabled: false,
+        responseHintDepth: kDefaultResponseHintDepth,
+      );
+
+  /// [look]'s appearance over this interface's own behaviour switches — the one
+  /// way a look is ever applied.
+  ChatInterface applyLook(ChatInterface look) => look.copyWith(
+        groupChatsEnabled: groupChatsEnabled,
+        responseHintEnabled: responseHintEnabled,
+        responseHintDepth: responseHintDepth,
+      );
+
   /// Every picture file this look refers to.
   ///
   /// One place, named once, because two callers need it and both are the kind
@@ -815,6 +853,8 @@ class ChatInterface {
   /// its pictures for the file to mean anything on another device.
   Iterable<String> get pictureRefs => [
         if (groupBarImage != null && groupBarImage!.isNotEmpty) groupBarImage!,
+        if (backgroundImage != null && backgroundImage!.isNotEmpty)
+          backgroundImage!,
       ];
 // APPEND-CI-2
 
@@ -853,6 +893,9 @@ class ChatInterface {
     int? responseHintDepth,
     double? menuButtonOpacity,
     double? jumpButtonOpacity,
+    double? looksButtonOpacity,
+    Object? backgroundImage = _unset,
+    double? backgroundOpacity,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -892,6 +935,11 @@ class ChatInterface {
         responseHintDepth: responseHintDepth ?? this.responseHintDepth,
         menuButtonOpacity: menuButtonOpacity ?? this.menuButtonOpacity,
         jumpButtonOpacity: jumpButtonOpacity ?? this.jumpButtonOpacity,
+        looksButtonOpacity: looksButtonOpacity ?? this.looksButtonOpacity,
+        backgroundImage: identical(backgroundImage, _unset)
+            ? this.backgroundImage
+            : backgroundImage as String?,
+        backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -961,6 +1009,10 @@ class ChatInterface {
         'responseHintDepth': responseHintDepth,
         'menuButtonOpacity': menuButtonOpacity,
         'jumpButtonOpacity': jumpButtonOpacity,
+        'looksButtonOpacity': looksButtonOpacity,
+        if (backgroundImage != null && backgroundImage!.isNotEmpty)
+          'backgroundImage': backgroundImage,
+        if (backgroundOpacity != 1) 'backgroundOpacity': backgroundOpacity,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -1033,6 +1085,10 @@ class ChatInterface {
           .clamp(kMinResponseHintDepth, kMaxResponseHintDepth),
       menuButtonOpacity: _chromeOpacity(json['menuButtonOpacity']),
       jumpButtonOpacity: _chromeOpacity(json['jumpButtonOpacity']),
+      looksButtonOpacity: _chromeOpacity(json['looksButtonOpacity']),
+      backgroundImage: (json['backgroundImage'] as String?)?.trim(),
+      backgroundOpacity:
+          ((json['backgroundOpacity'] as num?)?.toDouble() ?? 1).clamp(0.0, 1.0),
     );
   }
 
@@ -1116,7 +1172,10 @@ class ChatInterface {
       other.responseHintEnabled == responseHintEnabled &&
       other.responseHintDepth == responseHintDepth &&
       other.menuButtonOpacity == menuButtonOpacity &&
-      other.jumpButtonOpacity == jumpButtonOpacity;
+      other.jumpButtonOpacity == jumpButtonOpacity &&
+      other.looksButtonOpacity == looksButtonOpacity &&
+      other.backgroundImage == backgroundImage &&
+      other.backgroundOpacity == backgroundOpacity;
 
   @override
   int get hashCode => Object.hash(
@@ -1147,7 +1206,8 @@ class ChatInterface {
         Object.hash(Object.hashAll(messageActions), groupChatsEnabled,
             groupBarHeight, groupBarColor, groupBarImage,
             responseHintEnabled, responseHintDepth,
-            Object.hash(menuButtonOpacity, jumpButtonOpacity)),
+            Object.hash(menuButtonOpacity, jumpButtonOpacity,
+                looksButtonOpacity, backgroundImage, backgroundOpacity)),
       );
 }
 

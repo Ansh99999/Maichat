@@ -19,6 +19,7 @@ import '../widgets/avatar_image.dart';
 import '../widgets/avatar_swipe_sheet.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/floating_images_layer.dart';
+import '../widgets/interface_preset_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
 import '../widgets/picture_viewer.dart';
@@ -44,6 +45,10 @@ import 'settings_screen.dart';
 /// and [ChatInterface.jumpButtonOpacity] — rather than guess at which of the
 /// several `Material`s or fades around them is the one that carries it.
 const Key chatMenuButtonKey = ValueKey('chat-menu-button');
+
+/// The looks square at the top-right, which raises the saved-looks sheet. Its own
+/// key so a test can tell the two floating squares apart.
+const Key chatLooksButtonKey = ValueKey('chat-looks-button');
 const Key jumpToLatestKey = ValueKey('jump-to-latest');
 
 /// A single conversation: the thread and a composer. The chat is deliberately
@@ -643,11 +648,16 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Stack(
         children: [
           // This chat's own picture, behind everything and behind nothing else's.
-          if (conversation.backgroundImage != null)
+          // A thread's own background is the more specific choice and wins; the
+          // one on the interface is what a saved look can carry, and so what
+          // dresses every chat that has not picked its own.
+          if ((conversation.backgroundImage ?? ui.backgroundImage) != null)
             Positioned.fill(
               child: _ChatBackground(
-                image: conversation.backgroundImage!,
-                opacity: conversation.backgroundOpacity,
+                image: conversation.backgroundImage ?? ui.backgroundImage!,
+                opacity: conversation.backgroundImage != null
+                    ? conversation.backgroundOpacity
+                    : ui.backgroundOpacity,
               ),
             ),
           SafeArea(
@@ -741,8 +751,8 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
-          // The one piece of chrome: a translucent soft square that floats over
-          // the thread without boxing it in.
+          // The two soft squares that float over the thread without boxing it in:
+          // the drawer on the left, the looks sheet on the right.
           Positioned(
             top: topInset + 6,
             left: 8,
@@ -750,6 +760,20 @@ class _ChatScreenState extends State<ChatScreen> {
               builder: (ctx) => _ChatMenuButton(
                 opacity: ui.menuButtonOpacity,
                 onTap: () => Scaffold.of(ctx).openDrawer(),
+              ),
+            ),
+          ),
+          Positioned(
+            top: topInset + 6,
+            right: 8,
+            child: _ChatMenuButton(
+              buttonKey: chatLooksButtonKey,
+              icon: Icons.style_outlined,
+              tooltip: 'Looks',
+              opacity: ui.looksButtonOpacity,
+              onTap: () => showInterfacePresetSheet(
+                context,
+                conversationId: conversation.id,
               ),
             ),
           ),
@@ -2113,17 +2137,28 @@ class _GroupChip extends StatelessWidget {
   }
 }
 
-/// The lone bit of chat chrome: a small, semi-transparent **soft square** that
-/// carries the menu icon. How visible it is comes from the chat's own interface
-/// settings ([ChatInterface.menuButtonOpacity]) — translucent by default, so it
-/// never boxes the conversation in.
+/// A small, semi-transparent **soft square** floating over the thread. Two of
+/// them: the menu at the top-left and the looks sheet at the top-right. How
+/// visible each one is comes from the chat's own interface settings
+/// ([ChatInterface.menuButtonOpacity], [ChatInterface.looksButtonOpacity]) —
+/// translucent by default, so neither boxes the conversation in.
 class _ChatMenuButton extends StatelessWidget {
-  const _ChatMenuButton({required this.onTap, required this.opacity});
+  const _ChatMenuButton({
+    required this.onTap,
+    required this.opacity,
+    this.icon = Icons.menu,
+    this.tooltip = 'Menu',
+    this.buttonKey = chatMenuButtonKey,
+  });
 
   final VoidCallback onTap;
 
   /// 0..1, from the chat's interface settings.
   final double opacity;
+
+  final IconData icon;
+  final String tooltip;
+  final Key buttonKey;
 
   /// The corner radius that makes a 48-pixel square read as *soft* rather than
   /// as a box or as a circle.
@@ -2143,7 +2178,7 @@ class _ChatMenuButton extends StatelessWidget {
     // painting became. Alpha in the colours reads the same at a glance and costs
     // nothing per frame, not even an offscreen layer.
     return Material(
-      key: chatMenuButtonKey,
+      key: buttonKey,
       color: scheme.surface.withValues(alpha: alpha),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.all(Radius.circular(_radius)),
@@ -2153,8 +2188,8 @@ class _ChatMenuButton extends StatelessWidget {
       // visible square is what gives a ghost button away.
       shadowColor: Colors.black.withValues(alpha: 0.3 * alpha),
       child: IconButton(
-        tooltip: 'Menu',
-        icon: Icon(Icons.menu, color: scheme.onSurface.withValues(alpha: alpha)),
+        tooltip: tooltip,
+        icon: Icon(icon, color: scheme.onSurface.withValues(alpha: alpha)),
         onPressed: onTap,
       ),
     );

@@ -121,7 +121,13 @@ bar or the overflow menu.
   is the escape hatch. There is **no avatar size cap** by design. This holds for
   message attachments too (`MessageImage.ref`): base64 only ever exists on the
   copy handed to the wire, and `_sweepAvatars`' keep-list must name every message
-  attachment or the sweep deletes a picture that is in the transcript.
+  attachment or the sweep deletes a picture that is in the transcript. The same
+  trap caught the interface's own pictures (a participant bar, a look's
+  background), which is why `ChatInterface.pictureRefs` exists: one place naming
+  what a look refers to, read by the keep-list *and* by a look's export. A picture
+  the sweep deleted cannot be in a backup either, since a backup ships the
+  pictures directory as it finds it. An **export** file may hold base64 — that
+  rule is about the store, not about files leaving the app.
 - **Per-chat overrides resolve in exactly one place each.** Read a thread's style
   via `AppState.interfaceFor(conversation)`, a character *inside a thread* via
   `AppState.characterFor(conversation, id)` and its scenario via
@@ -279,6 +285,33 @@ bar or the overflow menu.
   `widgets/floating_images_layer.dart`. Pictures are files like every other
   image; a character's extra avatars live in `Character.avatars` and are resolved
   only through `AppState.avatarPoolFor`/`avatarRefFor`.
+- **Chat Interface settings:** a **hub of spokes**, not one long page.
+  `screens/settings/chat_interface_settings_page.dart` is the hub (it keeps that
+  name and path so every caller is untouched); each spoke is a file under
+  `screens/settings/chat_interface/` — layout, avatars, names, colours, text,
+  message actions, and a group-chat-bar page that only appears while group chats
+  are on. `controls.dart` holds the shared row widgets and `spoke.dart` the frame
+  (`ChatUiBuilder` resolves app-wide-vs-draft; `SpokeScaffold` gives every page
+  the preview eye and an optional per-spoke reset). Every spoke takes the same
+  `SettingAnchor? highlight` and `ChatUiScope? scope` the hub does, so search
+  deep-links onto a short page and the per-chat route serves a draft. Two things
+  that were never interface settings — `responseHintEnabled`/`responseHintDepth`
+  and `groupChatsEnabled` — are edited in `settings/chat_behaviour_page.dart`
+  instead; the fields still live on `ChatInterface` and are still read app-wide,
+  so nothing migrated.
+- **Saved looks (interface presets):** `models/interface_preset.dart` (an
+  `InterfacePreset` is a name plus a whole `ChatInterface`;
+  `kBuiltInInterfacePresets` ships four, told apart by a `builtin:` id and not
+  deletable), the `interfacePresets` store entry, `AppState`'s
+  save/apply/rename/delete, `widgets/interface_preset_sheet.dart` (the sheet, from
+  the square at a chat's top-right *and* the Chat Interface app bar), and
+  `services/interface_preset_io.dart` (one self-contained JSON per look, with its
+  pictures base64'd in). A look carries **appearance only**:
+  `ChatInterface.lookOnly` strips the Chat behaviour switches and `applyLook`
+  lays a look over whatever they currently are, so switching to Document cannot
+  switch off group chats. Applying from inside a chat asks once — every chat, or
+  this one — and routes to `updateChatInterface` or
+  `saveChatInterfaceOverride`; there is no third writer.
 - **Chat UI:** `screens/chat_screen.dart`, `widgets/message_bubble.dart`
   (swipes/variants, per-message action bar, name placement, attachments),
   `widgets/thinking_block.dart`, per-chat settings screen,

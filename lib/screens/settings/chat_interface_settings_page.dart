@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/chat_interface.dart';
+import '../../widgets/interface_preset_sheet.dart';
 import 'chat_interface/actions_page.dart';
 import 'chat_interface/avatars_page.dart';
 import 'chat_interface/colours_page.dart';
@@ -40,6 +41,15 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
         appBar: AppBar(
           title: Text(scope?.title ?? 'Chat Interface'),
           actions: [
+            // Only app-wide: from a chat's own copy this page is editing a draft,
+            // and a sheet that wrote somewhere else while a draft was open would
+            // be two answers to one question.
+            if (scope == null)
+              IconButton(
+                tooltip: 'Looks',
+                icon: const Icon(Icons.style_outlined),
+                onPressed: () => showInterfacePresetSheet(context),
+              ),
             IconButton(
               tooltip: 'Preview',
               icon: const Icon(Icons.visibility_outlined),
@@ -276,7 +286,8 @@ int _layoutChanges(ChatInterface ui) =>
     (ui.bubbleOpacity != _d.bubbleOpacity ? 1 : 0) +
     (ui.messageSpacing != _d.messageSpacing ? 1 : 0) +
     (ui.menuButtonOpacity != _d.menuButtonOpacity ? 1 : 0) +
-    (ui.jumpButtonOpacity != _d.jumpButtonOpacity ? 1 : 0);
+    (ui.jumpButtonOpacity != _d.jumpButtonOpacity ? 1 : 0) +
+    (ui.looksButtonOpacity != _d.looksButtonOpacity ? 1 : 0);
 String _avatarSummary(ChatInterface ui) {
   final bot = ui.botAvatar;
   final user = ui.userAvatar;

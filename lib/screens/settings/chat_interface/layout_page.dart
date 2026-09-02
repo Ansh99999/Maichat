@@ -37,6 +37,7 @@ class LayoutSpokePage extends StatelessWidget {
               messageSpacing: d.messageSpacing,
               menuButtonOpacity: d.menuButtonOpacity,
               jumpButtonOpacity: d.jumpButtonOpacity,
+              looksButtonOpacity: d.looksButtonOpacity,
             ));
             notifySetting(context, 'Layout back to defaults');
           },
@@ -107,9 +108,10 @@ class LayoutSpokePage extends StatelessWidget {
         settingHeader(context, 'Floating buttons'),
         settingNote(
           context,
-          'The two buttons that float over a conversation: the menu square at '
-          'the top-left, and the arrow at the bottom-right that jumps to the '
-          'newest turn. Turn either down to let the chat read through it.',
+          'The three buttons that float over a conversation: the menu square at '
+          'the top-left, the looks square at the top-right, and the arrow at the '
+          'bottom-right that jumps to the newest turn. Turn any of them down to '
+          'let the chat read through it.',
         ),
         SettingHighlight(
           active: highlight == SettingAnchor.floatingButtons,
@@ -123,6 +125,15 @@ class LayoutSpokePage extends StatelessWidget {
                 max: kMaxChromeOpacity,
                 suffix: '${(ui.menuButtonOpacity * 100).round()}%',
                 onChanged: (v) => update(ui.copyWith(menuButtonOpacity: v)),
+              ),
+              SettingSlider(
+                icon: Icons.style_outlined,
+                label: 'Looks button opacity',
+                value: ui.looksButtonOpacity,
+                min: kMinChromeOpacity,
+                max: kMaxChromeOpacity,
+                suffix: '${(ui.looksButtonOpacity * 100).round()}%',
+                onChanged: (v) => update(ui.copyWith(looksButtonOpacity: v)),
               ),
               SettingSlider(
                 icon: Icons.arrow_downward,

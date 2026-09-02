@@ -11,6 +11,7 @@ import '../models/discover.dart';
 import '../models/embedding.dart';
 import '../models/gallery_image.dart';
 import '../models/image_gen.dart';
+import '../models/interface_preset.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
@@ -58,6 +59,7 @@ class Storage {
   static const _embeddingKey = 'embeddings';
   static const _documentsKey = 'documents';
   static const _viewPrefsKey = 'viewPrefs';
+  static const _interfacePresetsKey = 'interfacePresets';
   static const _imageGenKey = 'imageGen';
   static const _summaryFoldsKey = 'summaryFolds';
   static const _responseHintsKey = 'responseHints';
@@ -311,6 +313,37 @@ class Storage {
 
   Future<void> saveViewPrefs(ViewPrefs prefs) async =>
       (await _prefs).setString(_viewPrefsKey, jsonEncode(prefs.toJson()));
+
+  /// The user's saved chat-interface looks. Its own small entry, so saving a look
+  /// never rewrites the conversations blob — and so a backup, which copies the
+  /// store entry by entry, carries them without knowing what they are.
+  ///
+  /// The looks that ship with the app are not stored: they are code, and writing
+  /// them to disk would freeze this version's idea of "Document" into every
+  /// install that ever opened the sheet.
+  Future<List<InterfacePreset>> loadInterfacePresets() async {
+    final raw = (await _prefs).getString(_interfacePresetsKey);
+    if (raw == null) return const [];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return [
+          for (final entry in json)
+            if (entry is Map<String, dynamic>)
+              ?InterfacePreset.fromJson(entry),
+        ];
+      }
+    } catch (_) {
+      // A corrupt list is an empty list, not a startup failure.
+    }
+    return const [];
+  }
+
+  Future<void> saveInterfacePresets(List<InterfacePreset> presets) async =>
+      (await _prefs).setString(
+        _interfacePresetsKey,
+        jsonEncode(presets.map((p) => p.toJson()).toList()),
+      );
 
   /// How the image studio talks to its endpoint. Its own small entry, so opening
   /// the studio's settings never rewrites anything large.
