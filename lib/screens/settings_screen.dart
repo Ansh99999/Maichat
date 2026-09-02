@@ -8,7 +8,14 @@ import 'backups/drive_settings_page.dart';
 import 'chats_screen.dart' show relativeTime;
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
+import 'settings/chat_behaviour_page.dart';
 import 'settings/chat_interface_settings_page.dart';
+import 'settings/chat_interface/actions_page.dart';
+import 'settings/chat_interface/avatars_page.dart';
+import 'settings/chat_interface/colours_page.dart';
+import 'settings/chat_interface/layout_page.dart';
+import 'settings/chat_interface/names_page.dart';
+import 'settings/chat_interface/text_page.dart';
 import 'providers/providers_screen.dart';
 import 'settings/setting_anchors.dart';
 import 'settings/storage_settings_page.dart';
@@ -49,6 +56,12 @@ class SettingsScreen extends StatelessWidget {
             title: 'Chat Interface',
             subtitle: _chatInterfaceSummary(state),
             onTap: () => _open(context, const ChatInterfaceSettingsPage()),
+          ),
+          _SectionTile(
+            icon: Icons.tune_outlined,
+            title: 'Chat behaviour',
+            subtitle: _chatBehaviourSummary(state),
+            onTap: () => _open(context, const ChatBehaviourPage()),
           ),
           _SectionTile(
             icon: Icons.sd_storage_outlined,
@@ -98,6 +111,15 @@ class SettingsScreen extends StatelessWidget {
         ? 'avatars on'
         : 'no avatars';
     return '$style · $avatars · ${ui.textPlacement.label}';
+  }
+
+  static String _chatBehaviourSummary(AppState state) {
+    final ui = state.chatInterface;
+    final parts = [
+      if (ui.responseHintEnabled) 'Response hints on',
+      if (ui.groupChatsEnabled) 'Group chats on',
+    ];
+    return parts.isEmpty ? 'Response hints, group chats' : parts.join(' · ');
   }
 
   static String _backupSummary(AppState state) {
@@ -298,12 +320,20 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Message colours',
     section: 'Chat Interface',
     icon: Icons.format_color_fill_outlined,
-    keywords: 'text bubble background colour color chat theme override font size',
+    keywords: 'text bubble background colour color chat theme override',
     builder: _chatColoursPage,
   ),
   _SearchEntry(
-    title: 'Group chat',
+    title: 'Text and markdown',
     section: 'Chat Interface',
+    icon: Icons.text_fields_outlined,
+    keywords: 'font size text markdown bold italic code emphasis asterisk '
+        'quote quotation wrapping wrap rule symbols colour color render',
+    builder: _chatTextPage,
+  ),
+  _SearchEntry(
+    title: 'Group chat',
+    section: 'Chat behaviour',
     icon: Icons.groups_outlined,
     keywords: 'group chat multi character participants members bar height '
         'background picture colour color enable roleplay scene',
@@ -311,7 +341,7 @@ const List<_SearchEntry> _searchIndex = [
   ),
   _SearchEntry(
     title: 'Response hint',
-    section: 'Chat Interface',
+    section: 'Chat behaviour',
     icon: Icons.tips_and_updates_outlined,
     keywords: 'response hint guide steer nudge direction instruction inject '
         'depth realtime live author note ooc guidance next reply',
@@ -368,23 +398,23 @@ Widget _systemColoursPage() =>
 Widget _fontPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.font);
 Widget _chatAvatarsPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatAvatars);
+    const AvatarsSpokePage(highlight: SettingAnchor.chatAvatars);
 Widget _textPlacementPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.textPlacement);
+    const LayoutSpokePage(highlight: SettingAnchor.textPlacement);
 Widget _spacingPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.spacing);
-Widget _namesPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.names);
+    const LayoutSpokePage(highlight: SettingAnchor.spacing);
+Widget _namesPage() => const NamesSpokePage(highlight: SettingAnchor.names);
 Widget _messageActionsPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.messageActions);
+    const ActionsSpokePage(highlight: SettingAnchor.messageActions);
 Widget _floatingButtonsPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.floatingButtons);
+    const LayoutSpokePage(highlight: SettingAnchor.floatingButtons);
 Widget _chatColoursPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.chatColours);
+    const ColoursSpokePage(highlight: SettingAnchor.chatColours);
+Widget _chatTextPage() => const TextSpokePage();
 Widget _groupChatsPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.groupChats);
+    const ChatBehaviourPage(highlight: SettingAnchor.groupChats);
 Widget _responseHintPage() =>
-    const ChatInterfaceSettingsPage(highlight: SettingAnchor.responseHint);
+    const ChatBehaviourPage(highlight: SettingAnchor.responseHint);
 Widget _storagePage() => const StorageSettingsPage();
 Widget _backupsPage() => const BackupsScreen();
 Widget _backupImportPage() => const BackupImportScreen();

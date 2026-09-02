@@ -37,6 +37,11 @@ const double kDefaultMessageSpacing = 14;
 /// pixels — the bound both the preview's drag and the settings sliders honour.
 const double kMaxNameOffset = 100;
 
+/// The same bound for an avatar, which is allowed to travel further because it
+/// is often being pulled clear of a tall turn rather than snugged up to a line
+/// of text. Honoured by the preview's drag and by the settings nudge pad.
+const double kMaxAvatarNudge = 200;
+
 /// Bounds for the group-chat participant bar's height, in logical pixels. The
 /// default is one comfortable row of avatar chips; the ceiling allows two rows.
 const double kMinGroupBarHeight = 44;

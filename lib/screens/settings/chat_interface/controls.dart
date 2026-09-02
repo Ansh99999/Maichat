@@ -5,6 +5,7 @@
 /// seven pages can share them rather than each growing its own near-copy.
 library;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../widgets/color_picker.dart';
@@ -431,6 +432,11 @@ class _EagerPanRecognizer extends PanGestureRecognizer {
   }
 }
 
+/// The pad's own touch surface. Named so a test can drag the square itself
+/// rather than the row it sits in — the row's centre is over the label, where a
+/// drag does nothing.
+const Key kNudgePadKey = Key('nudge-pad');
+
 /// The two-axis nudge: one square pad standing in for what used to be a "nudge
 /// across" slider, a "nudge down" slider and a row whose only job was a Reset.
 ///
@@ -510,6 +516,7 @@ class NudgePad extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           RawGestureDetector(
+            key: kNudgePadKey,
             gestures: {
               _EagerPanRecognizer:
                   GestureRecognizerFactoryWithHandlers<_EagerPanRecognizer>(

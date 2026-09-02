@@ -4,7 +4,7 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/screens/chat_screen.dart';
-import 'package:maichat/screens/settings/chat_interface_settings_page.dart';
+import 'package:maichat/screens/settings/chat_interface/layout_page.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -258,9 +258,11 @@ void main() {
   });
 
   group('the settings page', () {
+    // The two sliders live on the Layout spoke now: what they control is the
+    // layout of a chat, and there were never enough of them to be a section.
     Widget host(AppState state) => ChangeNotifierProvider<AppState>.value(
           value: state,
-          child: const MaterialApp(home: ChatInterfaceSettingsPage()),
+          child: const MaterialApp(home: LayoutSpokePage()),
         );
 
     testWidgets('offers a slider per button, showing its percentage',

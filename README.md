@@ -24,7 +24,7 @@ one device rather than scaled down from something multi-user.
 <td align="center"><b>Discover</b><br>a catalogue inside the app</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/04-interface.png" alt="The Chat Interface settings page: switches, segmented controls and sliders"></td>
+<td><img src="docs/screenshots/04-interface.png" alt="The Chat Interface settings hub: six rows — layout, avatars, names, colours, text, message actions — each summarising what it is currently set to"></td>
 <td><img src="docs/screenshots/05-costs.png" alt="A provider's Costs tab: tokens and money in and out, a per-model breakdown, and usage charted by day"></td>
 <td><img src="docs/screenshots/06-gallery.png" alt="The gallery: pictures grouped by date, each labelled with its title and owner"></td>
 </tr>

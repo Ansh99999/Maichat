@@ -82,8 +82,8 @@ class ChatInterfacePreviewPage extends StatelessWidget {
       update(now.withAvatar(
         isUser,
         s.copyWith(
-          offsetX: (s.offsetX + d.dx).clamp(-200.0, 200.0),
-          offsetY: (s.offsetY + d.dy).clamp(-200.0, 200.0),
+          offsetX: (s.offsetX + d.dx).clamp(-kMaxAvatarNudge, kMaxAvatarNudge),
+          offsetY: (s.offsetY + d.dy).clamp(-kMaxAvatarNudge, kMaxAvatarNudge),
         ),
       ));
     }

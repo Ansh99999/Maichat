@@ -6,7 +6,7 @@ import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/screens/chat_screen.dart';
-import 'package:maichat/screens/settings/chat_interface_settings_page.dart';
+import 'package:maichat/screens/settings/chat_behaviour_page.dart';
 import 'package:maichat/services/avatar_store.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/state/app_state.dart';
@@ -252,10 +252,13 @@ void main() {
     expect(find.text('first chat'), findsOneWidget);
   });
 
-  group('Chat Interface settings', () {
+  // A response hint is an injection depth — a fact about the prompt rather than
+  // about the screen — so the switch and the depth live in Chat behaviour, not
+  // in Chat Interface, where they were also app-wide-only oddities.
+  group('Chat behaviour settings', () {
     Widget settings(AppState state) => ChangeNotifierProvider<AppState>.value(
           value: state,
-          child: const MaterialApp(home: ChatInterfaceSettingsPage()),
+          child: const MaterialApp(home: ChatBehaviourPage()),
         );
 
     Future<void> reveal(WidgetTester tester, Finder target) async {
