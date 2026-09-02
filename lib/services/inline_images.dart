@@ -113,7 +113,7 @@ String _bareUrlsToPictures(String html) {
       final tag = html.substring(i, gt + 1);
       out.write(tag);
       i = gt + 1;
-      final name = _tagNameOf(tag);
+      final name = htmlTagName(tag);
       if (name != null &&
           !tag.startsWith('</') &&
           !tag.endsWith('/>') &&
@@ -142,5 +142,9 @@ String _bareUrlsToPictures(String html) {
 
 final _tagName = RegExp(r'^</?\s*([a-zA-Z][a-zA-Z0-9]*)');
 
-String? _tagNameOf(String tag) =>
+/// The lowercased element name of a whole tag (`</DIV >` → `div`), or null when
+/// [tag] is not one. Shared with the quote-wrapping pass in `message_html.dart`,
+/// which walks the same documents for the same reason: a rewrite that reaches
+/// inside a tag destroys it.
+String? htmlTagName(String tag) =>
     _tagName.firstMatch(tag)?.group(1)?.toLowerCase();

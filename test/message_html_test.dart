@@ -43,6 +43,85 @@ void main() {
     });
   });
 
+  group('quoted spans', () {
+    const url = 'https://x.tld/a.png';
+
+    test('a quoted run is tinted, and crosses emphasis inside it', () {
+      expect(messageToHtml('she said "hello" now'), contains('<q>"hello"</q>'));
+      // One quotation, even though markdown put a tag in the middle of it.
+      expect(messageToHtml('she said "hello **there**" now'),
+          contains('<q>"hello <strong>there</strong>"</q>'));
+      expect(messageToHtml('she said “hello” now'), contains('<q>"hello"</q>'));
+    });
+
+    // The bug: `("[^"]+")` paired a quote in the prose with the next quote
+    // anywhere in the document, and an HTML document is full of quotes that
+    // belong to attributes. One `"` a model never closed therefore paired with
+    // the `"` opening `src="…"` and put a `<q>` around half the tag — the
+    // picture vanished and `" alt="` was left showing as text.
+    test('an unclosed quote cannot reach into a tag', () {
+      for (final content in [
+        'She said "hello.\n\n![]($url)',
+        'She said "hello.\n\n![stuff]($url)',
+        '"a" and "b" and "c\n\n![]($url)',
+      ]) {
+        final html = messageToHtml(content);
+        expect(html, contains('<img src="$url"'),
+            reason: 'the picture survives: $content');
+        expect(html, isNot(contains('alt="</q>')));
+        expect(html, isNot(contains('src="</q>')));
+        expect(html, isNot(contains(' alt=</q>')));
+        expect(html, isNot(contains('<q>" alt="</q>')));
+      }
+    });
+
+    test('a bare picture link survives an unclosed quote too', () {
+      // This one used to lose the picture outright: the `<a>` the auto-linker
+      // made was cut in half before anything could turn it into an `<img>`.
+      final html = messageToHtml('She said "hello.\n\n$url');
+      expect(html, contains('<img src="$url"'));
+    });
+
+    test('an unpaired quote is left as the character it is', () {
+      final html = messageToHtml('She said "hello.');
+      expect(html, contains('She said "hello.'));
+      expect(html, isNot(contains('<q>')));
+    });
+
+    test('a run never straddles two blocks', () {
+      // A `<q>` spanning `</p><p>` is unbalanced markup, and flutter_html then
+      // draws every following paragraph inside the quotation.
+      final html = messageToHtml('"one\n\ntwo"');
+      expect(html, isNot(contains('<q>')));
+      expect(html, contains('<p>"one</p>'));
+    });
+
+    test('a quote in code is part of the code', () {
+      final html = messageToHtml('use `"quoted"` here');
+      expect(html, contains('<code>'));
+      expect(html, isNot(contains('<q>')));
+    });
+
+    test('an attribute holding a quote is left intact', () {
+      // The old pass folded every `&quot;` in the document — including the ones
+      // markdown had escaped inside an attribute — which broke the attribute.
+      final html = messageToHtml('![say "hi"]($url)');
+      expect(html, contains('alt="say &quot;hi&quot;"'));
+      expect(html, contains('<img src="$url"'));
+      // A creator's own markup keeps its attributes, and its prose still tints.
+      final card = messageToHtml('<div class="card">She said "hi"</div>');
+      expect(card, contains('<div class="card">'));
+      expect(card, contains('<q>"hi"</q>'));
+    });
+
+    test('a quotation may hold a picture', () {
+      // `<img>` is inline, so a run is allowed through it — the alternative is
+      // losing the tint on every quotation a picture happens to sit inside.
+      final html = messageToHtml('She said "look ![]($url) at it" now');
+      expect(html, contains('<q>"look <img src="$url" alt="" /> at it"</q>'));
+    });
+  });
+
   group('text wrapping rules', () {
     const yellow = TextWrapRule(start: '<', end: '>', color: 0xFFFFCC00);
 

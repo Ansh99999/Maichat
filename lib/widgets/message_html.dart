@@ -75,9 +75,6 @@ bool messageNeedsHtml(String text) =>
     looksLikeHtml(text) || carriesInlineImage(text);
 
 final _htmlTag = RegExp(r'<(/?[a-zA-Z][a-zA-Z0-9]*)(\s[^<>]*)?/?>');
-final _curlyQuotes = RegExp(r'[“”„‟]');
-// A tag, a fenced/inline code run, or a "double-quoted" span (captured).
-final _quoteSpan = RegExp(r'<[\s\S]*?>|```[\s\S]*?```|`[^`]*`|("[^"]+")');
 
 /// Converts a message (markdown, possibly with inline/block HTML) to HTML,
 /// applying the user's [wraps] to the source first, then wrapping
@@ -93,17 +90,146 @@ String messageToHtml(String text, {List<TextWrapRule> wraps = const []}) {
     applyWrapRules(source, wraps),
     extensionSet: md.ExtensionSet.gitHubWeb,
   );
-  final normalized =
-      html.replaceAll(_curlyQuotes, '"').replaceAll('&quot;', '"');
-  final quoted = normalized.replaceAllMapped(_quoteSpan, (m) {
-    final quoted = m.group(1);
-    if (quoted == null) return m.group(0)!;
-    return '<q>$quoted</q>';
-  });
   // A bare link to a picture becomes the picture. Markdown has already turned it
   // into an `<a>`; this is the one place that knows a photograph was meant.
   return linkedImagesToPictures(
-      tameRichCss(resolveFontFamilies(quoted)));
+      tameRichCss(resolveFontFamilies(wrapQuotedSpans(html))));
+}
+
+// --- quoted spans -----------------------------------------------------------
+
+/// Curly quotes, folded to straight ones so a run typed with them is tinted too.
+final _curlyQuotes = RegExp(r'[“”„‟]');
+
+/// A straight-double-quoted run of prose.
+final _quotedRun = RegExp(r'"[^"]+"');
+
+/// A fenced or inline code run that survived markdown — inside a raw HTML block
+/// markdown copies its contents through, backticks and all.
+final _rawCode = RegExp(r'```[\s\S]*?```|`[^`\n]*`');
+
+/// Inline elements a quoted run is allowed to cross. `"Hello **there**"` is one
+/// quotation and reaches this pass as `"Hello <strong>there</strong>"`, so the
+/// run has to be let through the emphasis.
+const Set<String> _quoteCrossable = {
+  'em', 'i', 'strong', 'b', 'u', 's', 'strike', 'del', 'ins', 'mark', 'small',
+  'sub', 'sup', 'span', 'a', 'abbr', 'cite', 'time', 'font', 'q', 'img', 'wbr',
+};
+
+/// Elements whose body is not prose, copied through without being read: a quote
+/// in code is part of the code.
+const Set<String> _quoteOpaque = {
+  'code', 'pre', 'style', 'script', 'textarea', 'title',
+};
+
+/// Mask for a stretch that must be copied through but may sit inside a quoted
+/// run — an inline tag, a code run. One character, so it cannot look like prose
+/// and cannot itself contain a quote. `applyWrapRules` masks with the same one.
+const String _mask = '\u0001';
+
+/// Wraps each straight-double-quoted run of prose in [html] in a `<q>`, so the
+/// Chat Interface's quote colour can reach it.
+///
+/// Deliberately a walk rather than one regex. The regex this replaces
+/// (`("[^"]+")`, tried after an alternative that matched a whole tag) paired a
+/// quote in the prose with the next quote *anywhere* in the document, and an
+/// HTML document is full of quotes that belong to attributes. So a message with
+/// an odd number of quotes in it — one `"` a model never closed — paired that
+/// one with the `"` opening `src="…"` on the next picture and wrapped a `<q>`
+/// around the first half of the tag. The tag was destroyed: the picture vanished
+/// with no trace, and `" alt="` was left showing as text.
+///
+/// Two rules follow from that, and they are the whole function. A run never
+/// reads what is inside a tag. And a run ends at anything that is not inline: a
+/// `<q>` straddling `</p><p>` is unbalanced markup, and flutter_html then draws
+/// every following paragraph inside the quotation.
+String wrapQuotedSpans(String html) {
+  if (!html.contains('"') &&
+      !html.contains('&quot;') &&
+      !_curlyQuotes.hasMatch(html)) {
+    return html;
+  }
+  // The mask has to be absent from the text for the restore to line up, and a
+  // control character in a message is not content worth keeping.
+  final source = html.contains(_mask) ? html.replaceAll(_mask, '') : html;
+
+  final out = StringBuffer();
+  final run = StringBuffer(); // the current inline run, tags masked out
+  final masked = <String>[]; // what each mask in [run] stands for, in order
+
+  void flush() {
+    if (run.isNotEmpty) out.write(_wrapRun(run.toString(), masked));
+    run.clear();
+    masked.clear();
+  }
+
+  void hide(String verbatim) {
+    masked.add(verbatim);
+    run.write(_mask);
+  }
+
+  final lower = source.toLowerCase();
+  var i = 0;
+  while (i < source.length) {
+    final ch = source[i];
+    if (ch == '<') {
+      final gt = source.indexOf('>', i);
+      if (gt < 0) {
+        // An unclosed `<`: prose, then, like every other stray character.
+        run.write(source.substring(i));
+        break;
+      }
+      final tag = source.substring(i, gt + 1);
+      final name = htmlTagName(tag);
+      i = gt + 1;
+      if (name != null && _quoteOpaque.contains(name)) {
+        flush();
+        out.write(tag);
+        if (!tag.startsWith('</') && !tag.endsWith('/>')) {
+          final close = lower.indexOf('</$name', i);
+          final end = close < 0 ? source.length : close;
+          out.write(source.substring(i, end));
+          i = end;
+        }
+        continue;
+      }
+      if (name != null && _quoteCrossable.contains(name)) {
+        hide(tag);
+        continue;
+      }
+      flush(); // a block boundary, or a tag we know nothing about
+      out.write(tag);
+      continue;
+    }
+    if (ch == '`') {
+      final code = _rawCode.matchAsPrefix(source, i);
+      if (code != null) {
+        hide(code.group(0)!);
+        i = code.end;
+        continue;
+      }
+    }
+    run.write(ch);
+    i++;
+  }
+  flush();
+  return out.toString();
+}
+
+/// One inline run: fold its quote characters, wrap what pairs up, put back what
+/// was masked out.
+String _wrapRun(String run, List<String> masked) {
+  var text = run.replaceAll(_curlyQuotes, '"').replaceAll('&quot;', '"');
+  text = text.replaceAllMapped(_quotedRun, (m) => '<q>${m.group(0)}</q>');
+  if (masked.isEmpty) return text;
+  final parts = text.split(_mask);
+  final restored = StringBuffer(parts.first);
+  for (var i = 1; i < parts.length; i++) {
+    restored
+      ..write(masked[i - 1])
+      ..write(parts[i]);
+  }
+  return restored.toString();
 }
 
 // --- reasoning wrappers ------------------------------------------------------
@@ -182,9 +308,10 @@ String _wrapSource(String s, List<TextWrapRule> rules, int depth) {
           : '${_escape(rule.start)}'
               '${_wrapSource(inner, rules, depth + 1)}'
               '${_escape(rule.end)}';
-      // Single-quoted attribute on purpose: the quote-wrapping pass below scans
-      // for double-quoted runs, and a double-quoted attribute here would look
-      // like one.
+      // Single-quoted attribute on purpose. The quote-wrapping pass no longer
+      // reads inside a tag, so this is belt and braces rather than load-bearing
+      // — but a double-quoted attribute written into the *source*, before
+      // markdown has run, is prose as far as that pass is concerned.
       out.write(rule.color == null
           ? body
           : "<span style='color: ${_cssColor(rule.color!)}'>$body</span>");
