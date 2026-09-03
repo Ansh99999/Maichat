@@ -287,6 +287,7 @@ int _layoutChanges(ChatInterface ui) =>
     (ui.messageSpacing != _d.messageSpacing ? 1 : 0) +
     (ui.menuButtonOpacity != _d.menuButtonOpacity ? 1 : 0) +
     (ui.jumpButtonOpacity != _d.jumpButtonOpacity ? 1 : 0) +
+    (ui.looksButtonEnabled != _d.looksButtonEnabled ? 1 : 0) +
     (ui.looksButtonOpacity != _d.looksButtonOpacity ? 1 : 0);
 String _avatarSummary(ChatInterface ui) {
   final bot = ui.botAvatar;

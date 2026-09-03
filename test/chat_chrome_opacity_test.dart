@@ -46,6 +46,26 @@ void main() {
       expect(back.jumpButtonOpacity, kDefaultChromeOpacity);
     });
 
+    test('the looks square can be put away, and is there until it is', () {
+      const ui = ChatInterface();
+      expect(ui.looksButtonEnabled, isTrue,
+          reason: 'a feature nobody can see is a feature nobody uses');
+
+      const off = ChatInterface(looksButtonEnabled: false);
+      expect(ChatInterface.fromJson(off.toJson()).looksButtonEnabled, isFalse);
+      expect(off == ui, isFalse);
+      expect(off.hashCode == ui.hashCode, isFalse);
+
+      // A config saved before the switch existed keeps the square.
+      final legacy = const ChatInterface().toJson()
+        ..remove('looksButtonEnabled');
+      expect(ChatInterface.fromJson(legacy).looksButtonEnabled, isTrue);
+
+      // Putting it away does not disturb the opacity it had.
+      expect(ui.copyWith(looksButtonEnabled: false).looksButtonOpacity,
+          kDefaultChromeOpacity);
+    });
+
     test('a stored value out of range is clamped, never invisible', () {
       final low = ChatInterface.fromJson({
         'menuButtonOpacity': 0.0,
@@ -279,6 +299,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(menuRow, findsOneWidget);
+      expect(find.text('Looks button'), findsOneWidget);
       expect(find.text('Looks button opacity'), findsOneWidget);
       expect(find.text('Jump-to-latest opacity'), findsOneWidget);
       expect(find.text('50%'), findsNWidgets(3),
@@ -299,6 +320,36 @@ void main() {
           reason: 'one slider must not move the other buttons');
       expect(state.chatInterface.looksButtonOpacity, kDefaultChromeOpacity);
       expect(find.text('${(kMinChromeOpacity * 100).round()}%'), findsOneWidget);
+    });
+
+    testWidgets('putting the looks square away takes its slider with it',
+        (tester) async {
+      final state = AppState();
+      await state.init();
+      await tester.pumpWidget(host(state));
+      await tester.pumpAndSettle();
+
+      final row = find.text('Looks button');
+      await tester.scrollUntilVisible(row, 120,
+          scrollable: find.byType(Scrollable).first);
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+
+      expect(state.chatInterface.looksButtonEnabled, isFalse);
+      // Nothing to be half-visible, so the opacity row goes away rather than
+      // sitting there setting a property of something that is not drawn.
+      expect(find.text('Looks button opacity'), findsNothing);
+      // The other two are untouched.
+      expect(find.text('Menu button opacity'), findsOneWidget);
+      expect(find.text('Jump-to-latest opacity'), findsOneWidget);
+
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      expect(state.chatInterface.looksButtonEnabled, isTrue);
+      expect(find.text('Looks button opacity'), findsOneWidget);
     });
   });
 }

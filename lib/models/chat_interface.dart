@@ -670,6 +670,7 @@ class ChatInterface {
     this.responseHintDepth = kDefaultResponseHintDepth,
     this.menuButtonOpacity = kDefaultChromeOpacity,
     this.jumpButtonOpacity = kDefaultChromeOpacity,
+    this.looksButtonEnabled = true,
     this.looksButtonOpacity = kDefaultChromeOpacity,
     this.backgroundImage,
     this.backgroundOpacity = 1,
@@ -794,7 +795,17 @@ class ChatInterface {
   /// The same, for the arrow at the bottom-right that jumps to the newest turn.
   final double jumpButtonOpacity;
 
-  /// The same, for the square at the top-right that raises the looks sheet.
+  /// Whether the square at the top-right that raises the looks sheet is drawn at
+  /// all. Switched off, a conversation keeps only the menu square over it — and
+  /// the looks are still reached from Settings ▸ Chat Interface, so nothing
+  /// becomes unavailable, it just stops floating over the thread.
+  ///
+  /// The menu square has no such switch on purpose: it is the only way to the
+  /// drawer, and a control that cannot be reached at all is a different thing
+  /// from one you chose to put away.
+  final bool looksButtonEnabled;
+
+  /// How visible that square is, when it is drawn.
   final double looksButtonOpacity;
 
   /// A picture behind the whole conversation: a `local:<file>` reference, or an
@@ -893,6 +904,7 @@ class ChatInterface {
     int? responseHintDepth,
     double? menuButtonOpacity,
     double? jumpButtonOpacity,
+    bool? looksButtonEnabled,
     double? looksButtonOpacity,
     Object? backgroundImage = _unset,
     double? backgroundOpacity,
@@ -935,6 +947,7 @@ class ChatInterface {
         responseHintDepth: responseHintDepth ?? this.responseHintDepth,
         menuButtonOpacity: menuButtonOpacity ?? this.menuButtonOpacity,
         jumpButtonOpacity: jumpButtonOpacity ?? this.jumpButtonOpacity,
+        looksButtonEnabled: looksButtonEnabled ?? this.looksButtonEnabled,
         looksButtonOpacity: looksButtonOpacity ?? this.looksButtonOpacity,
         backgroundImage: identical(backgroundImage, _unset)
             ? this.backgroundImage
@@ -1009,6 +1022,7 @@ class ChatInterface {
         'responseHintDepth': responseHintDepth,
         'menuButtonOpacity': menuButtonOpacity,
         'jumpButtonOpacity': jumpButtonOpacity,
+        'looksButtonEnabled': looksButtonEnabled,
         'looksButtonOpacity': looksButtonOpacity,
         if (backgroundImage != null && backgroundImage!.isNotEmpty)
           'backgroundImage': backgroundImage,
@@ -1085,6 +1099,7 @@ class ChatInterface {
           .clamp(kMinResponseHintDepth, kMaxResponseHintDepth),
       menuButtonOpacity: _chromeOpacity(json['menuButtonOpacity']),
       jumpButtonOpacity: _chromeOpacity(json['jumpButtonOpacity']),
+      looksButtonEnabled: json['looksButtonEnabled'] as bool? ?? true,
       looksButtonOpacity: _chromeOpacity(json['looksButtonOpacity']),
       backgroundImage: (json['backgroundImage'] as String?)?.trim(),
       backgroundOpacity:
@@ -1173,6 +1188,7 @@ class ChatInterface {
       other.responseHintDepth == responseHintDepth &&
       other.menuButtonOpacity == menuButtonOpacity &&
       other.jumpButtonOpacity == jumpButtonOpacity &&
+      other.looksButtonEnabled == looksButtonEnabled &&
       other.looksButtonOpacity == looksButtonOpacity &&
       other.backgroundImage == backgroundImage &&
       other.backgroundOpacity == backgroundOpacity;
@@ -1207,7 +1223,8 @@ class ChatInterface {
             groupBarHeight, groupBarColor, groupBarImage,
             responseHintEnabled, responseHintDepth,
             Object.hash(menuButtonOpacity, jumpButtonOpacity,
-                looksButtonOpacity, backgroundImage, backgroundOpacity)),
+                Object.hash(looksButtonEnabled, looksButtonOpacity),
+                backgroundImage, backgroundOpacity)),
       );
 }
 

@@ -751,8 +751,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
-          // The two soft squares that float over the thread without boxing it in:
-          // the drawer on the left, the looks sheet on the right.
+          // The soft squares that float over the thread without boxing it in: the
+          // drawer on the left, and — unless it has been put away — the looks
+          // sheet on the right.
           Positioned(
             top: topInset + 6,
             left: 8,
@@ -763,20 +764,21 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          Positioned(
-            top: topInset + 6,
-            right: 8,
-            child: _ChatMenuButton(
-              buttonKey: chatLooksButtonKey,
-              icon: Icons.style_outlined,
-              tooltip: 'Looks',
-              opacity: ui.looksButtonOpacity,
-              onTap: () => showInterfacePresetSheet(
-                context,
-                conversationId: conversation.id,
+          if (ui.looksButtonEnabled)
+            Positioned(
+              top: topInset + 6,
+              right: 8,
+              child: _ChatMenuButton(
+                buttonKey: chatLooksButtonKey,
+                icon: Icons.style_outlined,
+                tooltip: 'Looks',
+                opacity: ui.looksButtonOpacity,
+                onTap: () => showInterfacePresetSheet(
+                  context,
+                  conversationId: conversation.id,
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

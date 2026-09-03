@@ -37,6 +37,7 @@ class LayoutSpokePage extends StatelessWidget {
               messageSpacing: d.messageSpacing,
               menuButtonOpacity: d.menuButtonOpacity,
               jumpButtonOpacity: d.jumpButtonOpacity,
+              looksButtonEnabled: d.looksButtonEnabled,
               looksButtonOpacity: d.looksButtonOpacity,
             ));
             notifySetting(context, 'Layout back to defaults');
@@ -108,10 +109,10 @@ class LayoutSpokePage extends StatelessWidget {
         settingHeader(context, 'Floating buttons'),
         settingNote(
           context,
-          'The three buttons that float over a conversation: the menu square at '
-          'the top-left, the looks square at the top-right, and the arrow at the '
+          'The buttons that float over a conversation: the menu square at the '
+          'top-left, the looks square at the top-right, and the arrow at the '
           'bottom-right that jumps to the newest turn. Turn any of them down to '
-          'let the chat read through it.',
+          'let the chat read through it — or put the looks square away entirely.',
         ),
         SettingHighlight(
           active: highlight == SettingAnchor.floatingButtons,
@@ -126,15 +127,30 @@ class LayoutSpokePage extends StatelessWidget {
                 suffix: '${(ui.menuButtonOpacity * 100).round()}%',
                 onChanged: (v) => update(ui.copyWith(menuButtonOpacity: v)),
               ),
-              SettingSlider(
+              SettingSwitch(
                 icon: Icons.style_outlined,
-                label: 'Looks button opacity',
-                value: ui.looksButtonOpacity,
-                min: kMinChromeOpacity,
-                max: kMaxChromeOpacity,
-                suffix: '${(ui.looksButtonOpacity * 100).round()}%',
-                onChanged: (v) => update(ui.copyWith(looksButtonOpacity: v)),
+                title: 'Looks button',
+                subtitle: ui.looksButtonEnabled
+                    ? 'A square at the top-right that switches between saved '
+                        'looks'
+                    : 'Off — saved looks are still in Settings ▸ Chat Interface',
+                value: ui.looksButtonEnabled,
+                onChanged: (v) {
+                  update(ui.copyWith(looksButtonEnabled: v));
+                  notifySetting(
+                      context, v ? 'Looks button shown' : 'Looks button hidden');
+                },
               ),
+              if (ui.looksButtonEnabled)
+                SettingSlider(
+                  icon: Icons.style_outlined,
+                  label: 'Looks button opacity',
+                  value: ui.looksButtonOpacity,
+                  min: kMinChromeOpacity,
+                  max: kMaxChromeOpacity,
+                  suffix: '${(ui.looksButtonOpacity * 100).round()}%',
+                  onChanged: (v) => update(ui.copyWith(looksButtonOpacity: v)),
+                ),
               SettingSlider(
                 icon: Icons.arrow_downward,
                 label: 'Jump-to-latest opacity',

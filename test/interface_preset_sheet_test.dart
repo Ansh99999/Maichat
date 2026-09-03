@@ -223,6 +223,39 @@ void main() {
       expect(find.text('Document'), findsOneWidget);
     });
 
+    testWidgets('switching it off takes the square off the chat',
+        (tester) async {
+      final state = await chat();
+      await state.updateChatInterface(
+          state.chatInterface.copyWith(looksButtonEnabled: false));
+      await tester.pumpWidget(host(state, const ChatScreen()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(find.byKey(chatLooksButtonKey), findsNothing);
+      // The menu square has no such switch: it is the only way to the drawer.
+      expect(find.byKey(chatMenuButtonKey), findsOneWidget);
+    });
+
+    testWidgets('one chat can put it away while another keeps it',
+        (tester) async {
+      final state = await chat();
+      final id = state.active.id;
+      await state.saveChatInterfaceOverride(
+        id,
+        state.chatInterface.copyWith(looksButtonEnabled: false),
+      );
+      await tester.pumpWidget(host(state, const ChatScreen()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // The per-chat copy is what the chat reads, like every other interface
+      // setting — nothing special had to be taught about this one.
+      expect(find.byKey(chatLooksButtonKey), findsNothing);
+      expect(state.chatInterface.looksButtonEnabled, isTrue,
+          reason: 'the app-wide setting is untouched');
+    });
+
     testWidgets('turning it down leaves the menu square alone', (tester) async {
       final state = await chat();
       await state.updateChatInterface(
