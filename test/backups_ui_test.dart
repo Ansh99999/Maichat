@@ -319,7 +319,12 @@ void main() {
   });
 
   testWidgets('Settings has a Backups section, and search finds it',
-      (tester) async {    final state = await ready(withRecords());
+      (tester) async {
+    // Tall, because the hub has grown past the default 800×600 surface: a
+    // `ListView` only builds what is near the viewport, so Backups sits below
+    // the fold and is not built at all on a short window.
+    tall(tester);
+    final state = await ready(withRecords());
     await tester.pumpWidget(host(state, const SettingsScreen()));
     await tester.pumpAndSettle();
 

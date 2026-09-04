@@ -5,11 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/character.dart';
+import '../models/lorebook.dart';
 import '../services/character_codec.dart';
 import '../state/app_state.dart';
 import 'chats_screen.dart';
 import 'character_sheet_screen.dart';
-import 'character_edit_screen.dart';
+import 'character_editor.dart';
 import 'chat_screen.dart';
 import 'gallery/gallery_screen.dart';
 
@@ -56,11 +57,10 @@ Future<void> runCharacterAction(
     case CharacterAction.newChat:
       startCharacterChat(context, state, character);
     case CharacterAction.download:
-      await exportCharacter(context, character);
+      await exportCharacter(context, character,
+          books: state.lorebooksOf(character));
     case CharacterAction.edit:
-      await Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => CharacterEditScreen(character: character),
-      ));
+      await openCharacterEditor(context, character: character);
     case CharacterAction.chatList:
       Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => ChatsScreen(
@@ -131,28 +131,46 @@ Future<void> confirmDeleteCharacter(
 
 /// Exports [character] as a SillyTavern v2 card, offering a saved `.json` file
 /// or a clipboard copy — both permission-free.
-Future<void> exportCharacter(BuildContext context, Character character) async {
-  final json = CharacterCodec.exportTavernV2(character);
+///
+/// [books] are the character's attached lorebooks. The first goes out as the
+/// spec's `character_book` and the rest ride in `extensions`, so a card exported
+/// here arrives somewhere else with its world info rather than half of it.
+Future<void> exportCharacter(
+  BuildContext context,
+  Character character, {
+  List<Lorebook> books = const <Lorebook>[],
+}) async {
+  final json = CharacterCodec.exportTavernV2(character, books: books);
   final safe = _safeName(character.displayName);
   await _offerExport(
     context,
     json: json,
     fileName: '${safe.isEmpty ? 'character' : safe}.json',
-    subtitle: 'SillyTavern v2 card',
+    subtitle: books.isEmpty
+        ? 'SillyTavern v2 card'
+        : 'SillyTavern v2 card · with '
+            '${books.length == 1 ? 'its lorebook' : '${books.length} lorebooks'}',
   );
 }
 
 /// Exports several characters as one `.json` array of v2 cards (bulk export
 /// that the file importer reads back). A single selection defers to
-/// [exportCharacter].
+/// [exportCharacter]. [booksOf] resolves each card's attached lorebooks.
 Future<void> exportCharacters(
-    BuildContext context, List<Character> characters) async {
+  BuildContext context,
+  List<Character> characters, {
+  List<Lorebook> Function(Character)? booksOf,
+}) async {
   if (characters.isEmpty) return;
   if (characters.length == 1) {
-    await exportCharacter(context, characters.single);
+    await exportCharacter(
+      context,
+      characters.single,
+      books: booksOf?.call(characters.single) ?? const <Lorebook>[],
+    );
     return;
   }
-  final json = CharacterCodec.exportTavernV2Many(characters);
+  final json = CharacterCodec.exportTavernV2Many(characters, booksOf: booksOf);
   await _offerExport(
     context,
     json: json,

@@ -199,18 +199,22 @@ class _DiscoverItemScreenState extends State<DiscoverItemScreen> {
     final lorebook = payload.lorebook;
     final preset = payload.preset;
     if (character != null) {
-      await state.addCharacter(character);
-      _savedCharacterId = character.id;
-      message = '${character.displayName} added to Characters';
-      open = () => _push(CharacterSheetScreen(characterId: character.id));
       // A card's own `character_book` rides along with it. Filing the character
       // and dropping its world info would look like a working download and
-      // behave like a broken character.
+      // behave like a broken character — and the book is *attached*, so it is in
+      // force in every chat with them and travels on if the card is exported
+      // again.
       if (lorebook != null) {
         await state.addLorebook(lorebook);
-        message = '${character.displayName} and its lorebook '
-            '(${lorebook.entries.length} entries) added';
+        character.lorebookIds.add(lorebook.id);
       }
+      await state.addCharacter(character);
+      _savedCharacterId = character.id;
+      message = lorebook == null
+          ? '${character.displayName} added to Characters'
+          : '${character.displayName} and its lorebook '
+              '(${lorebook.entries.length} entries) added';
+      open = () => _push(CharacterSheetScreen(characterId: character.id));
     } else if (lorebook != null) {
       await state.addLorebook(lorebook);
       message = '${lorebook.name} added to Lorebooks';

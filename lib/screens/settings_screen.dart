@@ -8,6 +8,7 @@ import 'backups/drive_settings_page.dart';
 import 'chats_screen.dart' show relativeTime;
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
+import 'settings/character_settings_page.dart';
 import 'settings/chat_behaviour_page.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/chat_interface/actions_page.dart';
@@ -62,6 +63,13 @@ class SettingsScreen extends StatelessWidget {
             title: 'Chat behaviour',
             subtitle: _chatBehaviourSummary(state),
             onTap: () => _open(context, const ChatBehaviourPage()),
+          ),
+          _SectionTile(
+            icon: Icons.person_outline,
+            title: 'Characters',
+            subtitle: '${state.creatorVersion.label} · '
+                '${state.creatorVersion.blurb.toLowerCase()}',
+            onTap: () => _open(context, const CharacterSettingsPage()),
           ),
           _SectionTile(
             icon: Icons.sd_storage_outlined,
@@ -348,6 +356,14 @@ const List<_SearchEntry> _searchIndex = [
     builder: _responseHintPage,
   ),
   _SearchEntry(
+    title: 'Character creator',
+    section: 'Characters',
+    icon: Icons.edit_note_outlined,
+    keywords: 'creator v1 v2 editor legacy old new tabs character card create '
+        'edit form single page classic',
+    builder: _characterCreatorPage,
+  ),
+  _SearchEntry(
     title: 'Storage',
     section: 'Storage',
     icon: Icons.sd_storage_outlined,
@@ -415,6 +431,8 @@ Widget _groupChatsPage() =>
     const ChatBehaviourPage(highlight: SettingAnchor.groupChats);
 Widget _responseHintPage() =>
     const ChatBehaviourPage(highlight: SettingAnchor.responseHint);
+Widget _characterCreatorPage() =>
+    const CharacterSettingsPage(highlight: SettingAnchor.characterCreator);
 Widget _storagePage() => const StorageSettingsPage();
 Widget _backupsPage() => const BackupsScreen();
 Widget _backupImportPage() => const BackupImportScreen();

@@ -4,10 +4,11 @@ import 'package:provider/provider.dart';
 import '../models/character.dart';
 import '../state/app_state.dart';
 import '../widgets/character_avatar.dart';
+import '../widgets/character_theme_scope.dart';
 import '../widgets/fab_menu.dart';
 import '../widgets/natural_image.dart';
 import 'character_actions.dart';
-import 'character_edit_screen.dart';
+import 'character_editor.dart';
 import 'chat_screen.dart';
 import 'character_sheet_parts.dart';
 
@@ -40,53 +41,58 @@ class CharacterSheetScreen extends StatelessWidget {
     final recent = state.mostRecentChatWith(character.id);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
 
-    return Scaffold(
-      body: Stack(
-        children: [
-          CustomScrollView(
-            slivers: [
-              _SheetAppBar(character: character, state: state),
-              SliverToBoxAdapter(child: _Portrait(character: character)),
-              SliverToBoxAdapter(child: TagBand(tags: character.tags)),
-              SliverToBoxAdapter(
-                child: NotesBlock(notes: character.creatorNotes),
-              ),
-              const SliverToBoxAdapter(child: SheetDivider()),
-              SliverToBoxAdapter(
-                child: DefinitionFolds(character: character),
-              ),
-              // Room for the action bubbles to sit over nothing important.
-              SliverToBoxAdapter(child: SizedBox(height: 120 + bottomInset)),
-            ],
-          ),
-          Positioned.fill(
-            child: FabMenu(
-              tooltip: 'Chat',
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
-              actions: [
-                if (recent != null)
-                  FabMenuAction(
-                    icon: Icons.forum_outlined,
-                    label: 'Most recent chat',
-                    onPressed: () {
-                      state.selectConversation(recent.id);
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const ChatScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                FabMenuAction(
-                  icon: Icons.chat_bubble_outline,
-                  label: 'New chat',
-                  onPressed: () =>
-                      startCharacterChat(context, state, character),
+    // The sheet is where a character's own theme is most worth wearing: this is
+    // their page. A card with no theme of its own gets the app's, untouched.
+    return CharacterThemeScope(
+      theme: character.theme,
+      child: Scaffold(
+        body: Stack(
+          children: [
+            CustomScrollView(
+              slivers: [
+                _SheetAppBar(character: character, state: state),
+                SliverToBoxAdapter(child: _Portrait(character: character)),
+                SliverToBoxAdapter(child: TagBand(tags: character.tags)),
+                SliverToBoxAdapter(
+                  child: NotesBlock(notes: character.creatorNotes),
                 ),
+                const SliverToBoxAdapter(child: SheetDivider()),
+                SliverToBoxAdapter(
+                  child: DefinitionFolds(character: character),
+                ),
+                // Room for the action bubbles to sit over nothing important.
+                SliverToBoxAdapter(child: SizedBox(height: 120 + bottomInset)),
               ],
             ),
-          ),
-        ],
+            Positioned.fill(
+              child: FabMenu(
+                tooltip: 'Chat',
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
+                actions: [
+                  if (recent != null)
+                    FabMenuAction(
+                      icon: Icons.forum_outlined,
+                      label: 'Most recent chat',
+                      onPressed: () {
+                        state.selectConversation(recent.id);
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ChatScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  FabMenuAction(
+                    icon: Icons.chat_bubble_outline,
+                    label: 'New chat',
+                    onPressed: () =>
+                        startCharacterChat(context, state, character),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -115,11 +121,8 @@ class _SheetAppBar extends StatelessWidget {
           IconButton(
             tooltip: 'Edit',
             icon: const Icon(Icons.edit_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => CharacterEditScreen(character: character),
-              ),
-            ),
+            onPressed: () =>
+                openCharacterEditor(context, character: character),
           ),
           PopupMenuButton<CharacterAction>(
             onSelected: (action) =>
@@ -189,6 +192,17 @@ class _Portrait extends StatelessWidget {
                               fontWeight: FontWeight.w700,
                             ),
                   ),
+                  // The one-line catcher, under the name and above the
+                  // provenance — the order it reads in.
+                  if (character.hasTitle)
+                    Text(
+                      character.title.trim(),
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            fontStyle: FontStyle.italic,
+                          ),
+                    ),
                   if (meta.isNotEmpty)
                     Text(
                       meta,

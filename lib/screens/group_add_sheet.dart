@@ -4,7 +4,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../models/character.dart';
 import '../state/app_state.dart';
 import '../widgets/character_avatar.dart';
-import 'character_edit_screen.dart';
+import 'character_editor.dart';
 
 /// Opens the "add characters to this group" sheet: a bottom sheet that rises to
 /// three-quarters of the screen, with a search field, a tag filter, and a `+`
@@ -65,11 +65,7 @@ class _GroupAddSheetState extends State<_GroupAddSheet> {
   /// straight away, so "create a temporary character" lands them in the chat.
   Future<void> _createCharacter() async {
     final state = context.read<AppState>();
-    final created = await Navigator.of(context).push<Character>(
-      MaterialPageRoute<Character>(
-        builder: (_) => const CharacterEditScreen(),
-      ),
-    );
+    final created = await openCharacterEditor(context);
     if (created != null) {
       await state.addParticipant(widget.conversationId, created);
     }

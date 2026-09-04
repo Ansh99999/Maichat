@@ -4,6 +4,7 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/provider.dart';
+import 'package:maichat/models/view_prefs.dart';
 import 'package:maichat/screens/chat_settings_screen.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:provider/provider.dart' hide Provider;
@@ -263,13 +264,18 @@ void main() {
       await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
 
-      // The character editor, on a draft: saving there writes nothing yet.
-      expect(find.text('Edit character'), findsOneWidget);
+      // Creator v2, on a draft: saving there writes nothing yet.
+      expect(find.text('Scenarios'), findsOneWidget);
+      await tester.tap(find.text('Persona'));
+      await tester.pumpAndSettle();
       await tester.enterText(
-        find.widgetWithText(TextFormField, 'Description'),
+        find.descendant(
+          of: find.byKey(const Key('creator-description')),
+          matching: find.byType(TextField),
+        ),
         'furious',
       );
-      await tester.tap(find.widgetWithText(TextButton, 'Save'));
+      await tester.tap(find.byKey(const Key('creator-save')));
       await tester.pumpAndSettle();
       expect(state.characterById('c')!.description, 'calm');
       // The note sits under the participant list, past the foot of the viewport.
@@ -291,6 +297,40 @@ void main() {
       expect(chat.characterOverrides['c']?.description, 'furious');
       expect(state.characterById('c')!.description, 'calm');
       expect(state.characterFor(chat, 'c')?.description, 'furious');
+    });
+
+    testWidgets('the legacy editor collects a draft the same way',
+        (tester) async {
+      final state = await boot();
+      // The whole point of keeping Creator v1 is that it still works everywhere
+      // Creator v2 does — including the one route that edits a *draft* rather
+      // than the stored card.
+      await state.setCreatorVersion(CreatorVersion.v1);
+      final card = Character(id: 'c', name: 'Aria', description: 'calm');
+      await state.addCharacter(card);
+      final chatId = state.startChatWithCharacter(card);
+
+      await tester.pumpWidget(host(state, chatId));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit character'), findsOneWidget);
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Description'),
+        'furious',
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(state.characterById('c')!.description, 'calm');
+      await tester.drag(find.byType(ListView), const Offset(0, -240));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('1 character change waiting'), findsOneWidget);
     });
   });
 

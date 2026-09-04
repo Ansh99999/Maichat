@@ -11,6 +11,7 @@ import '../models/appearance.dart';
 import '../models/backup.dart';
 import '../models/budget.dart';
 import '../models/character.dart';
+import '../models/character_scenario.dart';
 import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
@@ -2231,17 +2232,40 @@ class AppState extends ChangeNotifier {
   /// Ids that no longer resolve are skipped rather than reported: a book the
   /// user deleted should not break sending a message. A repeated id is counted
   /// once, so a stored list written by hand cannot inject the same lore twice.
+  ///
+  /// A chat's own books come first, then the books attached to the characters in
+  /// it ([Character.lorebookIds]) — the same de-duplication covers both, so a
+  /// book that is both attached to the character and switched on for the chat is
+  /// one book. This is the single place the two sources are joined, which is what
+  /// makes "attach a lorebook to a character" mean anything at all: the request,
+  /// the memory panel and the chat's own count all read it through here.
   List<Lorebook> lorebooksFor(Conversation? conversation) {
     if (conversation == null) return const <Lorebook>[];
     final out = <Lorebook>[];
     final seen = <String>{};
-    for (final id in conversation.lorebookIds) {
-      if (!seen.add(id)) continue;
+    void add(String id) {
+      if (!seen.add(id)) return;
       final book = lorebookFor(conversation, id);
       if (book != null) out.add(book);
     }
+
+    for (final id in conversation.lorebookIds) {
+      add(id);
+    }
+    for (final character in participantsOf(conversation)) {
+      for (final id in character.lorebookIds) {
+        add(id);
+      }
+    }
     return out;
   }
+
+  /// The lorebooks attached to [character] that still exist, in the order they
+  /// were attached. What an export ships with the card, and what the creator's
+  /// Lorebooks tab lists.
+  List<Lorebook> lorebooksOf(Character character) => <Lorebook>[
+        for (final id in character.lorebookIds) ?lorebookById(id),
+      ];
 
   /// Moves a book's picture out of the preferences store and into a file, the
   /// same way character avatars are handled — the store is read whole at every
@@ -2295,6 +2319,12 @@ class AppState extends ChangeNotifier {
       if (conversation.lorebookIds.remove(id)) touched = true;
       if (conversation.lorebookOverrides.remove(id) != null) touched = true;
     }
+    // …and off every character that had it attached, for the same reason.
+    var characters = false;
+    for (final character in _characters) {
+      if (character.lorebookIds.remove(id)) characters = true;
+    }
+    if (characters) await _persistCharacters();
     notifyListeners();
     await _persistLorebooks();
     if (touched) await _saveConversations();
@@ -2405,17 +2435,57 @@ class AppState extends ChangeNotifier {
   ///
   /// **The** resolution point, in ranked order: a scenario written for this chat
   /// wins, then the library scenario plugged into it (applied over the card's, so
-  /// an "add to it" scenario keeps both), then the character's own. Everything
-  /// that needs to know — the request, the inspectors, the chat settings screen —
-  /// reads it through here, so a chosen scenario cannot be honoured in one place
-  /// and forgotten in another.
+  /// an "add to it" scenario keeps both), then the character's own — and among
+  /// *those*, the one attached to the greeting this thread opened on, else the
+  /// single card scenario every other app understands. Everything that needs to
+  /// know — the request, the inspectors, the chat settings screen — reads it
+  /// through here, so a chosen scenario cannot be honoured in one place and
+  /// forgotten in another.
   String scenarioFor(Conversation? conversation, Character? character) {
-    final card = character?.activeScenario.trim() ?? '';
+    final card = _cardScenario(conversation, character);
     final own = conversation?.scenarioOverride.trim() ?? '';
     if (own.isNotEmpty) return own;
     final plugged = scenarioOf(conversation);
     if (plugged != null && plugged.isUsable) return plugged.appliedOver(card);
     return card;
+  }
+
+  /// The character's own scenario for this thread: whichever of their
+  /// [Character.scenarios] belongs to the greeting it opened on, falling back to
+  /// the card's single scenario when they have none (which is every card written
+  /// before per-greeting scenarios existed).
+  String _cardScenario(Conversation? conversation, Character? character) {
+    if (character == null) return '';
+    if (character.scenarios.isNotEmpty) {
+      final picked = CharacterScenario.resolve(
+        character.scenarios,
+        activeGreetingIndex(conversation, character),
+      );
+      if (picked.isNotEmpty) return picked;
+    }
+    return character.activeScenario.trim();
+  }
+
+  /// Which of [character]'s greetings [conversation] opened on, or null when it
+  /// did not open on one at all (a blank thread, or an imported log).
+  ///
+  /// A chat's opening turn is seeded with the character's greetings as its
+  /// swipes, so the live swipe index *is* the greeting index — as long as both
+  /// sides count the same list, which is why [Character.greetings] exists. A
+  /// thread whose first turn is the user's, or whose opening no longer matches
+  /// any greeting the character still has, has no index.
+  int? activeGreetingIndex(Conversation? conversation, Character character) {
+    if (conversation == null || conversation.messages.isEmpty) return null;
+    final opening = conversation.messages.first;
+    if (opening.role != 'assistant') return null;
+    final greetings = character.greetings;
+    if (greetings.isEmpty) return null;
+    if (opening.swipes.length == greetings.length) return opening.swipeIndex;
+    // The card was edited after the chat started: fall back to matching the
+    // text, so a scenario stays attached to the greeting it was written for.
+    final text = opening.content.trim();
+    final match = greetings.indexOf(text);
+    return match == -1 ? null : match;
   }
 
   /// Where [conversation]'s scenario comes from, phrased for a settings row.
@@ -2531,6 +2601,19 @@ class AppState extends ChangeNotifier {
     final next = _viewPrefs.withLayout(section, layout);
     if (next == _viewPrefs) return;
     _viewPrefs = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveViewPrefs(_viewPrefs);
+  }
+
+  /// Which character editor "Create" and "Edit" open — the tabbed creator, or the
+  /// single-page form it replaced. Both write the same [Character], so this is
+  /// only ever a preference about how you like to fill a card in.
+  CreatorVersion get creatorVersion => _viewPrefs.creatorVersion;
+
+  Future<void> setCreatorVersion(CreatorVersion version) async {
+    if (_viewPrefs.creatorVersion == version) return;
+    _viewPrefs = _viewPrefs.withCreatorVersion(version);
     notifyListeners();
     if (!_writable) return;
     await _storage.saveViewPrefs(_viewPrefs);
@@ -3247,6 +3330,10 @@ class AppState extends ChangeNotifier {
   /// belonging to the character whose chat asked for them — so a picture made in
   /// Aria's chat is in Aria's album afterwards without anyone having to save it.
   ///
+  /// [characterId] names that character outright, for a caller with no chat to
+  /// read it from: the character creator generates a portrait before the card has
+  /// ever been in a conversation, and the picture still belongs to them.
+  ///
   /// [references] are pictures already in the app (a gallery entry, an
   /// attachment) handed to the endpoint as a starting point; their bytes are read
   /// here so the studio only has to pass references around.
@@ -3255,6 +3342,7 @@ class AppState extends ChangeNotifier {
   Future<List<GalleryImage>> generateImages({
     required String prompt,
     String? conversationId,
+    String? characterId,
     List<MessageImage> references = const <MessageImage>[],
   }) async {
     final config = _imageGen;
@@ -3276,7 +3364,7 @@ class AppState extends ChangeNotifier {
     final title = _pictureTitle(prompt);
     return addGalleryImages(
       result.images,
-      characterId: conversation?.characterId,
+      characterId: characterId ?? conversation?.characterId,
       title: title,
       tags: const <String>['generated'],
     );
@@ -3747,21 +3835,21 @@ class AppState extends ChangeNotifier {
   }
 
 
-  /// Every greeting [character] offers, in card order: the main one first, then
-  /// its alternates, blanks dropped. Seeded as the swipes of the opening turn so
-  /// a card's alternate greetings are finally reachable — flip through them with
-  /// the message's ‹ › control instead of only ever seeing `first_mes`.
+  /// Every greeting [character] offers, in card order, as the swipes of the
+  /// opening turn — so a card's alternate greetings are finally reachable: flip
+  /// through them with the message's ‹ › control instead of only ever seeing
+  /// `first_mes`.
+  ///
+  /// The list itself is [Character.greetings], because the swipe index doubles as
+  /// the greeting index that a per-greeting [CharacterScenario] names.
   ///
   /// Greetings are kept with {{char}}/{{user}} intact so they track the current
   /// identity (e.g. after the user starts impersonating) — resolution happens at
   /// prompt-build and display time, not once at write time.
-  static List<MessageVariant> _greetingSwipes(Character character) => <String>[
-        character.firstMes.trim(),
-        ...character.alternateGreetings.map((g) => g.trim()),
-      ]
-          .where((g) => g.isNotEmpty)
-          .map((g) => MessageVariant(content: g))
-          .toList();
+  static List<MessageVariant> _greetingSwipes(Character character) => [
+        for (final greeting in character.greetings)
+          MessageVariant(content: greeting),
+      ];
 
   /// Opens a fresh thread bound to [character]: titles it after the character,
   /// stores the composed persona as the thread's (invisible) system prompt, and
@@ -4143,6 +4231,96 @@ class AppState extends ChangeNotifier {
         );
         await _persistUsage();
       }
+      notifyListeners();
+    }
+  }
+
+  /// Runs one exchange of a helper conversation that is **not** part of any chat:
+  /// [messages] go out exactly as given and the whole reply comes back as a
+  /// string. This is the door behind "let the AI write this for you" in the
+  /// character creator.
+  ///
+  /// Deliberately thin — no preset, no character sheet, no lorebook, no history
+  /// budget. The caller composes the entire request (see `CharacterWriter`),
+  /// because a card-writing helper wants a prompt of its own rather than the
+  /// roleplay frame a reply is assembled under.
+  ///
+  /// Everything that makes a *send* safe still applies: the same one-request-at-
+  /// a-time guard (the client holds a single live request, so a second one would
+  /// cancel the first), the same budget refusal, the same key rotation, and the
+  /// tokens are recorded in the ledger — help that costs money should show up
+  /// where the money is counted. [onProgress] fires on the reply's paint cadence
+  /// so the sheet can fill in as it is written.
+  ///
+  /// Throws [ChatApiException] when the request failed, with the same wording a
+  /// failed reply carries; returns an empty string when nothing came back.
+  Future<String> askAssistant({
+    required List<ChatMessage> messages,
+    void Function(String text)? onProgress,
+  }) async {
+    if (_streaming) {
+      throw ChatApiException('Something else is generating — wait for it to '
+          'finish, or stop it first.');
+    }
+    final base = _resolveProvider(defaultPreset);
+    if (base == null) {
+      throw ChatApiException('Set up a provider in Settings first.');
+    }
+    final blocked = blockingBudget(base, base.model);
+    if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
+
+    _streaming = true;
+    _stopRequested = false;
+    JankLogger.instance.activity('streaming');
+    notifyListeners();
+    await _letTheFrameLand();
+
+    final provider = _applyKey(base);
+    final buffer = StringBuffer();
+    var text = '';
+    var inputTokens = 0;
+    try {
+      for (final message in messages) {
+        inputTokens += _cost(message);
+      }
+      final clock = Stopwatch()..start();
+      var painted = -_streamPaintMs;
+      await for (final delta in _client.streamChat(
+        provider: provider,
+        history: messages,
+      )) {
+        if (delta.text.isEmpty) continue;
+        buffer.write(delta.text);
+        final now = clock.elapsedMilliseconds;
+        if (now - painted < _streamPaintMs) continue;
+        painted = now;
+        onProgress?.call(buffer.toString().trimLeft());
+      }
+      text = buffer.toString().trim();
+      onProgress?.call(text);
+      return text;
+    } on ChatApiException catch (_) {
+      if (_stopRequested) {
+        text = buffer.toString().trim();
+        onProgress?.call(text);
+        return text;
+      }
+      _advanceKeyOnError(base);
+      rethrow;
+    } finally {
+      _streaming = false;
+      _stopRequested = false;
+      JankLogger.instance.activity('idle');
+      recordUsage(
+        base,
+        provider.model,
+        TokenUsage(
+          inputTokens: inputTokens,
+          outputTokens: _tokenizer.estimate(text),
+          estimated: true,
+        ),
+      );
+      await _persistUsage();
       notifyListeners();
     }
   }

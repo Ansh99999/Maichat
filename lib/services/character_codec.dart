@@ -4,6 +4,9 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 
 import '../models/character.dart';
+import '../models/character_theme.dart';
+import '../models/lorebook.dart';
+import 'lorebook_codec.dart';
 
 /// Raised when bytes/text cannot be understood as a character card. The message
 /// is written to be shown straight to the user.
@@ -12,6 +15,23 @@ class CharacterParseException implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+/// A card and everything that travelled inside it.
+///
+/// A character's lorebooks are part of the character now, and a card is the file
+/// they arrive in — so reading one has to be able to hand back both. The books
+/// come out with fresh ids and are *not* yet attached: filing them in the library
+/// and pointing [Character.lorebookIds] at them is the caller's job, because only
+/// the caller knows whether this import is being kept.
+class CharacterBundle {
+  const CharacterBundle(this.character, [this.lorebooks = const <Lorebook>[]]);
+
+  final Character character;
+
+  /// The books the card carried, first the V2 `character_book`, then any extra
+  /// ones a card written by this app listed beside it.
+  final List<Lorebook> lorebooks;
 }
 
 /// Reads and writes character cards across the formats the app accepts:
@@ -27,21 +47,25 @@ class CharacterCodec {
   /// Parses raw bytes, auto-detecting a PNG card, a CharX archive (a `.charx`
   /// zip, standalone or appended after a JPEG/PNG) or a JSON card. [filename]
   /// only sharpens error messages.
-  static Character parseBytes(Uint8List bytes, {String? filename}) {
+  static Character parseBytes(Uint8List bytes, {String? filename}) =>
+      parseBundleBytes(bytes, filename: filename).character;
+
+  /// The same, keeping the lorebooks the card carried.
+  static CharacterBundle parseBundleBytes(Uint8List bytes, {String? filename}) {
     if (bytes.isEmpty) {
       throw CharacterParseException('That file is empty.');
     }
     if (_looksLikePng(bytes)) {
       final embedded = _extractPngCard(bytes);
       if (embedded != null) {
-        final character = parseJson(embedded);
+        final bundle = parseBundleJson(embedded);
         // The card image *is* the portrait — keep it as the avatar unless the
         // card already named a URL of its own. Any size: the picture is on its
         // way to a file (see AvatarStore), not into the preferences store.
-        if (character.avatar.trim().isEmpty) {
-          character.avatar = base64Encode(bytes);
+        if (bundle.character.avatar.trim().isEmpty) {
+          bundle.character.avatar = base64Encode(bytes);
         }
-        return character;
+        return bundle;
       }
       // A PNG can also carry a CharX zip appended after IEND — fall through.
     }
@@ -49,11 +73,11 @@ class CharacterCodec {
     // CharX: a zip (possibly riding after a JPEG/PNG image) with a card.json.
     final charX = _extractCharX(bytes);
     if (charX != null) {
-      final character = parseJson(charX.cardJson);
-      if (character.avatar.trim().isEmpty && charX.avatar != null) {
-        character.avatar = base64Encode(charX.avatar!);
+      final bundle = parseBundleJson(charX.cardJson);
+      if (bundle.character.avatar.trim().isEmpty && charX.avatar != null) {
+        bundle.character.avatar = base64Encode(charX.avatar!);
       }
-      return character;
+      return bundle;
     }
 
     if (_looksLikePng(bytes)) {
@@ -75,7 +99,7 @@ class CharacterCodec {
     } catch (_) {
       throw CharacterParseException('That file is not a character card.');
     }
-    return parseJson(text);
+    return parseBundleJson(text);
   }
 
   /// The raw card document inside [bytes], in whatever wrapper it arrived: a
@@ -103,17 +127,24 @@ class CharacterCodec {
 
   /// Parses raw bytes into one or more cards: a PNG holds a single card, while
   /// JSON may be a single card object or an array of them (a bulk export).
-  static List<Character> parseCards(Uint8List bytes, {String? filename}) {
+  static List<Character> parseCards(Uint8List bytes, {String? filename}) =>
+      parseBundles(bytes, filename: filename)
+          .map((bundle) => bundle.character)
+          .toList();
+
+  /// The same, keeping each card's lorebooks.
+  static List<CharacterBundle> parseBundles(Uint8List bytes,
+      {String? filename}) {
     if (bytes.isEmpty) {
       throw CharacterParseException('That file is empty.');
     }
     if (_looksLikePng(bytes)) {
-      return [parseBytes(bytes, filename: filename)];
+      return [parseBundleBytes(bytes, filename: filename)];
     }
     // A CharX archive (standalone .charx, or a zip appended after a JPEG/PNG)
     // holds a single card — hand it to the byte parser.
     if (_looksLikeImage(bytes) || _hasZipArchive(bytes)) {
-      return [parseBytes(bytes, filename: filename)];
+      return [parseBundleBytes(bytes, filename: filename)];
     }
     final String text;
     try {
@@ -133,7 +164,7 @@ class CharacterCodec {
       );
     }
     if (decoded is List) {
-      final cards = <Character>[];
+      final cards = <CharacterBundle>[];
       for (final entry in decoded) {
         if (entry is Map<String, dynamic>) {
           try {
@@ -155,7 +186,10 @@ class CharacterCodec {
   }
 
   /// Parses a JSON card string in any accepted shape.
-  static Character parseJson(String text) {
+  static Character parseJson(String text) => parseBundleJson(text).character;
+
+  /// The same, keeping the lorebooks the card carried.
+  static CharacterBundle parseBundleJson(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
       throw CharacterParseException('There is nothing to import.');
@@ -177,7 +211,7 @@ class CharacterCodec {
   }
 
   /// Dispatches a decoded card map to the right format parser.
-  static Character _parseMap(Map<String, dynamic> map) {
+  static CharacterBundle _parseMap(Map<String, dynamic> map) {
     // SillyTavern v2/v3: the real card lives under `data`, tagged by `spec`.
     final spec = _str(map, 'spec').toLowerCase();
     final data = map['data'];
@@ -186,21 +220,21 @@ class CharacterCodec {
         data.containsKey('name'))) {
       final format =
           spec.contains('v3') ? CharacterFormat.tavernV3 : CharacterFormat.tavernV2;
-      return _fromTavern(data, format);
+      return _bundle(_fromTavern(data, format), data);
     }
 
     // Agnai export: a persona object and/or a greeting/sampleChat.
     if (map.containsKey('persona') ||
         map.containsKey('sampleChat') ||
         map.containsKey('greeting')) {
-      return _fromAgnai(map);
+      return _bundle(_fromAgnai(map), map);
     }
 
     // SillyTavern v1: flat fields at the top level.
     if (map.containsKey('first_mes') ||
         map.containsKey('mes_example') ||
         (map.containsKey('name') && map.containsKey('description'))) {
-      return _fromTavern(map, CharacterFormat.tavernV1);
+      return _bundle(_fromTavern(map, CharacterFormat.tavernV1), map);
     }
 
     throw CharacterParseException(
@@ -209,17 +243,84 @@ class CharacterCodec {
     );
   }
 
+  /// Pairs a parsed [character] with the lorebooks its card [map] carried, and
+  /// lays this app's own extras (the title, the per-greeting scenarios, the
+  /// theme) over it.
+  ///
+  /// Order matters: the `character_book` every ecosystem understands comes first,
+  /// then the extra books only a card written here lists — so the book a
+  /// SillyTavern user sees is the same one that ends up first in the list.
+  static CharacterBundle _bundle(
+      Character character, Map<String, dynamic> map) {
+    final books = <Lorebook>[];
+    void read(Object? raw) {
+      if (raw is! Map) return;
+      try {
+        final book =
+            LorebookCodec.readBook(Map<String, dynamic>.from(raw));
+        if (book.name.trim().isEmpty) {
+          book.name = "${character.displayName}'s lorebook";
+        }
+        books.add(book);
+      } catch (_) {
+        // A card with an unreadable book is still a card.
+      }
+    }
+
+    read(map['character_book'] ?? map['characterBook']);
+    final ours = _ourExtras(map['extensions']);
+    final extra = ours['lorebooks'];
+    if (extra is List) {
+      for (final entry in extra) {
+        read(entry);
+      }
+    }
+
+    character
+      ..title = ours['title']?.toString() ?? ''
+      ..titleShown =
+          ours['titleShown'] as bool? ?? (ours['title']?.toString().trim().isNotEmpty ?? false)
+      ..scenarios = Character.characterScenarioList(ours['scenarios'])
+      ..theme = CharacterTheme.fromJson(ours['theme']);
+    return CharacterBundle(character, books);
+  }
+
   /// Serialises [c] as a pretty-printed SillyTavern v2 card. The core fields are
   /// mirrored at the top level so v1-only readers still work.
-  static String exportTavernV2(Character c) =>
-      const JsonEncoder.withIndent('  ').convert(_v2Card(c));
+  ///
+  /// [books] are the character's attached lorebooks, resolved by the caller (the
+  /// card holds ids, and an id means nothing in somebody else's app). The first
+  /// becomes the spec's `character_book`; any others ride in `extensions`.
+  static String exportTavernV2(Character c,
+          {List<Lorebook> books = const <Lorebook>[]}) =>
+      const JsonEncoder.withIndent('  ').convert(_v2Card(c, books));
 
   /// Serialises several characters as a JSON array of v2 cards (a bulk export
-  /// that [parseCards] reads back).
-  static String exportTavernV2Many(List<Character> cs) =>
-      const JsonEncoder.withIndent('  ').convert(cs.map(_v2Card).toList());
+  /// that [parseCards] reads back). [booksOf] resolves each character's attached
+  /// lorebooks; without it the cards go out without their world info.
+  static String exportTavernV2Many(
+    List<Character> cs, {
+    List<Lorebook> Function(Character)? booksOf,
+  }) =>
+      const JsonEncoder.withIndent('  ').convert([
+        for (final c in cs) _v2Card(c, booksOf?.call(c) ?? const <Lorebook>[]),
+      ]);
 
-  static Map<String, dynamic> _v2Card(Character c) {
+  static Map<String, dynamic> _v2Card(Character c, List<Lorebook> books) {
+    final ours = <String, dynamic>{
+      if (c.hasCustomScenario) 'cardScenario': c.scenario,
+      if (c.title.trim().isNotEmpty) 'title': c.title,
+      if (c.titleShown) 'titleShown': true,
+      if (c.scenarios.isNotEmpty)
+        'scenarios': c.scenarios.map((s) => s.toJson()).toList(),
+      'theme': ?c.theme.toJson(),
+      // The second and later books: a card has exactly one `character_book`, and
+      // dropping the rest would make "exports with its lorebooks" a half-truth.
+      if (books.length > 1)
+        'lorebooks': [
+          for (final book in books.skip(1)) LorebookCodec.bookJson(book),
+        ],
+    };
     final data = <String, dynamic>{
       'name': c.name,
       'description': c.description,
@@ -238,9 +339,10 @@ class CharacterCodec {
       'tags': c.tags,
       'creator': c.creator,
       'character_version': c.characterVersion,
+      if (books.isNotEmpty)
+        'character_book': LorebookCodec.characterBookJson(books.first),
       'extensions': <String, dynamic>{
-        if (c.hasCustomScenario)
-          'maichat': <String, dynamic>{'cardScenario': c.scenario},
+        if (ours.isNotEmpty) 'maichat': ours,
       },
     };
     return <String, dynamic>{
@@ -291,11 +393,17 @@ class CharacterCodec {
   /// The creator's original scenario stashed by our own exporter under
   /// `extensions.maichat.cardScenario`, or empty when this card is not one of
   /// ours (or carried no custom scenario).
-  static String _ourCardScenario(Object? extensions) {
-    if (extensions is! Map) return '';
+  static String _ourCardScenario(Object? extensions) =>
+      _ourExtras(extensions)['cardScenario']?.toString().trim() ?? '';
+
+  /// Everything this app wrote into a card's `extensions.maichat` bag — the
+  /// fields no other ecosystem has a home for. Empty for somebody else's card,
+  /// which is what makes every read of it a plain default.
+  static Map<String, dynamic> _ourExtras(Object? extensions) {
+    if (extensions is! Map) return const <String, dynamic>{};
     final ours = extensions['maichat'];
-    if (ours is! Map) return '';
-    return ours['cardScenario']?.toString().trim() ?? '';
+    if (ours is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(ours);
   }
 
   // --- Agnai ---------------------------------------------------------------

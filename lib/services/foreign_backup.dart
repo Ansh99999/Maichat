@@ -529,8 +529,9 @@ Future<ForeignBackup> _readSillyTavern(
       }
       if (cards.length == 1) byCard[stem.toLowerCase()] = cards.single;
       // A card can carry its own lorebook. This app keeps books separately, so
-      // it becomes one rather than being dropped with the rest of the wrapper.
-      _readCardBook(backup, data, stem);
+      // it becomes one rather than being dropped with the rest of the wrapper —
+      // and stays attached to the card it came out of.
+      _readCardBook(backup, data, stem, owners: cards);
     } catch (_) {
       backup.skip('unreadable character cards');
     }
@@ -1148,7 +1149,7 @@ Future<void> _readOne(
         await _storeAvatar(card, store2);
         backup.characters.add(card);
       }
-      _readCardBook(backup, data, stem);
+      _readCardBook(backup, data, stem, owners: cards);
     } catch (_) {
       // Not a card. A picture that is plainly somebody's gallery has a home
       // here; a wallpaper or a UI asset does not.
@@ -1261,7 +1262,14 @@ Future<void> _readJson(
       (json['name'] != null && json['description'] != null)) {
     await _addCharacter(backup, json, stem, pictures);
     // A card in JSON can carry its book too.
-    _readCardBook(backup, Uint8List.fromList(utf8.encode(jsonEncode(json))), stem);
+    _readCardBook(
+      backup,
+      Uint8List.fromList(utf8.encode(jsonEncode(json))),
+      stem,
+      owners: backup.characters.isEmpty
+          ? const <Character>[]
+          : <Character>[backup.characters.last],
+    );
     return;
   }
   if (detectFormat(json) != PresetFormat.unknown) {
@@ -1325,13 +1333,27 @@ Future<void> _addCharacter(
 
 /// A card's own lorebook (`character_book`), which this app keeps as a book of
 /// its own. Silent when there is none — most cards have none.
-void _readCardBook(ForeignBackup backup, Uint8List cardBytes, String stem) {
+///
+/// [owners] are the cards it came out of, so the book is *attached* to them: a
+/// character imported from SillyTavern keeps its world info in force in every
+/// chat, which is what it did over there.
+void _readCardBook(
+  ForeignBackup backup,
+  Uint8List cardBytes,
+  String stem, {
+  List<Character> owners = const <Character>[],
+}) {
   final json = CharacterCodec.cardJsonOf(cardBytes);
   if (json == null || !json.contains('character_book')) return;
   try {
     for (final book in LorebookCodec.parse(json, fileName: stem)) {
       if (book.entries.isEmpty) continue;
       backup.lorebooks.add(book);
+      for (final owner in owners) {
+        if (!owner.lorebookIds.contains(book.id)) {
+          owner.lorebookIds.add(book.id);
+        }
+      }
     }
   } catch (_) {
     // A card whose book will not read is still a perfectly good card.

@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'character_scenario.dart';
+import 'character_theme.dart';
+
 /// Where a [Character] came from, kept so the UI can show provenance and so a
 /// re-export can favour a compatible shape.
 enum CharacterFormat {
@@ -26,35 +29,66 @@ enum CharacterFormat {
 /// fields and Agnai's character export, so a card from either ecosystem
 /// round-trips without losing anything the app understands. Fields are mutable
 /// so the edit form can drive them directly.
+///
+/// Every list is copied into a growable one on the way in. A `const []` handed to
+/// the constructor is unmodifiable, and things do modify these in place — a
+/// deleted lorebook takes its id off every character, a swept picture takes its
+/// reference off the pool — so accepting one would turn a housekeeping pass into
+/// a crash.
 class Character {
   Character({
     required this.id,
     required this.name,
+    this.title = '',
+    this.titleShown = false,
     this.avatar = '',
     List<String>? avatars,
     this.description = '',
     this.personality = '',
     this.scenario = '',
     this.customScenario = '',
+    List<CharacterScenario>? scenarios,
+    List<String>? lorebookIds,
+    this.theme = CharacterTheme.none,
     this.firstMes = '',
-    this.alternateGreetings = const <String>[],
+    List<String>? alternateGreetings,
     this.mesExample = '',
     this.systemPrompt = '',
     this.postHistoryInstructions = '',
     this.creatorNotes = '',
-    this.tags = const <String>[],
+    List<String>? tags,
     this.creator = '',
     this.characterVersion = '',
     this.format = CharacterFormat.manual,
     this.starred = false,
     DateTime? createdAt,
     DateTime? updatedAt,
-  })  : avatars = avatars ?? <String>[],
+  })  : avatars = List<String>.of(avatars ?? const <String>[]),
+        scenarios =
+            List<CharacterScenario>.of(scenarios ?? const <CharacterScenario>[]),
+        lorebookIds = List<String>.of(lorebookIds ?? const <String>[]),
+        alternateGreetings =
+            List<String>.of(alternateGreetings ?? const <String>[]),
+        tags = List<String>.of(tags ?? const <String>[]),
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
   final String id;
   String name;
+
+  /// A one-line catcher shown under the name — "she was your sister, back then".
+  /// Not a field either ecosystem has, and not part of the definition: it is
+  /// never sent to the model, it is there to tell the reader what this character
+  /// *is* before they open anything.
+  String title;
+
+  /// Whether the title is used at all. Kept apart from [title] so switching the
+  /// field off in the editor hides it without destroying what was written —
+  /// switching it back on returns the line rather than a blank.
+  bool titleShown;
+
+  /// Whether there is a title to show anywhere.
+  bool get hasTitle => titleShown && title.trim().isNotEmpty;
 
   /// Either an `http(s)` URL or a base64-encoded image (no `data:` prefix).
   /// Imported PNG cards keep their own picture here as base64.
@@ -88,12 +122,44 @@ class Character {
   /// Whether the user has replaced the card's scenario with their own.
   bool get hasCustomScenario => customScenario.trim().isNotEmpty;
 
+  /// The character's own scenarios, each naming the greetings it belongs to (see
+  /// [CharacterScenario]). Empty on every card that arrived before this existed,
+  /// and empty is exactly what "just use [activeScenario]" looks like — so the
+  /// single scenario every other app understands stays the fallback rather than
+  /// being migrated away.
+  ///
+  /// Read this through `AppState.scenarioFor`, never directly: a chat's own
+  /// scenario and a library one plugged into it both outrank these.
+  List<CharacterScenario> scenarios;
+
+  /// The lorebooks attached to this character, by [Lorebook.id]. Books listed
+  /// here activate in every chat with them, on top of whatever books the chat
+  /// itself switched on (`AppState.lorebooksFor` is where the two are joined).
+  /// An id whose book has since been deleted is skipped, not an error.
+  List<String> lorebookIds;
+
+  /// This character's own palette, or [CharacterTheme.none] to wear the app's.
+  CharacterTheme theme;
+
   /// The opening line the character sends (SillyTavern `first_mes`, Agnai
   /// `greeting`).
   String firstMes;
 
   /// Extra opening lines to swipe between (SillyTavern `alternate_greetings`).
   List<String> alternateGreetings;
+
+  /// Every greeting this character offers, in card order, blanks dropped: the
+  /// first message, then the alternates.
+  ///
+  /// The one place that list is derived. Two things index into it — the swipes
+  /// the opening turn is seeded with (`AppState.startChatWithCharacter`) and the
+  /// greetings a [CharacterScenario] names — so they have to agree about what
+  /// "greeting 3" means, including when the card left `first_mes` empty and only
+  /// filled in alternates.
+  List<String> get greetings => <String>[
+        firstMes.trim(),
+        ...alternateGreetings.map((g) => g.trim()),
+      ].where((g) => g.isNotEmpty).toList();
 
   /// Example dialogue that primes the model's voice (`mes_example` / `sampleChat`).
   String mesExample;
@@ -134,9 +200,19 @@ class Character {
     }
   }
 
-  /// A short, one-line blurb for list rows: creator notes, then description.
+  /// A short, one-line blurb for list rows: the title when there is one, then
+  /// creator notes, then description.
+  ///
+  /// The title comes first because that is exactly what it is for — a line that
+  /// says what this character is, written to be read on its own. Falling through
+  /// to the notes keeps every card that has no title reading as it always did.
   String get blurb {
-    for (final candidate in [creatorNotes, description, personality]) {
+    for (final candidate in [
+      if (hasTitle) title,
+      creatorNotes,
+      description,
+      personality,
+    ]) {
       final flat = candidate.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (flat.isNotEmpty) return flat;
     }
@@ -288,12 +364,17 @@ class Character {
   Character copyWith({String? id, String? name}) => Character(
         id: id ?? this.id,
         name: name ?? this.name,
+        title: title,
+        titleShown: titleShown,
         avatar: avatar,
         avatars: List<String>.from(avatars),
         description: description,
         personality: personality,
         scenario: scenario,
         customScenario: customScenario,
+        scenarios: scenarios.map((s) => s.clone()).toList(),
+        lorebookIds: List<String>.from(lorebookIds),
+        theme: theme,
         firstMes: firstMes,
         alternateGreetings: List<String>.from(alternateGreetings),
         mesExample: mesExample,
@@ -320,12 +401,18 @@ class Character {
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        if (title.trim().isNotEmpty) 'title': title,
+        if (titleShown) 'titleShown': true,
         'avatar': avatar,
         if (avatars.isNotEmpty) 'avatars': avatars,
         'description': description,
         'personality': personality,
         'scenario': scenario,
         if (customScenario.trim().isNotEmpty) 'customScenario': customScenario,
+        if (scenarios.isNotEmpty)
+          'scenarios': scenarios.map((s) => s.toJson()).toList(),
+        if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
+        'theme': ?theme.toJson(),
         'firstMes': firstMes,
         'alternateGreetings': alternateGreetings,
         'mesExample': mesExample,
@@ -345,12 +432,20 @@ class Character {
         id: json['id'] as String? ??
             DateTime.now().microsecondsSinceEpoch.toString(),
         name: json['name'] as String? ?? '',
+        title: json['title'] as String? ?? '',
+        // A card that carries a title but predates the switch is shown with it:
+        // the only way a title got there is that somebody wrote one.
+        titleShown: json['titleShown'] as bool? ??
+            (json['title'] as String? ?? '').trim().isNotEmpty,
         avatar: json['avatar'] as String? ?? '',
         avatars: _stringList(json['avatars']),
         description: json['description'] as String? ?? '',
         personality: json['personality'] as String? ?? '',
         scenario: json['scenario'] as String? ?? '',
         customScenario: json['customScenario'] as String? ?? '',
+        scenarios: characterScenarioList(json['scenarios']),
+        lorebookIds: _stringList(json['lorebookIds']),
+        theme: CharacterTheme.fromJson(json['theme']),
         firstMes: json['firstMes'] as String? ?? '',
         alternateGreetings: _stringList(json['alternateGreetings']),
         mesExample: json['mesExample'] as String? ?? '',
@@ -365,6 +460,26 @@ class Character {
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
       );
+
+  /// Reads a stored/exported list of [CharacterScenario]s, skipping anything
+  /// unreadable. Shared with the card codec, which finds the same list under a
+  /// card's `extensions`.
+  static List<CharacterScenario> characterScenarioList(Object? value) {
+    if (value is! List) return <CharacterScenario>[];
+    final out = <CharacterScenario>[];
+    for (final entry in value) {
+      if (entry is Map) {
+        out.add(CharacterScenario.fromJson(
+          Map<String, dynamic>.from(entry),
+        ));
+      } else if (entry is String && entry.trim().isNotEmpty) {
+        // A bare string is a scenario with no name and no greeting of its own —
+        // the shape a hand-written export is most likely to use.
+        out.add(CharacterScenario.empty()..text = entry.trim());
+      }
+    }
+    return out;
+  }
 
   /// Coerces a JSON value into a clean list of non-empty strings, tolerating a
   /// single comma-separated string (some exporters flatten tags that way).

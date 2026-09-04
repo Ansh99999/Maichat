@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/character.dart';
+import '../models/lorebook.dart';
 import '../models/view_prefs.dart';
 import '../services/character_codec.dart';
 import '../services/character_sources.dart';
@@ -9,9 +10,10 @@ import '../state/app_state.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
+import '../widgets/character_theme_scope.dart';
 import '../widgets/tag_filter_sheet.dart';
 import 'character_actions.dart';
-import 'character_edit_screen.dart';
+import 'character_editor.dart';
 
 /// How the roster is ordered.
 enum CharacterSort {
@@ -138,9 +140,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
   // --- create / import -----------------------------------------------------
 
   Future<void> _createNew() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const CharacterEditScreen()),
-    );
+    await openCharacterEditor(context);
   }
 
   void _showImportSheet() {
@@ -193,6 +193,10 @@ class _CharactersScreenState extends State<CharactersScreen> {
   /// Collects any input the source needs, fetches, parses and stores the
   /// card(s). A file source may return several files, and a single JSON file
   /// may itself hold an array — both fan out into multiple characters.
+  ///
+  /// A card's lorebooks come with it: the books are filed in the library and
+  /// attached to the character, because a card whose world info was silently
+  /// dropped looks like a working import and behaves like a broken character.
   Future<void> _runSource(CharacterSource source) async {
     // Capture context-derived objects up front so nothing is read across the
     // input/fetch async gaps.
@@ -210,12 +214,20 @@ class _CharactersScreenState extends State<CharactersScreen> {
       final payloads = await source.fetch(input);
       if (payloads.isEmpty) return; // e.g. file picker cancelled
       final imported = <Character>[];
+      final books = <Lorebook>[];
       String? firstError;
       for (final payload in payloads) {
         try {
-          imported.addAll(
-            CharacterCodec.parseCards(payload.bytes, filename: payload.filename),
-          );
+          for (final bundle in CharacterCodec.parseBundles(
+            payload.bytes,
+            filename: payload.filename,
+          )) {
+            for (final book in bundle.lorebooks) {
+              books.add(book);
+              bundle.character.lorebookIds.add(book.id);
+            }
+            imported.add(bundle.character);
+          }
         } on CharacterParseException catch (e) {
           firstError ??= e.message;
         }
@@ -227,12 +239,16 @@ class _CharactersScreenState extends State<CharactersScreen> {
         ));
         return;
       }
+      if (books.isNotEmpty) await state.addLorebooks(books);
       await state.addCharacters(imported);
       if (!mounted) return;
+      final lore = books.isEmpty
+          ? ''
+          : ' with ${books.length == 1 ? 'its lorebook' : '${books.length} lorebooks'}';
       messenger.showSnackBar(SnackBar(
         content: Text(imported.length == 1
-            ? 'Imported ${imported.single.displayName}.'
-            : 'Imported ${imported.length} characters.'),
+            ? 'Imported ${imported.single.displayName}$lore.'
+            : 'Imported ${imported.length} characters$lore.'),
       ));
       if (imported.length == 1) openCharacterDetail(context, imported.single.id);
     } on CharacterParseException catch (e) {
@@ -433,7 +449,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
     final chosen =
         state.characters.where((c) => _selection.contains(c.id)).toList();
     if (chosen.isEmpty) return;
-    await exportCharacters(context, chosen);
+    await exportCharacters(context, chosen, booksOf: state.lorebooksOf);
   }
 
   Widget _searchAndControls(AppState state, List<String> tags) {
@@ -609,105 +625,115 @@ class _CharacterCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final blurb = character.blurb;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      elevation: 0,
-      color: scheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: selected
-            ? BorderSide(color: scheme.primary, width: 2)
-            : BorderSide.none,
-      ),
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _CardImage(character: character),
-                  Positioned(
-                    top: 4,
-                    left: 4,
-                    child: _GlassIcon(
-                      icon: character.starred ? Icons.star : Icons.star_border,
-                      color: character.starred ? Colors.amber : null,
-                      onTap: onToggleStar,
-                    ),
-                  ),
-                  if (selecting)
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: Icon(
-                        selected
-                            ? Icons.check_circle
-                            : Icons.radio_button_unchecked,
-                        color: selected ? scheme.primary : scheme.onSurface,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            // The name/description slot sits on a distinct, slightly stronger
-            // surface so it reads as a label attached under the avatar.
-            Container(
-              width: double.infinity,
-              color: scheme.surfaceContainerHighest,
-              padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          character.displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
+    // A themed character wears its own colours in the roster too, which is what
+    // makes a library of them readable at a glance rather than a wall of one
+    // accent. The scope is a no-op for a card with no theme.
+    return CharacterThemeScope(
+      theme: character.theme,
+      child: Builder(builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        return Card(
+          clipBehavior: Clip.antiAlias,
+          elevation: 0,
+          color: scheme.surfaceContainerLow,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: selected
+                ? BorderSide(color: scheme.primary, width: 2)
+                : BorderSide.none,
+          ),
+          child: InkWell(
+            onTap: onTap,
+            onLongPress: onLongPress,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _CardImage(character: character),
+                      Positioned(
+                        top: 4,
+                        left: 4,
+                        child: _GlassIcon(
+                          icon: character.starred
+                              ? Icons.star
+                              : Icons.star_border,
+                          color: character.starred ? Colors.amber : null,
+                          onTap: onToggleStar,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          blurb.isEmpty ? 'No description' : blurb,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (!selecting)
-                    SizedBox(
-                      width: 32,
-                      child: PopupMenuButton<CharacterAction>(
-                        padding: EdgeInsets.zero,
-                        icon: const Icon(Icons.more_vert, size: 20),
-                        tooltip: 'Actions',
-                        onSelected: onAction,
-                        itemBuilder: (context) => characterMenuItems(),
                       ),
-                    ),
-                ],
-              ),
+                      if (selecting)
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: Icon(
+                            selected
+                                ? Icons.check_circle
+                                : Icons.radio_button_unchecked,
+                            color: selected ? scheme.primary : scheme.onSurface,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                // The name/description slot sits on a distinct, slightly stronger
+                // surface so it reads as a label attached under the avatar.
+                Container(
+                  width: double.infinity,
+                  color: scheme.surfaceContainerHighest,
+                  padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              character.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              blurb.isEmpty ? 'No description' : blurb,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!selecting)
+                        SizedBox(
+                          width: 32,
+                          child: PopupMenuButton<CharacterAction>(
+                            padding: EdgeInsets.zero,
+                            icon: const Icon(Icons.more_vert, size: 20),
+                            tooltip: 'Actions',
+                            onSelected: onAction,
+                            itemBuilder: (context) => characterMenuItems(),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      }),
     );
   }
 }

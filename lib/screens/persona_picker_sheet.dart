@@ -4,7 +4,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../models/character.dart';
 import '../state/app_state.dart';
 import '../widgets/character_avatar.dart';
-import 'character_edit_screen.dart';
+import 'character_editor.dart';
 
 /// Opens the "default persona" picker: a bottom sheet that rises to
 /// three-quarters of the screen, with a search field, a tag filter, and a `+`
@@ -66,11 +66,7 @@ class _PersonaPickerSheetState extends State<_PersonaPickerSheet> {
   Future<void> _createPersona() async {
     final navigator = Navigator.of(context);
     final state = context.read<AppState>();
-    final created = await navigator.push<Character>(
-      MaterialPageRoute<Character>(
-        builder: (_) => const CharacterEditScreen(),
-      ),
-    );
+    final created = await openCharacterEditor(context);
     if (created == null) return;
     await state.setDefaultPersona(created.id);
     if (mounted) navigator.pop();

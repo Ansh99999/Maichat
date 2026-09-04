@@ -20,12 +20,22 @@ import 'image_gen_settings.dart';
 /// the studio's own endpoint (see [ImageGenConfig]) rather than to the chat's
 /// provider. [prompt] seeds the prompt box — that is how a message's "Generate
 /// image" action hands its text over.
-Future<void> showImageStudio(
+///
+/// It also opens where there is no chat at all. The character creator makes a
+/// portrait here, so [conversationId] is optional (without one there is nowhere
+/// to send a picture, and that action goes away), [characterId] says whose album
+/// the results belong in, and [picking] adds the button that hands a picture back
+/// — which is what the returned ref is. Null means the sheet was dismissed, or
+/// was never picking in the first place.
+Future<String?> showImageStudio(
   BuildContext context, {
-  required String conversationId,
+  String? conversationId,
+  String? characterId,
   String prompt = '',
+  bool picking = false,
+  String pickLabel = 'Use picture',
 }) =>
-    showModalBottomSheet<void>(
+    showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -36,19 +46,38 @@ Future<void> showImageStudio(
       ),
       builder: (_) => ImageStudioSheet(
         conversationId: conversationId,
+        characterId: characterId,
         initialPrompt: prompt,
+        picking: picking,
+        pickLabel: pickLabel,
       ),
     );
 
 class ImageStudioSheet extends StatefulWidget {
   const ImageStudioSheet({
     super.key,
-    required this.conversationId,
+    this.conversationId,
+    this.characterId,
     this.initialPrompt = '',
+    this.picking = false,
+    this.pickLabel = 'Use picture',
   });
 
-  final String conversationId;
+  /// The chat the studio was opened over, or null when it was opened from
+  /// somewhere that has no chat (the character creator).
+  final String? conversationId;
+
+  /// Whose gallery the pictures are filed under. Defaults to the chat's
+  /// character when there is a chat.
+  final String? characterId;
+
   final String initialPrompt;
+
+  /// Whether the sheet is being used to *choose* a picture, in which case it pops
+  /// with the chosen reference.
+  final bool picking;
+
+  final String pickLabel;
 
   @override
   State<ImageStudioSheet> createState() => _ImageStudioSheetState();
@@ -105,6 +134,7 @@ class _ImageStudioSheetState extends State<ImageStudioSheet> {
       final made = await state.generateImages(
         prompt: prompt,
         conversationId: widget.conversationId,
+        characterId: widget.characterId,
         references: _references,
       );
       if (!mounted) return;
@@ -165,13 +195,21 @@ class _ImageStudioSheetState extends State<ImageStudioSheet> {
   /// any attached picture does.
   Future<void> _share(AppState state) async {
     final image = _current(state);
-    if (image == null) return;
+    final conversationId = widget.conversationId;
+    if (image == null || conversationId == null) return;
     await state.postImageToChat(
-      widget.conversationId,
+      conversationId,
       MessageImage(ref: image.image, mime: mimeForRef(image.image)),
     );
     if (!mounted) return;
     Navigator.of(context).pop();
+  }
+
+  /// Hands the shown picture back to whoever opened the sheet to choose one.
+  void _pick(AppState state) {
+    final image = _current(state);
+    if (image == null) return;
+    Navigator.of(context).pop(image.image);
   }
 
   @override
@@ -228,7 +266,10 @@ class _ImageStudioSheetState extends State<ImageStudioSheet> {
               _PictureActions(
                 onDownload: () => _download(state),
                 onDelete: () => _delete(state),
-                onShare: () => _share(state),
+                onShare:
+                    widget.conversationId == null ? null : () => _share(state),
+                onPick: widget.picking ? () => _pick(state) : null,
+                pickLabel: widget.pickLabel,
               ),
             if (_references.isNotEmpty)
               _ReferenceStrip(
@@ -504,11 +545,20 @@ class _PictureActions extends StatelessWidget {
     required this.onDownload,
     required this.onDelete,
     required this.onShare,
+    this.onPick,
+    this.pickLabel = 'Use picture',
   });
 
   final VoidCallback onDownload;
   final VoidCallback onDelete;
-  final VoidCallback onShare;
+
+  /// Null when the studio was not opened over a chat — there is nowhere to send
+  /// a picture, so the button is not there rather than there and inert.
+  final VoidCallback? onShare;
+
+  /// Set when the sheet is choosing a picture for its caller.
+  final VoidCallback? onPick;
+  final String pickLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -531,12 +581,23 @@ class _PictureActions extends StatelessWidget {
             onPressed: onDelete,
             icon: const Icon(Icons.delete_outline),
           ),
-          FilledButton.tonalIcon(
-            key: const Key('imagegen-share'),
-            onPressed: onShare,
-            icon: const Icon(Icons.send_outlined, size: 18),
-            label: const Text('Send to chat'),
-          ),
+          if (onPick != null)
+            FilledButton.tonalIcon(
+              key: const Key('imagegen-pick'),
+              onPressed: onPick,
+              icon: const Icon(Icons.check, size: 18),
+              label: Text(pickLabel),
+            ),
+          if (onShare != null)
+            Padding(
+              padding: EdgeInsets.only(left: onPick == null ? 0 : 8),
+              child: FilledButton.tonalIcon(
+                key: const Key('imagegen-share'),
+                onPressed: onShare,
+                icon: const Icon(Icons.send_outlined, size: 18),
+                label: const Text('Send to chat'),
+              ),
+            ),
         ],
       ),
     );

@@ -19,6 +19,7 @@ enum SettingAnchor {
   chatColours,
   groupChats,
   responseHint,
+  characterCreator,
   storage,
   version,
 }

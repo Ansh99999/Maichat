@@ -8,6 +8,7 @@ import '../widgets/message_bubble.dart';
 import '../widgets/rich_notes_view.dart';
 import '../widgets/scenario_picker_sheet.dart';
 import '../services/rich_notes.dart';
+import 'library/lorebook_edit_screen.dart';
 
 /// The character sheet's blocks, kept out of the screen file so each stays small
 /// enough to read: the tag band, the creator-notes block, the thin rule, and the
@@ -212,11 +213,67 @@ class DefinitionFolds extends StatelessWidget {
         GreetingsFold(character: character),
         TextFold(title: 'Personality', body: character.personality),
         TextFold(title: 'Example dialogue', body: character.mesExample),
+        if (interactive) LorebooksFold(character: character),
         TextFold(title: 'System prompt', body: character.systemPrompt),
         TextFold(
           title: 'Post-history instructions',
           body: character.postHistoryInstructions,
         ),
+      ],
+    );
+  }
+}
+
+/// The lorebooks this character travels with, when it has any.
+///
+/// Only shown on a card that is actually in the library: a catalogue entry's
+/// books are downloaded with it and have no id here yet, so there would be
+/// nothing to open. Tapping one opens the ordinary lorebook editor, because a
+/// book attached to a character is the same book as any other.
+class LorebooksFold extends StatelessWidget {
+  const LorebooksFold({super.key, required this.character});
+
+  final Character character;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final books = state.lorebooksOf(character);
+    if (books.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+
+    return FoldTile(
+      title: 'Lorebooks',
+      subtitle: books.length == 1
+          ? books.single.displayName
+          : '${books.length} attached',
+      children: [
+        Text(
+          'In force in every chat with ${character.displayName}, and exported '
+          'with the card.',
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 8),
+        for (final book in books)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: Icon(Icons.menu_book_outlined, color: scheme.primary),
+            title: Text(book.displayName),
+            subtitle: Text(
+              '${book.entries.length} '
+              '${book.entries.length == 1 ? 'entry' : 'entries'}',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => LorebookEditScreen(book: book),
+              ),
+            ),
+          ),
       ],
     );
   }

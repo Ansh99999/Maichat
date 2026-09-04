@@ -60,6 +60,14 @@ class LorebookCodec {
   }
 
   /// Works out which of the four shapes [json] is and reads it.
+  ///
+  /// Public because a character card carries a whole book inside it: the card
+  /// codec finds the map and hands it here rather than re-deriving which of the
+  /// four shapes somebody wrote it in.
+  static Lorebook readBook(Map<String, dynamic> json, {String? fileName}) =>
+      _book(json, fileName: fileName);
+
+  /// Works out which of the four shapes [json] is and reads it.
   static Lorebook _book(Map<String, dynamic> json, {String? fileName}) {
     // A character card carries its book under `character_book`, either at the
     // top level (V1-style) or inside `data` (V2/V3).
@@ -261,6 +269,7 @@ class LorebookCodec {
   /// with everything SillyTavern-specific inside each entry's `extensions`.
   static Lorebook _fromCharacterBook(Map<String, dynamic> json,
       {String? fileName}) {
+    final bookExtras = _extras(json['extensions']);
     final raw = (json['entries'] as List)
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
@@ -312,6 +321,13 @@ class LorebookCodec {
       id: _freshId(),
       name: (json['name'] as String?)?.trim() ?? '',
       description: json['description'] as String? ?? '',
+      // A card written by this app keeps the book's picture, colour and tags in
+      // the same `extensions.maichat` bag a world file uses, so a character
+      // exported with its lorebook comes back looking the way it left.
+      thumbnail: bookExtras['thumbnail'] as String? ?? '',
+      color: _num(bookExtras['color'])?.toInt(),
+      tags: _list(bookExtras['tags']),
+      starred: bookExtras['starred'] as bool? ?? false,
       scanDepth: _num(json['scan_depth'])?.toInt(),
       tokenBudget: _num(json['token_budget'])?.toInt(),
       recursive: json['recursive_scanning'] == true,
@@ -411,6 +427,96 @@ class LorebookCodec {
         for (var i = 0; i < book.entries.length; i++)
           '${book.entries[i].uid}': _toWorldEntry(book.entries[i], i),
       };
+
+  /// The book as a character card's `character_book` — the V2 spec's array shape.
+  ///
+  /// This is what a card exported with its lorebook attached carries, so the
+  /// world info travels *inside* the character and lands in SillyTavern, Agnai or
+  /// here without a second file. The spec's own fields are written plainly; every
+  /// knob only SillyTavern (or only this app) has goes in each entry's
+  /// `extensions`, which is exactly where [_fromCharacterBook] looks for it — so
+  /// a card written here and read back here loses nothing, and a card read by
+  /// anything else still gets keys, content, order and the on/off switch.
+  static Map<String, dynamic> characterBookJson(Lorebook book) {
+    final extras = <String, dynamic>{
+      if (book.thumbnail.isNotEmpty) 'thumbnail': book.thumbnail,
+      if (book.color != null) 'color': book.color,
+      if (book.tags.isNotEmpty) 'tags': book.tags,
+      if (book.starred) 'starred': true,
+    };
+    return <String, dynamic>{
+      'name': book.name,
+      if (book.description.isNotEmpty) 'description': book.description,
+      if (book.scanDepth != null) 'scan_depth': book.scanDepth,
+      if (book.tokenBudget != null) 'token_budget': book.tokenBudget,
+      if (book.recursive) 'recursive_scanning': true,
+      if (book.extensions.isNotEmpty || extras.isNotEmpty)
+        'extensions': {
+          ...book.extensions,
+          if (extras.isNotEmpty) extensionKey: extras,
+        },
+      'entries': [
+        for (var i = 0; i < book.entries.length; i++)
+          _toCardEntry(book.entries[i], i),
+      ],
+    };
+  }
+
+  /// One entry in a `character_book`. The pairing with [_fromCharacterBook] is
+  /// deliberate and tested: whatever goes out under a name here is read back
+  /// under the same name there.
+  static Map<String, dynamic> _toCardEntry(LorebookEntry e, int index) {
+    final extras = <String, dynamic>{
+      'selectiveLogic': e.selectiveLogic.wire,
+      'position': e.position.wire,
+      'depth': e.depth,
+      'role': e.role.wire,
+      'probability': e.probability,
+      'useProbability': e.useProbability,
+      if (e.matchWholeWords != null) 'match_whole_words': e.matchWholeWords,
+      if (e.scanDepth != null) 'scan_depth': e.scanDepth,
+      if (e.excludeRecursion) 'exclude_recursion': true,
+      if (e.preventRecursion) 'prevent_recursion': true,
+      if (e.delayUntilRecursion != 0)
+        'delay_until_recursion': e.delayUntilRecursion,
+      if (e.group.isNotEmpty) 'group': e.group,
+      if (e.groupOverride) 'group_override': true,
+      if (e.groupWeight != kLoreDefaultWeight) 'group_weight': e.groupWeight,
+      if (e.useGroupScoring != null) 'use_group_scoring': e.useGroupScoring,
+      if (e.sticky != null) 'sticky': e.sticky,
+      if (e.cooldown != null) 'cooldown': e.cooldown,
+      if (e.delay != null) 'delay': e.delay,
+      if (e.automationId.isNotEmpty) 'automation_id': e.automationId,
+    };
+    return <String, dynamic>{
+      'id': e.uid,
+      'keys': e.keys,
+      'content': e.content,
+      'enabled': e.enabled,
+      'insertion_order': e.weight,
+      'priority': e.priority,
+      'comment': e.name,
+      'name': e.name,
+      'selective': e.selective,
+      if (e.secondaryKeys.isNotEmpty) 'secondary_keys': e.secondaryKeys,
+      if (e.constant) 'constant': true,
+      if (e.caseSensitive != null) 'case_sensitive': e.caseSensitive,
+      // The spec spells position as a string; the numeric one rides in
+      // `extensions`, where our reader prefers it.
+      'position': e.position == LorebookPosition.beforeChar
+          ? 'before_char'
+          : 'after_char',
+      'extensions': {...e.extensions, ...extras},
+      // Kept so a re-import preserves the author's ordering, exactly as the
+      // world-info writer does.
+      'displayIndex': index,
+    };
+  }
+
+  /// The book in this app's own shape, as a map rather than a string — what an
+  /// exported character embeds for the second and later books it carries (a card
+  /// has only one `character_book`).
+  static Map<String, dynamic> bookJson(Lorebook book) => _nativeJson(book);
 
   /// SillyTavern world info, and deliberately nothing else at the top level:
   /// Agnai only recognises a SillyTavern export when `entries` is the sole key,

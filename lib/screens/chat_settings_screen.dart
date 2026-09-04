@@ -9,7 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/scenario_picker_sheet.dart';
-import 'character_edit_screen.dart';
+import 'character_editor.dart';
 import 'gallery/gallery_picker_sheet.dart';
 import 'group_add_sheet.dart';
 import 'settings/chat_interface_settings_page.dart';
@@ -171,13 +171,10 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
   /// Opens the character editor on a draft. What comes back is held here until
   /// Save decides whether it belongs to this chat or to the roster.
   Future<void> _editCharacter(Character character) async {
-    final edited = await Navigator.of(context).push<Character>(
-      MaterialPageRoute<Character>(
-        builder: (_) => CharacterEditScreen(
-          character: character.clone(),
-          persist: false,
-        ),
-      ),
+    final edited = await openCharacterEditor(
+      context,
+      character: character.clone(),
+      persist: false,
     );
     if (edited == null || !mounted) return;
     setState(() => _edits[edited.id] = edited);
