@@ -30,7 +30,6 @@ class _ScenariosTabState extends State<ScenariosTab> {
     final draft = context.watch<CreatorDraft>();
 
     return CreatorTabBody(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
       children: [
         if (draft.scenarios.isEmpty)
           const Padding(
@@ -62,7 +61,7 @@ class _ScenariosTabState extends State<ScenariosTab> {
               setState(() => _open = null);
             },
           ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 14),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -145,7 +144,8 @@ class _ScenarioFold extends StatelessWidget {
       preview: scenario.text.text.replaceAll(RegExp(r'\s+'), ' ').trim(),
       expanded: expanded,
       onExpand: onExpand,
-      actions: CreatorFieldActions(
+      actions: (progress) => CreatorFieldActions(
+        progress: progress,
         title: label,
         controller: scenario.text,
         draft: draft,

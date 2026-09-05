@@ -32,7 +32,6 @@ class _GreetingsTabState extends State<GreetingsTab> {
   Widget build(BuildContext context) {
     final draft = context.watch<CreatorDraft>();
     return CreatorTabBody(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
       children: [
         for (var i = 0; i < draft.greetings.length; i++)
           _GreetingFold(
@@ -56,7 +55,7 @@ class _GreetingsTabState extends State<GreetingsTab> {
                     setState(() => _open = 0);
                   },
           ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 14),
         Align(
           alignment: Alignment.centerLeft,
           child: FilledButton.tonalIcon(
@@ -102,7 +101,8 @@ class _GreetingFold extends StatelessWidget {
       preview: controller.text.replaceAll(RegExp(r'\s+'), ' ').trim(),
       expanded: expanded,
       onExpand: onExpand,
-      actions: CreatorFieldActions(
+      actions: (progress) => CreatorFieldActions(
+        progress: progress,
         title: _label,
         controller: controller,
         draft: draft,

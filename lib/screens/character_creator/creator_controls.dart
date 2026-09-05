@@ -189,9 +189,11 @@ class _TokenCountState extends State<TokenCount> {
 /// at it drawn the way the app will draw it, and open it on a screen of its own.
 ///
 /// Lives in one widget so it can sit either on a plain field's own label row or on
-/// the header of the fold that names it — a greeting is named once, by its fold,
-/// and its tools belong up there beside the name rather than on a second row that
-/// repeats it.
+/// the header of the fold that names it.
+///
+/// [progress] is how far the fold holding them is open, 0 to 1. They pop out one
+/// after another as it opens and shrink back as it shuts, so opening a fold reads
+/// as the tools arriving rather than as three glyphs blinking into existence.
 class CreatorFieldActions extends StatelessWidget {
   const CreatorFieldActions({
     super.key,
@@ -204,6 +206,7 @@ class CreatorFieldActions extends StatelessWidget {
     this.onPreview,
     this.previewKey,
     this.previewTooltip = 'Preview',
+    this.progress = 1,
   });
 
   /// What the field is called — the assistant's heading and the full-screen
@@ -228,49 +231,116 @@ class CreatorFieldActions extends StatelessWidget {
   final Key? previewKey;
   final String previewTooltip;
 
+  final double progress;
+
+  /// A symbol's own hit area. Generous, and generously spaced: three of these
+  /// crowded together at compact density read as one smudge of icons.
+  static const double _tap = 44;
+  static const double _gap = 10;
+
+  Widget _symbol(
+    BuildContext context, {
+    Key? key,
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) =>
+      IconButton(
+        key: key,
+        tooltip: tooltip,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: _tap, minHeight: _tap),
+        iconSize: 21,
+        icon: Icon(icon),
+        onPressed: onPressed,
+      );
+
   @override
   Widget build(BuildContext context) {
     final target = field;
+    final symbols = <Widget>[
+      if (target != null)
+        _symbol(
+          context,
+          icon: Icons.auto_awesome_outlined,
+          tooltip: 'Let the AI write this',
+          onPressed: () => showWriterSheet(
+            context,
+            draft: draft,
+            field: target,
+            controller: controller,
+            slot: slot,
+            fieldLabel: title,
+          ),
+        ),
+      if (onPreview != null)
+        _symbol(
+          context,
+          key: previewKey,
+          icon: Icons.visibility_outlined,
+          tooltip: previewTooltip,
+          onPressed: onPreview!,
+        ),
+      _symbol(
+        context,
+        icon: Icons.open_in_full,
+        tooltip: 'Write full screen',
+        onPressed: () => openFullscreenField(
+          context,
+          title: title,
+          controller: controller,
+          draft: draft,
+          field: target,
+          slot: slot,
+          onChanged: onChanged,
+        ),
+      ),
+    ];
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (target != null)
-          IconButton(
-            tooltip: 'Let the AI write this',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.auto_awesome_outlined, size: 20),
-            onPressed: () => showWriterSheet(
-              context,
-              draft: draft,
-              field: target,
-              controller: controller,
-              slot: slot,
-              fieldLabel: title,
-            ),
+        for (var i = 0; i < symbols.length; i++) ...[
+          if (i > 0) const SizedBox(width: _gap),
+          _Pop(
+            progress: progress,
+            index: i,
+            count: symbols.length,
+            child: symbols[i],
           ),
-        if (onPreview != null)
-          IconButton(
-            key: previewKey,
-            tooltip: previewTooltip,
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.visibility_outlined, size: 20),
-            onPressed: onPreview,
-          ),
-        IconButton(
-          tooltip: 'Write full screen',
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.open_in_full, size: 20),
-          onPressed: () => openFullscreenField(
-            context,
-            title: title,
-            controller: controller,
-            draft: draft,
-            field: target,
-            slot: slot,
-            onChanged: onChanged,
-          ),
-        ),
+        ],
       ],
+    );
+  }
+}
+
+/// One symbol on its way in: scaled and faded by its own slice of [progress], so
+/// a row of them arrives left to right instead of all at once.
+class _Pop extends StatelessWidget {
+  const _Pop({
+    required this.progress,
+    required this.index,
+    required this.count,
+    required this.child,
+  });
+
+  final double progress;
+  final int index;
+  final int count;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    // Each symbol gets the whole run minus the stagger ahead of it, so the last
+    // one still finishes with the fold rather than after it.
+    const stagger = 0.18;
+    final start = count <= 1 ? 0.0 : (index / (count - 1)) * stagger;
+    final t = ((progress - start) / (1 - stagger)).clamp(0.0, 1.0);
+    // A little overshoot on the way in is what makes it read as a pop.
+    final scale = 0.55 + 0.45 * Curves.easeOutBack.transform(t).clamp(0.0, 1.08);
+    return Opacity(
+      opacity: t,
+      child: Transform.scale(scale: scale, child: child),
     );
   }
 }
@@ -403,17 +473,21 @@ class CreatorField extends StatelessWidget {
 /// One thing on a tab, folded away until it is being worked on: a greeting, a
 /// scenario.
 ///
-/// Its header is the only place the thing is named, and while it is open the
-/// header carries the field's tools too — so an open fold is a name, three
-/// symbols, a box, and the count under it. Closed, it shows the first line of what
-/// is written in it, which is what tells eight greetings apart.
+/// A flat row, not a card. The tinted rounded box these used to sit in read as a
+/// bubble around a bubble once the field inside had its own outline — so the fold
+/// is now a name, a drop-down arrow, and a hairline under it.
+///
+/// The arrow lives at the **far right** and stays there, turning over in place: it
+/// is the one thing on the row whose position must never move, because it is what
+/// the thumb goes back to. The field's tools appear to its left as the fold opens,
+/// popping out one after another (see [CreatorFieldActions]).
 ///
 /// Deliberately hand-built rather than an [ExpansionTile]: the tile puts its
 /// trailing widget where the chevron goes, has no way to hide its subtitle while
-/// it is open, and stores its open/closed **bool** under the page-storage
-/// identifier that the [Scrollable] inside the fold's own text field reads as a
-/// `double?` scroll offset — which threw out of `restoreScrollOffset` and left the
-/// field unlaid-out.
+/// it is open, cannot animate anything into its header, and stores its
+/// open/closed **bool** under the page-storage identifier that the [Scrollable]
+/// inside the fold's own text field reads as a `double?` scroll offset — which
+/// threw out of `restoreScrollOffset` and left the field unlaid-out.
 class CreatorFold extends StatelessWidget {
   const CreatorFold({
     super.key,
@@ -433,79 +507,87 @@ class CreatorFold extends StatelessWidget {
   final bool expanded;
   final ValueChanged<bool> onExpand;
 
-  /// The field's tools, shown on the header while the fold is open.
-  final Widget? actions;
+  /// The field's tools. Built with how far the fold is open, 0 to 1, so they can
+  /// arrive with it rather than blinking into place.
+  final Widget Function(double progress)? actions;
 
   final Widget child;
+
+  static const Duration _swing = Duration(milliseconds: 240);
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final summary = preview?.trim() ?? '';
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerLow,
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () => onExpand(!expanded),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 48),
-                child: Row(
-                  children: [
-                    AnimatedRotation(
-                      turns: expanded ? 0.5 : 0,
-                      duration: const Duration(milliseconds: 180),
-                      curve: Curves.easeOutCubic,
-                      child: Icon(
-                        Icons.expand_more,
-                        size: 22,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
+    final build = actions;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => onExpand(!expanded),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 2, 0, 2),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 52),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        if (!expanded)
                           Text(
-                            title,
+                            summary.isEmpty ? 'Empty' : summary,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
-                          if (!expanded)
-                            Text(
-                              summary.isEmpty ? 'Empty' : summary,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(color: scheme.onSurfaceVariant),
-                            ),
-                        ],
-                      ),
+                      ],
                     ),
-                    if (expanded) ?actions,
-                  ],
-                ),
+                  ),
+                  if (build != null)
+                    TweenAnimationBuilder<double>(
+                      tween: Tween<double>(end: expanded ? 1 : 0),
+                      duration: _swing,
+                      curve: Curves.easeOutCubic,
+                      builder: (context, progress, _) => progress <= 0
+                          ? const SizedBox.shrink()
+                          : build(progress),
+                    ),
+                  const SizedBox(width: 4),
+                  AnimatedRotation(
+                    turns: expanded ? 0.5 : 0,
+                    duration: _swing,
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      Icons.expand_more,
+                      size: 24,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
               ),
             ),
           ),
-          if (expanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
-              child: child,
-            ),
-        ],
-      ),
+        ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
+            child: child,
+          ),
+        Divider(height: 1, color: scheme.outlineVariant),
+      ],
     );
   }
 }

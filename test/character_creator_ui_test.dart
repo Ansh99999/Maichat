@@ -617,6 +617,47 @@ void main() {
       expect(find.byKey(const Key('creator-remove-greeting-0')), findsNothing);
     });
 
+    testWidgets('the drop-down arrow never moves, and the tools pop out',
+        (tester) async {
+      tall(tester, height: 2000);
+      final state = await boot();
+      await open(tester, state);
+      await goTo(tester, 'Greetings');
+
+      final arrow = find.byIcon(Icons.expand_more);
+      final openArrow = tester.getCenter(arrow.first);
+      // Right of everything else on the row — including the tools, which arrive
+      // to its left.
+      expect(openArrow.dx,
+          greaterThan(tester.getCenter(find.byTooltip('Write full screen')).dx));
+
+      await tester.tap(find.text('First message'));
+      await tester.pumpAndSettle();
+      // Closed: same place, to the pixel. It is the one thing on the row whose
+      // position must not move.
+      expect(tester.getCenter(arrow.first), openArrow);
+
+      // Opening it again fades and scales the tools in rather than blinking them
+      // into place.
+      await tester.tap(find.text('First message'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 70));
+      final midway = tester
+          .widgetList<Opacity>(find.byType(Opacity))
+          .map((o) => o.opacity)
+          .where((o) => o > 0 && o < 1);
+      expect(midway, isNotEmpty, reason: 'the tools appeared with no animation');
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widgetList<Opacity>(find.byType(Opacity))
+            .every((o) => o.opacity == 1 || o.opacity == 0),
+        isTrue,
+        reason: 'the animation never finished',
+      );
+      expect(tester.getCenter(arrow.first), openArrow);
+    });
+
     testWidgets('a closed fold previews what is in it; an open one does not',
         (tester) async {
       tall(tester, height: 2000);

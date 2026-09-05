@@ -25,26 +25,36 @@ Future<int> showGalleryUploadSheet(
 
   FilePickerResult? result;
   try {
-    // Deliberately **without** `withData`: that reads every selected photo into
-    // memory before the sheet has even opened, which for a couple of dozen camera
-    // pictures is hundreds of megabytes. The sheet only needs to draw them, and it
-    // draws them from their paths at thumbnail size.
+    // `withData` on purpose, and do not take it out again. Without it the plugin
+    // hands back a path and nothing else, and on Android that path is not always
+    // one this process can open — a scoped-storage or cloud-provider pick reads
+    // back as "could not be stored" and the whole import fails. The bytes are the
+    // only thing every platform guarantees. `GalleryUpload` keeps the path too,
+    // and everything downstream prefers whichever of the two it actually has.
     result = await FilePicker.pickFiles(
       type: FileType.image,
       allowMultiple: true,
+      withData: true,
     );
-  } catch (_) {
-    result = null;
+  } catch (error) {
+    // Say so. A swallowed failure here is indistinguishable from a tap that did
+    // nothing at all, which is exactly how a broken picker gets reported.
+    debugPrint('MaiChat: the picture picker failed ($error)');
+    messenger.showSnackBar(SnackBar(
+      content: Text('The picture picker could not be opened: $error'),
+      duration: const Duration(seconds: 6),
+    ));
+    return 0;
   }
   if (result == null || result.files.isEmpty) return 0;
 
   final picked = <GalleryUpload>[
     for (final file in result.files)
-      if (file.path != null || (file.bytes?.isNotEmpty ?? false))
+      if ((file.bytes?.isNotEmpty ?? false) || (file.path?.isNotEmpty ?? false))
         GalleryUpload(
           title: '',
           path: file.path,
-          bytes: file.path == null ? file.bytes : null,
+          bytes: file.bytes,
           name: file.name,
         ),
   ];
@@ -56,42 +66,90 @@ Future<int> showGalleryUploadSheet(
   }
   if (!context.mounted) return 0;
 
-  final added = await showGalleryNamingSheet(
+  return nameAndFilePictures(
     context,
     picked: picked,
     characterId: characterId,
     characters: allowChoosingOwner ? state.characters : const <Character>[],
   );
-  if (added == null) return 0;
-  if (!context.mounted) return added.length;
+}
+
+/// Everything after the picker: name them, then file them.
+///
+/// The screen's own path with the picker taken out, so the whole import can be
+/// driven without a device dialog in the way.
+///
+/// The sheet **collects** and this writes. Nothing is written from inside the
+/// sheet: it is a route, and a route that goes away mid-write — dismissed by a
+/// drag, or by anything that rebuilds the navigator — takes the rest of the import
+/// with it. Returns the number added.
+Future<int> nameAndFilePictures(
+  BuildContext context, {
+  required List<GalleryUpload> picked,
+  String? characterId,
+  List<Character> characters = const <Character>[],
+}) async {
+  final state = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+
+  final details = await showGalleryNamingSheet(
+    context,
+    picked: picked,
+    characterId: characterId,
+    characters: characters,
+  );
+  if (details == null) return 0;
+
+  final added = await state.addGalleryPictures(
+    details.uploads,
+    characterId: details.characterId,
+    tags: details.tags,
+  );
   if (added.isEmpty) {
     messenger.showSnackBar(
       const SnackBar(content: Text('Those pictures could not be stored.')),
     );
   } else {
+    final missed = picked.length - added.length;
     messenger.showSnackBar(SnackBar(
-      content: Text(added.length == 1
-          ? 'Added ${added.single.displayTitle}.'
-          : 'Added ${added.length} pictures.'),
+      content: Text([
+        if (added.length == 1)
+          'Added ${added.single.displayTitle}.'
+        else
+          'Added ${added.length} pictures.',
+        if (missed > 0) '$missed could not be read.',
+      ].join(' ')),
     ));
   }
   return added.length;
 }
 
+/// What the naming sheet collected: every picture with the name it was given, and
+/// the tags and owner they share.
+class GalleryNaming {
+  const GalleryNaming({
+    required this.uploads,
+    required this.tags,
+    this.characterId,
+  });
+
+  final List<GalleryUpload> uploads;
+  final List<String> tags;
+  final String? characterId;
+}
+
 /// The naming step on its own, over pictures that have already been chosen: one
 /// row per picture, a box for each name, and the tags and owner they share.
 ///
-/// It files what it collected itself rather than handing the details back, because
-/// the pictures are written one at a time and this sheet is what draws how far it
-/// has got — so it has to still be on screen while that happens. Answers with the
-/// records it added, or null when it was dismissed.
-Future<List<GalleryImage>?> showGalleryNamingSheet(
+/// Answers with what was collected, or null when it was dismissed. It writes
+/// nothing — see [nameAndFilePictures].
+Future<GalleryNaming?> showGalleryNamingSheet(
   BuildContext context, {
   required List<GalleryUpload> picked,
   String? characterId,
   List<Character> characters = const <Character>[],
 }) =>
-    showModalBottomSheet<List<GalleryImage>>(
+    showModalBottomSheet<GalleryNaming>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -129,9 +187,6 @@ class _UploadSheetState extends State<_UploadSheet> {
   List<String> _tags = <String>[];
   String? _owner;
 
-  /// How many have been written so far, while Add is running; null when it is not.
-  int? _done;
-
   @override
   void initState() {
     super.initState();
@@ -147,11 +202,8 @@ class _UploadSheetState extends State<_UploadSheet> {
   }
 
   bool get _many => widget.picked.length > 1;
-  bool get _working => _done != null;
 
   Future<void> _add() async {
-    if (_working) return;
-    setState(() => _done = 0);
     // A tag typed but never turned into a chip is still a tag. Dropping focus is
     // what commits it (see [TagEntryField]), and the focus manager applies that in
     // a microtask — so this hop is what stops the last tag of "beach, summer"
@@ -159,20 +211,14 @@ class _UploadSheetState extends State<_UploadSheet> {
     FocusManager.instance.primaryFocus?.unfocus();
     await Future<void>.microtask(() {});
     if (!mounted) return;
-    final uploads = <GalleryUpload>[
-      for (var i = 0; i < widget.picked.length; i++)
-        widget.picked[i].withTitle(_titles[i].text.trim()),
-    ];
-    final added = await context.read<AppState>().addGalleryPictures(
-          uploads,
-          characterId: _owner,
-          tags: _tags,
-          onProgress: (done, _) {
-            if (mounted) setState(() => _done = done);
-          },
-        );
-    if (!mounted) return;
-    Navigator.of(context).pop(added);
+    Navigator.of(context).pop(GalleryNaming(
+      uploads: <GalleryUpload>[
+        for (var i = 0; i < widget.picked.length; i++)
+          widget.picked[i].withTitle(_titles[i].text.trim()),
+      ],
+      tags: _tags,
+      characterId: _owner,
+    ));
   }
 
   @override
@@ -199,10 +245,12 @@ class _UploadSheetState extends State<_UploadSheet> {
                 style: theme.textTheme.titleLarge,
               ),
             ),
-            // The rows scroll; the buttons under them do not, so Add is always
-            // where the thumb left it however many pictures were picked.
+            // The rows scroll when there are more than fit; the buttons under them
+            // never move. `shrinkWrap` so a single picture does not stretch the
+            // sheet to its full height with a hole above Add.
             Flexible(
               child: ListView(
+                shrinkWrap: true,
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
                 children: [
                   for (var i = 0; i < widget.picked.length; i++)
@@ -210,7 +258,6 @@ class _UploadSheetState extends State<_UploadSheet> {
                       key: ValueKey(_titles[i]),
                       upload: widget.picked[i],
                       title: _titles[i],
-                      enabled: !_working,
                     ),
                   const SizedBox(height: 8),
                   const Divider(),
@@ -239,8 +286,7 @@ class _UploadSheetState extends State<_UploadSheet> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed:
-                          _working ? null : () => Navigator.of(context).pop(),
+                      onPressed: () => Navigator.of(context).pop(),
                       child: const Text('Cancel'),
                     ),
                   ),
@@ -248,17 +294,9 @@ class _UploadSheetState extends State<_UploadSheet> {
                   Expanded(
                     child: FilledButton.icon(
                       key: const Key('gallery-upload-add'),
-                      onPressed: _working ? null : _add,
-                      icon: _working
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.add_photo_alternate_outlined),
-                      label: Text(_working
-                          ? 'Adding ${_done! + 1} of ${widget.picked.length}'
-                          : (_many ? 'Add all' : 'Add')),
+                      onPressed: _add,
+                      icon: const Icon(Icons.add_photo_alternate_outlined),
+                      label: Text(_many ? 'Add all' : 'Add'),
                     ),
                   ),
                 ],
@@ -283,12 +321,10 @@ class _PictureRow extends StatelessWidget {
     super.key,
     required this.upload,
     required this.title,
-    required this.enabled,
   });
 
   final GalleryUpload upload;
   final TextEditingController title;
-  final bool enabled;
 
   static const double _side = 80;
 
@@ -316,7 +352,6 @@ class _PictureRow extends StatelessWidget {
           Expanded(
             child: TextField(
               controller: title,
-              enabled: enabled,
               maxLines: 1,
               textInputAction: TextInputAction.next,
               textCapitalization: TextCapitalization.sentences,
@@ -352,19 +387,22 @@ class _PictureRow extends StatelessWidget {
     final pixels = (_side * (dpr <= 0 ? 1 : dpr)).round();
     Widget broken() =>
         Icon(Icons.broken_image_outlined, color: scheme.outline);
-    final path = upload.path;
-    if (path != null && path.isNotEmpty) {
-      return Image.file(
-        File(path),
+    // Bytes first: they are what the picker guarantees, and a path that the
+    // process cannot open would otherwise draw a broken picture over a picture
+    // that is perfectly readable.
+    final bytes = upload.bytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(
+        bytes,
         fit: BoxFit.cover,
         cacheWidth: pixels,
         errorBuilder: (_, _, _) => broken(),
       );
     }
-    final bytes = upload.bytes;
-    if (bytes == null || bytes.isEmpty) return broken();
-    return Image.memory(
-      bytes,
+    final path = upload.path;
+    if (path == null || path.isEmpty) return broken();
+    return Image.file(
+      File(path),
       fit: BoxFit.cover,
       cacheWidth: pixels,
       errorBuilder: (_, _, _) => broken(),
@@ -376,13 +414,13 @@ class _PictureRow extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
     final pixels = (size.width * (dpr <= 0 ? 1 : dpr)).round();
-    final path = upload.path;
     final bytes = upload.bytes;
+    final path = upload.path;
     final Widget picture;
-    if (path != null && path.isNotEmpty) {
-      picture = Image.file(File(path), fit: BoxFit.contain, cacheWidth: pixels);
-    } else if (bytes != null && bytes.isNotEmpty) {
+    if (bytes != null && bytes.isNotEmpty) {
       picture = Image.memory(bytes, fit: BoxFit.contain, cacheWidth: pixels);
+    } else if (path != null && path.isNotEmpty) {
+      picture = Image.file(File(path), fit: BoxFit.contain, cacheWidth: pixels);
     } else {
       return;
     }

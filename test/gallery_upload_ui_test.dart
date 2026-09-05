@@ -48,14 +48,15 @@ void main() {
     return GalleryUpload(title: '', path: file.path, name: name);
   }
 
-  /// Opens the naming sheet over a bare screen and answers with what it filed.
-  Future<List<GalleryImage>?> open(
+  /// Opens the naming sheet over a bare screen and files what it collects — the
+  /// screen's own path with only the device picker taken out.
+  Future<int?> open(
     WidgetTester tester,
     AppState state,
     List<GalleryUpload> uploads, {
     List<Character> characters = const <Character>[],
   }) async {
-    List<GalleryImage>? filed;
+    int? filed;
     await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
       value: state,
       child: MaterialApp(
@@ -64,7 +65,7 @@ void main() {
             body: Center(
               child: TextButton(
                 onPressed: () async {
-                  filed = await showGalleryNamingSheet(
+                  filed = await nameAndFilePictures(
                     context,
                     picked: uploads,
                     characters: characters,
@@ -192,10 +193,38 @@ void main() {
     expect(state.gallery.single.title, 'Beach outfit');
   });
 
+  testWidgets('with the keyboard up, Add is still reachable', (tester) async {
+    // The bug that made "import several pictures" impossible: the sheet was
+    // capped against the whole display rather than the room left above the
+    // keyboard, so with a few rows in it Cancel and Add were pushed off the
+    // bottom. One picture fitted; three did not.
+    final state = await boot();
+    final dpr = tester.view.devicePixelRatio;
+    await open(tester, state, [
+      picked('a.png', 1),
+      picked('b.png', 2),
+      picked('c.png', 3),
+      picked('d.png', 4),
+    ]);
+
+    tester.view.viewInsets = FakeViewPadding(bottom: 300 * dpr);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpAndSettle();
+
+    final add = find.byKey(const Key('gallery-upload-add'));
+    final screen = tester.view.physicalSize.height / dpr;
+    expect(tester.getBottomLeft(add).dy, lessThanOrEqualTo(screen - 300),
+        reason: 'Add is behind the keyboard');
+    // And it really can be pressed from there.
+    await tester.tap(add);
+    await tester.pump();
+    await awaitFiled(tester, state, 4);
+    expect(state.gallery, hasLength(4));
+  });
+
   testWidgets('backing out writes nothing', (tester) async {
     final state = await boot();
-    final filed = await open(tester, state, [picked('a.png', 1)]);
-    expect(filed, isNull);
+    await open(tester, state, [picked('a.png', 1)]);
 
     await tester.enterText(find.widgetWithText(TextField, 'Title'), 'Ignored');
     await tester.pump();
