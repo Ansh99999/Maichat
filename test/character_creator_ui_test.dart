@@ -230,7 +230,7 @@ void main() {
       final before = tester.getTopLeft(find.byType(TabBar)).dy;
       expect(before, greaterThan(200));
 
-      await tester.drag(find.byType(ListView).first, const Offset(0, -600));
+      await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -600));
       await tester.pumpAndSettle();
 
       // …and ends up directly under the app bar, with the picture lifted clean
@@ -239,6 +239,13 @@ void main() {
       expect(after, lessThan(before));
       expect(after, lessThanOrEqualTo(kToolbarHeight));
       expect(find.byType(CreatorAvatarHeader), findsNothing);
+      // And the tab starts *below* the bar rather than under it: the overlap the
+      // pinned bar takes is injected back into the tab's own scroll view, so the
+      // first thing on it is still readable and still tappable.
+      final barBottom = tester.getBottomLeft(find.byType(TabBar)).dy;
+      expect(tester.getTopLeft(find.byKey(const Key('creator-name'))).dy,
+          greaterThanOrEqualTo(barBottom),
+          reason: 'the top of the tab is hiding under the tab bar');
 
       // Switching tabs from there is still one tap, and the bar has not moved.
       await goTo(tester, 'Persona');
@@ -555,15 +562,16 @@ void main() {
       await tester.enterText(boxOf('creator-name'), 'Serina');
       await goTo(tester, 'Greetings');
 
-      // One fold, open, with nothing in it yet.
-      expect(find.text('Empty'), findsOneWidget);
+      // One fold, open, and one box inside it — the greeting is named by the fold
+      // and nowhere else.
+      expect(find.text('First message'), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
       await tester.enterText(find.byType(TextField), 'Evening.');
       await tester.pumpAndSettle();
-      expect(find.text('Empty'), findsNothing);
 
       await tester.tap(find.byKey(const Key('creator-add-greeting')));
       await tester.pumpAndSettle();
-      expect(find.text('Greeting 2'), findsWidgets);
+      expect(find.text('Greeting 2'), findsOneWidget);
       await tester.enterText(find.byType(TextField).last, 'Or this way.');
       await tester.pumpAndSettle();
 
@@ -598,8 +606,8 @@ void main() {
       expect(find.text('Remove this greeting?'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
-      // Still there — as the fold's title and as its field's label.
-      expect(find.text('Greeting 2'), findsWidgets);
+      // Still there — the fold that names it is the only place it is named.
+      expect(find.text('Greeting 2'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('creator-remove-greeting-1')));
       await tester.pumpAndSettle();
@@ -607,6 +615,41 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Greeting 2'), findsNothing);
       expect(find.byKey(const Key('creator-remove-greeting-0')), findsNothing);
+    });
+
+    testWidgets('a closed fold previews what is in it; an open one does not',
+        (tester) async {
+      tall(tester, height: 2000);
+      final state = await boot();
+      await open(tester, state);
+      await goTo(tester, 'Greetings');
+
+      // The open fold names the greeting once and shows the words themselves —
+      // no second copy of the name, and no one-line summary of a box that is
+      // right there. Its three tools are on the header beside the name.
+      expect(find.text('First message'), findsOneWidget);
+      expect(find.text('Empty'), findsNothing);
+      expect(find.byTooltip('Let the AI write this'), findsOneWidget);
+      expect(find.byTooltip('Preview it as a message'), findsOneWidget);
+      expect(find.byTooltip('Write full screen'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), 'Evening. Looking for me?');
+      await tester.pumpAndSettle();
+      // Closing it hands the space back and leaves the first line behind, which
+      // is what tells eight greetings apart.
+      await tester.tap(find.text('First message'));
+      await tester.pumpAndSettle();
+      expect(find.text('Evening. Looking for me?'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing);
+      expect(find.byTooltip('Write full screen'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('creator-add-greeting')));
+      await tester.pumpAndSettle();
+      // The new one is empty and says so, in its own fold.
+      expect(find.text('Greeting 2'), findsOneWidget);
+      await tester.tap(find.text('Greeting 2'));
+      await tester.pumpAndSettle();
+      expect(find.text('Empty'), findsOneWidget);
     });
 
     testWidgets('Preview draws the greeting as the chat will', (tester) async {
@@ -747,11 +790,15 @@ void main() {
 
       await tester.tap(find.byKey(const Key('creator-add-scenario')));
       await tester.pumpAndSettle();
-      expect(find.text('Untitled scenario'), findsOneWidget);
+      expect(find.text('Scenario 1'), findsOneWidget);
       await tester.enterText(
         find.widgetWithText(TextField, 'Name (optional)').last,
         'The library',
       );
+      await tester.pumpAndSettle();
+      // Naming it renames the fold: twice on screen now — the heading, and the
+      // box it was typed into.
+      expect(find.text('The library'), findsNWidgets(2));
       await tester.enterText(scenarioBox(), 'A library after hours.');
       await tester.pumpAndSettle();
 
@@ -929,6 +976,37 @@ void main() {
   });
 
   group('a field', () {
+    testWidgets('the box never changes size as it is typed into',
+        (tester) async {
+      tall(tester);
+      final state = await boot();
+      await open(tester, state);
+      await goTo(tester, 'Persona');
+
+      final box = boxOf('creator-description');
+      final below = find.byKey(const Key('creator-personality'));
+      final height = tester.getSize(box).height;
+      final belowTop = tester.getTopLeft(below).dy;
+
+      // Enough words to wrap many times over. A box grown between minLines and
+      // maxLines pushed everything under it down a line at a time as this was
+      // typed, and the caret then had to be scrolled back into view — which is
+      // what made the page bob up and down under the cursor.
+      await tester.enterText(
+        box,
+        List<String>.filled(60, 'a rain-soaked port city').join(' '),
+      );
+      // Past the token count's debounce, so its row has settled too.
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(tester.getSize(box).height, height,
+          reason: 'the box grew with the words in it');
+      expect(tester.getTopLeft(below).dy, belowTop,
+          reason: 'the field below was pushed down');
+      // The words are all there — the box scrolls, it does not truncate.
+      expect(textOf(tester, 'creator-description'), contains('port city'));
+    });
+
     testWidgets('counts its tokens and opens full screen onto the same text',
         (tester) async {
       tall(tester);

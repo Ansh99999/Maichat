@@ -126,7 +126,11 @@ class _MemberRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final provider = avatarImage(character.avatar, displaySize: 44);
+    final provider = avatarImage(
+      character.avatar,
+      displaySize: 44,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       leading: CircleAvatar(

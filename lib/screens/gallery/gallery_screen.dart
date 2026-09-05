@@ -876,7 +876,11 @@ class _SheetAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final provider = avatarImage(character.avatar, displaySize: 40);
+    final provider = avatarImage(
+      character.avatar,
+      displaySize: 40,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
     return CircleAvatar(
       radius: 20,
       backgroundColor: scheme.secondaryContainer,

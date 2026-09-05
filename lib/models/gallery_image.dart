@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 /// A picture the user keeps in the app: one photo in a character's album, or an
 /// unattached one that only shows in the whole-app gallery.
 ///
@@ -207,3 +209,43 @@ enum GalleryZoom {
 
 /// Where a gallery opens before anyone pinches: two across, grouped by day.
 const GalleryZoom kDefaultGalleryZoom = GalleryZoom.pair;
+
+/// One picture on its way into the gallery: where its bytes still are, what the
+/// file was called, and the name it is being given.
+///
+/// It carries a **path** wherever it can rather than the bytes themselves. A
+/// device picker asked for `withData` reads every selected photo into memory at
+/// once, which for a couple of dozen camera pictures is hundreds of megabytes and
+/// takes the process down with no Dart error to show for it — the same trap a
+/// backup restore had to be built around. `AppState.addGalleryPictures` reads
+/// these one at a time instead.
+class GalleryUpload {
+  const GalleryUpload({
+    required this.title,
+    this.path,
+    this.bytes,
+    this.name = '',
+  });
+
+  /// What this one picture is to be called. Blank is allowed: the gallery falls
+  /// back to the date it was added.
+  final String title;
+
+  /// Where the picture is, unread.
+  final String? path;
+
+  /// The bytes, for the rare picker that hands over no path at all.
+  final Uint8List? bytes;
+
+  /// The file name it was picked as — shown in the sheet so one photo can be told
+  /// from the next before it has a name.
+  final String name;
+
+  /// Whether there is anything here to read at all.
+  bool get isReadable =>
+      (path != null && path!.isNotEmpty) || (bytes?.isNotEmpty ?? false);
+
+  GalleryUpload withTitle(String next) =>
+      GalleryUpload(title: next, path: path, bytes: bytes, name: name);
+}
+

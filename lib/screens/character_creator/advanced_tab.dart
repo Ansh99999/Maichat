@@ -16,8 +16,7 @@ import 'creator_draft.dart';
 /// are the one field on a card that is written *for a human*, and cards routinely
 /// design them in HTML and CSS, so there is a preview that renders them the way
 /// the sheet will.
-class AdvancedTab extends StatelessWidget {
-  const AdvancedTab({super.key});
+class AdvancedTab extends StatelessWidget {  const AdvancedTab({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -25,10 +24,6 @@ class AdvancedTab extends StatelessWidget {
     return CreatorTabBody(
       children: [
         const CreatorLabel('Instructions to the model'),
-        const CreatorNote(
-          'These frame the roleplay. A preset can carry its own versions of both; '
-          "a card's own are used where the preset asks for them.",
-        ),
         CreatorField(
           key: const Key('creator-system'),
           label: 'System prompt',
@@ -36,8 +31,7 @@ class AdvancedTab extends StatelessWidget {
           draft: draft,
           field: WritableField.systemPrompt,
           hint: 'How to play this character, and how to write the roleplay.',
-          minLines: 5,
-          maxLines: 14,
+          lines: 8,
         ),
         CreatorField(
           key: const Key('creator-post-history'),
@@ -46,15 +40,9 @@ class AdvancedTab extends StatelessWidget {
           draft: draft,
           field: WritableField.postHistory,
           hint: 'The reminder placed closest to the reply.',
-          minLines: 4,
-          maxLines: 10,
+          lines: 6,
         ),
         const Divider(height: 28),
-        const CreatorLabel('Example dialogue'),
-        const CreatorNote(
-          'Exchanges that teach the model this voice. `<START>` between examples, '
-          'then {{char}}: and {{user}}: turns.',
-        ),
         CreatorField(
           key: const Key('creator-example'),
           label: 'Example dialogue',
@@ -62,33 +50,23 @@ class AdvancedTab extends StatelessWidget {
           draft: draft,
           field: WritableField.exampleDialogue,
           hint: '<START>\n{{char}}: …\n{{user}}: …',
-          minLines: 5,
-          maxLines: 14,
+          lines: 8,
         ),
         const Divider(height: 28),
-        const CreatorLabel('For whoever gets this card'),
-        const CreatorNote(
-          'Notes to a human, never sent to the model. HTML and CSS are rendered '
-          'on the sheet, so the preview is worth a look before you publish.',
-        ),
         CreatorField(
           key: const Key('creator-notes'),
           label: 'Creator notes',
           controller: draft.notes,
           draft: draft,
           field: WritableField.creatorNotes,
-          hint: 'What this card is, how to play it, what to expect.',
-          minLines: 5,
-          maxLines: 14,
-          trailing: IconButton(
-            key: const Key('creator-notes-preview'),
-            tooltip: 'Preview the notes',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.visibility_outlined, size: 20),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => NotesPreviewScreen(notes: draft.notes.text),
-              ),
+          hint: 'What this card is, how to play it, what to expect. Never sent '
+              'to the model.',
+          lines: 8,
+          previewKey: const Key('creator-notes-preview'),
+          previewTooltip: 'Preview the notes',
+          onPreview: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => NotesPreviewScreen(notes: draft.notes.text),
             ),
           ),
         ),

@@ -28,31 +28,27 @@ class _ScenariosTabState extends State<ScenariosTab> {
   @override
   Widget build(BuildContext context) {
     final draft = context.watch<CreatorDraft>();
-    final greetings = draft.filledGreetings;
 
     return CreatorTabBody(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
       children: [
-        const CreatorNote(
-          'Where a chat starts. A scenario can cover every greeting, or belong to '
-          'the ones it was written for — the chat uses whichever matches the '
-          'greeting it opened on.',
-        ),
         if (draft.scenarios.isEmpty)
           const Padding(
             padding: EdgeInsets.fromLTRB(4, 8, 4, 16),
             child: Text('No scenarios yet.'),
           ),
-        for (final scenario in draft.scenarios)
-          _ScenarioCard(
-            key: ValueKey(scenario.id),
+        for (var i = 0; i < draft.scenarios.length; i++)
+          _ScenarioFold(
+            key: ValueKey(draft.scenarios[i].id),
             draft: draft,
-            scenario: scenario,
-            greetings: greetings,
-            expanded: _open == scenario.id || draft.scenarios.length == 1,
+            scenario: draft.scenarios[i],
+            index: i,
+            expanded: _open == draft.scenarios[i].id ||
+                draft.scenarios.length == 1,
             onExpand: (open) =>
-                setState(() => _open = open ? scenario.id : null),
+                setState(() => _open = open ? draft.scenarios[i].id : null),
             onRemove: () async {
+              final scenario = draft.scenarios[i];
               final named = scenario.name.text.trim();
               final gone = await confirmRemoval(
                 context,
@@ -114,12 +110,12 @@ class _ScenariosTabState extends State<ScenariosTab> {
   }
 }
 
-class _ScenarioCard extends StatelessWidget {
-  const _ScenarioCard({
+class _ScenarioFold extends StatelessWidget {
+  const _ScenarioFold({
     super.key,
     required this.draft,
     required this.scenario,
-    required this.greetings,
+    required this.index,
     required this.expanded,
     required this.onExpand,
     required this.onRemove,
@@ -127,90 +123,69 @@ class _ScenarioCard extends StatelessWidget {
 
   final CreatorDraft draft;
   final ScenarioDraft scenario;
-  final List<String> greetings;
+  final int index;
   final bool expanded;
   final ValueChanged<bool> onExpand;
   final VoidCallback onRemove;
 
+  /// What it is called, or where it sits. Deliberately *not* the first words of
+  /// the scenario itself: a title taken from the body would have to be recomputed
+  /// on every keystroke, which means rebuilding the whole tab to keep a heading in
+  /// step with the box under it.
   String get _title {
     final name = scenario.name.text.trim();
-    if (name.isNotEmpty) return name;
-    final body = scenario.text.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (body.isEmpty) return 'Untitled scenario';
-    return body.length <= 42 ? body : '${body.substring(0, 42)}…';
-  }
-
-  String get _scope {
-    if (scenario.greetings.isEmpty) return 'Every greeting';
-    final named = scenario.greetings.toList()..sort();
-    return named.map(CharacterScenario.greetingLabel).join(', ');
+    return name.isEmpty ? 'Scenario ${index + 1}' : name;
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerLow,
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          initiallyExpanded: expanded,
-          onExpansionChanged: onExpand,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 14),
-          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-          expandedCrossAxisAlignment: CrossAxisAlignment.start,
-          title: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(
-            _scope,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
+    const label = 'Scenario';
+    return CreatorFold(
+      title: _title,
+      preview: scenario.text.text.replaceAll(RegExp(r'\s+'), ' ').trim(),
+      expanded: expanded,
+      onExpand: onExpand,
+      actions: CreatorFieldActions(
+        title: label,
+        controller: scenario.text,
+        draft: draft,
+        field: WritableField.scenario,
+        slot: 'scenario:${scenario.id}',
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: scenario.name,
+            maxLines: 1,
+            textCapitalization: TextCapitalization.sentences,
+            // The one field here that does notify: the fold's own heading is this
+            // text, so it has to be redrawn as the name is typed.
+            onChanged: (_) => draft.touch(),
+            decoration: const InputDecoration(
+              labelText: 'Name (optional)',
+              hintText: 'What you call this opening',
+              isDense: true,
+            ),
           ),
-          children: [
-            TextField(
-              controller: scenario.name,
-              textCapitalization: TextCapitalization.sentences,
-              onChanged: (_) => draft.touch(),
-              decoration: const InputDecoration(
-                labelText: 'Name (optional)',
-                hintText: 'What you call this opening',
-                isDense: true,
-              ),
+          const CreatorLabel('Applies to'),
+          _GreetingChips(draft: draft, scenario: scenario),
+          const SizedBox(height: 12),
+          CreatorField(
+            controller: scenario.text,
+            draft: draft,
+            field: WritableField.scenario,
+            slot: 'scenario:${scenario.id}',
+            hint: 'Where they are, what is happening, why they are together.',
+            lines: 8,
+            footer: TextButton.icon(
+              key: Key('creator-remove-scenario-$index'),
+              onPressed: onRemove,
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('Remove'),
             ),
-            const SizedBox(height: 14),
-            CreatorField(
-              label: 'Scenario',
-              aiLabel: 'Scenario',
-              slot: 'scenario:${scenario.id}',
-              controller: scenario.text,
-              draft: draft,
-              field: WritableField.scenario,
-              hint: 'Where they are, what is happening, why they are together.',
-              minLines: 5,
-              maxLines: 12,
-              onChanged: draft.touch,
-            ),
-            const CreatorLabel('Applies to'),
-            _GreetingChips(
-              draft: draft,
-              scenario: scenario,
-              greetings: greetings,
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: onRemove,
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: const Text('Remove'),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -219,53 +194,56 @@ class _ScenarioCard extends StatelessWidget {
 /// Which greetings a scenario belongs to. "Every greeting" is the empty set, so a
 /// card that has never thought about it behaves exactly as a single-scenario card
 /// always did.
+///
+/// The chips follow the greetings live — through the greeting controllers
+/// themselves rather than through a notification from the draft, so writing a
+/// greeting on the tab before this one costs a rebuild of these chips and nothing
+/// else.
 class _GreetingChips extends StatelessWidget {
-  const _GreetingChips({
-    required this.draft,
-    required this.scenario,
-    required this.greetings,
-  });
+  const _GreetingChips({required this.draft, required this.scenario});
 
   final CreatorDraft draft;
   final ScenarioDraft scenario;
-  final List<String> greetings;
 
   @override
-  Widget build(BuildContext context) {
-    if (greetings.isEmpty) {
-      return const CreatorNote(
-        'Write a greeting first and you can attach this scenario to it.',
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: Listenable.merge(draft.greetings),
+        builder: (context, _) {
+          final greetings = draft.filledGreetings;
+          if (greetings.isEmpty) {
+            return const CreatorNote(
+              'Write a greeting first and you can attach this scenario to it.',
+            );
+          }
+          return Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilterChip(
+                key: const Key('scenario-scope-all'),
+                label: const Text('Every greeting'),
+                selected: scenario.greetings.isEmpty,
+                onSelected: (_) {
+                  scenario.greetings.clear();
+                  draft.touch();
+                },
+              ),
+              for (var i = 0; i < greetings.length; i++)
+                FilterChip(
+                  key: Key('scenario-scope-$i'),
+                  label: Text(CharacterScenario.greetingLabel(i)),
+                  selected: scenario.greetings.contains(i),
+                  onSelected: (on) {
+                    if (on) {
+                      scenario.greetings.add(i);
+                    } else {
+                      scenario.greetings.remove(i);
+                    }
+                    draft.touch();
+                  },
+                ),
+            ],
+          );
+        },
       );
-    }
-    final all = scenario.greetings.isEmpty;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        FilterChip(
-          key: const Key('scenario-scope-all'),
-          label: const Text('Every greeting'),
-          selected: all,
-          onSelected: (_) {
-            scenario.greetings.clear();
-            draft.touch();
-          },
-        ),
-        for (var i = 0; i < greetings.length; i++)
-          FilterChip(
-            key: Key('scenario-scope-$i'),
-            label: Text(CharacterScenario.greetingLabel(i)),
-            selected: scenario.greetings.contains(i),
-            onSelected: (on) {
-              if (on) {
-                scenario.greetings.add(i);
-              } else {
-                scenario.greetings.remove(i);
-              }
-              draft.touch();
-            },
-          ),
-      ],
-    );
-  }
 }

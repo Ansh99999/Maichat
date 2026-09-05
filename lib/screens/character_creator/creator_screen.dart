@@ -163,14 +163,16 @@ class _CharacterCreatorScreenState extends State<CharacterCreatorScreen>
   }
 
   Widget _scaffold(BuildContext context, CreatorDraft draft) {
-    final media = MediaQuery.of(context);
+    // Read one aspect at a time, never the whole `MediaQueryData`: the keyboard
+    // moves `viewInsets` on every frame of its animation, and a dependency on the
+    // whole thing rebuilt this scaffold — six tabs' worth of header, tab bar and
+    // fields — fifteen times on the way up.
+    final size = MediaQuery.sizeOf(context);
     // With the keyboard up the header goes away entirely: a portrait is worth
     // looking at, and it is worth nothing at all while it is squeezing the field
     // being typed into down to two lines.
-    final typing = media.viewInsets.bottom > 0;
-    final headerHeight =
-        (media.size.height * 0.3).clamp(170.0, 320.0).toDouble();
-    final name = draft.name.text.trim();
+    final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final headerHeight = (size.height * 0.3).clamp(170.0, 320.0).toDouble();
 
     return Scaffold(
       appBar: AppBar(
@@ -183,12 +185,20 @@ class _CharacterCreatorScreenState extends State<CharacterCreatorScreen>
           icon: const Icon(Icons.arrow_back),
           onPressed: _leave,
         ),
-        title: Text(
-          name.isEmpty
-              ? (draft.isNew ? 'New character' : 'Edit character')
-              : name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        // Follows the name box directly rather than through the draft: typing a
+        // name should redraw this one line, not the whole screen.
+        title: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: draft.name,
+          builder: (context, value, _) {
+            final name = value.text.trim();
+            return Text(
+              name.isEmpty
+                  ? (draft.isNew ? 'New character' : 'Edit character')
+                  : name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            );
+          },
         ),
         actions: [
           IconButton(
@@ -229,11 +239,18 @@ class _CharacterCreatorScreenState extends State<CharacterCreatorScreen>
                     ),
             ),
           ),
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _CreatorTabs(
-              controller: _tabs,
-              color: Theme.of(context).colorScheme.surface,
+          SliverOverlapAbsorber(
+            // The tab bar stays put while a tab scrolls under it, so the tab has
+            // to be told how much of itself the bar is covering — see
+            // [CreatorTabBody]'s injector. Without the pair the top of every tab
+            // hid behind the bar the moment the portrait was scrolled off.
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            sliver: SliverPersistentHeader(
+              pinned: true,
+              delegate: _CreatorTabs(
+                controller: _tabs,
+                color: Theme.of(context).colorScheme.surface,
+              ),
             ),
           ),
         ],

@@ -95,4 +95,54 @@ void main() {
         lessThan(composerTopBefore - 200),
         reason: 'the composer still rides up with the keyboard');
   });
+
+  /// The other half of the same cost, and the bigger one.
+  ///
+  /// Not rebuilding the thread is not enough on its own: letting the Scaffold
+  /// shrink the body still *lays the list out again* on every frame of the
+  /// keyboard's animation, and a list that has been laid out again has to be
+  /// painted again — a screenful of markdown, HTML and selectable text, fifteen
+  /// times on the way up. So the keyboard no longer resizes this screen at all: the
+  /// thread and the composer are slid, which the compositor does for free.
+  testWidgets('the keyboard slides the chat rather than relaying it out',
+      (tester) async {
+    final state = await boot();
+    final dpr = tester.view.devicePixelRatio;
+    tester.view.padding = FakeViewPadding(bottom: 32 * dpr, top: 24 * dpr);
+    tester.view.viewPadding = FakeViewPadding(bottom: 32 * dpr, top: 24 * dpr);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(home: ChatScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    final thread = find.byType(ListView);
+    final composerField = find.byKey(const Key('composer-field'));
+    final threadHeight = tester.getSize(thread).height;
+    final threadTop = tester.getTopLeft(thread).dy;
+    final offset = tester.widget<ListView>(thread).controller!.position.pixels;
+    final composerBottom = tester.getBottomLeft(composerField).dy;
+
+    tester.view.viewInsets = FakeViewPadding(bottom: 300 * dpr);
+    tester.view.padding = FakeViewPadding(top: 24 * dpr);
+    await tester.pump();
+
+    // The viewport is the size it was, and the reader is exactly where they were.
+    expect(tester.getSize(thread).height, threadHeight,
+        reason: 'the thread was resized by the keyboard');
+    expect(tester.widget<ListView>(thread).controller!.position.pixels, offset,
+        reason: 'the keyboard moved the reader');
+
+    // What moved is the whole column, by the keyboard's height less the
+    // navigation bar it covers on the way up.
+    final lift = composerBottom - tester.getBottomLeft(composerField).dy;
+    expect(lift, moreOrLessEquals(300 - 32, epsilon: 0.5));
+    expect(tester.getTopLeft(thread).dy, moreOrLessEquals(threadTop - lift,
+        epsilon: 0.5));
+    // Which leaves the composer sitting on the keyboard, not under it.
+    expect(tester.getBottomLeft(composerField).dy,
+        lessThanOrEqualTo(tester.view.physicalSize.height / dpr - 300 + 0.5));
+  });
 }

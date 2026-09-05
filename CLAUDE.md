@@ -159,6 +159,25 @@ bar or the overflow menu.
   thread, composer, drawer — when the keyboard only needed to relayout it, which is
   what made tapping into the message box feel grainy. `test/chat_keyboard_test.dart`
   fails if it comes back.
+- **The keyboard never resizes the chat.** `ChatScreen`'s Scaffold sets
+  `resizeToAvoidBottomInset: false` and `_KeyboardShift` slides the thread and the
+  composer up instead. Not rebuilding was only half the cost: a shrinking viewport
+  *lays the message list out again*, and a re-laid-out list is a re-painted one —
+  a screenful of markdown, HTML and `SelectableText` on each of the fifteen-odd
+  frames the keyboard takes to rise, which cost the same at six turns as at ninety.
+  Sliding is a transform-layer offset: no layout, no paint, and the scroll position
+  is never touched. The thread is bottom-anchored (`reverse: true`), so the result
+  on screen is identical. Two things follow: the column's padding comes from
+  `viewPadding` (stable) rather than a `SafeArea` reading `padding`, and a snackbar
+  has to be floated clear of the keyboard by hand (`_toast`), because the Scaffold
+  no longer knows the keyboard is there.
+- **A creator field is a fixed-height box, never `minLines`→`maxLines`.**
+  `CreatorField` sizes its box with `creatorBoxHeight` and lets `expands: true`
+  scroll the words inside it. A growing box moved everything below it as it was
+  typed into, and the caret then had to be scrolled back into view, which is what
+  made the page bob under the cursor. For the same reason the long fields do **not**
+  call `CreatorDraft.touch()` on every keystroke: what has to follow the words
+  follows the controller (the app-bar title, a fold's preview, the scenario chips).
 
 ## Architecture map (where things live)
 
@@ -181,6 +200,16 @@ bar or the overflow menu.
   resolution), `services/character_codec.dart` (parses flat/spec cards, PNG
   `chara`/`ccv3` chunks, `.charx` ZIP carving), `services/character_sources.dart`
   (import plugins), screens under `lib/screens/` + `widgets/character_avatar.dart`.
+- **Creator v2:** `screens/character_creator/*` — one `CreatorDraft` (every
+  controller, handed down through a provider so a swiped-away tab loses nothing)
+  under six tabs, with the portrait as a scrollable `NestedScrollView` header. The
+  shared parts are in `creator_controls.dart`: `CreatorField` (a fixed-height box,
+  a token count, and the three things you can do to a field —
+  `CreatorFieldActions`), `CreatorFold` (a greeting or a scenario, named **once**,
+  by the fold, which carries the field's tools while it is open), and
+  `CreatorTabBody`. That last one pairs a `SliverOverlapInjector` with the
+  `SliverOverlapAbsorber` around the pinned tab bar; without the pair the top of
+  every tab hides under the bar as soon as the portrait is scrolled off.
 - **Lorebooks:** `models/lorebook.dart`, `services/lorebook_codec.dart` (ST world
   info / card `character_book` / Agnai memory books — one export file all read),
   `services/world_info.dart` (activation scan). `lib/screens/library/`.
@@ -284,7 +313,13 @@ bar or the overflow menu.
   pinch ladder), `widgets/avatar_swipe_sheet.dart`,
   `widgets/floating_images_layer.dart`. Pictures are files like every other
   image; a character's extra avatars live in `Character.avatars` and are resolved
-  only through `AppState.avatarPoolFor`/`avatarRefFor`.
+  only through `AppState.avatarPoolFor`/`avatarRefFor`. Pictures picked off the
+  device come in as `GalleryUpload`s — a **path** and the name it is being given —
+  through `AppState.addGalleryPictures`, which reads and writes one at a time;
+  the picker is called without `withData` for the same reason a backup is never
+  held whole. Each gets its own title (`showGalleryNamingSheet`); the old shared
+  title with a number stuck on the end is gone. `addGalleryImages` is still the
+  in-memory door, for bytes that already exist (a generated picture).
 - **Chat Interface settings:** a **hub of spokes**, not one long page.
   `screens/settings/chat_interface_settings_page.dart` is the hub (it keeps that
   name and path so every caller is untouched); each spoke is a file under

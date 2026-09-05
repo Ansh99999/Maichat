@@ -11,9 +11,10 @@ import 'greeting_preview_screen.dart';
 /// chat swipes between.
 ///
 /// Kept as folds rather than a wall of boxes, because a card with eight greetings
-/// is eight long texts and only one of them is being worked on at a time. Each
-/// fold carries the same three affordances every long field has, plus the one that
-/// only a greeting needs: a preview, drawn as the chat will draw it.
+/// is eight long texts and only one of them is being worked on at a time. A fold
+/// names its greeting **once**, and while it is open its header carries the three
+/// things you can do to the words plus the one only a greeting needs — a preview,
+/// drawn as the chat will draw it.
 class GreetingsTab extends StatefulWidget {
   const GreetingsTab({super.key});
 
@@ -33,12 +34,8 @@ class _GreetingsTabState extends State<GreetingsTab> {
     return CreatorTabBody(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
       children: [
-        const CreatorNote(
-          'The first one is what a new chat opens with. Add more and the chat can '
-          'swipe between them — and a scenario can be attached to each.',
-        ),
         for (var i = 0; i < draft.greetings.length; i++)
-          _GreetingCard(
+          _GreetingFold(
             key: ValueKey(draft.greetings[i]),
             draft: draft,
             index: i,
@@ -77,8 +74,8 @@ class _GreetingsTabState extends State<GreetingsTab> {
   }
 }
 
-class _GreetingCard extends StatelessWidget {
-  const _GreetingCard({
+class _GreetingFold extends StatelessWidget {
+  const _GreetingFold({
     super.key,
     required this.draft,
     required this.index,
@@ -97,79 +94,44 @@ class _GreetingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final controller = draft.greetings[index];
-    final preview = controller.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerLow,
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          // Deliberately no PageStorageKey, however idiomatic one looks on an
-          // ExpansionTile: the tile stores its open/closed **bool** under the
-          // page-storage identifier built from the keys above it, and every
-          // consumer inside it resolves to that same identifier — including the
-          // Scrollable inside the greeting's own text field, which reads the slot
-          // as a `double?` scroll offset. With the key in place, opening a fold by
-          // hand threw `type 'bool' is not a subtype of type 'double?'` out of
-          // ScrollPosition.restoreScrollOffset and left the field unlaid-out.
-          initiallyExpanded: expanded,
-          onExpansionChanged: onExpand,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 14),
-          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-          expandedCrossAxisAlignment: CrossAxisAlignment.start,
-          title: Text(_label),
-          subtitle: Text(
-            preview.isEmpty ? 'Empty' : preview,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-          children: [
-            CreatorField(
-              label: _label,
-              aiLabel: _label,
-              slot: 'greeting:$index',
-              controller: controller,
-              draft: draft,
-              field: WritableField.greeting,
-              hint: 'How they open the conversation.',
-              minLines: 6,
-              maxLines: 14,
-              onChanged: draft.touch,
-            ),
-            Row(
-              children: [
-                FilledButton.tonalIcon(
-                  key: Key('creator-preview-greeting-$index'),
-                  onPressed: () => openGreetingPreview(
-                    context,
-                    character: draft.snapshot(),
-                    text: controller.text,
-                    label: _label,
-                  ),
-                  icon: const Icon(Icons.visibility_outlined, size: 18),
-                  label: const Text('Preview'),
-                ),
-                const Spacer(),
-                if (onRemove != null)
-                  TextButton.icon(
-                    key: Key('creator-remove-greeting-$index'),
-                    onPressed: onRemove,
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: const Text('Remove'),
-                  ),
-              ],
-            ),
-          ],
+    return CreatorFold(
+      title: _label,
+      // Only read while the fold is closed, and a closed fold cannot be typed
+      // into — so this is right without the tab having to rebuild per keystroke.
+      preview: controller.text.replaceAll(RegExp(r'\s+'), ' ').trim(),
+      expanded: expanded,
+      onExpand: onExpand,
+      actions: CreatorFieldActions(
+        title: _label,
+        controller: controller,
+        draft: draft,
+        field: WritableField.greeting,
+        slot: 'greeting:$index',
+        previewKey: Key('creator-preview-greeting-$index'),
+        previewTooltip: 'Preview it as a message',
+        onPreview: () => openGreetingPreview(
+          context,
+          character: draft.snapshot(),
+          text: controller.text,
+          label: _label,
         ),
+      ),
+      child: CreatorField(
+        controller: controller,
+        draft: draft,
+        field: WritableField.greeting,
+        slot: 'greeting:$index',
+        hint: 'How they open the conversation.',
+        lines: 9,
+        footer: onRemove == null
+            ? null
+            : TextButton.icon(
+                key: Key('creator-remove-greeting-$index'),
+                onPressed: onRemove,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Remove'),
+              ),
       ),
     );
   }

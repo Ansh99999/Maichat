@@ -3448,6 +3448,10 @@ class AppState extends ChangeNotifier {
   /// pictures directory and only its reference is stored — the same path every
   /// other picture in the app takes. Several pictures added at once share [tags]
   /// and, when there is more than one, are numbered from [title].
+  ///
+  /// This is the in-memory door, used where the bytes already exist (a generated
+  /// picture). Pictures picked off the device come in through
+  /// [addGalleryPictures], which never holds more than one of them at a time.
   Future<List<GalleryImage>> addGalleryImages(
     List<Uint8List> pictures, {
     String? characterId,
@@ -3476,6 +3480,60 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     await _persistGallery();
     return added;
+  }
+
+  /// Files pictures that are still sitting somewhere else on the device — what the
+  /// picker hands back — each under the name it was given.
+  ///
+  /// One at a time, and the bytes are dropped as soon as they are written, so
+  /// importing thirty camera photos never has more than one of them in memory.
+  /// [onProgress] is called after each, which is what the upload sheet's bar draws.
+  Future<List<GalleryImage>> addGalleryPictures(
+    List<GalleryUpload> uploads, {
+    String? characterId,
+    List<String> tags = const <String>[],
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (uploads.isEmpty) return const <GalleryImage>[];
+    final added = <GalleryImage>[];
+    for (var i = 0; i < uploads.length; i++) {
+      final upload = uploads[i];
+      final bytes = await _readUpload(upload);
+      if (bytes != null && bytes.isNotEmpty) {
+        final ref = await storePicture(bytes);
+        // Nowhere to write it, or nothing readable there: skip this one rather
+        // than abandon the rest of the import.
+        if (ref != null) {
+          added.add(GalleryImage.create(
+            image: ref,
+            title: upload.title.trim(),
+            tags: List<String>.from(tags),
+            characterId: characterId,
+          ));
+        }
+      }
+      onProgress?.call(i + 1, uploads.length);
+    }
+    if (added.isEmpty) return added;
+    _gallery.insertAll(0, added);
+    notifyListeners();
+    await _persistGallery();
+    return added;
+  }
+
+  Future<Uint8List?> _readUpload(GalleryUpload upload) async {
+    final inline = upload.bytes;
+    if (inline != null && inline.isNotEmpty) return inline;
+    final path = upload.path;
+    if (path == null || path.isEmpty) return null;
+    try {
+      final file = File(path);
+      if (!await file.exists()) return null;
+      return await file.readAsBytes();
+    } catch (error) {
+      debugPrint('MaiChat: could not read a picked picture ($error)');
+      return null;
+    }
   }
 
   /// Replaces the stored record sharing [image]'s id (title, tags, owner, star).

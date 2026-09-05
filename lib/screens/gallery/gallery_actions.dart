@@ -127,7 +127,13 @@ class _EditSheetState extends State<_EditSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final media = MediaQuery.of(context);
-    final provider = avatarImage(widget.image.image, displaySize: 160);
+    // Decoded for *device* pixels, not logical ones: without the ratio the cap is
+    // a third of what a 3× display needs and the preview comes out soft.
+    final provider = avatarImage(
+      widget.image.image,
+      displaySize: 160,
+      devicePixelRatio: media.devicePixelRatio,
+    );
 
     return Padding(
       padding: EdgeInsets.only(bottom: media.viewInsets.bottom),

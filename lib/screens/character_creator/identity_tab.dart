@@ -18,21 +18,15 @@ class IdentityTab extends StatelessWidget {
     final draft = context.watch<CreatorDraft>();
     return CreatorTabBody(
       children: [
-        const CreatorLabel('Name'),
         CreatorLine(
           key: const Key('creator-name'),
           label: 'Character name',
           hint: 'Serina',
           controller: draft.name,
-          onChanged: draft.touch,
         ),
         _TitleSection(draft: draft),
         const Divider(height: 28),
         const CreatorLabel('Tags'),
-        const CreatorNote(
-          'How this character is found, here and in a catalogue. Write your own, '
-          'pick from the ones you already use, or let the card describe itself.',
-        ),
         _TagsSection(draft: draft),
       ],
     );
@@ -81,11 +75,7 @@ class _TitleSection extends StatelessWidget {
           ),
         ),
         if (draft.titleShown) ...[
-          const SizedBox(height: 6),
-          const CreatorNote(
-            'One line that catches what they are — "she was your sister, back '
-            'then". Shown under their name; never sent to the model.',
-          ),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
@@ -93,9 +83,9 @@ class _TitleSection extends StatelessWidget {
                   key: const Key('creator-title'),
                   controller: draft.title,
                   textCapitalization: TextCapitalization.sentences,
-                  maxLines: 2,
-                  minLines: 1,
-                  onChanged: (_) => draft.touch(),
+                  // One line, fixed: a field that grew to a second line as it was
+                  // typed moved everything under it on the way.
+                  maxLines: 1,
                   decoration: const InputDecoration(
                     labelText: 'Title',
                     hintText: 'A one-line catcher',

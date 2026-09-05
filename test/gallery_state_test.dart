@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/floating_image.dart';
+import 'package:maichat/models/gallery_image.dart';
 import 'package:maichat/services/avatar_store.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:maichat/widgets/avatar_image.dart';
@@ -102,6 +103,82 @@ void main() {
       expect(image.tags, ['a']);
       expect(image.characterId, 'sumire');
       expect(fileFor(image.image).existsSync(), isTrue);
+    });
+  });
+
+  /// Pictures picked off the device: named one by one, and read one at a time.
+  ///
+  /// This is the door the upload sheet uses. It takes *paths* rather than bytes on
+  /// purpose — a picker asked for `withData` reads every selected photo into
+  /// memory before anything is drawn, which for a couple of dozen camera pictures
+  /// is hundreds of megabytes.
+  group('picked off the device', () {
+    late Directory picks;
+
+    setUp(() => picks = Directory.systemTemp.createTempSync('picked'));
+    tearDown(() => picks.deleteSync(recursive: true));
+
+    /// A file sitting where a picker would have left it.
+    GalleryUpload onDisk(String name, int seed, {String title = ''}) {
+      final file = File('${picks.path}/$name')
+        ..writeAsBytesSync(_picture(seed));
+      return GalleryUpload(title: title, path: file.path, name: name);
+    }
+
+    test('each picture keeps the name it was given, not a number', () async {
+      final state = await app();
+      final added = await state.addGalleryPictures(
+        [
+          onDisk('a.png', 1, title: 'Beach outfit'),
+          onDisk('b.png', 2, title: 'Rain, later'),
+          onDisk('c.png', 3),
+        ],
+        characterId: 'sumire',
+        tags: ['holiday'],
+      );
+
+      expect(added.map((i) => i.title), ['Beach outfit', 'Rain, later', '']);
+      expect(added.every((i) => i.characterId == 'sumire'), isTrue);
+      expect(added.every((i) => i.tags.contains('holiday')), isTrue);
+      // Three distinct files in the pictures directory, and the bytes of each are
+      // the bytes that were on disk.
+      expect(added.map((i) => i.image).toSet(), hasLength(3));
+      expect(fileFor(added.first.image).readAsBytesSync(), _picture(1));
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('gallery'),
+          isNot(contains(base64Encode(_picture(1)))),
+          reason: 'a picture must never live inside the preferences store');
+    });
+
+    test('progress is reported per picture', () async {
+      final state = await app();
+      final seen = <int>[];
+      await state.addGalleryPictures(
+        [onDisk('a.png', 1), onDisk('b.png', 2), onDisk('c.png', 3)],
+        onProgress: (done, total) {
+          expect(total, 3);
+          seen.add(done);
+        },
+      );
+      expect(seen, [1, 2, 3]);
+    });
+
+    test('one unreadable pick costs that picture, not the import', () async {
+      final state = await app();
+      final added = await state.addGalleryPictures([
+        onDisk('a.png', 1, title: 'Kept'),
+        const GalleryUpload(title: 'Gone', path: '/nowhere/at/all.png'),
+        onDisk('c.png', 3, title: 'Also kept'),
+      ]);
+      expect(added.map((i) => i.title), ['Kept', 'Also kept']);
+    });
+
+    test('bytes are accepted for a picker that hands over no path', () async {
+      final state = await app();
+      final added = await state
+          .addGalleryPictures([GalleryUpload(title: 'Inline', bytes: _png)]);
+      expect(added.single.title, 'Inline');
+      expect(fileFor(added.single.image).readAsBytesSync(), _png);
     });
   });
 

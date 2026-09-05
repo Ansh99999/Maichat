@@ -11,18 +11,13 @@ import 'creator_draft.dart';
 /// Both are ordinary [CreatorField]s, which is where the three things the brief
 /// asks for come from — a live token count, a full-screen editor in the top right,
 /// and the assistant beside it.
-class PersonaTab extends StatelessWidget {
-  const PersonaTab({super.key});
+class PersonaTab extends StatelessWidget {  const PersonaTab({super.key});
 
   @override
   Widget build(BuildContext context) {
     final draft = context.watch<CreatorDraft>();
     return CreatorTabBody(
       children: [
-        const CreatorNote(
-          'This is the character as the model sees them. The description does the '
-          'heavy lifting; the personality is the short version of how they behave.',
-        ),
         CreatorField(
           key: const Key('creator-description'),
           label: 'Description',
@@ -31,8 +26,7 @@ class PersonaTab extends StatelessWidget {
           field: WritableField.description,
           hint: 'Who they are, how they look, how they speak, where they come '
               'from.',
-          minLines: 8,
-          maxLines: 18,
+          lines: 12,
         ),
         CreatorField(
           key: const Key('creator-personality'),
@@ -41,8 +35,7 @@ class PersonaTab extends StatelessWidget {
           draft: draft,
           field: WritableField.personality,
           hint: 'Temperament, habits, what they want.',
-          minLines: 4,
-          maxLines: 10,
+          lines: 7,
         ),
       ],
     );

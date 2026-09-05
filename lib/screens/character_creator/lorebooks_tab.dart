@@ -29,11 +29,6 @@ class LorebooksTab extends StatelessWidget {
     return CreatorTabBody(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
       children: [
-        const CreatorNote(
-          'Facts that appear when they are mentioned. A book attached here is in '
-          'force in every chat with this character, and rides along when the card '
-          'is exported.',
-        ),
         if (attached.isEmpty)
           const Padding(
             padding: EdgeInsets.fromLTRB(4, 4, 4, 12),

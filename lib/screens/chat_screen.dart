@@ -439,8 +439,22 @@ class _ChatScreenState extends State<ChatScreen> {
     return ok ?? false;
   }
 
-  void _toast(String message) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(message)));
+  /// A one-line confirmation over the chat.
+  ///
+  /// Floated, and lifted clear of the soft keyboard by hand: this screen does not
+  /// resize for the keyboard (see [_KeyboardShift]), so a snackbar anchored to the
+  /// Scaffold's own bottom would appear *behind* it. Reads better over a
+  /// conversation than a full-width bar anyway.
+  void _toast(String message) {
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.only(left: 16, right: 16, bottom: 16 + keyboard),
+      ));
+  }
 
   /// Returns to the newest message. The list is reversed, so "the end" is
   /// offset 0: [animated] glides there (the jump-to-latest button), otherwise it
@@ -629,6 +643,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return Scaffold(
       backgroundColor: bg,
+      // The keyboard does not resize this screen — see [_KeyboardShift]. Letting
+      // the Scaffold shrink the body meant the thread's viewport changed height on
+      // every frame of the keyboard's animation, and a laid-out-again message list
+      // has to be *painted* again: a screenful of markdown, HTML and selectable
+      // text, fifteen times on the way up. That is the stutter felt when tapping
+      // into the message box, and it cost the same whether the chat held six turns
+      // or ninety.
+      resizeToAvoidBottomInset: false,
       drawer: _ChatDrawer(
         onProfile: _goHome,
         onCharacters: _openCharacters,
@@ -660,7 +682,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     : ui.backgroundOpacity,
               ),
             ),
-          SafeArea(
+          _KeyboardShift(
             child: Column(
               children: [
                 Expanded(
@@ -1479,6 +1501,56 @@ enum _DeleteScope {
   fromHere,
 }
 
+/// The thread and the composer, kept clear of the system bars and slid up out of
+/// the soft keyboard's way.
+///
+/// The keyboard is deliberately *not* allowed to resize this part of the screen.
+/// A shorter viewport means the message list lays out again, and laying out again
+/// means painting again — every visible bubble's markdown, HTML and selectable
+/// text, on every one of the fifteen-odd frames the keyboard takes to rise. This
+/// slides the whole column up instead: the padding never changes, so nothing is
+/// laid out and nothing is painted; only one transform layer's offset moves, which
+/// the compositor does for free.
+///
+/// The result on screen is the same as a resize. The thread is a `reverse: true`
+/// list anchored to its bottom, so lifting it by the keyboard's height leaves the
+/// newest turn sitting just above the composer and clips the same amount off the
+/// top — and, unlike a resize, the scroll position is never touched, so opening
+/// the keyboard part-way up a long conversation no longer nudges it.
+///
+/// The keyboard covers the navigation bar on its way up, so the first
+/// `viewPadding.bottom` pixels of it cost the composer nothing.
+class _KeyboardShift extends StatelessWidget {
+  const _KeyboardShift({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    // Read as aspects: `viewPadding` does not move when the keyboard does, so
+    // only the second of these rebuilds this widget mid-animation — and its child
+    // is handed back unchanged, so nothing under it rebuilds at all.
+    final view = MediaQuery.viewPaddingOf(context);
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final lift = (keyboard - view.bottom).clamp(0.0, double.infinity);
+    return Padding(
+      padding: EdgeInsets.only(
+        top: view.top,
+        left: view.left,
+        right: view.right,
+        bottom: view.bottom,
+      ),
+      // Its own layer, so the shift re-records one clip and one transform rather
+      // than the layer it shares with the chat's background picture.
+      child: RepaintBoundary(
+        child: ClipRect(
+          child: Transform.translate(offset: Offset(0, -lift), child: child),
+        ),
+      ),
+    );
+  }
+}
+
 /// A bubble already built, and the inputs it was built from.
 ///
 /// A streaming reply repaints the chat about twenty times a second, and every
@@ -1490,6 +1562,7 @@ enum _DeleteScope {
 /// instead of a screenful. Anything the bubble reads from its context — the
 /// theme, the app state — still reaches it, because that path marks the element
 /// itself dirty rather than going through its parent.
+
 class _CachedBubble {
   const _CachedBubble(this.signature, this.widget);
 
