@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/screens/character_sheet_screen.dart';
 import 'package:maichat/state/app_state.dart';
+import 'package:maichat/widgets/avatar_dots.dart';
 import 'package:maichat/widgets/avatar_image.dart';
 import 'package:maichat/widgets/fab_menu.dart';
 import 'package:maichat/widgets/message_bubble.dart';
@@ -28,6 +29,7 @@ Character _card({
   String id = 'c',
   String name = 'Aria',
   String avatar = '',
+  List<String> avatars = const <String>[],
   String notes = '',
   String scenario = '',
   String customScenario = '',
@@ -40,6 +42,7 @@ Character _card({
       id: id,
       name: name,
       avatar: avatar,
+      avatars: avatars,
       creatorNotes: notes,
       scenario: scenario,
       customScenario: customScenario,
@@ -123,7 +126,7 @@ void main() {
     testWidgets('an unmeasured avatar reserves a square rather than collapsing',
         (tester) async {
       await open(tester, _card(avatar: _pic('unmeasured')));
-      final frame = tester.getSize(find.byType(NaturalImage));
+      final frame = tester.getSize(find.byType(NaturalFrame));
       expect(frame.height, greaterThan(0));
       expect(frame.height, closeTo(frame.width, 1));
     });
@@ -151,10 +154,77 @@ void main() {
     final ref = _pic('named');
     noteAvatarRatio(ref, 1);
     await open(tester, _card(name: 'Sumire', avatar: ref));
-    final picture = tester.getRect(find.byType(NaturalImage));
+    final picture = tester.getRect(find.byType(NaturalFrame));
     final name = tester.getRect(find.text('Sumire'));
     expect(name.bottom, lessThanOrEqualTo(picture.bottom + 1));
     expect(name.center.dx, greaterThan(picture.center.dx));
+  });
+
+  // --- several pictures on one card ------------------------------------------
+
+  group('a card with several pictures', () {
+    testWidgets('swipes through them, and the one you stop on becomes the '
+        "card's", (tester) async {
+      final one = _pic('one');
+      final two = _pic('two');
+      final three = _pic('three');
+      for (final ref in [one, two, three]) {
+        noteAvatarRatio(ref, 1);
+      }
+      final state = await open(
+        tester,
+        _card(avatar: one, avatars: [two, three]),
+      );
+      final opened = drawnPicture(tester);
+
+      // Dots for the run, and nothing else said about it.
+      expect(find.byType(AvatarDots), findsOneWidget);
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).count, 3);
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 0);
+
+      await tester.drag(find.byType(PageView), const Offset(-400, 0));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
+
+      // The write is held back until the swiping stops (a write per page
+      // crossed would be felt), and then it is silent: no dialog, no snackbar,
+      // the card simply wears what you left it on, with the one it was wearing
+      // kept in the run.
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+      expect(state.characterById('c')!.avatar, two);
+      expect(state.characterById('c')!.avatars, [one, three]);
+      expect(find.byType(SnackBar), findsNothing);
+      // Committing reorders the stored pool, and the page you are on must not
+      // move because of it.
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
+      // Nor may the frame resize: it keeps the shape of the picture the sheet
+      // opened on, whatever the rest of the run is shaped like.
+      expect(drawnPicture(tester), opened);
+    });
+
+    testWidgets('one picture is not a carousel', (tester) async {
+      final ref = _pic('only');
+      noteAvatarRatio(ref, 1);
+      await open(tester, _card(avatar: ref));
+
+      expect(find.byType(AvatarDots), findsNothing);
+      expect(find.byType(PageView), findsNothing);
+    });
+
+    testWidgets('a picture deleted elsewhere shortens the run', (tester) async {
+      final one = _pic('one');
+      final two = _pic('two');
+      for (final ref in [one, two]) {
+        noteAvatarRatio(ref, 1);
+      }
+      final state = await open(tester, _card(avatar: one, avatars: [two]));
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).count, 2);
+
+      await state.removeAvatarFromPool('c', two);
+      await tester.pumpAndSettle();
+      expect(find.byType(AvatarDots), findsNothing);
+    });
   });
 
   // --- tags ------------------------------------------------------------------

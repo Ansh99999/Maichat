@@ -9,6 +9,38 @@ import 'creator_ai_sheet.dart';
 import 'creator_draft.dart';
 import 'creator_fullscreen.dart';
 
+/// Asks before something is taken away, and answers whether it should be.
+///
+/// One dialog behind every removal in the creator — a greeting, a scenario, a
+/// picture, a lorebook's link — because all of them used to happen on a single
+/// tap next to a text field somebody was typing in, and none of them could be
+/// undone. [action] names the button, so a detach does not offer to "remove".
+Future<bool> confirmRemoval(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String action = 'Remove',
+}) async {
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: Text(action),
+        ),
+      ],
+    ),
+  );
+  return yes ?? false;
+}
+
 /// A tinted heading inside a creator tab — the one heading style the tabs use.
 class CreatorLabel extends StatelessWidget {
   const CreatorLabel(this.text, {super.key});
@@ -298,6 +330,14 @@ class CreatorTabBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListView(
+        // Always scrollable, even when the tab is shorter than the display.
+        // Without this a short tab (Identity, Lorebooks) refuses the drag
+        // outright — `ScrollPhysics.shouldAcceptUserOffset` is false for a list
+        // with nothing to scroll — and the portrait above it can then never be
+        // pushed off the top, which is the one thing the header is meant to do.
+        // The `NestedScrollView` hands whatever the list cannot use to the
+        // header, so the drag collapses the picture instead of doing nothing.
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: padding.copyWith(
           bottom: padding.bottom + MediaQuery.viewInsetsOf(context).bottom,
         ),

@@ -56,18 +56,31 @@ class FullscreenFieldScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final target = field;
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      // As bare as a bar can be while still holding a back arrow. This screen
+      // exists to leave you alone with the words: the field's name is a quiet
+      // label rather than a title, the token count has moved to the foot of the
+      // page, and there is no Done button because backing out *is* done — the
+      // controller is the tab's own, so there was never anything to apply.
       appBar: AppBar(
-        title: Text(title),
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        titleSpacing: 0,
+        title: Text(
+          title,
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
+        ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Center(child: TokenCount(controller: controller)),
-          ),
           if (target != null)
             IconButton(
               tooltip: 'Let the AI write this',
-              icon: const Icon(Icons.auto_awesome_outlined),
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.auto_awesome_outlined, size: 20),
               onPressed: () => showWriterSheet(
                 context,
                 draft: draft,
@@ -77,34 +90,42 @@ class FullscreenFieldScreen extends StatelessWidget {
                 fieldLabel: title,
               ),
             ),
-          IconButton(
-            tooltip: 'Done',
-            icon: const Icon(Icons.check),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: TextField(
-            key: const Key('creator-fullscreen-field'),
-            controller: controller,
-            autofocus: true,
-            // The field *is* the screen: it takes all the room there is and
-            // scrolls inside itself, so the cursor never leaves the display.
-            expands: true,
-            maxLines: null,
-            minLines: null,
-            keyboardType: TextInputType.multiline,
-            textCapitalization: TextCapitalization.sentences,
-            textAlignVertical: TextAlignVertical.top,
-            onChanged: (_) => onChanged?.call(),
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              hintText: 'Write here.',
+        child: Column(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                child: TextField(
+                  key: const Key('creator-fullscreen-field'),
+                  controller: controller,
+                  autofocus: true,
+                  // The field *is* the screen: it takes all the room there is and
+                  // scrolls inside itself, so the cursor never leaves the display.
+                  expands: true,
+                  maxLines: null,
+                  minLines: null,
+                  keyboardType: TextInputType.multiline,
+                  textCapitalization: TextCapitalization.sentences,
+                  textAlignVertical: TextAlignVertical.top,
+                  onChanged: (_) => onChanged?.call(),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'Write here.',
+                  ),
+                ),
+              ),
             ),
-          ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 2, 20, 6),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: TokenCount(controller: controller),
+              ),
+            ),
+          ],
         ),
       ),
     );

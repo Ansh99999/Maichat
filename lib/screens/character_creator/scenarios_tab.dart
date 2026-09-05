@@ -52,7 +52,16 @@ class _ScenariosTabState extends State<ScenariosTab> {
             expanded: _open == scenario.id || draft.scenarios.length == 1,
             onExpand: (open) =>
                 setState(() => _open = open ? scenario.id : null),
-            onRemove: () {
+            onRemove: () async {
+              final named = scenario.name.text.trim();
+              final gone = await confirmRemoval(
+                context,
+                title: 'Remove this scenario?',
+                message: named.isEmpty
+                    ? 'It will be taken off the card, text and all.'
+                    : '"$named" will be taken off the card, text and all.',
+              );
+              if (!gone || !context.mounted) return;
               draft.removeScenario(scenario.id);
               setState(() => _open = null);
             },

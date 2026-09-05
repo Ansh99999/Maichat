@@ -5,11 +5,13 @@ import 'package:maichat/models/character_theme.dart';
 import 'package:maichat/models/lorebook.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
+import 'package:maichat/screens/character_creator/creator_avatar_header.dart';
 import 'package:maichat/screens/character_creator/creator_screen.dart';
 import 'package:maichat/screens/library/lorebook_edit_screen.dart';
 import 'package:maichat/services/character_writer.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/state/app_state.dart';
+import 'package:maichat/widgets/avatar_dots.dart';
 import 'package:maichat/widgets/message_bubble.dart';
 import 'package:provider/provider.dart' hide Provider;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -176,7 +178,7 @@ void main() {
       }
       // The picture belongs to the screen, not to one of the tabs.
       expect(find.text('No picture yet'), findsOneWidget);
-      expect(find.text('Add a picture'), findsOneWidget);
+      expect(find.byTooltip('Add a picture'), findsOneWidget);
       // Identity is what is on show, and the title is folded away behind its
       // switch.
       expect(find.byKey(const Key('creator-name')), findsOneWidget);
@@ -214,6 +216,151 @@ void main() {
       // rather than the whole header.
       expect(find.widgetWithText(Tab, 'Identity'), findsOneWidget);
       expect(find.byKey(const Key('creator-name')), findsOneWidget);
+    });
+  });
+
+  group('the portrait', () {
+    testWidgets('scrolls away and leaves the tabs pinned at the top',
+        (tester) async {
+      tall(tester);
+      final state = await boot();
+      await open(tester, state);
+
+      // It starts under the picture…
+      final before = tester.getTopLeft(find.byType(TabBar)).dy;
+      expect(before, greaterThan(200));
+
+      await tester.drag(find.byType(ListView).first, const Offset(0, -600));
+      await tester.pumpAndSettle();
+
+      // …and ends up directly under the app bar, with the picture lifted clean
+      // off the top — which is the whole point: the tab gets the display.
+      final after = tester.getTopLeft(find.byType(TabBar)).dy;
+      expect(after, lessThan(before));
+      expect(after, lessThanOrEqualTo(kToolbarHeight));
+      expect(find.byType(CreatorAvatarHeader), findsNothing);
+
+      // Switching tabs from there is still one tap, and the bar has not moved.
+      await goTo(tester, 'Persona');
+      expect(find.byKey(const Key('creator-description')), findsOneWidget);
+      expect(tester.getTopLeft(find.byType(TabBar)).dy, after);
+    });
+
+    testWidgets('a run of pictures is swiped, and where you stop is what the '
+        'card wears', (tester) async {
+      tall(tester);
+      final state = await boot();
+      await open(
+        tester,
+        state,
+        character: Character(
+          id: 'c',
+          name: 'Aria',
+          avatar: 'https://example.com/one.png',
+          avatars: const [
+            'https://example.com/two.png',
+            'https://example.com/three.png',
+          ],
+        ),
+      );
+
+      final pager = find.descendant(
+        of: find.byType(CreatorAvatarHeader),
+        matching: find.byType(PageView),
+      );
+      expect(pager, findsOneWidget);
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).count, 3);
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 0);
+
+      await tester.drag(pager, const Offset(-400, 0));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
+
+      await tester.tap(find.byKey(const Key('creator-save')));
+      await tester.pumpAndSettle();
+      final saved = state.characterById('c')!;
+      expect(saved.avatar, 'https://example.com/two.png');
+      // Nothing is lost by looking: the rest of the run stays, in its own order.
+      expect(saved.avatars, [
+        'https://example.com/one.png',
+        'https://example.com/three.png',
+      ]);
+    });
+
+    testWidgets('one picture draws no dots at all', (tester) async {
+      tall(tester);
+      final state = await boot();
+      await open(
+        tester,
+        state,
+        character: Character(
+          id: 'c',
+          name: 'Aria',
+          avatar: 'https://example.com/one.png',
+        ),
+      );
+      expect(find.byType(AvatarDots), findsNothing);
+    });
+
+    testWidgets('a quiet pencil is the whole control, and it opens the sources',
+        (tester) async {
+      tall(tester);
+      final state = await boot();
+      await open(tester, state);
+
+      // No button with a label on the picture — one pencil, and that is all.
+      expect(find.byType(FilledButton), findsNothing);
+      expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('creator-avatar-button')));
+      await tester.pumpAndSettle();
+      for (final source in const [
+        'Image URL',
+        'App gallery',
+        'This device',
+        'Generate one',
+      ]) {
+        expect(find.text(source), findsOneWidget, reason: source);
+      }
+      // Nothing to remove while there is no picture.
+      expect(find.text('Remove this picture'), findsNothing);
+    });
+
+    testWidgets('removing the picture on show asks first', (tester) async {
+      tall(tester);
+      final state = await boot();
+      await open(
+        tester,
+        state,
+        character: Character(
+          id: 'c',
+          name: 'Aria',
+          avatar: 'https://example.com/one.png',
+        ),
+      );
+      // A picture on the card, so the pencil offers to change it rather than to
+      // add one. (What is *drawn* proves nothing here: a URL never loads in a
+      // test, so the empty state is on screen either way.)
+      expect(find.byTooltip('Change the picture'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('creator-avatar-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('creator-avatar-remove')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove this picture?'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('creator-avatar-remove')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Add a picture'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('creator-save')));
+      await tester.pumpAndSettle();
+      expect(state.characterById('c')!.avatar, isEmpty);
+      expect(state.characterById('c')!.avatars, isEmpty);
     });
   });
 
@@ -444,7 +591,19 @@ void main() {
         findsOneWidget,
       );
 
+      // Nothing is taken away on one tap: the fold's Remove asks first, and
+      // Cancel means the greeting is still there.
       await tester.tap(find.byKey(const Key('creator-remove-greeting-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove this greeting?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      // Still there — as the fold's title and as its field's label.
+      expect(find.text('Greeting 2'), findsWidgets);
+
+      await tester.tap(find.byKey(const Key('creator-remove-greeting-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
       await tester.pumpAndSettle();
       expect(find.text('Greeting 2'), findsNothing);
       expect(find.byKey(const Key('creator-remove-greeting-0')), findsNothing);
@@ -565,6 +724,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('creator-remove-greeting-1')));
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('creator-save')));
       await tester.pumpAndSettle();
 
@@ -607,6 +768,40 @@ void main() {
       expect(saved.scenarios.first.name, 'The library');
       // The one every other app reads is the first that covers everything.
       expect(saved.scenario, 'A library after hours.');
+    });
+
+    testWidgets('a scenario is not taken off the card without asking',
+        (tester) async {
+      tall(tester, height: 2200);
+      final state = await boot();
+      await open(
+        tester,
+        state,
+        character: Character(
+          id: 'c',
+          name: 'Aria',
+          scenario: 'A library after hours.',
+        ),
+      );
+      await goTo(tester, 'Scenarios');
+
+      await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove this scenario?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('No scenarios yet.'), findsNothing);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+      await tester.pumpAndSettle();
+      expect(find.text('No scenarios yet.'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('creator-save')));
+      await tester.pumpAndSettle();
+      expect(state.characterById('c')!.scenario, isEmpty);
+      expect(state.characterById('c')!.scenarios, isEmpty);
     });
 
     testWidgets('the library picker is the same sheet as everywhere else',
@@ -678,6 +873,11 @@ void main() {
       expect(find.text('Port'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Detach'));
+      await tester.pumpAndSettle();
+      // Unlinking a book is a confirmation too, and it says the book stays.
+      expect(find.text('Detach this lorebook?'), findsOneWidget);
+      expect(find.textContaining('stays in your library'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Detach'));
       await tester.pumpAndSettle();
       expect(find.text('No lorebook attached.'), findsOneWidget);
 
@@ -756,9 +956,15 @@ void main() {
       expect(tester.widget<TextField>(full).controller!.text,
           contains('tea house'));
 
-      // The same controller, so there is nothing to apply on the way back.
+      // A bar with nothing on it but a way back and the assistant: no Done (the
+      // controller is the tab's own, so there is nothing to apply) and no token
+      // count competing with the words — that has moved to the foot of the page.
+      expect(find.byTooltip('Done'), findsNothing);
+      expect(find.byTooltip('Let the AI write this'), findsOneWidget);
+      expect(find.textContaining('tokens'), findsOneWidget);
+
       await tester.enterText(full, 'Rewritten full screen.');
-      await tester.tap(find.byTooltip('Done'));
+      await tester.tap(find.byIcon(Icons.arrow_back));
       await tester.pumpAndSettle();
       expect(textOf(tester, 'creator-description'), 'Rewritten full screen.');
 

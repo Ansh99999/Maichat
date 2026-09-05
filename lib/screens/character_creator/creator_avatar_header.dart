@@ -1,21 +1,28 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../widgets/avatar_dots.dart';
 import '../../widgets/avatar_image.dart';
 import '../gallery/gallery_picker_sheet.dart';
 import '../image_gen/image_gen_sheet.dart';
+import 'creator_controls.dart';
 import 'creator_draft.dart';
 
-/// The picture at the top of the creator, at whatever shape it actually is.
+/// The pictures at the top of the creator, at whatever shape they actually are.
 ///
-/// "Free size" means exactly that: the picture is drawn `contain`ed, so a square
+/// "Free size" means exactly that: a picture is drawn `contain`ed, so a square
 /// avatar is a square, a tall portrait is tall, and nothing is cropped to fit a
 /// circle it was never composed for — the same decision the character sheet makes
-/// about the portrait, in a header that has to be a fixed height because it lives
-/// in a [SliverAppBar].
-class CreatorAvatarHeader extends StatelessWidget {
+/// about the portrait, in a header that has to be a fixed height because it scrolls
+/// away above the tabs.
+///
+/// A card can wear more than one picture, so the header is a run of them with dots
+/// under it: swipe, and the one you stop on is the one the card wears. That write
+/// is silent by design — see [CreatorDraft.setDefaultPicture].
+class CreatorAvatarHeader extends StatefulWidget {
   const CreatorAvatarHeader({
     super.key,
     required this.draft,
@@ -32,14 +39,48 @@ class CreatorAvatarHeader extends StatelessWidget {
   final double height;
 
   @override
+  State<CreatorAvatarHeader> createState() => _CreatorAvatarHeaderState();
+}
+
+class _CreatorAvatarHeaderState extends State<CreatorAvatarHeader> {
+  late final PageController _pages =
+      PageController(initialPage: widget.draft.defaultPicture);
+
+  /// The run the pager is showing. Held here as well as on the draft so a rebuild
+  /// that only changed *which* picture is worn does not disturb the pager, while
+  /// one that added or removed a picture does.
+  late List<String> _pictures = List<String>.of(widget.draft.pictures);
+
+  late int _index = widget.draft.defaultPicture;
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+
+  void _onPage(int page) {
+    setState(() => _index = page);
+    widget.draft.setDefaultPicture(page);
+  }
+
+  /// Follows a run that changed under us — a picture added by the sheet, or the
+  /// one on show taken away.
+  void _adopt(List<String> pool) {
+    _pictures = List<String>.of(pool);
+    _index = widget.draft.defaultPicture.clamp(0, _pictures.length);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_pages.hasClients) return;
+      _pages.jumpToPage(_index);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final ref = draft.avatar;
-    final provider = avatarImage(
-      ref,
-      displaySize: height,
-      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
-    );
+    final pool = widget.draft.pictures;
+    if (!listEquals(pool, _pictures)) _adopt(pool);
+    final height = widget.height;
 
     return SizedBox(
       height: height,
@@ -60,42 +101,68 @@ class CreatorAvatarHeader extends StatelessWidget {
               ),
             ),
           ),
-          if (provider != null)
-            Center(
-              child: Image(
-                image: provider,
-                fit: BoxFit.contain,
-                errorBuilder: (_, _, _) => _Empty(height: height),
-              ),
-            )
+          if (pool.isEmpty)
+            _Empty(height: height)
           else
-            _Empty(height: height),
+            PageView.builder(
+              controller: _pages,
+              itemCount: pool.length,
+              onPageChanged: _onPage,
+              itemBuilder: (context, i) => _Picture(ref: pool[i], height: height),
+            ),
+          if (pool.length > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 10,
+              child: Center(
+                child: AvatarDots(count: pool.length, index: _index),
+              ),
+            ),
+          // One quiet pencil, and nothing else: the sheet behind it is where
+          // adding, swapping and removing a picture live, so the header stays a
+          // picture rather than a toolbar.
           Positioned(
             right: 8,
             bottom: 8,
-            child: Row(
-              children: [
-                if (ref.trim().isNotEmpty)
-                  _HeaderButton(
-                    icon: Icons.close,
-                    tooltip: 'Remove picture',
-                    onTap: () => draft.setAvatar(''),
-                  ),
-                const SizedBox(width: 8),
-                FilledButton.tonalIcon(
-                  key: const Key('creator-avatar-button'),
-                  onPressed: () => showAvatarSourceSheet(
-                    context,
-                    draft: draft,
-                    characterId: characterId,
-                  ),
-                  icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-                  label: Text(ref.trim().isEmpty ? 'Add a picture' : 'Change'),
-                ),
-              ],
+            child: _HeaderButton(
+              key: const Key('creator-avatar-button'),
+              icon: Icons.edit_outlined,
+              tooltip: pool.isEmpty ? 'Add a picture' : 'Change the picture',
+              onTap: () => showAvatarSourceSheet(
+                context,
+                draft: widget.draft,
+                characterId: widget.characterId,
+                index: pool.isEmpty ? null : _index,
+              ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// One picture in the run, at its own shape inside the header's box.
+class _Picture extends StatelessWidget {
+  const _Picture({required this.ref, required this.height});
+
+  final String ref;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = avatarImage(
+      ref,
+      displaySize: height,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
+    if (provider == null) return _Empty(height: height);
+    return Center(
+      child: Image(
+        image: provider,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _Empty(height: height),
       ),
     );
   }
@@ -131,6 +198,7 @@ class _Empty extends StatelessWidget {
 
 class _HeaderButton extends StatelessWidget {
   const _HeaderButton({
+    super.key,
     required this.icon,
     required this.tooltip,
     required this.onTap,
@@ -161,12 +229,19 @@ class _HeaderButton extends StatelessWidget {
   }
 }
 
-/// The four ways a character gets a picture: a link, the app's own gallery, a
-/// file on the phone, or one made on the spot in the image studio.
+/// Where a picture comes from — a link, the app's own gallery, a file on the
+/// phone, or one made on the spot in the image studio — and the way back out
+/// again.
+///
+/// Every source *adds*: a card can wear several pictures, so picking one puts it
+/// on without throwing away the one that was there. [index] is the picture on
+/// show, the one Remove would take away; null when there is nothing to remove
+/// yet.
 Future<void> showAvatarSourceSheet(
   BuildContext context, {
   required CreatorDraft draft,
   String? characterId,
+  int? index,
 }) =>
     showModalBottomSheet<void>(
       context: context,
@@ -197,7 +272,7 @@ Future<void> showAvatarSourceSheet(
                   title: 'Choose a picture',
                   characterId: characterId,
                 );
-                if (ref != null) draft.setAvatar(ref);
+                if (ref != null) draft.addPicture(ref);
               },
             ),
             ListTile(
@@ -224,9 +299,30 @@ Future<void> showAvatarSourceSheet(
                   pickLabel: 'Use as avatar',
                   prompt: _promptFor(draft),
                 );
-                if (ref != null) draft.setAvatar(ref);
+                if (ref != null) draft.addPicture(ref);
               },
             ),
+            if (index != null)
+              ListTile(
+                key: const Key('creator-avatar-remove'),
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Remove this picture'),
+                subtitle: Text(draft.pictures.length > 1
+                    ? 'The others stay'
+                    : 'The card goes back to no picture'),
+                onTap: () async {
+                  final removed = await confirmRemoval(
+                    context,
+                    title: 'Remove this picture?',
+                    message: draft.pictures.length > 1
+                        ? 'The rest of this card\'s pictures stay as they are.'
+                        : 'The card will have no picture until you add one.',
+                  );
+                  if (!removed) return;
+                  draft.removePictureAt(index);
+                  if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+                },
+              ),
             const SizedBox(height: 8),
           ],
         ),
@@ -283,7 +379,7 @@ Future<void> _askForUrl(BuildContext context, CreatorDraft draft) async {
   controller.dispose();
   final trimmed = url?.trim() ?? '';
   if (trimmed.isEmpty) return;
-  draft.setAvatar(trimmed);
+  draft.addPicture(trimmed);
 }
 
 /// Reads a file off the phone as base64. It stays base64 only until the card is
@@ -298,5 +394,5 @@ Future<void> _pickFromDevice(CreatorDraft draft) async {
   if (result == null || result.files.isEmpty) return;
   final bytes = result.files.first.bytes;
   if (bytes == null || bytes.isEmpty) return;
-  draft.setAvatar(base64Encode(bytes));
+  draft.addPicture(base64Encode(bytes));
 }

@@ -23,8 +23,10 @@ import 'scenarios_tab.dart';
 /// remember. Tabs make each of them a place.
 ///
 /// The picture is above the tabs rather than inside one, because it is the thing
-/// you keep glancing at while you write, and it steps out of the way when the
-/// keyboard comes up: with a text field focused the display belongs to the field.
+/// you keep glancing at while you write — and it gets out of the way twice over:
+/// it scrolls off the top as a tab is read (the tabs stay pinned, so switching is
+/// still one tap), and it is gone entirely while the keyboard is up, because with
+/// a text field focused the display belongs to the field.
 ///
 /// Everything lives on one [CreatorDraft], handed down through a provider, so a
 /// tab that has been swiped away and rebuilt does not lose what was typed into it.
@@ -172,6 +174,11 @@ class _CharacterCreatorScreenState extends State<CharacterCreatorScreen>
 
     return Scaffold(
       appBar: AppBar(
+        // No surface tint when content passes under it: once the portrait has
+        // scrolled away the tab bar is *directly* under this bar, and a tinted
+        // app bar over an untinted tab bar is a hard two-tone seam across the
+        // top of the screen. The divider under the tabs is the separation.
+        scrolledUnderElevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: _leave,
@@ -201,52 +208,97 @@ class _CharacterCreatorScreenState extends State<CharacterCreatorScreen>
           ),
         ],
       ),
-      body: Column(
-        children: [
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: typing
-                ? const SizedBox(width: double.infinity, height: 0)
-                : CreatorAvatarHeader(
-                    draft: draft,
-                    characterId: widget.character?.id,
-                    height: headerHeight,
-                  ),
-          ),
-          Material(
-            color: Theme.of(context).colorScheme.surface,
-            child: TabBar(
-              controller: _tabs,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              tabs: const [
-                Tab(text: 'Identity'),
-                Tab(text: 'Persona'),
-                Tab(text: 'Greetings'),
-                Tab(text: 'Scenarios'),
-                Tab(text: 'Lorebooks'),
-                Tab(text: 'Advanced'),
-              ],
+      body: NestedScrollView(
+        // The picture is worth looking at while you write and worth nothing while
+        // it is holding a third of the display hostage. So it scrolls: reading
+        // down a tab lifts the portrait off the top of the screen and leaves the
+        // tabs pinned there, which is both the room each tab wanted and the
+        // shortest possible reach to the next one.
+        headerSliverBuilder: (context, _) => [
+          SliverToBoxAdapter(
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: typing
+                  ? const SizedBox(width: double.infinity, height: 0)
+                  : CreatorAvatarHeader(
+                      draft: draft,
+                      characterId: widget.character?.id,
+                      height: headerHeight,
+                    ),
             ),
           ),
-          const Divider(height: 1),
-          Expanded(
-            child: TabBarView(
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _CreatorTabs(
               controller: _tabs,
-              children: const [
-                IdentityTab(),
-                PersonaTab(),
-                GreetingsTab(),
-                ScenariosTab(),
-                LorebooksTab(),
-                AdvancedTab(),
-              ],
+              color: Theme.of(context).colorScheme.surface,
             ),
           ),
         ],
+        body: TabBarView(
+          controller: _tabs,
+          children: const [
+            IdentityTab(),
+            PersonaTab(),
+            GreetingsTab(),
+            ScenariosTab(),
+            LorebooksTab(),
+            AdvancedTab(),
+          ],
+        ),
       ),
     );
   }
+}
+
+/// The tab bar as a sliver, so it can be the thing that stays behind when the
+/// portrait scrolls off.
+class _CreatorTabs extends SliverPersistentHeaderDelegate {
+  const _CreatorTabs({required this.controller, required this.color});
+
+  final TabController controller;
+  final Color color;
+
+  /// A label-only [TabBar] is 46 high; the divider under it is the last pixel.
+  static const double _height = 47;
+
+  @override
+  double get minExtent => _height;
+
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
+      Material(
+        color: color,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              height: _height - 1,
+              child: TabBar(
+                controller: controller,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                tabs: const [
+                  Tab(text: 'Identity'),
+                  Tab(text: 'Persona'),
+                  Tab(text: 'Greetings'),
+                  Tab(text: 'Scenarios'),
+                  Tab(text: 'Lorebooks'),
+                  Tab(text: 'Advanced'),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+          ],
+        ),
+      );
+
+  @override
+  bool shouldRebuild(_CreatorTabs old) =>
+      old.controller != controller || old.color != color;
 }

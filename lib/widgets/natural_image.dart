@@ -8,9 +8,18 @@ import 'avatar_image.dart';
 /// happened to complete.
 const Key naturalImageFrameKey = ValueKey('natural-image-frame');
 
-/// A picture drawn at **its own** proportions across the full width it is given:
-/// a 1:1 avatar is a square, a 16:9 one is a band, a 3:4 one is a portrait. No
-/// crop, no letterbox, no circle.
+/// Draws inside a [NaturalFrame]: [size] is the frame's own box, and [image] is
+/// the frame's picture already resolved at the width it is drawn at — null when
+/// there is nothing drawable, which is when a fallback belongs.
+typedef NaturalFrameBuilder = Widget Function(
+  BuildContext context,
+  Size size,
+  ImageProvider? image,
+);
+
+/// A box laid out at **[imageRef]'s own** proportions across the full width it is
+/// given: a 1:1 avatar is a square, a 16:9 one is a band, a 3:4 one is a portrait.
+/// No crop, no letterbox, no circle.
 ///
 /// The height cannot be known until the picture has been decoded, and asking for
 /// it costs a frame. Two things keep that from being visible:
@@ -26,19 +35,25 @@ const Key naturalImageFrameKey = ValueKey('natural-image-frame');
 /// ratio when capped — it just gets narrower and centres. A portrait avatar at
 /// ordinary proportions (2:3, 3:4) still runs the full width; only the extremes
 /// are trimmed.
-class NaturalImage extends StatefulWidget {
-  const NaturalImage({
+///
+/// What goes *in* the frame is the caller's business, which is what separates this
+/// from [NaturalImage]: the character sheet puts a whole swipeable run of pictures
+/// in a frame sized by the one the card is wearing, so the frame does not resize
+/// under the finger as the run is swiped.
+class NaturalFrame extends StatefulWidget {
+  const NaturalFrame({
     super.key,
     required this.imageRef,
+    required this.builder,
     this.placeholderRatio = 1,
     this.maxHeightFactor = 0.72,
-    this.fallback,
-    this.overlay,
   });
 
   /// A picture reference: `local:<file>`, an `http(s)` URL, or legacy base64 —
   /// whatever [avatarImage] accepts.
   final String imageRef;
+
+  final NaturalFrameBuilder builder;
 
   /// The width/height to reserve until the real ratio is known.
   final double placeholderRatio;
@@ -46,19 +61,11 @@ class NaturalImage extends StatefulWidget {
   /// Cap on the drawn height, as a fraction of the viewport height.
   final double maxHeightFactor;
 
-  /// Drawn instead when there is no usable picture.
-  final Widget? fallback;
-
-  /// Drawn over the picture, filling exactly the picture's own frame — so a
-  /// caption anchored to the bottom-right lands on the artwork, not in the empty
-  /// margin beside a capped one.
-  final Widget? overlay;
-
   @override
-  State<NaturalImage> createState() => _NaturalImageState();
+  State<NaturalFrame> createState() => _NaturalFrameState();
 }
 
-class _NaturalImageState extends State<NaturalImage> {
+class _NaturalFrameState extends State<NaturalFrame> {
   ImageProvider? _provider;
   ImageStream? _stream;
   ImageStreamListener? _listener;
@@ -75,7 +82,7 @@ class _NaturalImageState extends State<NaturalImage> {
   }
 
   @override
-  void didUpdateWidget(NaturalImage old) {
+  void didUpdateWidget(NaturalFrame old) {
     super.didUpdateWidget(old);
     if (old.imageRef != widget.imageRef) {
       _ratio = null;
@@ -141,12 +148,12 @@ class _NaturalImageState extends State<NaturalImage> {
         aspectRatio: widget.placeholderRatio,
         child: KeyedSubtree(
           key: naturalImageFrameKey,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              widget.fallback ?? const SizedBox.shrink(),
-              if (widget.overlay != null) widget.overlay!,
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) => widget.builder(
+              context,
+              Size(constraints.maxWidth, constraints.maxHeight),
+              null,
+            ),
           ),
         ),
       );
@@ -180,23 +187,65 @@ class _NaturalImageState extends State<NaturalImage> {
               key: naturalImageFrameKey,
               width: width,
               height: height,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image(
-                    image: provider,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    errorBuilder: (_, _, _) =>
-                        widget.fallback ?? const SizedBox.shrink(),
-                  ),
-                  if (widget.overlay != null) widget.overlay!,
-                ],
-              ),
+              child: widget.builder(context, Size(width, height), provider),
             ),
           ),
         );
       },
     );
   }
+}
+
+/// One picture drawn at its own proportions — a [NaturalFrame] with the picture
+/// in it, which is what almost every caller wants.
+class NaturalImage extends StatelessWidget {
+  const NaturalImage({
+    super.key,
+    required this.imageRef,
+    this.placeholderRatio = 1,
+    this.maxHeightFactor = 0.72,
+    this.fallback,
+    this.overlay,
+  });
+
+  /// A picture reference: `local:<file>`, an `http(s)` URL, or legacy base64 —
+  /// whatever [avatarImage] accepts.
+  final String imageRef;
+
+  /// The width/height to reserve until the real ratio is known.
+  final double placeholderRatio;
+
+  /// Cap on the drawn height, as a fraction of the viewport height.
+  final double maxHeightFactor;
+
+  /// Drawn instead when there is no usable picture.
+  final Widget? fallback;
+
+  /// Drawn over the picture, filling exactly the picture's own frame — so a
+  /// caption anchored to the bottom-right lands on the artwork, not in the empty
+  /// margin beside a capped one.
+  final Widget? overlay;
+
+  @override
+  Widget build(BuildContext context) => NaturalFrame(
+        imageRef: imageRef,
+        placeholderRatio: placeholderRatio,
+        maxHeightFactor: maxHeightFactor,
+        builder: (context, size, image) => Stack(
+          fit: StackFit.expand,
+          children: [
+            if (image == null)
+              fallback ?? const SizedBox.shrink()
+            else
+              Image(
+                image: image,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) =>
+                    fallback ?? const SizedBox.shrink(),
+              ),
+            if (overlay != null) ?overlay,
+          ],
+        ),
+      );
 }

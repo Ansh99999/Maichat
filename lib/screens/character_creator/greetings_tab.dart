@@ -46,7 +46,15 @@ class _GreetingsTabState extends State<GreetingsTab> {
             onExpand: (open) => setState(() => _open = open ? i : -1),
             onRemove: draft.greetings.length == 1
                 ? null
-                : () {
+                : () async {
+                    final gone = await confirmRemoval(
+                      context,
+                      title: 'Remove this greeting?',
+                      message:
+                          '${CharacterScenario.greetingLabel(i)} and what is '
+                          'written in it will be gone.',
+                    );
+                    if (!gone || !context.mounted) return;
                     draft.removeGreeting(i);
                     setState(() => _open = 0);
                   },

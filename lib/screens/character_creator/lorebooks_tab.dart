@@ -47,7 +47,17 @@ class LorebooksTab extends StatelessWidget {
                 builder: (_) => LorebookEditScreen(book: book),
               ),
             ),
-            onDetach: () => draft.detachLorebook(book.id),
+            onDetach: () async {
+              final gone = await confirmRemoval(
+                context,
+                title: 'Detach this lorebook?',
+                message: '"${book.displayName}" stays in your library — it just '
+                    'stops travelling with this character.',
+                action: 'Detach',
+              );
+              if (!gone) return;
+              draft.detachLorebook(book.id);
+            },
           ),
         const SizedBox(height: 8),
         Wrap(

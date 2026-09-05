@@ -1387,11 +1387,20 @@ class AppState extends ChangeNotifier {
   /// into a file. Every avatar reaches storage through here — a picked photo, an
   /// imported card, a CharX asset — so nothing puts an image back in the store.
   /// No size limit: the file can be as large as the picture is.
+  ///
+  /// [Character.avatars] goes the same way, and has to: the creator's carousel
+  /// adds a picked photo to the *run* rather than to the worn slot, so base64 can
+  /// arrive there too — and base64 left in the store is what once made the app
+  /// unopenable.
   Future<void> _storeAvatar(Character character) async {
     final store = _avatars;
     if (store == null) return; // No directory: keep the old base64 behaviour.
     final stored = await store.adopt(character.avatar);
     if (stored != character.avatar) character.avatar = stored;
+    for (var i = 0; i < character.avatars.length; i++) {
+      final adopted = await store.adopt(character.avatars[i]);
+      if (adopted != character.avatars[i]) character.avatars[i] = adopted;
+    }
   }
 
   Future<void> deleteCharacter(String id) async {

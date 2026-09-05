@@ -83,10 +83,13 @@ class CreatorDraft extends ChangeNotifier {
         creator = TextEditingController(text: source?.creator ?? ''),
         version = TextEditingController(text: source?.characterVersion ?? ''),
         titleShown = source?.titleShown ?? false,
-        avatar = source?.avatar ?? '',
         theme = source?.theme ?? CharacterTheme.none,
         tags = (source?.tags ?? const <String>[]).toSet(),
         lorebookIds = (source?.lorebookIds ?? const <String>[]).toList() {
+    pictures = _poolOf([
+      source?.avatar ?? '',
+      ...?source?.avatars,
+    ]);
     greetings = <TextEditingController>[
       TextEditingController(text: source?.firstMes ?? ''),
       for (final alternate in source?.alternateGreetings ?? const <String>[])
@@ -129,9 +132,37 @@ class CreatorDraft extends ChangeNotifier {
 
   bool titleShown;
 
-  /// A picture reference: `local:<file>`, an `http(s)` URL, or freshly picked
-  /// base64 on its way to a file (see `AvatarStore`). Never a data: URI.
-  String avatar;
+  /// Every picture this card can wear, in the order they are swiped through:
+  /// `local:<file>` refs, `http(s)` URLs, or freshly picked base64 on its way to
+  /// a file (see `AvatarStore`). Never a data: URI.
+  ///
+  /// Index 0 is *not* special. Which one the card wears is [defaultPicture], so
+  /// swiping the header does not reorder the run under the finger — the order a
+  /// picture was added in is the order it stays in until the card is saved.
+  late List<String> pictures;
+
+  /// Which of [pictures] the card wears. Clamped by every mutator, so it is
+  /// always a valid index or 0 for an empty run.
+  int defaultPicture = 0;
+
+  /// The picture the card wears — `Character.avatar` as this draft would build it.
+  String get avatar =>
+      defaultPicture >= 0 && defaultPicture < pictures.length
+          ? pictures[defaultPicture]
+          : '';
+
+  /// Trims, drops empties and de-duplicates, keeping the first spelling — the
+  /// same rule `AppState.avatarPoolFor` applies, so a card's run of pictures
+  /// means the same thing in the creator as everywhere else.
+  static List<String> _poolOf(Iterable<String> refs) {
+    final out = <String>[];
+    for (final ref in refs) {
+      final trimmed = ref.trim();
+      if (trimmed.isEmpty || out.contains(trimmed)) continue;
+      out.add(trimmed);
+    }
+    return out;
+  }
 
   CharacterTheme theme;
 
@@ -174,8 +205,50 @@ class CreatorDraft extends ChangeNotifier {
   }
 
   void setAvatar(String ref) {
-    avatar = ref;
+    final trimmed = ref.trim();
+    pictures = trimmed.isEmpty ? <String>[] : <String>[trimmed];
+    defaultPicture = 0;
     notifyListeners();
+  }
+
+  /// Adds a picture to the run and wears it. A picture already in the run is not
+  /// duplicated — picking it again just puts it on.
+  void addPicture(String ref) {
+    final trimmed = ref.trim();
+    if (trimmed.isEmpty) return;
+    final at = pictures.indexOf(trimmed);
+    if (at != -1) {
+      defaultPicture = at;
+    } else {
+      pictures.add(trimmed);
+      defaultPicture = pictures.length - 1;
+    }
+    notifyListeners();
+  }
+
+  /// Takes picture [index] out of the run, keeping whichever one was being worn
+  /// on — unless it was that one, in which case the neighbour before it is.
+  void removePictureAt(int index) {
+    if (index < 0 || index >= pictures.length) return;
+    pictures.removeAt(index);
+    if (pictures.isEmpty) {
+      defaultPicture = 0;
+    } else if (defaultPicture > index || defaultPicture >= pictures.length) {
+      defaultPicture = (defaultPicture - 1).clamp(0, pictures.length - 1);
+    }
+    notifyListeners();
+  }
+
+  /// Which picture the card wears, by index.
+  ///
+  /// Deliberately silent: it does **not** notify. This is called as a swipe
+  /// settles, the pager that called it is already showing the right picture, and
+  /// rebuilding the whole creator — six tabs and every field on them — on each
+  /// swipe is precisely the stutter a carousel must not have. Everything that
+  /// reads the choice ([snapshot], [build], the discard check) reads it fresh.
+  void setDefaultPicture(int index) {
+    if (index < 0 || index >= pictures.length) return;
+    defaultPicture = index;
   }
 
   void setTheme(CharacterTheme next) {
@@ -280,6 +353,12 @@ class CreatorDraft extends ChangeNotifier {
       ..title = title.text.trim()
       ..titleShown = titleShown && title.text.trim().isNotEmpty
       ..avatar = avatar
+      // The rest of the run, in order, with the worn one taken out — the shape
+      // `Character` keeps: one picture it wears, and a pool beside it.
+      ..avatars = <String>[
+        for (var i = 0; i < pictures.length; i++)
+          if (i != defaultPicture) pictures[i],
+      ]
       ..description = description.text.trim()
       ..personality = personality.text.trim()
       ..scenarios = keptScenarios
