@@ -3528,8 +3528,16 @@ class AppState extends ChangeNotifier {
     if (path == null || path.isEmpty) return null;
     try {
       final file = File(path);
-      if (!await file.exists()) return null;
-      return await file.readAsBytes();
+      final readable = await file.exists().timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => false,
+      );
+      if (!readable) return null;
+      final read = file.readAsBytes().then<Uint8List?>((bytes) => bytes);
+      return await read.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => null,
+      );
     } catch (error) {
       debugPrint('MaiChat: could not read a picked picture ($error)');
       return null;
