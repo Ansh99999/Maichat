@@ -25,16 +25,17 @@ Future<int> showGalleryUploadSheet(
 
   FilePickerResult? result;
   try {
-    // `withData` on purpose, and do not take it out again. Without it the plugin
-    // hands back a path and nothing else, and on Android that path is not always
-    // one this process can open — a scoped-storage or cloud-provider pick reads
-    // back as "could not be stored" and the whole import fails. The bytes are the
-    // only thing every platform guarantees. `GalleryUpload` keeps the path too,
-    // and everything downstream prefers whichever of the two it actually has.
+    // Paths only, on purpose. On Android the plugin copies every pick into the
+    // app's own cache directory and always hands back a path (file_picker's
+    // `FileUtils.openFileStream`), so the path is openable. `withData` would
+    // additionally ship every photo's full bytes over the platform channel: one
+    // photo fits, but several camera photos stall the return for seconds or take
+    // the process down with no Dart error to show for it — which reads as "pick
+    // several, then nothing". Everything downstream still accepts bytes if they
+    // are there, and reads one file at a time.
     result = await FilePicker.pickFiles(
       type: FileType.image,
       allowMultiple: true,
-      withData: true,
     );
   } catch (error) {
     // Say so. A swallowed failure here is indistinguishable from a tap that did
@@ -46,7 +47,15 @@ Future<int> showGalleryUploadSheet(
     ));
     return 0;
   }
-  if (result == null || result.files.isEmpty) return 0;
+  // Backing out of the picker is normal and stays silent. Coming back with no
+  // files is not — say so instead of going quiet.
+  if (result == null) return 0;
+  if (result.files.isEmpty) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('The picker returned no files.')),
+    );
+    return 0;
+  }
 
   final picked = <GalleryUpload>[
     for (final file in result.files)
@@ -387,9 +396,8 @@ class _PictureRow extends StatelessWidget {
     final pixels = (_side * (dpr <= 0 ? 1 : dpr)).round();
     Widget broken() =>
         Icon(Icons.broken_image_outlined, color: scheme.outline);
-    // Bytes first: they are what the picker guarantees, and a path that the
-    // process cannot open would otherwise draw a broken picture over a picture
-    // that is perfectly readable.
+    // Whatever the pick came with — the picker hands back paths, other callers
+    // may hand over bytes instead.
     final bytes = upload.bytes;
     if (bytes != null && bytes.isNotEmpty) {
       return Image.memory(

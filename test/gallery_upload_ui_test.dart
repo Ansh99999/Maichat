@@ -235,4 +235,20 @@ void main() {
     expect(state.gallery, isEmpty);
     expect(dir.listSync(), isEmpty);
   });
+
+  testWidgets('a picture that cannot be read says so instead of going quiet',
+      (tester) async {
+    final state = await boot();
+    await open(tester, state, [
+      GalleryUpload(
+          title: '', path: '${picks.path}/missing.png', name: 'missing.png'),
+    ]);
+
+    await tester.tap(find.byKey(const Key('gallery-upload-add')));
+    await tester.pump();
+    await settleRealWork(tester);
+
+    expect(state.gallery, isEmpty);
+    expect(find.text('Those pictures could not be stored.'), findsOneWidget);
+  });
 }
