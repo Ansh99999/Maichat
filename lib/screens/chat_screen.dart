@@ -652,6 +652,12 @@ class _ChatScreenState extends State<ChatScreen> {
       // into the message box, and it cost the same whether the chat held six turns
       // or ninety.
       resizeToAvoidBottomInset: false,
+      // The drawer owns a temporary focus scope. Clear the route's remembered
+      // composer when that scope opens, or removing it restores the focused
+      // field and gives EditableText a fresh keyboard token.
+      onDrawerChanged: (opened) {
+        if (opened) FocusManager.instance.primaryFocus?.unfocus();
+      },
       drawer: _ChatDrawer(
         onProfile: _goHome,
         onCharacters: _openCharacters,

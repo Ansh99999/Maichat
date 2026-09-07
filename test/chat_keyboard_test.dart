@@ -145,4 +145,82 @@ void main() {
     expect(tester.getBottomLeft(composerField).dy,
         lessThanOrEqualTo(tester.view.physicalSize.height / dpr - 300 + 0.5));
   });
+
+  testWidgets('closing the drawer does not restore the composer keyboard',
+      (tester) async {
+    final state = await boot();
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(home: ChatScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    final composer = find.byKey(const Key('composer-field'));
+    EditableText editable() => tester.widget<EditableText>(
+          find.descendant(of: composer, matching: find.byType(EditableText)),
+        );
+    await tester.tap(composer);
+    await tester.pump();
+    expect(editable().focusNode.hasFocus, isTrue);
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    // Android's keyboard-back action hides the IME but leaves the field focused.
+    tester.testTextInput.hide();
+    await tester.pump();
+    expect(editable().focusNode.hasFocus, isTrue);
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    await tester.tap(find.byKey(chatMenuButtonKey));
+    await tester.pumpAndSettle();
+    final scaffold = tester.state<ScaffoldState>(find.byType(Scaffold));
+    expect(scaffold.isDrawerOpen, isTrue);
+
+    final size = tester.getSize(find.byType(Scaffold));
+    await tester.tapAt(Offset(size.width - 8, size.height / 2));
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isFalse);
+    expect(editable().focusNode.hasFocus, isFalse);
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    // Only a deliberate tap should bring the keyboard back.
+    await tester.tap(composer);
+    await tester.pump();
+    expect(editable().focusNode.hasFocus, isTrue);
+    expect(tester.testTextInput.isVisible, isTrue);
+  });
+
+  testWidgets('swiping the drawer closed keeps the keyboard hidden',
+      (tester) async {
+    final state = await boot();
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.android),
+        home: const ChatScreen(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final composer = find.byKey(const Key('composer-field'));
+    EditableText editable() => tester.widget<EditableText>(
+          find.descendant(of: composer, matching: find.byType(EditableText)),
+        );
+    await tester.tap(composer);
+    await tester.pump();
+    tester.testTextInput.hide();
+    await tester.pump();
+    expect(editable().focusNode.hasFocus, isTrue);
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    await tester.dragFrom(const Offset(1, 200), const Offset(400, 0));
+    await tester.pumpAndSettle();
+    final scaffold = tester.state<ScaffoldState>(find.byType(Scaffold));
+    expect(scaffold.isDrawerOpen, isTrue);
+
+    await tester.dragFrom(const Offset(280, 200), const Offset(-320, 0));
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isFalse);
+    expect(editable().focusNode.hasFocus, isFalse);
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
 }
