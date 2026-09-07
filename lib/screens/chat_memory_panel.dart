@@ -6,6 +6,7 @@ import '../models/embedding.dart';
 import '../models/lorebook.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
+import '../widgets/smooth_image.dart';
 import 'library/embeddings_screen.dart';
 import 'library/lorebook_edit_screen.dart';
 import 'summary/summary_edit_screen.dart';
@@ -409,7 +410,7 @@ class _BookThumbnail extends StatelessWidget {
     if (provider == null) return fallback();
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
-      child: Image(
+      child: SmoothImage(
         image: provider,
         width: _size,
         height: _size,

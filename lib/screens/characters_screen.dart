@@ -11,6 +11,7 @@ import '../widgets/app_drawer.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/character_theme_scope.dart';
+import '../widgets/smooth_image.dart';
 import '../widgets/tag_filter_sheet.dart';
 import 'character_actions.dart';
 import 'character_editor.dart';
@@ -770,7 +771,7 @@ class _CardImage extends StatelessWidget {
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
     if (provider == null) return fallback();
-    return Image(
+    return SmoothImage(
       image: provider,
       fit: BoxFit.cover,
       errorBuilder: (_, _, _) => fallback(),

@@ -12,6 +12,7 @@ import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/library_drawer.dart';
+import '../../widgets/smooth_image.dart';
 import '../../widgets/tag_filter_sheet.dart';
 import 'lorebook_edit_screen.dart';
 
@@ -908,7 +909,7 @@ class _CardImage extends StatelessWidget {
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
     if (provider == null) return fallback();
-    return Image(
+    return SmoothImage(
       image: provider,
       fit: BoxFit.cover,
       errorBuilder: (_, _, _) => fallback(),
@@ -1063,7 +1064,7 @@ class _Thumb extends StatelessWidget {
       alignment: Alignment.center,
       child: provider == null
           ? glyph()
-          : Image(
+          : SmoothImage(
               image: provider,
               fit: BoxFit.cover,
               width: 44,

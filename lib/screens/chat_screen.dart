@@ -23,6 +23,7 @@ import '../widgets/interface_preset_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
 import '../widgets/picture_viewer.dart';
+import '../widgets/smooth_image.dart';
 import '../widgets/startup_screen.dart';
 import 'characters_screen.dart';
 import 'chat_export.dart';
@@ -1922,7 +1923,7 @@ class _AttachPreview extends StatelessWidget {
                           size: 20, color: scheme.onSurfaceVariant),
                     ),
                   )
-                : Image(image: provider, fit: BoxFit.cover),
+                : SmoothImage(image: provider, fit: BoxFit.cover),
           ),
         ),
         Positioned(

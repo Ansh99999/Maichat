@@ -5,6 +5,7 @@ import '../../models/gallery_image.dart';
 import '../../services/gallery_group.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
+import '../../widgets/smooth_image.dart';
 
 /// Picks one picture out of the gallery, returning its reference (a `local:` file
 /// or a URL) — or null if the sheet was dismissed.
@@ -158,7 +159,7 @@ class _PickerTile extends StatelessWidget {
                 child: Icon(Icons.broken_image_outlined,
                     color: scheme.outline, size: 20),
               )
-            : Image(
+            : SmoothImage(
                 image: provider,
                 fit: BoxFit.cover,
                 errorBuilder: (_, _, _) => Center(

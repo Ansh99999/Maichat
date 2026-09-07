@@ -9,6 +9,7 @@ import '../../services/avatar_store.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/export_sheet.dart';
+import '../../widgets/smooth_image.dart';
 import '../../widgets/tag_entry_field.dart';
 
 /// Saves a picture out of the app.
@@ -150,7 +151,7 @@ class _EditSheetState extends State<_EditSheet> {
                 Center(
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: Image(
+                    child: SmoothImage(
                       image: provider,
                       height: 140,
                       fit: BoxFit.contain,
