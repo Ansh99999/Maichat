@@ -12,6 +12,7 @@ import 'avatar_image.dart';
 import 'character_avatar.dart';
 import 'message_html.dart';
 import 'message_markdown.dart';
+import 'smooth_image.dart';
 import 'thinking_block.dart';
 
 /// One chat turn, drawn per the current [ChatInterface]: each role's own avatar
@@ -1026,13 +1027,13 @@ class MessageBubble extends StatelessWidget {
           : single
               // Its own proportions, capped so a phone screenshot does not fill
               // the thread.
-              ? Image(
+              ? SmoothImage(
                   image: provider,
                   width: side,
                   fit: BoxFit.fitWidth,
                   errorBuilder: (_, _, _) => broken(),
                 )
-              : Image(
+              : SmoothImage(
                   image: provider,
                   width: side,
                   height: side,

@@ -658,6 +658,35 @@ void main() {
       expect(tester.getCenter(arrow.first), openArrow);
     });
 
+    testWidgets('the fold itself slides open rather than snapping',
+        (tester) async {
+      tall(tester, height: 2000);
+      final state = await boot();
+      await open(tester, state);
+      await goTo(tester, 'Greetings');
+
+      // Everything under the fold is what shows the box arriving: the button at
+      // the foot of the tab is pushed down as it opens.
+      final foot = find.byKey(const Key('creator-add-greeting'));
+      final whenOpen = tester.getTopLeft(foot).dy;
+      await tester.tap(find.text('First message'));
+      await tester.pumpAndSettle();
+      final whenShut = tester.getTopLeft(foot).dy;
+      expect(whenShut, lessThan(whenOpen));
+
+      await tester.tap(find.text('First message'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+      final midway = tester.getTopLeft(foot).dy;
+      expect(midway, greaterThan(whenShut),
+          reason: 'the box appeared in one frame');
+      expect(midway, lessThan(whenOpen),
+          reason: 'the box appeared in one frame');
+
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(foot).dy, moreOrLessEquals(whenOpen, epsilon: 1));
+    });
+
     testWidgets('a closed fold previews what is in it; an open one does not',
         (tester) async {
       tall(tester, height: 2000);

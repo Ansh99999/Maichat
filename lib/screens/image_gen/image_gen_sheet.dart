@@ -8,6 +8,7 @@ import '../../services/chat_client.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/picture_viewer.dart';
+import '../../widgets/smooth_image.dart';
 import '../gallery/gallery_actions.dart';
 import '../gallery/gallery_picker_sheet.dart';
 import 'image_gen_settings.dart';
@@ -467,7 +468,8 @@ class _Stage extends StatelessWidget {
                     : Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 8),
-                        child: Image(image: provider, fit: BoxFit.contain),
+                        child: SmoothImage(
+                            image: provider, fit: BoxFit.contain),
                       ),
               ),
             ),
@@ -644,7 +646,8 @@ class _ReferenceStrip extends StatelessWidget {
                           height: 48,
                           child: provider == null
                               ? const ColoredBox(color: Colors.black26)
-                              : Image(image: provider, fit: BoxFit.cover),
+                              : SmoothImage(
+                                  image: provider, fit: BoxFit.cover),
                         ),
                       ),
                       Positioned(

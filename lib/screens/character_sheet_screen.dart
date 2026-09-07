@@ -12,6 +12,7 @@ import '../widgets/character_avatar.dart';
 import '../widgets/character_theme_scope.dart';
 import '../widgets/fab_menu.dart';
 import '../widgets/natural_image.dart';
+import '../widgets/smooth_image.dart';
 import 'character_actions.dart';
 import 'character_editor.dart';
 import 'chat_screen.dart';
@@ -231,7 +232,7 @@ class _PortraitState extends State<_Portrait> {
             if (image == null)
               fallback
             else
-              Image(
+              SmoothImage(
                 image: image,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,

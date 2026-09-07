@@ -18,10 +18,15 @@ import 'screens/home_screen.dart';
 import 'services/avatar_store.dart';
 import 'services/backup_store.dart';
 import 'services/embedding_store.dart';
+import 'services/image_cache_tuning.dart';
 import 'state/app_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final imageBudget = imageCacheBudget();
+  final decodedImages = PaintingBinding.instance.imageCache;
+  decodedImages.maximumSize = imageBudget.maximumSize;
+  decodedImages.maximumSizeBytes = imageBudget.maximumSizeBytes;
   // Draw behind the status and navigation bars so the system chrome takes on
   // the app's colours instead of sitting in an opaque strip.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);

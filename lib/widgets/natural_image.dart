@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'avatar_image.dart';
+import 'smooth_image.dart';
 
 /// Identifies the box a [NaturalImage] lays out at the picture's proportions.
 /// Tests measure this rather than the [Image] inside it, so the assertion is
@@ -237,7 +238,7 @@ class NaturalImage extends StatelessWidget {
             if (image == null)
               fallback ?? const SizedBox.shrink()
             else
-              Image(
+              SmoothImage(
                 image: image,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,

@@ -235,4 +235,95 @@ void main() {
     expect(state.gallery, isEmpty);
     expect(dir.listSync(), isEmpty);
   });
+
+  testWidgets('a picture that cannot be read says so instead of going quiet',
+      (tester) async {
+    final state = await boot();
+    await open(tester, state, [
+      GalleryUpload(
+          title: '', path: '${picks.path}/missing.png', name: 'missing.png'),
+    ]);
+
+    await tester.tap(find.byKey(const Key('gallery-upload-add')));
+    await tester.pump();
+    await settleRealWork(tester);
+
+    expect(state.gallery, isEmpty);
+    expect(find.text('Those pictures could not be stored.'), findsOneWidget);
+  });
+
+  /// The whole pick→name→file path with a fake picker, the way the gallery's Add
+  /// button runs it — only the device dialog is missing. The picker is injected
+  /// because that is the layer the other tests skip: `nameAndFilePictures` is
+  /// driven directly, but the bug was in the pick returning nothing for a
+  /// multi-pick.
+  Future<void> openViaPicker(
+    WidgetTester tester,
+    AppState state,
+    GalleryPicker picker,
+  ) async {
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: TextButton(
+                onPressed: () async {
+                  await showGalleryUploadSheet(context, picker: picker);
+                },
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('a multi-pick opens the naming sheet and files every picture',
+      (tester) async {
+    final state = await boot();
+    await openViaPicker(tester, state, () async => [
+          picked('DSC_0001.jpg', 1),
+          picked('DSC_0002.jpg', 2),
+          picked('DSC_0003.jpg', 3),
+        ]);
+
+    // The sheet counts them, and there is a title box for each.
+    expect(find.text('Name 3 pictures'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Title'), findsNWidgets(3));
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Title').at(0), 'Beach outfit');
+    await tester.tap(find.byKey(const Key('gallery-upload-add')));
+    await tester.pump();
+    await awaitFiled(tester, state, 3);
+
+    expect(state.gallery, hasLength(3));
+    expect(state.gallery.map((i) => i.title), contains('Beach outfit'));
+  });
+
+  testWidgets('backing out of the Photo Picker writes nothing, silently',
+      (tester) async {
+    final state = await boot();
+    await openViaPicker(tester, state, () async => const <GalleryUpload>[]);
+
+    // No naming sheet and no snackbar — a cancel is normal, not a failure.
+    expect(find.byKey(const Key('gallery-upload-add')), findsNothing);
+    await settleRealWork(tester);
+    expect(state.gallery, isEmpty);
+  });
+
+  testWidgets('a picker that fails says so instead of going quiet',
+      (tester) async {
+    final state = await boot();
+    await openViaPicker(
+        tester, state, () async => throw const FormatException('boom'));
+
+    expect(find.textContaining('could not be opened'), findsOneWidget);
+    expect(state.gallery, isEmpty);
+  });
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import 'avatar_image.dart';
+import 'smooth_image.dart';
 
 /// An avatar for a character: its picture when it has one (a URL or the base64
 /// image an imported card carried), falling back to a tinted monogram.
@@ -172,7 +173,7 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
         alignment: Alignment.center,
         child: provider == null
             ? _monogram(scheme, size)
-            : Image(
+            : SmoothImage(
                 image: provider,
                 width: w,
                 height: h,

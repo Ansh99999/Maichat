@@ -581,11 +581,24 @@ class CreatorFold extends StatelessWidget {
             ),
           ),
         ),
-        if (expanded)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
-            child: child,
+        // The fold itself opens and shuts rather than snapping. `AnimatedSize`
+        // over a clip is what slides the box out from under the header — without
+        // it the whole thing appeared in one frame, which is what "the drop-down
+        // has no animation" means: the arrow turned over and everything else just
+        // arrived.
+        ClipRect(
+          child: AnimatedSize(
+            duration: _swing,
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: expanded
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
+                    child: child,
+                  )
+                : const SizedBox(width: double.infinity, height: 0),
           ),
+        ),
         Divider(height: 1, color: scheme.outlineVariant),
       ],
     );

@@ -9,6 +9,7 @@ import '../../models/lorebook.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/color_picker.dart';
+import '../../widgets/smooth_image.dart';
 import 'lorebook_info.dart';
 
 /// How the entry list is ordered while editing.
@@ -741,7 +742,7 @@ class _PictureFrame extends StatelessWidget {
                 onLongPress: onClear,
                 child: provider == null
                     ? empty()
-                    : Image(
+                    : SmoothImage(
                         image: provider,
                         fit: BoxFit.cover,
                         errorBuilder: (_, _, _) => empty(),

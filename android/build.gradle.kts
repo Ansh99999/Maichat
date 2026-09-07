@@ -29,7 +29,8 @@ subprojects {
     if (name == "file_picker" ||
         name == "url_launcher_android" ||
         name == "path_provider_android" ||
-        name == "webview_flutter_android") {
+        name == "webview_flutter_android" ||
+        name == "image_picker_android") {
         plugins.apply("org.jetbrains.kotlin.android")
     }
 }

@@ -8,6 +8,7 @@ import '../../state/app_state.dart';
 import '../../widgets/app_drawer.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/photo_surface.dart';
+import '../../widgets/smooth_image.dart';
 import '../../widgets/tag_filter_sheet.dart';
 import 'gallery_actions.dart';
 import 'gallery_upload_sheet.dart';
@@ -638,7 +639,7 @@ class _ImageTile extends StatelessWidget {
               // what makes opening a photo feel instant.
               PhotoHero(
                 tag: photoHeroTag(image.id),
-                child: Image(
+                child: SmoothImage(
                   image: provider,
                   fit: BoxFit.cover,
                   errorBuilder: (_, _, _) => Center(

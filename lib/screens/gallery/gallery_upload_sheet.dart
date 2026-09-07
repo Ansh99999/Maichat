@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
@@ -9,6 +9,11 @@ import '../../models/gallery_image.dart';
 import '../../state/app_state.dart';
 import '../../widgets/tag_entry_field.dart';
 import 'gallery_actions.dart';
+
+/// How a batch of pictures is pulled off the device: returns the picked
+/// pictures, or throws on a picker failure. [pickGalleryImages] is the default;
+/// tests hand in a fake so the whole import runs without a device dialog.
+typedef GalleryPicker = Future<List<GalleryUpload>> Function();
 
 /// Picks pictures off the device and files them, naming each one first.
 ///
@@ -19,23 +24,19 @@ Future<int> showGalleryUploadSheet(
   BuildContext context, {
   String? characterId,
   bool allowChoosingOwner = false,
+  GalleryPicker? picker,
 }) async {
   final state = context.read<AppState>();
   final messenger = ScaffoldMessenger.of(context);
 
-  FilePickerResult? result;
+  List<GalleryUpload> picked;
   try {
-    // `withData` on purpose, and do not take it out again. Without it the plugin
-    // hands back a path and nothing else, and on Android that path is not always
-    // one this process can open — a scoped-storage or cloud-provider pick reads
-    // back as "could not be stored" and the whole import fails. The bytes are the
-    // only thing every platform guarantees. `GalleryUpload` keeps the path too,
-    // and everything downstream prefers whichever of the two it actually has.
-    result = await FilePicker.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-      withData: true,
-    );
+    // The system Photo Picker ([pickGalleryImages]) is used instead of
+    // file_picker's ACTION_GET_CONTENT intent, which silently came back empty
+    // for a multi-pick on Android (the bug this replaces). It hands back
+    // temp-file paths, so a batch is never more than a set of file references
+    // in memory — the same one-at-a-time rule the rest of the import follows.
+    picked = await (picker ?? pickGalleryImages)();
   } catch (error) {
     // Say so. A swallowed failure here is indistinguishable from a tap that did
     // nothing at all, which is exactly how a broken picker gets reported.
@@ -46,24 +47,10 @@ Future<int> showGalleryUploadSheet(
     ));
     return 0;
   }
-  if (result == null || result.files.isEmpty) return 0;
-
-  final picked = <GalleryUpload>[
-    for (final file in result.files)
-      if ((file.bytes?.isNotEmpty ?? false) || (file.path?.isNotEmpty ?? false))
-        GalleryUpload(
-          title: '',
-          path: file.path,
-          bytes: file.bytes,
-          name: file.name,
-        ),
-  ];
-  if (picked.isEmpty) {
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Those files could not be read.')),
-    );
-    return 0;
-  }
+  // Backing out of the picker is normal and stays silent — the Photo Picker
+  // answers an empty list for a cancel, so there is no "no files" case to talk
+  // about the way ACTION_GET_CONTENT had.
+  if (picked.isEmpty) return 0;
   if (!context.mounted) return 0;
 
   return nameAndFilePictures(
@@ -72,6 +59,24 @@ Future<int> showGalleryUploadSheet(
     characterId: characterId,
     characters: allowChoosingOwner ? state.characters : const <Character>[],
   );
+}
+
+/// Asks the system Photo Picker for pictures, as [GalleryUpload]s still waiting
+/// for their names.
+///
+/// The system Photo Picker is chosen over file_picker's ACTION_GET_CONTENT
+/// route deliberately: that route came back with nothing at all for a multi-pick
+/// on Android — "pick several, then nothing" — whereas the Photo Picker is the
+/// permission-free, Google-supported path and even recovers its own result if
+/// the activity is killed mid-pick. `pickMultiImage` copies each pick into the
+/// app's cache and hands back one file path per picture, so the "pictures are
+/// files, never base64 in the store" invariant is untouched.
+Future<List<GalleryUpload>> pickGalleryImages() async {
+  final files = await ImagePicker().pickMultiImage();
+  return <GalleryUpload>[
+    for (final file in files)
+      GalleryUpload(title: '', path: file.path, name: file.name),
+  ];
 }
 
 /// Everything after the picker: name them, then file them.
@@ -387,9 +392,8 @@ class _PictureRow extends StatelessWidget {
     final pixels = (_side * (dpr <= 0 ? 1 : dpr)).round();
     Widget broken() =>
         Icon(Icons.broken_image_outlined, color: scheme.outline);
-    // Bytes first: they are what the picker guarantees, and a path that the
-    // process cannot open would otherwise draw a broken picture over a picture
-    // that is perfectly readable.
+    // Whatever the pick came with — the picker hands back paths, other callers
+    // may hand over bytes instead.
     final bytes = upload.bytes;
     if (bytes != null && bytes.isNotEmpty) {
       return Image.memory(
