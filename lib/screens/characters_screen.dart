@@ -7,10 +7,12 @@ import '../models/view_prefs.dart';
 import '../services/character_codec.dart';
 import '../services/character_sources.dart';
 import '../state/app_state.dart';
+import '../widgets/adaptive_mosaic.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/character_theme_scope.dart';
+import '../widgets/natural_image.dart';
 import '../widgets/smooth_image.dart';
 import '../widgets/tag_filter_sheet.dart';
 import 'character_actions.dart';
@@ -88,8 +90,11 @@ class _CharactersScreenState extends State<CharactersScreen> {
       case CharacterSort.added:
         result.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       case CharacterSort.name:
-        result.sort((a, b) =>
-            a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+        result.sort(
+          (a, b) => a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          ),
+        );
     }
     return result;
   }
@@ -107,17 +112,19 @@ class _CharactersScreenState extends State<CharactersScreen> {
   }
 
   void _exitSelection() => setState(() {
-        _selecting = false;
-        _selection.clear();
-      });
+    _selecting = false;
+    _selection.clear();
+  });
 
   Future<void> _deleteSelected(AppState state) async {
     if (_selection.isEmpty) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Delete ${_selection.length} character'
-            '${_selection.length == 1 ? '' : 's'}?'),
+        title: Text(
+          'Delete ${_selection.length} character'
+          '${_selection.length == 1 ? '' : 's'}?',
+        ),
         content: const Text('Existing chats with them are kept.'),
         actions: [
           TextButton(
@@ -168,10 +175,10 @@ class _CharactersScreenState extends State<CharactersScreen> {
               child: Text(
                 'IMPORT FROM',
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                    ),
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
               ),
             ),
             for (final source in characterSources)
@@ -235,9 +242,11 @@ class _CharactersScreenState extends State<CharactersScreen> {
       }
       if (!mounted) return;
       if (imported.isEmpty) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(firstError ?? 'Could not import that character.'),
-        ));
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(firstError ?? 'Could not import that character.'),
+          ),
+        );
         return;
       }
       if (books.isNotEmpty) await state.addLorebooks(books);
@@ -246,12 +255,18 @@ class _CharactersScreenState extends State<CharactersScreen> {
       final lore = books.isEmpty
           ? ''
           : ' with ${books.length == 1 ? 'its lorebook' : '${books.length} lorebooks'}';
-      messenger.showSnackBar(SnackBar(
-        content: Text(imported.length == 1
-            ? 'Imported ${imported.single.displayName}$lore.'
-            : 'Imported ${imported.length} characters$lore.'),
-      ));
-      if (imported.length == 1) openCharacterDetail(context, imported.single.id);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            imported.length == 1
+                ? 'Imported ${imported.single.displayName}$lore.'
+                : 'Imported ${imported.length} characters$lore.',
+          ),
+        ),
+      );
+      if (imported.length == 1) {
+        openCharacterDetail(context, imported.single.id);
+      }
     } on CharacterParseException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
@@ -274,8 +289,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
           autofocus: false,
           minLines: multiline ? 4 : 1,
           maxLines: multiline ? 10 : 1,
-          keyboardType:
-              multiline ? TextInputType.multiline : TextInputType.url,
+          keyboardType: multiline ? TextInputType.multiline : TextInputType.url,
           decoration: InputDecoration(
             hintText: source.inputHint,
             border: const OutlineInputBorder(),
@@ -390,10 +404,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
           else if (visible.isEmpty)
             const SliverFillRemaining(hasScrollBody: false, child: _NoMatches())
           else ...[
-            if (hasStar) ...[
-              _header('Starred'),
-              _grid(state, starred),
-            ],
+            if (hasStar) ...[_header('Starred'), _grid(state, starred)],
             if (others.isNotEmpty) ...[
               if (hasStar) _header('All characters'),
               _grid(state, others),
@@ -406,49 +417,50 @@ class _CharactersScreenState extends State<CharactersScreen> {
   }
 
   AppBar _mainAppBar() => AppBar(
-        title: const Text('Characters'),
-        actions: [
-          IconButton(
-            tooltip: 'Import',
-            icon: const Icon(Icons.download_outlined),
-            onPressed: _showImportSheet,
-          ),
-          IconButton(
-            tooltip: 'New character',
-            icon: const Icon(Icons.person_add_alt_1_outlined),
-            onPressed: _createNew,
-          ),
-          IconButton(
-            tooltip: 'Select multiple',
-            icon: const Icon(Icons.checklist_outlined),
-            onPressed: () => setState(() => _selecting = true),
-          ),
-        ],
-      );
+    title: const Text('Characters'),
+    actions: [
+      IconButton(
+        tooltip: 'Import',
+        icon: const Icon(Icons.download_outlined),
+        onPressed: _showImportSheet,
+      ),
+      IconButton(
+        tooltip: 'New character',
+        icon: const Icon(Icons.person_add_alt_1_outlined),
+        onPressed: _createNew,
+      ),
+      IconButton(
+        tooltip: 'Select multiple',
+        icon: const Icon(Icons.checklist_outlined),
+        onPressed: () => setState(() => _selecting = true),
+      ),
+    ],
+  );
 
   AppBar _selectionAppBar(AppState state) => AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: _exitSelection,
-        ),
-        title: Text('${_selection.length} selected'),
-        actions: [
-          IconButton(
-            tooltip: 'Export selected',
-            icon: const Icon(Icons.download_outlined),
-            onPressed: _selection.isEmpty ? null : () => _exportSelected(state),
-          ),
-          IconButton(
-            tooltip: 'Delete selected',
-            icon: const Icon(Icons.delete_outline),
-            onPressed: _selection.isEmpty ? null : () => _deleteSelected(state),
-          ),
-        ],
-      );
+    leading: IconButton(
+      icon: const Icon(Icons.close),
+      onPressed: _exitSelection,
+    ),
+    title: Text('${_selection.length} selected'),
+    actions: [
+      IconButton(
+        tooltip: 'Export selected',
+        icon: const Icon(Icons.download_outlined),
+        onPressed: _selection.isEmpty ? null : () => _exportSelected(state),
+      ),
+      IconButton(
+        tooltip: 'Delete selected',
+        icon: const Icon(Icons.delete_outline),
+        onPressed: _selection.isEmpty ? null : () => _deleteSelected(state),
+      ),
+    ],
+  );
 
   Future<void> _exportSelected(AppState state) async {
-    final chosen =
-        state.characters.where((c) => _selection.contains(c.id)).toList();
+    final chosen = state.characters
+        .where((c) => _selection.contains(c.id))
+        .toList();
     if (chosen.isEmpty) return;
     await exportCharacters(context, chosen, booksOf: state.lorebooksOf);
   }
@@ -481,10 +493,15 @@ class _CharactersScreenState extends State<CharactersScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
-              _ControlChip(
-                icon: Icons.sort,
-                label: _sort.label,
-                onTap: _pickSort,
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _ControlChip(
+                    icon: Icons.sort,
+                    label: _sort.label,
+                    onTap: _pickSort,
+                  ),
+                ),
               ),
               const SizedBox(width: 8),
               _ControlChip(
@@ -495,12 +512,14 @@ class _CharactersScreenState extends State<CharactersScreen> {
                 selected: _tagFilter.isNotEmpty,
                 onTap: () => _showTagFilter(tags),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               IconButton(
                 tooltip: avatarView ? 'Show as list' : 'Show as grid',
-                icon: Icon(avatarView
-                    ? Icons.view_list_outlined
-                    : Icons.grid_view_outlined),
+                icon: Icon(
+                  avatarView
+                      ? Icons.view_list_outlined
+                      : Icons.grid_view_outlined,
+                ),
                 onPressed: () => state.setBrowseLayout(
                   BrowseSection.characters,
                   avatarView ? BrowseLayout.list : BrowseLayout.grid,
@@ -514,43 +533,69 @@ class _CharactersScreenState extends State<CharactersScreen> {
   }
 
   Widget _header(String text) => SliverToBoxAdapter(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(
-            text,
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.w600),
-          ),
-        ),
-      );
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text(
+        text,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+      ),
+    ),
+  );
 
   Widget _grid(AppState state, List<Character> list) {
     void tap(Character c) => _onItemTap(state, c);
     void long(Character c) => _onItemLongPress(c);
 
     if (_avatarView(state)) {
+      final freeSize = state.freeSizeCards(BrowseSection.characters);
       return SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        sliver: SliverGrid.builder(
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 200,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 0.66,
-          ),
-          itemCount: list.length,
-          itemBuilder: (context, i) => _CharacterCard(
-            character: list[i],
-            selecting: _selecting,
-            selected: _selection.contains(list[i].id),
-            onTap: () => tap(list[i]),
-            onLongPress: () => long(list[i]),
-            onToggleStar: () => state.toggleCharacterStar(list[i].id),
-            onAction: (a) => runCharacterAction(context, state, list[i], a),
-          ),
-        ),
+        sliver: freeSize
+            ? AdaptiveMosaicSliver<Character>(
+                items: list,
+                itemKey: (character) => character.id,
+                imageKey: (character) => character.avatar,
+                ratioOf: (character) => avatarRatio(character.avatar),
+                maxCrossAxisExtent: 200,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                itemBuilder: (context, character, width, onRatioResolved) =>
+                    _CharacterCard(
+                      character: character,
+                      selecting: _selecting,
+                      selected: _selection.contains(character.id),
+                      adaptive: true,
+                      displayWidth: width,
+                      onRatioResolved: onRatioResolved,
+                      onTap: () => tap(character),
+                      onLongPress: () => long(character),
+                      onToggleStar: () =>
+                          state.toggleCharacterStar(character.id),
+                      onAction: (action) =>
+                          runCharacterAction(context, state, character, action),
+                    ),
+              )
+            : SliverGrid.builder(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 200,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 0.66,
+                ),
+                itemCount: list.length,
+                itemBuilder: (context, i) => _CharacterCard(
+                  character: list[i],
+                  selecting: _selecting,
+                  selected: _selection.contains(list[i].id),
+                  onTap: () => tap(list[i]),
+                  onLongPress: () => long(list[i]),
+                  onToggleStar: () => state.toggleCharacterStar(list[i].id),
+                  onAction: (a) =>
+                      runCharacterAction(context, state, list[i], a),
+                ),
+              ),
       );
     }
     return SliverPadding(
@@ -614,11 +659,17 @@ class _CharacterCard extends StatelessWidget {
     required this.onLongPress,
     required this.onToggleStar,
     required this.onAction,
+    this.adaptive = false,
+    this.displayWidth,
+    this.onRatioResolved,
   });
 
   final Character character;
   final bool selecting;
   final bool selected;
+  final bool adaptive;
+  final double? displayWidth;
+  final ValueChanged<double>? onRatioResolved;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onToggleStar;
@@ -632,115 +683,176 @@ class _CharacterCard extends StatelessWidget {
     // accent. The scope is a no-op for a card with no theme.
     return CharacterThemeScope(
       theme: character.theme,
-      child: Builder(builder: (context) {
-        final scheme = Theme.of(context).colorScheme;
-        return Card(
-          clipBehavior: Clip.antiAlias,
-          elevation: 0,
-          color: scheme.surfaceContainerLow,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: selected
-                ? BorderSide(color: scheme.primary, width: 2)
-                : BorderSide.none,
-          ),
-          child: InkWell(
-            onTap: onTap,
-            onLongPress: onLongPress,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _CardImage(character: character),
-                      Positioned(
-                        top: 4,
-                        left: 4,
-                        child: _GlassIcon(
-                          icon: character.starred
-                              ? Icons.star
-                              : Icons.star_border,
-                          color: character.starred ? Colors.amber : null,
-                          onTap: onToggleStar,
-                        ),
-                      ),
-                      if (selecting)
-                        Positioned(
-                          top: 4,
-                          right: 4,
-                          child: Icon(
-                            selected
-                                ? Icons.check_circle
-                                : Icons.radio_button_unchecked,
-                            color: selected ? scheme.primary : scheme.onSurface,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                // The name/description slot sits on a distinct, slightly stronger
-                // surface so it reads as a label attached under the avatar.
-                Container(
-                  width: double.infinity,
-                  color: scheme.surfaceContainerHighest,
-                  padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              character.displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              blurb.isEmpty ? 'No description' : blurb,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(color: scheme.onSurfaceVariant),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (!selecting)
-                        SizedBox(
-                          width: 32,
-                          child: PopupMenuButton<CharacterAction>(
-                            padding: EdgeInsets.zero,
-                            icon: const Icon(Icons.more_vert, size: 20),
-                            tooltip: 'Actions',
-                            onSelected: onAction,
-                            itemBuilder: (context) => characterMenuItems(),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
+      child: Builder(
+        builder: (context) {
+          final scheme = Theme.of(context).colorScheme;
+          return Card(
+            clipBehavior: Clip.antiAlias,
+            elevation: 0,
+            color: scheme.surfaceContainerLow,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: selected
+                  ? BorderSide(color: scheme.primary, width: 2)
+                  : BorderSide.none,
             ),
-          ),
-        );
-      }),
+            child: InkWell(
+              onTap: onTap,
+              onLongPress: onLongPress,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (adaptive)
+                    _AdaptiveCardImage(
+                      character: character,
+                      selecting: selecting,
+                      selected: selected,
+                      onToggleStar: onToggleStar,
+                      displayWidth: displayWidth,
+                      onRatioResolved: onRatioResolved,
+                    )
+                  else
+                    Expanded(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _CardImage(character: character),
+                          Positioned(
+                            top: 4,
+                            left: 4,
+                            child: _GlassIcon(
+                              icon: character.starred
+                                  ? Icons.star
+                                  : Icons.star_border,
+                              color: character.starred ? Colors.amber : null,
+                              onTap: onToggleStar,
+                            ),
+                          ),
+                          if (selecting)
+                            Positioned(
+                              top: 4,
+                              right: 4,
+                              child: Icon(
+                                selected
+                                    ? Icons.check_circle
+                                    : Icons.radio_button_unchecked,
+                                color: selected
+                                    ? scheme.primary
+                                    : scheme.onSurface,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  // The name/description slot sits on a distinct, slightly stronger
+                  // surface so it reads as a label attached under the avatar.
+                  Container(
+                    width: double.infinity,
+                    color: scheme.surfaceContainerHighest,
+                    padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                character.displayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                blurb.isEmpty ? 'No description' : blurb,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (!selecting)
+                          SizedBox(
+                            width: 32,
+                            child: PopupMenuButton<CharacterAction>(
+                              padding: EdgeInsets.zero,
+                              icon: const Icon(Icons.more_vert, size: 20),
+                              tooltip: 'Actions',
+                              onSelected: onAction,
+                              itemBuilder: (context) => characterMenuItems(),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
 
-/// The picture area of a [_CharacterCard]: the character's image cropped to
-/// fill, or a tinted monogram panel when there is none / it fails to load.
+class _AdaptiveCardImage extends StatelessWidget {
+  const _AdaptiveCardImage({
+    required this.character,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleStar,
+    this.displayWidth,
+    this.onRatioResolved,
+  });
+
+  final Character character;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onToggleStar;
+  final double? displayWidth;
+  final ValueChanged<double>? onRatioResolved;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return NaturalImage(
+      imageRef: character.avatar,
+      maxHeightFactor: double.infinity,
+      displayWidth: displayWidth,
+      onRatioResolved: onRatioResolved,
+      fallback: _CardFallback(character: character),
+      overlay: Stack(
+        children: [
+          Positioned(
+            top: 4,
+            left: 4,
+            child: _GlassIcon(
+              icon: character.starred ? Icons.star : Icons.star_border,
+              color: character.starred ? Colors.amber : null,
+              onTap: onToggleStar,
+            ),
+          ),
+          if (selecting)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: Icon(
+                selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                color: selected ? scheme.primary : scheme.onSurface,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The picture area of a legacy [_CharacterCard], cropped to fill.
 class _CardImage extends StatelessWidget {
   const _CardImage({required this.character});
 
@@ -748,33 +860,43 @@ class _CardImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    Widget fallback() => Container(
-          color: scheme.secondaryContainer,
-          alignment: Alignment.center,
-          child: Text(
-            character.displayName.isEmpty
-                ? '?'
-                : character.displayName.characters.first.toUpperCase(),
-            style: TextStyle(
-              fontSize: 44,
-              fontWeight: FontWeight.w600,
-              color: scheme.onSecondaryContainer,
-            ),
-          ),
-        );
-
-    // Shared provider: decoded once, at card size, however many cards show it.
+    final fallback = _CardFallback(character: character);
     final provider = avatarImage(
       character.avatar,
       displaySize: 320,
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
-    if (provider == null) return fallback();
+    if (provider == null) return fallback;
     return SmoothImage(
       image: provider,
       fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => fallback(),
+      errorBuilder: (_, _, _) => fallback,
+    );
+  }
+}
+
+class _CardFallback extends StatelessWidget {
+  const _CardFallback({required this.character});
+
+  final Character character;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.secondaryContainer,
+      child: Center(
+        child: Text(
+          character.displayName.isEmpty
+              ? '?'
+              : character.displayName.characters.first.toUpperCase(),
+          style: TextStyle(
+            fontSize: 44,
+            fontWeight: FontWeight.w600,
+            color: scheme.onSecondaryContainer,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -904,17 +1026,18 @@ class _EmptyRoster extends StatelessWidget {
           children: [
             Icon(Icons.people_alt_outlined, size: 56, color: scheme.outline),
             const SizedBox(height: 16),
-            Text('No characters yet',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'No characters yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 8),
             Text(
               'Create one, or import a SillyTavern / Agnai card — a .json, a '
               'PNG card, a link, or a JannyAI download.',
               textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 20),
             FilledButton.tonalIcon(
@@ -947,10 +1070,9 @@ class _NoMatches extends StatelessWidget {
             Text(
               'No characters match your search.',
               textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -958,4 +1080,3 @@ class _NoMatches extends StatelessWidget {
     );
   }
 }
-

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/discover.dart';
 import '../../widgets/avatar_image.dart';
+import '../../widgets/natural_image.dart';
 
 /// A compact count: 1200 reads as "1.2k", 34000 as "34k".
 String compactCount(int value) {
@@ -67,10 +68,20 @@ class DiscoverImage extends StatelessWidget {
 /// One character in the feed: the art, the name, who made it, and the two
 /// numbers worth knowing before you tap.
 class DiscoverCard extends StatelessWidget {
-  const DiscoverCard({super.key, required this.item, required this.onTap});
+  const DiscoverCard({
+    super.key,
+    required this.item,
+    required this.onTap,
+    this.adaptive = false,
+    this.displayWidth,
+    this.onRatioResolved,
+  });
 
   final DiscoverItem item;
   final VoidCallback onTap;
+  final bool adaptive;
+  final double? displayWidth;
+  final ValueChanged<double>? onRatioResolved;
 
   @override
   Widget build(BuildContext context) {
@@ -88,35 +99,31 @@ class DiscoverCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  DiscoverImage(
-                    url: item.thumbnailUrl,
-                    fallbackIcon: Icons.person_outline,
-                    size: 220,
-                  ),
-                  if (item.nsfw)
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: _Badge(label: '18+', color: scheme.errorContainer,
-                          textColor: scheme.onErrorContainer),
+            if (adaptive)
+              NaturalImage(
+                imageRef: item.thumbnailUrl ?? '',
+                maxHeightFactor: double.infinity,
+                displayWidth: displayWidth,
+                onRatioResolved: onRatioResolved,
+                fallback: const _DiscoverPlaceholder(
+                  icon: Icons.person_outline,
+                ),
+                overlay: _DiscoverBadges(item: item),
+              )
+            else
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    DiscoverImage(
+                      url: item.thumbnailUrl,
+                      fallbackIcon: Icons.person_outline,
+                      size: 220,
                     ),
-                  if (item.hasLore)
-                    Positioned(
-                      top: 6,
-                      left: 6,
-                      child: _Badge(
-                        label: 'Lore',
-                        color: scheme.secondaryContainer,
-                        textColor: scheme.onSecondaryContainer,
-                      ),
-                    ),
-                ],
+                    _DiscoverBadges(item: item),
+                  ],
+                ),
               ),
-            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
               child: Column(
@@ -126,8 +133,9 @@ class DiscoverCard extends StatelessWidget {
                     item.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   if (item.creator.trim().isNotEmpty) ...[
                     const SizedBox(height: 2),
@@ -135,8 +143,9 @@ class DiscoverCard extends StatelessWidget {
                       'by ${item.creator.trim()}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: scheme.onSurfaceVariant),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                   if (stats.isNotEmpty) ...[
@@ -145,8 +154,9 @@ class DiscoverCard extends StatelessWidget {
                       stats,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: scheme.onSurfaceVariant),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ],
@@ -155,6 +165,59 @@ class DiscoverCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _DiscoverPlaceholder extends StatelessWidget {
+  const _DiscoverPlaceholder({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: Center(
+        child: Icon(icon, color: scheme.onSurfaceVariant, size: 28),
+      ),
+    );
+  }
+}
+
+class _DiscoverBadges extends StatelessWidget {
+  const _DiscoverBadges({required this.item});
+
+  final DiscoverItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (item.nsfw)
+          Positioned(
+            top: 6,
+            right: 6,
+            child: _Badge(
+              label: '18+',
+              color: scheme.errorContainer,
+              textColor: scheme.onErrorContainer,
+            ),
+          ),
+        if (item.hasLore)
+          Positioned(
+            top: 6,
+            left: 6,
+            child: _Badge(
+              label: 'Lore',
+              color: scheme.secondaryContainer,
+              textColor: scheme.onSecondaryContainer,
+            ),
+          ),
+      ],
     );
   }
 }
@@ -214,8 +277,9 @@ class DiscoverRow extends StatelessWidget {
                       item.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (meta.isNotEmpty) ...[
                       const SizedBox(height: 2),
@@ -223,8 +287,9 @@ class DiscoverRow extends StatelessWidget {
                         meta,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelSmall
-                            ?.copyWith(color: scheme.onSurfaceVariant),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ],
                     if (blurb.isNotEmpty) ...[
@@ -233,8 +298,9 @@ class DiscoverRow extends StatelessWidget {
                         blurb,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: scheme.onSurfaceVariant),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ],
@@ -281,19 +347,19 @@ class _Badge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(8),
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: textColor,
+          fontWeight: FontWeight.w700,
         ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          child: Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: textColor,
-                  fontWeight: FontWeight.w700,
-                ),
-          ),
-        ),
-      );
+      ),
+    ),
+  );
 }

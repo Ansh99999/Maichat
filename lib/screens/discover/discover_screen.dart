@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/discover.dart';
+import '../../models/view_prefs.dart';
 import '../../services/discover/discover_sources.dart';
 import '../../state/app_state.dart';
+import '../../widgets/adaptive_mosaic.dart';
 import '../../widgets/app_drawer.dart';
+import '../../widgets/avatar_image.dart';
 import '../../widgets/brand_mark.dart';
 import 'discover_card.dart';
 import 'discover_controller.dart';
@@ -154,7 +157,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
-        final activeFilters = _controller.includeTags.length +
+        final activeFilters =
+            _controller.includeTags.length +
             _controller.excludeTags.length +
             (_controller.nsfw ? 1 : 0);
         return Scaffold(
@@ -246,41 +250,41 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         Text(
           '${_controller.kind.label} from ${borrowed.label}',
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       ],
     );
   }
 
   Widget _searchField() => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-        child: SearchBar(
-          controller: _search,
-          hintText: 'Search ${_controller.effectiveSource?.label ?? 'catalogues'}',
-          leading: const Icon(Icons.search),
-          trailing: [
-            if (_search.text.isNotEmpty)
-              IconButton(
-                tooltip: 'Clear',
-                icon: const Icon(Icons.close),
-                onPressed: () {
-                  _search.clear();
-                  _debounce?.cancel();
-                  _controller.setSearch('');
-                },
-              ),
-          ],
-          onChanged: (value) {
-            setState(() {}); // Keeps the clear button in step.
-            _onSearchChanged(value);
-          },
-          onSubmitted: (value) {
-            _debounce?.cancel();
-            _controller.setSearch(value);
-          },
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+    child: SearchBar(
+      controller: _search,
+      hintText: 'Search ${_controller.effectiveSource?.label ?? 'catalogues'}',
+      leading: const Icon(Icons.search),
+      trailing: [
+        if (_search.text.isNotEmpty)
+          IconButton(
+            tooltip: 'Clear',
+            icon: const Icon(Icons.close),
+            onPressed: () {
+              _search.clear();
+              _debounce?.cancel();
+              _controller.setSearch('');
+            },
+          ),
+      ],
+      onChanged: (value) {
+        setState(() {}); // Keeps the clear button in step.
+        _onSearchChanged(value);
+      },
+      onSubmitted: (value) {
+        _debounce?.cancel();
+        _controller.setSearch(value);
+      },
+    ),
+  );
 
   List<Widget> _feed() {
     if (_controller.sectionUnavailable) {
@@ -294,8 +298,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             title: 'No catalogue for ${_controller.kind.label.toLowerCase()}',
             body: _controller.kind == DiscoverKind.preset
                 ? 'None of the sites MaiChat can browse publish generation '
-                    'presets yet. Import one from a file in Presets, or paste '
-                    'a SillyTavern preset there.'
+                      'presets yet. Import one from a file in Presets, or paste '
+                      'a SillyTavern preset there.'
                 : 'None of the sites MaiChat can browse publish these yet.',
           ),
         ),
@@ -337,22 +341,43 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
     final items = _controller.items;
     if (_controller.kind == DiscoverKind.character) {
+      final freeSize = context.watch<AppState>().freeSizeCards(
+        BrowseSection.discover,
+      );
       return [
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          sliver: SliverGrid.builder(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              childAspectRatio: 0.66,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-            ),
-            itemCount: items.length,
-            itemBuilder: (context, index) => DiscoverCard(
-              item: items[index],
-              onTap: () => _open(items[index]),
-            ),
-          ),
+          sliver: freeSize
+              ? AdaptiveMosaicSliver<DiscoverItem>(
+                  items: items,
+                  itemKey: (item) => item.key,
+                  imageKey: (item) => item.thumbnailUrl ?? '',
+                  ratioOf: (item) => avatarRatio(item.thumbnailUrl ?? ''),
+                  maxCrossAxisExtent: 220,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  itemBuilder: (context, item, width, onRatioResolved) =>
+                      DiscoverCard(
+                        item: item,
+                        onTap: () => _open(item),
+                        adaptive: true,
+                        displayWidth: width,
+                        onRatioResolved: onRatioResolved,
+                      ),
+                )
+              : SliverGrid.builder(
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 220,
+                    childAspectRatio: 0.66,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                  ),
+                  itemCount: items.length,
+                  itemBuilder: (context, index) => DiscoverCard(
+                    item: items[index],
+                    onTap: () => _open(items[index]),
+                  ),
+                ),
         ),
       ];
     }
@@ -363,10 +388,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         sliver: SliverList.separated(
           itemCount: items.length,
           separatorBuilder: (context, index) => const SizedBox(height: 10),
-          itemBuilder: (context, index) => DiscoverRow(
-            item: items[index],
-            onTap: () => _open(items[index]),
-          ),
+          itemBuilder: (context, index) =>
+              DiscoverRow(item: items[index], onTap: () => _open(items[index])),
         ),
       ),
     ];
@@ -398,10 +421,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             Text(
               error,
               textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.error),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.error),
             ),
             const SizedBox(height: 8),
             TextButton(
@@ -418,10 +440,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         child: Center(
           child: Text(
             'That is everything.',
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ),
       );
@@ -465,15 +486,11 @@ class _Message extends StatelessWidget {
             BrandedText(
               body,
               textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
-            if (action != null) ...[
-              const SizedBox(height: 20),
-              action!,
-            ],
+            if (action != null) ...[const SizedBox(height: 20), action!],
           ],
         ),
       ),

@@ -69,12 +69,12 @@ class AppState extends ChangeNotifier {
     DriveClient? drive,
     Summarizer? summarizer,
     this.loadTimeout = const Duration(seconds: 30),
-  })  : _storage = storage ?? Storage(),
-        _client = client ?? ChatClient(),
-        _imageClient = imageClient ?? ImageClient(),
-        _updateService = updateService ?? UpdateService(),
-        _drive = drive ?? DriveClient(),
-        _summarizer = summarizer ?? Summarizer() {
+  }) : _storage = storage ?? Storage(),
+       _client = client ?? ChatClient(),
+       _imageClient = imageClient ?? ImageClient(),
+       _updateService = updateService ?? UpdateService(),
+       _drive = drive ?? DriveClient(),
+       _summarizer = summarizer ?? Summarizer() {
     _avatars = avatars;
     _vectors = embeddings;
     _backups = backups;
@@ -132,8 +132,10 @@ class AppState extends ChangeNotifier {
     config: () => _tokenizerConfig,
     model: () => activeProvider?.model ?? '',
   );
-  late final PromptBuilder _prompts =
-      PromptBuilder(macros: DefaultMacroEngine(), tokens: _tokenizer);
+  late final PromptBuilder _prompts = PromptBuilder(
+    macros: DefaultMacroEngine(),
+    tokens: _tokenizer,
+  );
 
   /// Decides which lorebook entries each request carries. Shares the app's
   /// tokenizer so the lore budget is measured the same way the prompt budget is.
@@ -283,7 +285,6 @@ class AppState extends ChangeNotifier {
 
   /// Whether there is an active provider ready to send.
   bool get isConfigured => activeProvider?.isConfigured ?? false;
-
 
   /// The visible thread, creating one on first run.
   Conversation get active {
@@ -459,8 +460,10 @@ class AppState extends ChangeNotifier {
         }
       }
       if (moved > 0) {
-        debugPrint('MaiChat: moved $moved character picture(s) out of the '
-            'preferences store and into files');
+        debugPrint(
+          'MaiChat: moved $moved character picture(s) out of the '
+          'preferences store and into files',
+        );
         await _persistCharacters();
       }
       await _sweepAvatars();
@@ -602,8 +605,11 @@ class AppState extends ChangeNotifier {
     final now = DateTime.now();
     return switch (period) {
       BudgetPeriod.daily => DateTime(now.year, now.month, now.day),
-      BudgetPeriod.weekly => DateTime(now.year, now.month, now.day)
-          .subtract(Duration(days: now.weekday - 1)),
+      BudgetPeriod.weekly => DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: now.weekday - 1)),
       BudgetPeriod.monthly => DateTime(now.year, now.month),
       BudgetPeriod.total => null,
     };
@@ -648,8 +654,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> deleteBudget(Provider provider, String budgetId) async {
-    final budgets =
-        provider.budgets.where((b) => b.id != budgetId).toList(growable: false);
+    final budgets = provider.budgets
+        .where((b) => b.id != budgetId)
+        .toList(growable: false);
     if (budgets.length == provider.budgets.length) return;
     await updateProvider(provider.copyWith(budgets: budgets));
   }
@@ -707,7 +714,10 @@ class AppState extends ChangeNotifier {
   /// Whether [preset] is the look currently in force for [conversationId] (or
   /// app-wide when that is null). Compared on appearance alone, so the Chat
   /// behaviour switches do not make every look look unselected.
-  bool isInterfacePresetActive(InterfacePreset preset, {String? conversationId}) {
+  bool isInterfacePresetActive(
+    InterfacePreset preset, {
+    String? conversationId,
+  }) {
     final current = conversationId == null
         ? _chatInterface
         : interfaceFor(_conversationById(conversationId));
@@ -734,6 +744,7 @@ class AppState extends ChangeNotifier {
     await _persistInterfacePresets();
     return preset;
   }
+
   /// Files an imported look, keeping its name but never its id — an imported file
   /// must not be able to claim a built-in's identity or overwrite a saved look.
   Future<InterfacePreset> addInterfacePreset(InterfacePreset preset) async {
@@ -792,7 +803,6 @@ class AppState extends ChangeNotifier {
     if (!_writable) return;
     await _storage.saveInterfacePresets(_interfacePresets);
   }
-
 
   // --- Presets -------------------------------------------------------------
 
@@ -900,7 +910,10 @@ class AppState extends ChangeNotifier {
   /// Binds [conversation] to a preset (or clears it) — the per-chat selection.
   /// Choosing a preset drops any chat-specific override so the chat cleanly
   /// follows the chosen one.
-  Future<void> setConversationPreset(String conversationId, String? presetId) async {
+  Future<void> setConversationPreset(
+    String conversationId,
+    String? presetId,
+  ) async {
     for (final c in _conversations) {
       if (c.id == conversationId) {
         c.presetId = presetId;
@@ -915,7 +928,10 @@ class AppState extends ChangeNotifier {
 
   /// Stores an edited preset as a chat-specific override (the "save for this
   /// chat only" path); does not touch the shared library.
-  Future<void> saveChatPresetOverride(String conversationId, Preset preset) async {
+  Future<void> saveChatPresetOverride(
+    String conversationId,
+    Preset preset,
+  ) async {
     for (final c in _conversations) {
       if (c.id == conversationId) {
         c.presetOverride = Preset.fromJson(preset.toJson());
@@ -1027,8 +1043,7 @@ class AppState extends ChangeNotifier {
   }) async {
     await _editConversation(conversationId, (c) {
       final trimmed = image?.trim();
-      c.backgroundImage =
-          (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+      c.backgroundImage = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
       if (opacity != null) c.backgroundOpacity = opacity.clamp(0, 1).toDouble();
     });
     // A background that is no longer referenced is a file nobody will ever look
@@ -1058,10 +1073,9 @@ class AppState extends ChangeNotifier {
   Future<void> saveChatInterfaceOverride(
     String conversationId,
     ChatInterface ui,
-  ) =>
-      _editConversation(conversationId, (c) {
-        c.interfaceOverride = ChatInterface.fromJson(ui.toJson());
-      });
+  ) => _editConversation(conversationId, (c) {
+    c.interfaceOverride = ChatInterface.fromJson(ui.toJson());
+  });
 
   /// Drops a thread's own chat-style copy so it follows the app-wide settings
   /// again — the counterpart of [saveChatInterfaceOverride], for the same reason
@@ -1071,12 +1085,8 @@ class AppState extends ChangeNotifier {
 
   /// Turns per-chat character definitions on or off for this thread. The stored
   /// overrides are kept either way, so switching back on restores them.
-  Future<void> setOverrideDefinitions(
-    String conversationId,
-    bool enabled,
-  ) =>
-      _editConversation(
-          conversationId, (c) => c.overrideDefinitions = enabled);
+  Future<void> setOverrideDefinitions(String conversationId, bool enabled) =>
+      _editConversation(conversationId, (c) => c.overrideDefinitions = enabled);
 
   /// Stores [character] as this thread's own definition of it, leaving the
   /// roster untouched. Switches overriding on, since an override nobody honours
@@ -1098,7 +1108,9 @@ class AppState extends ChangeNotifier {
     String characterId,
   ) async {
     await _editConversation(
-        conversationId, (c) => c.characterOverrides.remove(characterId));
+      conversationId,
+      (c) => c.characterOverrides.remove(characterId),
+    );
     await _sweepAvatars();
   }
 
@@ -1107,7 +1119,9 @@ class AppState extends ChangeNotifier {
   /// picked photo, and base64 in the preferences store is what [AvatarStore]
   /// exists to prevent.
   Future<void> _storeOverrideAvatar(
-      String conversationId, String characterId) async {
+    String conversationId,
+    String characterId,
+  ) async {
     final store = _avatars;
     if (store == null) return;
     final conversation = _conversationById(conversationId);
@@ -1131,8 +1145,10 @@ class AppState extends ChangeNotifier {
     if (conversation == null) return;
     conversation.characterId = character.id;
     conversation.characterName = character.displayName;
-    conversation.systemPrompt =
-        _mergedPrompt(character, conversation.systemPrompt);
+    conversation.systemPrompt = _mergedPrompt(
+      character,
+      conversation.systemPrompt,
+    );
     if (conversation.messages.isEmpty) {
       final swipes = _greetingSwipes(character);
       if (swipes.isNotEmpty) {
@@ -1141,8 +1157,7 @@ class AppState extends ChangeNotifier {
         );
       }
     }
-    if (conversation.title.trim().isEmpty ||
-        conversation.title == 'New chat') {
+    if (conversation.title.trim().isEmpty || conversation.title == 'New chat') {
       conversation.title = character.displayName;
     }
     conversation.updatedAt = DateTime.now();
@@ -1194,10 +1209,10 @@ class AppState extends ChangeNotifier {
   /// resolved against the roster (and per-chat overrides). Characters that no
   /// longer resolve are dropped, so a deleted member never crashes a send.
   List<Character> participantsOf(Conversation conversation) => [
-        for (final id in conversation.memberIds)
-          if (characterFor(conversation, id) != null)
-            characterFor(conversation, id)!,
-      ];
+    for (final id in conversation.memberIds)
+      if (characterFor(conversation, id) != null)
+        characterFor(conversation, id)!,
+  ];
 
   /// Adds [character] to [conversationId] as a group member. The first add to a
   /// one-to-one thread seeds the roster with the existing character first, so
@@ -1212,8 +1227,8 @@ class AppState extends ChangeNotifier {
     final members = conversation.participantIds.isNotEmpty
         ? conversation.participantIds.toList()
         : (conversation.characterId == null
-            ? <String>[]
-            : <String>[conversation.characterId!]);
+              ? <String>[]
+              : <String>[conversation.characterId!]);
     if (members.contains(character.id)) return;
     members.add(character.id);
     conversation.participantIds
@@ -1249,11 +1264,13 @@ class AppState extends ChangeNotifier {
       final sole = members.isNotEmpty
           ? members.first
           : (conversation.characterId == characterId
-              ? null
-              : conversation.characterId);
+                ? null
+                : conversation.characterId);
       conversation.characterId = sole;
-      conversation.characterName =
-          characterFor(conversation, sole)?.displayName;
+      conversation.characterName = characterFor(
+        conversation,
+        sole,
+      )?.displayName;
       // Auto-reply is a group-only notion; there is no roster to choose from now.
       conversation.groupResponder = null;
     } else {
@@ -1262,8 +1279,10 @@ class AppState extends ChangeNotifier {
         ..addAll(members);
       if (conversation.characterId == characterId) {
         conversation.characterId = members.first;
-        conversation.characterName =
-            characterFor(conversation, members.first)?.displayName;
+        conversation.characterName = characterFor(
+          conversation,
+          members.first,
+        )?.displayName;
       }
       // The chosen auto-responder just left; drop back to manual rather than
       // silently answering as someone else.
@@ -1338,7 +1357,6 @@ class AppState extends ChangeNotifier {
     if (!_writable) return;
     await _storage.saveActiveId(id);
   }
-
 
   Character? characterById(String? id) {
     if (id == null) return null;
@@ -1590,6 +1608,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (_writable) await _storage.saveBackupPrefs(next);
   }
+
   /// Gathers everything a backup carries: the store as it stands, and the
   /// picture and vector files it goes with — *named*, not read.
   ///
@@ -1636,6 +1655,7 @@ class AppState extends ChangeNotifier {
       return const <File>[];
     }
   }
+
   /// The one path every export takes: build the archive on disk, deliver it,
   /// write down what happened, then drop whatever the retention setting says is
   /// surplus.
@@ -1731,6 +1751,7 @@ class AppState extends ChangeNotifier {
       }
     }
   }
+
   /// Keeps only the newest [BackupPrefs.keep] backups at [destination] and
   /// forgets the records that pointed at what went. A backup folder that grows
   /// for ever is a storage bug, not a safety feature — and the whole point of
@@ -1834,6 +1855,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (_writable) await _storage.saveBackupRecords(_backupRecords);
   }
+
   /// Puts a MaiChat backup back.
   ///
   /// With [replace] (what restoring a snapshot means) the store becomes exactly
@@ -1936,6 +1958,7 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
   }
+
   /// Takes the backup the schedule owes, if one is owed.
   ///
   /// Never throws and never blocks the launch: an automatic backup that cannot
@@ -1972,10 +1995,12 @@ class AppState extends ChangeNotifier {
     String clientId = '',
     String clientSecret = '',
   }) async {
-    final auth = await _drive.connect(_backupPrefs.drive.copyWith(
-      clientId: clientId.trim().isEmpty ? null : clientId.trim(),
-      clientSecret: clientSecret.trim().isEmpty ? null : clientSecret.trim(),
-    ));
+    final auth = await _drive.connect(
+      _backupPrefs.drive.copyWith(
+        clientId: clientId.trim().isEmpty ? null : clientId.trim(),
+        clientSecret: clientSecret.trim().isEmpty ? null : clientSecret.trim(),
+      ),
+    );
     await updateBackupPrefs(
       _backupPrefs.copyWith(drive: await _drive.ensureFolder(auth)),
     );
@@ -1984,13 +2009,13 @@ class AppState extends ChangeNotifier {
   /// Drops the grant but keeps the client id and secret, so reconnecting is one
   /// tap rather than another trip to the Google Cloud console.
   Future<void> disconnectDrive() => updateBackupPrefs(
-        _backupPrefs.copyWith(
-          drive: DriveAuth(
-            clientId: _backupPrefs.drive.clientId,
-            clientSecret: _backupPrefs.drive.clientSecret,
-          ),
-        ),
-      );
+    _backupPrefs.copyWith(
+      drive: DriveAuth(
+        clientId: _backupPrefs.drive.clientId,
+        clientSecret: _backupPrefs.drive.clientSecret,
+      ),
+    ),
+  );
 
   /// The backups sitting in Drive — including ones taken on another device,
   /// which is what makes Drive a way to move everything to a new phone.
@@ -2006,6 +2031,7 @@ class AppState extends ChangeNotifier {
   /// Downloads one of [driveBackups] to a temporary file, ready to restore.
   Future<LocalBackup> fetchDriveFile(DriveFile file) =>
       _driveToTemp(file.id, file.name);
+
   /// Reads a backup another app wrote, from a file on disk.
   ///
   /// The path rather than the bytes: a SillyTavern data folder is the largest
@@ -2016,26 +2042,24 @@ class AppState extends ChangeNotifier {
     String path, {
     String fileName = '',
     BackupProgress? onProgress,
-  }) =>
-      readForeignBackupFile(
-        path,
-        fileName: fileName,
-        storePicture: storePicture,
-        onProgress: onProgress,
-      );
+  }) => readForeignBackupFile(
+    path,
+    fileName: fileName,
+    storePicture: storePicture,
+    onProgress: onProgress,
+  );
 
   /// The same for bytes already in hand, when the platform would not give a path.
   Future<ForeignBackup> readForeignBytes(
     Uint8List bytes, {
     String fileName = '',
     BackupProgress? onProgress,
-  }) =>
-      readForeignBackupBytes(
-        bytes,
-        fileName: fileName,
-        storePicture: storePicture,
-        onProgress: onProgress,
-      );
+  }) => readForeignBackupBytes(
+    bytes,
+    fileName: fileName,
+    storePicture: storePicture,
+    onProgress: onProgress,
+  );
 
   /// Puts a backup from another app into place.
   ///
@@ -2082,7 +2106,8 @@ class AppState extends ChangeNotifier {
         // A group chat knows who was in the room; the ids only exist here.
         for (final name in chat.participantNames) {
           final member = _characterNamed(name);
-          if (member != null && !conversation.participantIds.contains(member.id)) {
+          if (member != null &&
+              !conversation.participantIds.contains(member.id)) {
             conversation.participantIds.add(member.id);
           }
         }
@@ -2127,12 +2152,14 @@ class AppState extends ChangeNotifier {
     final added = <GalleryImage>[];
     for (final picture in pictures) {
       if (picture.ref.trim().isEmpty) continue;
-      added.add(GalleryImage.create(
-        image: picture.ref,
-        title: picture.title,
-        tags: List<String>.from(picture.tags),
-        characterId: characterId,
-      ));
+      added.add(
+        GalleryImage.create(
+          image: picture.ref,
+          title: picture.title,
+          tags: List<String>.from(picture.tags),
+          characterId: characterId,
+        ),
+      );
     }
     if (added.isEmpty) return added;
     _gallery.insertAll(0, added);
@@ -2148,7 +2175,9 @@ class AppState extends ChangeNotifier {
     final needle = name?.trim().toLowerCase() ?? '';
     if (needle.isEmpty) return null;
     for (final character in _characters) {
-      if (character.displayName.trim().toLowerCase() == needle) return character;
+      if (character.displayName.trim().toLowerCase() == needle) {
+        return character;
+      }
     }
     return null;
   }
@@ -2273,8 +2302,8 @@ class AppState extends ChangeNotifier {
   /// were attached. What an export ships with the card, and what the creator's
   /// Lorebooks tab lists.
   List<Lorebook> lorebooksOf(Character character) => <Lorebook>[
-        for (final id in character.lorebookIds) ?lorebookById(id),
-      ];
+    for (final id in character.lorebookIds) ?lorebookById(id),
+  ];
 
   /// Moves a book's picture out of the preferences store and into a file, the
   /// same way character avatars are handled — the store is read whole at every
@@ -2362,7 +2391,9 @@ class AppState extends ChangeNotifier {
 
   /// Switches [bookId] on for a chat, or off again if it was already on.
   Future<void> toggleConversationLorebook(
-      String conversationId, String bookId) async {
+    String conversationId,
+    String bookId,
+  ) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     if (!conversation.lorebookIds.remove(bookId)) {
@@ -2374,7 +2405,9 @@ class AppState extends ChangeNotifier {
 
   /// Replaces the whole set of books a chat runs with.
   Future<void> setConversationLorebooks(
-      String conversationId, List<String> bookIds) async {
+    String conversationId,
+    List<String> bookIds,
+  ) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     conversation.lorebookIds
@@ -2389,7 +2422,9 @@ class AppState extends ChangeNotifier {
   /// global library book is untouched; other chats keep seeing the shared copy.
   /// The chat is switched on for the book if it was not already.
   Future<void> saveChatLorebookOverride(
-      String conversationId, Lorebook book) async {
+    String conversationId,
+    Lorebook book,
+  ) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     book.updatedAt = DateTime.now();
@@ -2406,7 +2441,9 @@ class AppState extends ChangeNotifier {
   /// Drops [conversationId]'s override copy of book [id], so it falls back to the
   /// shared library version again.
   Future<void> clearChatLorebookOverride(
-      String conversationId, String id) async {
+    String conversationId,
+    String id,
+  ) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     if (conversation.lorebookOverrides.remove(id) != null) {
@@ -2598,9 +2635,10 @@ class AppState extends ChangeNotifier {
   /// to read their own library and not a per-visit gesture.
   ViewPrefs get viewPrefs => _viewPrefs;
 
-  BrowseLayout browseLayout(String section,
-          {BrowseLayout fallback = BrowseLayout.grid}) =>
-      _viewPrefs.layoutFor(section, fallback: fallback);
+  BrowseLayout browseLayout(
+    String section, {
+    BrowseLayout fallback = BrowseLayout.grid,
+  }) => _viewPrefs.layoutFor(section, fallback: fallback);
 
   Future<void> setBrowseLayout(String section, BrowseLayout layout) async {
     // Nothing observable changes when the section already reads this way — and
@@ -2608,6 +2646,20 @@ class AppState extends ChangeNotifier {
     // did nothing.
     if (browseLayout(section) == layout) return;
     final next = _viewPrefs.withLayout(section, layout);
+    if (next == _viewPrefs) return;
+    _viewPrefs = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveViewPrefs(_viewPrefs);
+  }
+
+  /// Whether [section]'s picture cards use their natural proportions and may span
+  /// extra logical columns. False retains the legacy fixed-card layout.
+  bool freeSizeCards(String section) => _viewPrefs.freeSizeFor(section);
+
+  Future<void> setFreeSizeCards(String section, bool enabled) async {
+    if (freeSizeCards(section) == enabled) return;
+    final next = _viewPrefs.withFreeSize(section, enabled);
     if (next == _viewPrefs) return;
     _viewPrefs = next;
     notifyListeners();
@@ -2717,7 +2769,9 @@ class AppState extends ChangeNotifier {
     if (index == null || !cfg.isReady) return;
 
     final wantChat = conversation.embedRecall;
-    final books = lorebooksFor(conversation).where((b) => b.vectorized).toList();
+    final books = lorebooksFor(
+      conversation,
+    ).where((b) => b.vectorized).toList();
     final wantLore = cfg.loreActivation && books.isNotEmpty;
     final docs = conversation.documentIds
         .map(documentById)
@@ -2738,11 +2792,13 @@ class AppState extends ChangeNotifier {
         // are excluded from what gets recalled.
         final tail = conversation.messages.length > cfg.protect
             ? conversation.messages.sublist(
-                conversation.messages.length - cfg.protect)
+                conversation.messages.length - cfg.protect,
+              )
             : conversation.messages;
-        final exclude = EmbeddingIndex.chatChunks(tail, cfg.messageChunkSize)
-            .map(EmbeddingIndex.hashText)
-            .toSet();
+        final exclude = EmbeddingIndex.chatChunks(
+          tail,
+          cfg.messageChunkSize,
+        ).map(EmbeddingIndex.hashText).toSet();
         final hits = await index.retrieve(
           EmbeddingIndex.chatCollection(conversation.id),
           qv,
@@ -2753,26 +2809,32 @@ class AppState extends ChangeNotifier {
         );
         if (hits.isNotEmpty) {
           _memoryInjection[conversation.id] = cfg.template.replaceAll(
-              '{{text}}', hits.map((h) => h.text).join('\n\n'));
+            '{{text}}',
+            hits.map((h) => h.text).join('\n\n'),
+          );
         }
       }
 
       if (docs.isNotEmpty) {
         final all = <ScoredChunk>[];
         for (final d in docs) {
-          all.addAll(await index.retrieve(
-            EmbeddingIndex.docCollection(d.id),
-            qv,
-            topK: cfg.insert,
-            threshold: cfg.threshold,
-            model: cfg.model,
-          ));
+          all.addAll(
+            await index.retrieve(
+              EmbeddingIndex.docCollection(d.id),
+              qv,
+              topK: cfg.insert,
+              threshold: cfg.threshold,
+              model: cfg.model,
+            ),
+          );
         }
         all.sort((a, b) => b.score.compareTo(a.score));
         final top = all.length > cfg.insert ? all.sublist(0, cfg.insert) : all;
         if (top.isNotEmpty) {
           _docInjection[conversation.id] = cfg.docTemplate.replaceAll(
-              '{{text}}', top.map((h) => h.text).join('\n\n'));
+            '{{text}}',
+            top.map((h) => h.text).join('\n\n'),
+          );
         }
       }
 
@@ -2839,8 +2901,11 @@ class AppState extends ChangeNotifier {
     }
     if (!_indexing.add(id)) return;
     try {
-      await index.indexLore(book.id, book.entries,
-          model: _embeddingConfig.model);
+      await index.indexLore(
+        book.id,
+        book.entries,
+        model: _embeddingConfig.model,
+      );
     } on ChatApiException catch (e) {
       _noteEmbedding('Could not index "${book.displayName}": ${e.message}');
     } catch (_) {
@@ -2871,7 +2936,9 @@ class AppState extends ChangeNotifier {
 
   /// Attaches/detaches a document to a chat (toggles).
   Future<void> toggleConversationDocument(
-      String conversationId, String docId) async {
+    String conversationId,
+    String docId,
+  ) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     if (!conversation.documentIds.remove(docId)) {
@@ -2939,8 +3006,11 @@ class AppState extends ChangeNotifier {
   }
 
   /// Updates a document's name and tags (no re-embedding).
-  Future<void> updateDocumentMeta(String id,
-      {String? name, List<String>? tags}) async {
+  Future<void> updateDocumentMeta(
+    String id, {
+    String? name,
+    List<String>? tags,
+  }) async {
     final i = _documents.indexWhere((d) => d.id == id);
     if (i == -1) return;
     _documents[i] = _documents[i].copyWith(name: name, tags: tags);
@@ -3172,13 +3242,19 @@ class AppState extends ChangeNotifier {
   /// block was opened. The stored segment's flag is still updated in memory, so
   /// a later Save carries it too and nothing else has to know where it came from.
   void setSummarySegmentCollapsed(
-      String conversationId, String segmentId, bool collapsed) {
+    String conversationId,
+    String segmentId,
+    bool collapsed,
+  ) {
     final cfg = _conversationById(conversationId)?.summary;
     if (cfg == null) return;
     for (final s in cfg.segments) {
       if (s.id != segmentId) continue;
       s.collapsed = collapsed;
-      final folded = _summaryFolds.putIfAbsent(conversationId, () => <String>{});
+      final folded = _summaryFolds.putIfAbsent(
+        conversationId,
+        () => <String>{},
+      );
       if (collapsed ? !folded.add(segmentId) : !folded.remove(segmentId)) {
         return; // Already recorded that way; nothing to write.
       }
@@ -3231,9 +3307,9 @@ class AppState extends ChangeNotifier {
   /// Every chat that currently has a summary, newest-updated first — the source
   /// for the Library's global "Summary" section.
   List<Conversation> get conversationsWithSummary => [
-        for (final c in _conversations)
-          if (c.summary != null) c,
-      ];
+    for (final c in _conversations)
+      if (c.summary != null) c,
+  ];
 
   // --- Response hint --------------------------------------------------------
   //
@@ -3255,8 +3331,10 @@ class AppState extends ChangeNotifier {
   /// How far from the newest end of the conversation a hint is injected, in
   /// messages. App-wide, and clamped here so a hand-edited store cannot place a
   /// hint somewhere the builder has to guess about.
-  int get responseHintDepth => _chatInterface.responseHintDepth
-      .clamp(kMinResponseHintDepth, kMaxResponseHintDepth);
+  int get responseHintDepth => _chatInterface.responseHintDepth.clamp(
+    kMinResponseHintDepth,
+    kMaxResponseHintDepth,
+  );
 
   /// The hint typed for [conversationId], or '' when it has none. Whether it is
   /// switched on is a separate question — see [activeResponseHint].
@@ -3360,8 +3438,9 @@ class AppState extends ChangeNotifier {
         'Set an image model and endpoint in the studio settings first.',
       );
     }
-    final conversation =
-        conversationId == null ? null : _conversationById(conversationId);
+    final conversation = conversationId == null
+        ? null
+        : _conversationById(conversationId);
     final result = await _imageClient.generate(
       config: config,
       prompt: config.composePrompt(prompt),
@@ -3424,9 +3503,9 @@ class AppState extends ChangeNotifier {
   /// The pictures filed under [characterId], newest first. A null [characterId]
   /// asks for the unattached ones, not for everything — [gallery] is everything.
   List<GalleryImage> galleryFor(String? characterId) => sortImages(
-        _gallery.where((image) => image.characterId == characterId).toList(),
-        GallerySort.newest,
-      );
+    _gallery.where((image) => image.characterId == characterId).toList(),
+    GallerySort.newest,
+  );
 
   /// Every tag across the whole gallery, sorted — what the tag-filter sheet
   /// lists.
@@ -3464,16 +3543,18 @@ class AppState extends ChangeNotifier {
     for (var i = 0; i < pictures.length; i++) {
       final ref = await storePicture(pictures[i]);
       if (ref == null) continue; // Nowhere to write it; skip rather than lie.
-      added.add(GalleryImage.create(
-        image: ref,
-        title: base.isEmpty
-            ? ''
-            : pictures.length == 1
-                ? base
-                : '$base ${i + 1}',
-        tags: List<String>.from(tags),
-        characterId: characterId,
-      ));
+      added.add(
+        GalleryImage.create(
+          image: ref,
+          title: base.isEmpty
+              ? ''
+              : pictures.length == 1
+              ? base
+              : '$base ${i + 1}',
+          tags: List<String>.from(tags),
+          characterId: characterId,
+        ),
+      );
     }
     if (added.isEmpty) return added;
     _gallery.insertAll(0, added);
@@ -3504,12 +3585,14 @@ class AppState extends ChangeNotifier {
         // Nowhere to write it, or nothing readable there: skip this one rather
         // than abandon the rest of the import.
         if (ref != null) {
-          added.add(GalleryImage.create(
-            image: ref,
-            title: upload.title.trim(),
-            tags: List<String>.from(tags),
-            characterId: characterId,
-          ));
+          added.add(
+            GalleryImage.create(
+              image: ref,
+              title: upload.title.trim(),
+              tags: List<String>.from(tags),
+              characterId: characterId,
+            ),
+          );
         }
       }
       onProgress?.call(i + 1, uploads.length);
@@ -3651,8 +3734,9 @@ class AppState extends ChangeNotifier {
       changed = true;
     }
     if (refs.contains(character.avatar) && character.avatar.isNotEmpty) {
-      character.avatar =
-          character.avatars.isEmpty ? '' : character.avatars.removeAt(0);
+      character.avatar = character.avatars.isEmpty
+          ? ''
+          : character.avatars.removeAt(0);
       changed = true;
     }
     if (changed) character.updatedAt = DateTime.now();
@@ -3815,7 +3899,10 @@ class AppState extends ChangeNotifier {
   /// saves. Floats are in-memory only (see [Conversation.toJson]); persisting
   /// them was the whole-store re-save behind the "placing it" hitch, and they
   /// deliberately vanish when the app is fully closed.
-  void _mutateFloats(String conversationId, void Function(Conversation) change) {
+  void _mutateFloats(
+    String conversationId,
+    void Function(Conversation) change,
+  ) {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     change(conversation);
@@ -3823,27 +3910,30 @@ class AppState extends ChangeNotifier {
   }
 
   /// Adds [float] to a chat, or raises the matching one when it is already there.
-  Future<void> _addFloat(String conversationId, FloatingImage float) async =>
-      _mutateFloats(conversationId, (c) {
-        final existing =
-            c.floatingImages.indexWhere((f) => f.key == float.key);
-        if (existing != -1) {
-          c.floatingImages.add(c.floatingImages.removeAt(existing));
-          return;
-        }
-        // Each new float is offset a little from the last so a run of them fans
-        // out instead of hiding one another exactly. These are centre positions.
-        final step = c.floatingImages.length % 4;
-        float
-          ..x = FloatingImage.clampFraction(0.2 + step * 0.05)
-          ..y = FloatingImage.clampFraction(0.24 + step * 0.06);
-        c.floatingImages.add(float);
-      });
+  Future<void> _addFloat(
+    String conversationId,
+    FloatingImage float,
+  ) async => _mutateFloats(conversationId, (c) {
+    final existing = c.floatingImages.indexWhere((f) => f.key == float.key);
+    if (existing != -1) {
+      c.floatingImages.add(c.floatingImages.removeAt(existing));
+      return;
+    }
+    // Each new float is offset a little from the last so a run of them fans
+    // out instead of hiding one another exactly. These are centre positions.
+    final step = c.floatingImages.length % 4;
+    float
+      ..x = FloatingImage.clampFraction(0.2 + step * 0.05)
+      ..y = FloatingImage.clampFraction(0.24 + step * 0.06);
+    c.floatingImages.add(float);
+  });
 
   /// Takes [float] back off the chat.
   Future<void> unfloatImage(String conversationId, FloatingImage float) async =>
-      _mutateFloats(conversationId,
-          (c) => c.floatingImages.removeWhere((f) => f.key == float.key));
+      _mutateFloats(
+        conversationId,
+        (c) => c.floatingImages.removeWhere((f) => f.key == float.key),
+      );
 
   Future<void> clearFloatingImages(String conversationId) async =>
       _mutateFloats(conversationId, (c) => c.floatingImages.clear());
@@ -3867,8 +3957,9 @@ class AppState extends ChangeNotifier {
   }) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
-    final index =
-        conversation.floatingImages.indexWhere((f) => f.key == float.key);
+    final index = conversation.floatingImages.indexWhere(
+      (f) => f.key == float.key,
+    );
     if (index == -1) return;
     final stored = conversation.floatingImages[index];
     if (x != null) stored.x = FloatingImage.clampFraction(x);
@@ -3883,7 +3974,9 @@ class AppState extends ChangeNotifier {
     }
     // The list's order *is* z-order, so the last one is on top.
     if (raise && index != conversation.floatingImages.length - 1) {
-      conversation.floatingImages.add(conversation.floatingImages.removeAt(index));
+      conversation.floatingImages.add(
+        conversation.floatingImages.removeAt(index),
+      );
     }
   }
 
@@ -3897,18 +3990,19 @@ class AppState extends ChangeNotifier {
       if (float.imageId.isNotEmpty) {
         final image = galleryImageById(float.imageId);
         if (image == null) continue;
-        out.add(FloatedPicture(
-          float: float,
-          ref: image.image,
-          title: image.displayTitle,
-        ));
+        out.add(
+          FloatedPicture(
+            float: float,
+            ref: image.image,
+            title: image.displayTitle,
+          ),
+        );
       } else if (float.imageRef.isNotEmpty) {
         out.add(FloatedPicture(float: float, ref: float.imageRef, title: ''));
       }
     }
     return out;
   }
-
 
   /// Every greeting [character] offers, in card order, as the swipes of the
   /// opening turn — so a card's alternate greetings are finally reachable: flip
@@ -3922,9 +4016,9 @@ class AppState extends ChangeNotifier {
   /// identity (e.g. after the user starts impersonating) — resolution happens at
   /// prompt-build and display time, not once at write time.
   static List<MessageVariant> _greetingSwipes(Character character) => [
-        for (final greeting in character.greetings)
-          MessageVariant(content: greeting),
-      ];
+    for (final greeting in character.greetings)
+      MessageVariant(content: greeting),
+  ];
 
   /// Opens a fresh thread bound to [character]: titles it after the character,
   /// stores the composed persona as the thread's (invisible) system prompt, and
@@ -3946,8 +4040,9 @@ class AppState extends ChangeNotifier {
     }
     final greetings = _greetingSwipes(character);
     if (greetings.isNotEmpty) {
-      conversation.messages
-          .add(ChatMessage(role: 'assistant', swipes: greetings));
+      conversation.messages.add(
+        ChatMessage(role: 'assistant', swipes: greetings),
+      );
     }
     _conversations.insert(0, conversation);
     _activeId = conversation.id;
@@ -3961,11 +4056,10 @@ class AppState extends ChangeNotifier {
   /// Opens a fresh thread, reusing an existing empty one so repeated taps do
   /// not pile up blank entries.
   void newConversation() {
-    final existing =
-        _conversations.where((c) => c.isEmpty).cast<Conversation?>().firstWhere(
-              (c) => true,
-              orElse: () => null,
-            );
+    final existing = _conversations
+        .where((c) => c.isEmpty)
+        .cast<Conversation?>()
+        .firstWhere((c) => true, orElse: () => null);
     final target = existing ?? Conversation.empty();
     if (existing == null) _conversations.insert(0, target);
     // Seed the default persona onto a genuinely fresh thread. A reused empty
@@ -4042,8 +4136,9 @@ class AppState extends ChangeNotifier {
       if (character != null) {
         final greetings = _greetingSwipes(character);
         if (greetings.isNotEmpty) {
-          conversation.messages
-              .add(ChatMessage(role: 'assistant', swipes: greetings));
+          conversation.messages.add(
+            ChatMessage(role: 'assistant', swipes: greetings),
+          );
         }
       }
     } else {
@@ -4113,8 +4208,8 @@ class AppState extends ChangeNotifier {
   /// A copy under an unused id, for the rare case where an imported thread
   /// claims an id the list already holds.
   Conversation _renumber(Conversation source) => source.copyAs(
-        id: '${DateTime.now().microsecondsSinceEpoch}-${_conversations.length}',
-      );
+    id: '${DateTime.now().microsecondsSinceEpoch}-${_conversations.length}',
+  );
 
   /// Sends [text] with any [images] attached, and streams the reply into a
   /// placeholder turn. A picture on its own (no text) is a perfectly good send.
@@ -4139,14 +4234,18 @@ class AppState extends ChangeNotifier {
     // In a group chat the user's turn is tagged with whoever they are speaking
     // as, so the transcript and the wire can label it (mirrors how each member's
     // replies carry their speaker).
-    final speaking = conversation.isGroup ? impersonationFor(conversation) : null;
-    conversation.messages.add(ChatMessage(
-      role: 'user',
-      content: prompt,
-      images: images,
-      speakerId: speaking?.id,
-      speakerName: speaking?.displayName,
-    ));
+    final speaking = conversation.isGroup
+        ? impersonationFor(conversation)
+        : null;
+    conversation.messages.add(
+      ChatMessage(
+        role: 'user',
+        content: prompt,
+        images: images,
+        speakerId: speaking?.id,
+        speakerName: speaking?.displayName,
+      ),
+    );
 
     // In a group chat nobody replies automatically: the user's turn just lands
     // and they tap a chip to pick who speaks. The exception is a chosen
@@ -4334,8 +4433,10 @@ class AppState extends ChangeNotifier {
     void Function(String text)? onProgress,
   }) async {
     if (_streaming) {
-      throw ChatApiException('Something else is generating — wait for it to '
-          'finish, or stop it first.');
+      throw ChatApiException(
+        'Something else is generating — wait for it to '
+        'finish, or stop it first.',
+      );
     }
     final base = _resolveProvider(defaultPreset);
     if (base == null) {
@@ -4444,11 +4545,14 @@ class AppState extends ChangeNotifier {
   /// the options menu returns the thread to manual (nobody). [value] is a
   /// member's [Character.id], [kGroupResponderRandom], or null to clear.
   Future<void> toggleGroupResponder(
-      String conversationId, String? value) async {
+    String conversationId,
+    String? value,
+  ) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
-    conversation.groupResponder =
-        conversation.groupResponder == value ? null : value;
+    conversation.groupResponder = conversation.groupResponder == value
+        ? null
+        : value;
     notifyListeners();
     await _saveConversations();
   }
@@ -4484,11 +4588,13 @@ class AppState extends ChangeNotifier {
   /// the provider returns in its own field, and what the model writes inline
   /// between the preset's thinking tags. Either way the reply text stays clean
   /// and the thinking is timed, so the chat can show "Thought for X seconds".
-  Future<void> _generate(Conversation conversation,
-      {int? swipeInto,
-      int? continueAt,
-      bool nudgeNewReply = false,
-      Character? responder}) async {
+  Future<void> _generate(
+    Conversation conversation, {
+    int? swipeInto,
+    int? continueAt,
+    bool nudgeNewReply = false,
+    Character? responder,
+  }) async {
     final preset = presetFor(conversation);
     final base = _resolveProvider(preset);
     if (base == null) return;
@@ -4514,17 +4620,20 @@ class AppState extends ChangeNotifier {
     if (continueAt != null) {
       target = continueAt;
     } else if (swipeInto == null) {
-      conversation.messages.add(ChatMessage(
-        role: 'assistant',
-        content: '',
-        speakerId: conversation.isGroup ? speaker?.id : null,
-        speakerName: conversation.isGroup ? speaker?.displayName : null,
-      ));
+      conversation.messages.add(
+        ChatMessage(
+          role: 'assistant',
+          content: '',
+          speakerId: conversation.isGroup ? speaker?.id : null,
+          speakerName: conversation.isGroup ? speaker?.displayName : null,
+        ),
+      );
       target = conversation.messages.length - 1;
     } else {
       target = swipeInto;
-      conversation.messages[target] = conversation.messages[target]
-          .addSwipe(const MessageVariant(content: ''));
+      conversation.messages[target] = conversation.messages[target].addSwipe(
+        const MessageVariant(content: ''),
+      );
     }
     // What a continuation is extending: kept aside so every write below is
     // "everything that was already there, plus what has arrived since".
@@ -4550,7 +4659,11 @@ class AppState extends ChangeNotifier {
 
     // The placeholder turn added above is not part of its own prompt, so the
     // window always stops short of [target].
-    final assembled = _assemble(conversation, historyEnd: target, responder: speaker);
+    final assembled = _assemble(
+      conversation,
+      historyEnd: target,
+      responder: speaker,
+    );
     final history = _wirePayload(
       assembled.messages,
       continuation: continueAt == null ? null : prefix,
@@ -4594,17 +4707,23 @@ class AppState extends ChangeNotifier {
           answer.trim().isNotEmpty) {
         thinkingMs = clock.elapsedMilliseconds;
       }
-      _replaceAt(conversation, target,
-          content: prefix + answer,
-          reasoning: _joinThinking(prefixReasoning, thinking),
-          thinkingMs: thinkingMs);
+      _replaceAt(
+        conversation,
+        target,
+        content: prefix + answer,
+        reasoning: _joinThinking(prefixReasoning, thinking),
+        thinkingMs: thinkingMs,
+      );
       notifyListeners();
     }
 
     var painted = -_streamPaintMs; // so the first delta always shows at once
     try {
-      final deltas =
-          _client.streamChat(provider: provider, history: history, params: params);
+      final deltas = _client.streamChat(
+        provider: provider,
+        history: history,
+        params: params,
+      );
       await for (final delta in deltas) {
         if (delta.usage != null) reported = delta.usage;
         if (delta.reasoning.isNotEmpty) thoughts.write(delta.reasoning);
@@ -4633,7 +4752,9 @@ class AppState extends ChangeNotifier {
         // failure notice would be the worst possible reading of "continue".
         if (continueAt != null) {
           _appendErrorTurn(
-              conversation, 'The model had nothing more to add to that reply.');
+            conversation,
+            'The model had nothing more to add to that reply.',
+          );
         } else {
           _replaceAt(
             conversation,
@@ -4648,32 +4769,47 @@ class AppState extends ChangeNotifier {
           );
         }
       } else {
-        _replaceAt(conversation, target,
-            content: prefix + answer,
-            reasoning: _joinThinking(prefixReasoning, thinking),
-            thinkingMs: thinkingMs);
+        _replaceAt(
+          conversation,
+          target,
+          content: prefix + answer,
+          reasoning: _joinThinking(prefixReasoning, thinking),
+          thinkingMs: thinkingMs,
+        );
       }
     } on ChatApiException catch (e) {
       if (_stopRequested) {
         // Fold in anything the last paint left behind, so stopping keeps every
         // word that actually arrived rather than the last painted batch.
         paint();
-        _finishStopped(conversation, target, prefix + answer,
-            reasoning: _joinThinking(prefixReasoning, thinking),
-            thinkingMs: thinkingMs);
+        _finishStopped(
+          conversation,
+          target,
+          prefix + answer,
+          reasoning: _joinThinking(prefixReasoning, thinking),
+          thinkingMs: thinkingMs,
+        );
       } else {
         // A failed request rotates an error-based pool to the next key.
         _advanceKeyOnError(base);
         // Same again for a failed continuation: the reply stands, and the
         // failure is reported under it instead of on top of it.
         if (continueAt != null) {
-          _replaceAt(conversation, target,
-              content: prefix + answer,
-              reasoning: _joinThinking(prefixReasoning, thinking));
+          _replaceAt(
+            conversation,
+            target,
+            content: prefix + answer,
+            reasoning: _joinThinking(prefixReasoning, thinking),
+          );
           _appendErrorTurn(conversation, e.message);
         } else {
-          _replaceAt(conversation, target,
-              content: e.message, reasoning: '', error: true);
+          _replaceAt(
+            conversation,
+            target,
+            content: e.message,
+            reasoning: '',
+            error: true,
+          );
         }
       }
     } finally {
@@ -4690,8 +4826,8 @@ class AppState extends ChangeNotifier {
         reported ??
             TokenUsage(
               inputTokens: assembled.totalTokens,
-              outputTokens: _tokenizer.estimate(answer) +
-                  _tokenizer.estimate(thinking),
+              outputTokens:
+                  _tokenizer.estimate(answer) + _tokenizer.estimate(thinking),
               estimated: true,
             ),
       );
@@ -4789,7 +4925,8 @@ class AppState extends ChangeNotifier {
   /// of it. Without it the model is looking at its own last message and will
   /// often just carry on writing that instead of answering afresh.
   String _newReplyNudge(Conversation conversation, {Character? speaker}) {
-    final who = speaker?.displayName ??
+    final who =
+        speaker?.displayName ??
         characterFor(conversation, conversation.characterId)?.displayName ??
         conversation.characterName ??
         '';
@@ -4801,10 +4938,12 @@ class AppState extends ChangeNotifier {
   /// Adds an assistant turn that only carries an error, for the failures that
   /// happen before a request is ever made — a budget standing in the way, say.
   void _appendErrorTurn(Conversation conversation, String message) {
-    conversation.messages.add(ChatMessage(
-      role: 'assistant',
-      swipes: <MessageVariant>[MessageVariant(content: message, error: true)],
-    ));
+    conversation.messages.add(
+      ChatMessage(
+        role: 'assistant',
+        swipes: <MessageVariant>[MessageVariant(content: message, error: true)],
+      ),
+    );
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
     notifyListeners();
@@ -4831,14 +4970,18 @@ class AppState extends ChangeNotifier {
   /// Replaces the content of the message at [index] — the "edit turn" action.
   /// An empty (trimmed) edit is ignored.
   Future<void> editMessage(
-      String conversationId, int index, String content) async {
+    String conversationId,
+    int index,
+    String content,
+  ) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     if (index < 0 || index >= conversation.messages.length) return;
-    conversation.messages[index] =
-        conversation.messages[index].copyWith(content: trimmed);
+    conversation.messages[index] = conversation.messages[index].copyWith(
+      content: trimmed,
+    );
     conversation.updatedAt = DateTime.now();
     notifyListeners();
     await _saveConversations();
@@ -4891,8 +5034,9 @@ class AppState extends ChangeNotifier {
   Future<String> forkConversation(String conversationId, int index) async {
     final source = _conversationById(conversationId);
     if (source == null) return '';
-    final end =
-        source.messages.isEmpty ? -1 : index.clamp(0, source.messages.length - 1);
+    final end = source.messages.isEmpty
+        ? -1
+        : index.clamp(0, source.messages.length - 1);
     final copied = <ChatMessage>[
       for (var i = 0; i <= end; i++)
         ChatMessage.fromJson(source.messages[i].toJson()),
@@ -4936,7 +5080,9 @@ class AppState extends ChangeNotifier {
     final rootId = rootIdOf(_conversations, source.id);
     final root = _conversationById(rootId) ?? source;
     final inTree = _conversations
-        .where((c) => c.id != rootId && rootIdOf(_conversations, c.id) == rootId)
+        .where(
+          (c) => c.id != rootId && rootIdOf(_conversations, c.id) == rootId,
+        )
         .length;
     return '${root.title} · Branch ${inTree + 1}';
   }
@@ -4972,7 +5118,10 @@ class AppState extends ChangeNotifier {
   /// turn's alternatives feel choppy. Nothing is lost — the save still lands, just
   /// after the frame that showed the new text.
   Future<void> setSwipe(
-      String conversationId, int index, int swipeIndex) async {
+    String conversationId,
+    int index,
+    int swipeIndex,
+  ) async {
     if (_streaming) return;
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
@@ -5001,7 +5150,8 @@ class AppState extends ChangeNotifier {
   /// A plain-text transcript of messages `[start, end)` for the summarizer.
   String _summaryTranscript(Conversation c, int start, int end) {
     final userName = impersonationFor(c)?.displayName ?? 'User';
-    final charName = characterFor(c, c.characterId)?.displayName ??
+    final charName =
+        characterFor(c, c.characterId)?.displayName ??
         c.characterName ??
         'Character';
     final msgs = c.messages;
@@ -5037,8 +5187,12 @@ class AppState extends ChangeNotifier {
     return _applyKey(resolved);
   }
 
-  Future<void> _runSummary(Conversation c, ChatSummary cfg,
-      {required bool force, bool fromStart = false}) async {
+  Future<void> _runSummary(
+    Conversation c,
+    ChatSummary cfg, {
+    required bool force,
+    bool fromStart = false,
+  }) async {
     if (_summarizing.contains(c.id)) return;
     final provider = _summaryProvider(cfg, c);
     if (provider == null) return;
@@ -5050,8 +5204,13 @@ class AppState extends ChangeNotifier {
     for (final r in ranges) {
       final transcript = _summaryTranscript(c, r.$1, r.$2);
       if (transcript.isEmpty) continue;
-      requests.add(SummaryRequest(
-          startIndex: r.$1, endIndex: r.$2, transcript: transcript));
+      requests.add(
+        SummaryRequest(
+          startIndex: r.$1,
+          endIndex: r.$2,
+          transcript: transcript,
+        ),
+      );
     }
     if (requests.isEmpty) return;
 
@@ -5074,9 +5233,11 @@ class AppState extends ChangeNotifier {
             .map((r) => r.error)
             .firstWhere((e) => e != null && e.isNotEmpty, orElse: () => null);
         _lastSummaryError = err ?? 'The summariser returned nothing.';
-        _raiseSummaryNotice(err == null
-            ? 'The summariser returned nothing.'
-            : 'Summary failed: $err');
+        _raiseSummaryNotice(
+          err == null
+              ? 'The summariser returned nothing.'
+              : 'Summary failed: $err',
+        );
         return;
       }
       _lastSummaryError = null;
@@ -5087,26 +5248,30 @@ class AppState extends ChangeNotifier {
         final manual = cfg.segments.where((s) => s.manual).toList();
         cfg.segments
           ..clear()
-          ..add(SummarySegment(
-            id: '$stamp',
-            title: 'Summary through message ${ok.last.endIndex}',
-            content: content,
-            startIndex: 0,
-            endIndex: ok.last.endIndex,
-            tokens: estimateTokens(content),
-          ))
+          ..add(
+            SummarySegment(
+              id: '$stamp',
+              title: 'Summary through message ${ok.last.endIndex}',
+              content: content,
+              startIndex: 0,
+              endIndex: ok.last.endIndex,
+              tokens: estimateTokens(content),
+            ),
+          )
           ..addAll(manual);
       } else {
         for (var i = 0; i < ok.length; i++) {
           final r = ok[i];
-          cfg.segments.add(SummarySegment(
-            id: '$stamp-$i',
-            title: 'Messages ${r.startIndex + 1}–${r.endIndex}',
-            content: r.text,
-            startIndex: r.startIndex,
-            endIndex: r.endIndex,
-            tokens: estimateTokens(r.text),
-          ));
+          cfg.segments.add(
+            SummarySegment(
+              id: '$stamp-$i',
+              title: 'Messages ${r.startIndex + 1}–${r.endIndex}',
+              content: r.text,
+              startIndex: r.startIndex,
+              endIndex: r.endIndex,
+              tokens: estimateTokens(r.text),
+            ),
+          );
         }
       }
       cfg.lastSummarizedIndex = ok.last.endIndex;
@@ -5127,7 +5292,8 @@ class AppState extends ChangeNotifier {
     _summaryNoticeSeq++;
   }
 
-  Provider? _resolveProvider(Preset? preset) {    Provider? base = activeProvider;
+  Provider? _resolveProvider(Preset? preset) {
+    Provider? base = activeProvider;
     // Fall back to the preset's bound provider only when there is no active one.
     if (base == null && preset?.providerId != null) {
       for (final p in _providers) {
@@ -5176,7 +5342,8 @@ class AppState extends ChangeNotifier {
   }
 
   static const int _perMessageOverhead = 4; // mirrors PromptBuilder
-  int _cost(ChatMessage m) => _tokenizer.estimate(m.content) + _perMessageOverhead;
+  int _cost(ChatMessage m) =>
+      _tokenizer.estimate(m.content) + _perMessageOverhead;
 
   /// The app-wide tokenizer choice (OpenAI / Anthropic / Custom).
   TokenizerConfig get tokenizerConfig => _tokenizerConfig;
@@ -5246,17 +5413,23 @@ class AppState extends ChangeNotifier {
   /// what the user inspects is what the model receives. [historyEnd], when set,
   /// caps the messages considered (exclusive), letting a caller rebuild the
   /// prompt as it stood at an earlier turn.
-  AssembledPrompt _assemble(Conversation conversation,
-      {int? historyEnd, Character? responder}) {
+  AssembledPrompt _assemble(
+    Conversation conversation, {
+    int? historyEnd,
+    Character? responder,
+  }) {
     final preset = presetFor(conversation);
     final model = _resolveProvider(preset)?.model ?? '';
 
     final considered = historyEnd == null
         ? conversation.messages
-        : conversation.messages.take(historyEnd.clamp(0, conversation.messages.length)).toList();
+        : conversation.messages
+              .take(historyEnd.clamp(0, conversation.messages.length))
+              .toList();
     // Failure notices are display-only, so they never go back to the model.
-    final priorTurns =
-        considered.where((m) => !m.error).toList(growable: false);
+    final priorTurns = considered
+        .where((m) => !m.error)
+        .toList(growable: false);
 
     // A preset's {{input}} is the latest user turn in the considered window.
     var input = '';
@@ -5282,7 +5455,9 @@ class AppState extends ChangeNotifier {
     final userName = impersonation?.displayName ?? 'User';
     final persona = impersonation == null
         ? ''
-        : impersonation.userPersona(charName: character?.displayName ?? 'the character');
+        : impersonation.userPersona(
+            charName: character?.displayName ?? 'the character',
+          );
     final maxContext = _effectiveMaxContext(preset, model);
 
     // Which of the three scenarios this turn runs under, resolved once here so
@@ -5323,8 +5498,14 @@ class AppState extends ChangeNotifier {
       if (trimmed.isEmpty) return;
       final m = ChatMessage(role: 'system', content: trimmed);
       prefix.add(m);
-      sections.add(PromptSection(
-        label: label, role: 'system', tokens: _cost(m), messageCount: 1));
+      sections.add(
+        PromptSection(
+          label: label,
+          role: 'system',
+          tokens: _cost(m),
+          messageCount: 1,
+        ),
+      );
     }
 
     // Group chats speak in one thread of many voices, so every turn is labelled
@@ -5346,9 +5527,9 @@ class AppState extends ChangeNotifier {
         'Group',
         _groupBriefing(
           responder: character,
-          others: participantsOf(conversation)
-              .where((c) => c.id != character.id)
-              .toList(),
+          others: participantsOf(
+            conversation,
+          ).where((c) => c.id != character.id).toList(),
           userName: userName,
         ),
       );
@@ -5401,8 +5582,10 @@ class AppState extends ChangeNotifier {
       if (character == null) {
         addPrefix('Character (stored)', conversation.systemPrompt);
       } else if (!_presetEmitsDefinition(preset)) {
-        addPrefix('Character definition',
-            character.definition(userName: userName, scenario: scenario));
+        addPrefix(
+          'Character definition',
+          character.definition(userName: userName, scenario: scenario),
+        );
       }
       // A scenario the user *chose* — plugged in from the library, or written for
       // this chat — must reach the model even under a preset that carries no
@@ -5433,9 +5616,10 @@ class AppState extends ChangeNotifier {
       if (!_presetEmitsExamples(preset)) {
         addPrefix(
           'World info',
-          [lore.exampleTop, lore.exampleBottom]
-              .where((s) => s.isNotEmpty)
-              .join('\n'),
+          [
+            lore.exampleTop,
+            lore.exampleBottom,
+          ].where((s) => s.isNotEmpty).join('\n'),
         );
       }
       messages = <ChatMessage>[...prefix, ...built.messages];
@@ -5454,13 +5638,15 @@ class AppState extends ChangeNotifier {
       // would send both and leave the model to guess which setting it is in.
       // Rebuilding costs anything an import had merged into that snapshot, which
       // is the lesser loss — and only happens on a thread with no preset at all.
-      final rebuild = character != null &&
-          (conversation.isGroup || chosenScenario);
+      final rebuild =
+          character != null && (conversation.isGroup || chosenScenario);
       addPrefix(
         'Character (stored)',
         rebuild
             ? character.composedSystemPrompt(
-                userName: userName, scenario: scenario)
+                userName: userName,
+                scenario: scenario,
+              )
             : conversation.systemPrompt,
       );
       // With the card gone there is nothing to rebuild from, so a scenario
@@ -5499,26 +5685,32 @@ class AppState extends ChangeNotifier {
           role: 'user',
           content: PromptBuilder.wrapResponseHint(hintText),
         );
-        final at = (withHint.length - responseHintDepth)
-            .clamp(0, withHint.length);
+        final at = (withHint.length - responseHintDepth).clamp(
+          0,
+          withHint.length,
+        );
         withHint.insert(at, hintMessage);
       }
       messages = <ChatMessage>[...prefix, ...withHint];
       if (history.isNotEmpty) {
-        sections.add(PromptSection(
-          label: 'Chat history',
-          role: 'mixed',
-          tokens: history.fold<int>(0, (s, m) => s + _cost(m)),
-          messageCount: history.length,
-        ));
+        sections.add(
+          PromptSection(
+            label: 'Chat history',
+            role: 'mixed',
+            tokens: history.fold<int>(0, (s, m) => s + _cost(m)),
+            messageCount: history.length,
+          ),
+        );
       }
       if (hintMessage != null) {
-        sections.add(PromptSection(
-          label: 'Response hint (depth $responseHintDepth)',
-          role: hintMessage.role,
-          tokens: _cost(hintMessage),
-          messageCount: 1,
-        ));
+        sections.add(
+          PromptSection(
+            label: 'Response hint (depth $responseHintDepth)',
+            role: hintMessage.role,
+            tokens: _cost(hintMessage),
+            messageCount: 1,
+          ),
+        );
       }
     }
 
@@ -5638,12 +5830,15 @@ class AppState extends ChangeNotifier {
   }) async {
     final conversation = _conversationById(conversationId);
     if (conversation == null || image.ref.trim().isEmpty) return;
-    conversation.messages.add(ChatMessage(
-      role: 'user',
-      content: text.trim(),
-      images: <MessageImage>[image],
-    ));
-    if (conversation.title.trim().isEmpty || conversation.messages.length == 1) {
+    conversation.messages.add(
+      ChatMessage(
+        role: 'user',
+        content: text.trim(),
+        images: <MessageImage>[image],
+      ),
+    );
+    if (conversation.title.trim().isEmpty ||
+        conversation.messages.length == 1) {
       conversation.retitleFrom(text.trim().isEmpty ? 'Picture' : text);
     }
     conversation.updatedAt = DateTime.now();
@@ -5655,15 +5850,20 @@ class AppState extends ChangeNotifier {
   /// The exact prompt behind the message at [index] — for "View prompt"/"Info".
   /// An assistant turn shows the prompt that *produced* it (history before it);
   /// a user turn shows what *would* be sent next (history through it).
-  AssembledPrompt assemblePromptForMessage(Conversation conversation, int index) {
+  AssembledPrompt assemblePromptForMessage(
+    Conversation conversation,
+    int index,
+  ) {
     final safe = index.clamp(0, conversation.messages.length);
-    final isUser = safe < conversation.messages.length &&
+    final isUser =
+        safe < conversation.messages.length &&
         conversation.messages[safe].isUser;
     final end = isUser ? safe + 1 : safe;
     // For a group, an assistant turn was produced by a specific member, so its
     // prompt is rebuilt from that member's seat rather than the round-robin
     // guess; a user turn shows what the next speaker would receive.
-    final responder = conversation.isGroup && !isUser && safe < conversation.messages.length
+    final responder =
+        conversation.isGroup && !isUser && safe < conversation.messages.length
         ? characterFor(conversation, conversation.messages[safe].speakerId)
         : null;
     return _assemble(conversation, historyEnd: end, responder: responder);
@@ -5688,8 +5888,10 @@ class AppState extends ChangeNotifier {
     required String userName,
   }) {
     final buffer = StringBuffer()
-      ..writeln('This is a group roleplay with several characters. '
-          'Write the next reply as ${responder.displayName} only.');
+      ..writeln(
+        'This is a group roleplay with several characters. '
+        'Write the next reply as ${responder.displayName} only.',
+      );
     if (others.isNotEmpty) {
       buffer
         ..writeln()
@@ -5704,9 +5906,11 @@ class AppState extends ChangeNotifier {
     }
     buffer
       ..writeln()
-      ..writeln('$userName is the user. Stay in character as '
-          '${responder.displayName}; do not speak, act, or narrate for the '
-          'other characters or for $userName.');
+      ..writeln(
+        '$userName is the user. Stay in character as '
+        '${responder.displayName}; do not speak, act, or narrate for the '
+        'other characters or for $userName.',
+      );
     return Character.resolveMacros(
       buffer.toString().trim(),
       charName: responder.displayName,
@@ -5809,20 +6013,20 @@ class AppState extends ChangeNotifier {
   }
 
   GenParams _paramsFor(Preset p) => GenParams(
-        temperature: p.temperature,
-        maxTokens: p.maxResponseTokens,
-        topP: p.topP,
-        topK: p.topK,
-        frequencyPenalty: p.frequencyPenalty,
-        presencePenalty: p.presencePenalty,
-        seed: p.seed,
-        n: p.n,
-        stop: p.stopSequences,
-        stream: p.stream,
-        thinking: p.thinking,
-        thinkingBudget: p.thinkingBudget,
-        reasoningEffort: p.reasoningEffort,
-      );
+    temperature: p.temperature,
+    maxTokens: p.maxResponseTokens,
+    topP: p.topP,
+    topK: p.topK,
+    frequencyPenalty: p.frequencyPenalty,
+    presencePenalty: p.presencePenalty,
+    seed: p.seed,
+    n: p.n,
+    stop: p.stopSequences,
+    stream: p.stream,
+    thinking: p.thinking,
+    thinkingBudget: p.thinkingBudget,
+    reasoningEffort: p.reasoningEffort,
+  );
 
   /// Aborts streaming and keeps whatever text already arrived.
   void stop() {
@@ -5894,8 +6098,13 @@ class AppState extends ChangeNotifier {
       }
       return;
     }
-    _replaceAt(conversation, index,
-        content: partial, reasoning: reasoning, thinkingMs: thinkingMs);
+    _replaceAt(
+      conversation,
+      index,
+      content: partial,
+      reasoning: reasoning,
+      thinkingMs: thinkingMs,
+    );
   }
 
   void _moveToTop(Conversation conversation) {

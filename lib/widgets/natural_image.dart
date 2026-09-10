@@ -12,11 +12,8 @@ const Key naturalImageFrameKey = ValueKey('natural-image-frame');
 /// Draws inside a [NaturalFrame]: [size] is the frame's own box, and [image] is
 /// the frame's picture already resolved at the width it is drawn at — null when
 /// there is nothing drawable, which is when a fallback belongs.
-typedef NaturalFrameBuilder = Widget Function(
-  BuildContext context,
-  Size size,
-  ImageProvider? image,
-);
+typedef NaturalFrameBuilder =
+    Widget Function(BuildContext context, Size size, ImageProvider? image);
 
 /// A box laid out at **[imageRef]'s own** proportions across the full width it is
 /// given: a 1:1 avatar is a square, a 16:9 one is a band, a 3:4 one is a portrait.
@@ -48,6 +45,8 @@ class NaturalFrame extends StatefulWidget {
     required this.builder,
     this.placeholderRatio = 1,
     this.maxHeightFactor = 0.72,
+    this.displayWidth,
+    this.onRatioResolved,
   });
 
   /// A picture reference: `local:<file>`, an `http(s)` URL, or legacy base64 —
@@ -61,6 +60,15 @@ class NaturalFrame extends StatefulWidget {
 
   /// Cap on the drawn height, as a fraction of the viewport height.
   final double maxHeightFactor;
+
+  /// Logical width the caller has already allocated to this picture. Mosaic
+  /// callers know this before layout and pass it so the first provider is decoded
+  /// at the tile's size rather than at the viewport's width.
+  final double? displayWidth;
+
+  /// Reports a newly decoded intrinsic width/height ratio to a parent layout.
+  /// Cached ratios are reported after dependencies are available as well.
+  final ValueChanged<double>? onRatioResolved;
 
   @override
   State<NaturalFrame> createState() => _NaturalFrameState();
@@ -88,6 +96,8 @@ class _NaturalFrameState extends State<NaturalFrame> {
     if (old.imageRef != widget.imageRef) {
       _ratio = null;
       _sync();
+    } else if (old.displayWidth != widget.displayWidth) {
+      _sync();
     }
   }
 
@@ -98,7 +108,9 @@ class _NaturalFrameState extends State<NaturalFrame> {
       // A header picture is the largest thing on the page, so it is asked for at
       // the full width it will occupy — but still through the shared, bucketed,
       // deduplicated cache, so it is decoded once for the whole app.
-      displaySize: _width > 0 ? _width : MediaQuery.sizeOf(context).width,
+      displaySize:
+          widget.displayWidth ??
+          (_width > 0 ? _width : MediaQuery.sizeOf(context).width),
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
     if (provider == null) {
@@ -106,22 +118,32 @@ class _NaturalFrameState extends State<NaturalFrame> {
       if (_provider != null) _provider = null;
       return;
     }
-    if (provider == _provider && _stream != null) return;
+    final knownRatio = _ratio;
+    if (knownRatio != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onRatioResolved?.call(knownRatio);
+      });
+    }
+    if (provider == _provider) return;
     _detach();
     _provider = provider;
     // Already known: no listener needed at all, so nothing settles.
     if (_ratio != null) return;
     final stream = provider.resolve(ImageConfiguration.empty);
-    final listener = ImageStreamListener((info, _) {
-      final w = info.image.width.toDouble();
-      final h = info.image.height.toDouble();
-      if (w <= 0 || h <= 0) return;
-      final ratio = w / h;
-      noteAvatarRatio(widget.imageRef, ratio);
-      if (mounted && ratio != _ratio) setState(() => _ratio = ratio);
-    }, onError: (_, _) {
-      if (mounted && _provider != null) setState(() => _provider = null);
-    });
+    final listener = ImageStreamListener(
+      (info, _) {
+        final w = info.image.width.toDouble();
+        final h = info.image.height.toDouble();
+        if (w <= 0 || h <= 0) return;
+        final ratio = w / h;
+        noteAvatarRatio(widget.imageRef, ratio);
+        widget.onRatioResolved?.call(ratio);
+        if (mounted && ratio != _ratio) setState(() => _ratio = ratio);
+      },
+      onError: (_, _) {
+        if (mounted && _provider != null) setState(() => _provider = null);
+      },
+    );
     _stream = stream;
     _listener = listener;
     stream.addListener(listener);
@@ -205,6 +227,8 @@ class NaturalImage extends StatelessWidget {
     required this.imageRef,
     this.placeholderRatio = 1,
     this.maxHeightFactor = 0.72,
+    this.displayWidth,
+    this.onRatioResolved,
     this.fallback,
     this.overlay,
   });
@@ -219,6 +243,11 @@ class NaturalImage extends StatelessWidget {
   /// Cap on the drawn height, as a fraction of the viewport height.
   final double maxHeightFactor;
 
+  /// Logical width already allocated by a parent mosaic, when known.
+  final double? displayWidth;
+
+  final ValueChanged<double>? onRatioResolved;
+
   /// Drawn instead when there is no usable picture.
   final Widget? fallback;
 
@@ -229,24 +258,25 @@ class NaturalImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => NaturalFrame(
-        imageRef: imageRef,
-        placeholderRatio: placeholderRatio,
-        maxHeightFactor: maxHeightFactor,
-        builder: (context, size, image) => Stack(
-          fit: StackFit.expand,
-          children: [
-            if (image == null)
-              fallback ?? const SizedBox.shrink()
-            else
-              SmoothImage(
-                image: image,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                errorBuilder: (_, _, _) =>
-                    fallback ?? const SizedBox.shrink(),
-              ),
-            if (overlay != null) ?overlay,
-          ],
-        ),
-      );
+    imageRef: imageRef,
+    placeholderRatio: placeholderRatio,
+    maxHeightFactor: maxHeightFactor,
+    displayWidth: displayWidth,
+    onRatioResolved: onRatioResolved,
+    builder: (context, size, image) => Stack(
+      fit: StackFit.expand,
+      children: [
+        if (image == null)
+          fallback ?? const SizedBox.shrink()
+        else
+          SmoothImage(
+            image: image,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => fallback ?? const SizedBox.shrink(),
+          ),
+        if (overlay != null) ?overlay,
+      ],
+    ),
+  );
 }

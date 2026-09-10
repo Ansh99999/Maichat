@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/view_prefs.dart';
 import '../state/app_state.dart';
 import 'backups/backups_screen.dart';
 import 'backups/backup_import_screen.dart';
@@ -8,6 +9,7 @@ import 'backups/drive_settings_page.dart';
 import 'chats_screen.dart' show relativeTime;
 import 'settings/about_settings_page.dart';
 import 'settings/appearance_settings_page.dart';
+import 'settings/browse_appearance_settings_page.dart';
 import 'settings/character_settings_page.dart';
 import 'settings/chat_behaviour_page.dart';
 import 'settings/chat_interface_settings_page.dart';
@@ -53,6 +55,12 @@ class SettingsScreen extends StatelessWidget {
             onTap: () => _open(context, const AppearanceSettingsPage()),
           ),
           _SectionTile(
+            icon: Icons.grid_view_outlined,
+            title: 'Browse appearance',
+            subtitle: _browseAppearanceSummary(state),
+            onTap: () => _open(context, const BrowseAppearanceSettingsPage()),
+          ),
+          _SectionTile(
             icon: Icons.chat_bubble_outline,
             title: 'Chat Interface',
             subtitle: _chatInterfaceSummary(state),
@@ -67,7 +75,8 @@ class SettingsScreen extends StatelessWidget {
           _SectionTile(
             icon: Icons.person_outline,
             title: 'Characters',
-            subtitle: '${state.creatorVersion.label} · '
+            subtitle:
+                '${state.creatorVersion.label} · '
                 '${state.creatorVersion.blurb.toLowerCase()}',
             onTap: () => _open(context, const CharacterSettingsPage()),
           ),
@@ -108,12 +117,22 @@ class SettingsScreen extends StatelessWidget {
 
   static String _appearanceSummary(AppState state) {
     final a = state.appearance;
-    return a.dynamicColor
-        ? '${a.mode.label} · System colours'
-        : a.mode.label;
+    return a.dynamicColor ? '${a.mode.label} · System colours' : a.mode.label;
   }
 
-  static String _chatInterfaceSummary(AppState state) {    final ui = state.chatInterface;
+  static String _browseAppearanceSummary(AppState state) {
+    final enabled = <String>[
+      if (state.freeSizeCards(BrowseSection.characters)) 'Characters',
+      if (state.freeSizeCards(BrowseSection.gallery)) 'Gallery',
+      if (state.freeSizeCards(BrowseSection.discover)) 'Discover',
+    ];
+    return enabled.isEmpty
+        ? 'Natural-size artwork by section'
+        : '${enabled.join(' · ')} free-size';
+  }
+
+  static String _chatInterfaceSummary(AppState state) {
+    final ui = state.chatInterface;
     final style = ui.bubbles ? 'Bubbles' : 'Document';
     final avatars = (ui.botAvatar.show || ui.userAvatar.show)
         ? 'avatars on'
@@ -143,9 +162,7 @@ class SettingsScreen extends StatelessWidget {
   }
 
   static void _open(BuildContext context, Widget page) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => page),
-    );
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
 }
 
@@ -251,7 +268,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Tokenizer',
     section: 'Providers',
     icon: Icons.calculate_outlined,
-    keywords: 'token count tokenizer tiktoken openai anthropic claude bpe '
+    keywords:
+        'token count tokenizer tiktoken openai anthropic claude bpe '
         'cl100k o200k context window encoding custom',
     builder: _tokenizerPage,
   ),
@@ -277,10 +295,38 @@ const List<_SearchEntry> _searchIndex = [
     builder: _fontPage,
   ),
   _SearchEntry(
+    title: 'Characters free-size cards',
+    section: 'Browse appearance',
+    icon: Icons.people_outline,
+    keywords:
+        'character mosaic characters free size free-size adaptive masonry '
+        'pinterest natural ratio artwork image grid cards crop uncropped',
+    builder: _charactersFreeSizePage,
+  ),
+  _SearchEntry(
+    title: 'Gallery free-size cards',
+    section: 'Browse appearance',
+    icon: Icons.photo_library_outlined,
+    keywords:
+        'gallery natural size free size free-size adaptive mosaic masonry '
+        'pinterest ratio artwork image picture zoom crop uncropped',
+    builder: _galleryFreeSizePage,
+  ),
+  _SearchEntry(
+    title: 'Discover free-size cards',
+    section: 'Browse appearance',
+    icon: Icons.explore_outlined,
+    keywords:
+        'discover pinterest catalogue catalog feed free size free-size adaptive '
+        'mosaic masonry natural ratio artwork image cards crop uncropped',
+    builder: _discoverFreeSizePage,
+  ),
+  _SearchEntry(
     title: 'Avatars',
     section: 'Chat Interface',
     icon: Icons.account_circle_outlined,
-    keywords: 'avatar size shape corners circle square fit picture image free '
+    keywords:
+        'avatar size shape corners circle square fit picture image free '
         'rounded roundness radius none xxs xs small medium large xl xxl',
     builder: _chatAvatarsPage,
   ),
@@ -288,7 +334,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Message spacing',
     section: 'Chat Interface',
     icon: Icons.height_outlined,
-    keywords: 'gap space spacing between messages turns margin padding close '
+    keywords:
+        'gap space spacing between messages turns margin padding close '
         'tight distance avatars touching',
     builder: _spacingPage,
   ),
@@ -296,14 +343,16 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Text placement',
     section: 'Chat Interface',
     icon: Icons.view_agenda_outlined,
-    keywords: 'beside below under around wrap avatar layout position bubbles flat',
+    keywords:
+        'beside below under around wrap avatar layout position bubbles flat',
     builder: _textPlacementPage,
   ),
   _SearchEntry(
     title: 'Sender names',
     section: 'Chat Interface',
     icon: Icons.badge_outlined,
-    keywords: 'name label title font google fonts typeface size placement align '
+    keywords:
+        'name label title font google fonts typeface size placement align '
         'alignment position nudge offset drag sync independent character user',
     builder: _namesPage,
   ),
@@ -311,7 +360,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Message actions',
     section: 'Chat Interface',
     icon: Icons.more_horiz,
-    keywords: 'message actions buttons regenerate edit delete copy fork prompt '
+    keywords:
+        'message actions buttons regenerate edit delete copy fork prompt '
         'info inline overflow three dot menu',
     builder: _messageActionsPage,
   ),
@@ -319,7 +369,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Floating buttons',
     section: 'Chat Interface',
     icon: Icons.opacity_outlined,
-    keywords: 'floating buttons opacity transparent translucent see through '
+    keywords:
+        'floating buttons opacity transparent translucent see through '
         'faint hide chrome menu hamburger square top left drawer sidebar jump '
         'to latest newest scroll to bottom arrow down fab',
     builder: _floatingButtonsPage,
@@ -335,7 +386,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Text and markdown',
     section: 'Chat Interface',
     icon: Icons.text_fields_outlined,
-    keywords: 'font size text markdown bold italic code emphasis asterisk '
+    keywords:
+        'font size text markdown bold italic code emphasis asterisk '
         'quote quotation wrapping wrap rule symbols colour color render',
     builder: _chatTextPage,
   ),
@@ -343,7 +395,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Group chat',
     section: 'Chat behaviour',
     icon: Icons.groups_outlined,
-    keywords: 'group chat multi character participants members bar height '
+    keywords:
+        'group chat multi character participants members bar height '
         'background picture colour color enable roleplay scene',
     builder: _groupChatsPage,
   ),
@@ -351,7 +404,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Response hint',
     section: 'Chat behaviour',
     icon: Icons.tips_and_updates_outlined,
-    keywords: 'response hint guide steer nudge direction instruction inject '
+    keywords:
+        'response hint guide steer nudge direction instruction inject '
         'depth realtime live author note ooc guidance next reply',
     builder: _responseHintPage,
   ),
@@ -359,7 +413,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Character creator',
     section: 'Characters',
     icon: Icons.edit_note_outlined,
-    keywords: 'creator v1 v2 editor legacy old new tabs character card create '
+    keywords:
+        'creator v1 v2 editor legacy old new tabs character card create '
         'edit form single page classic',
     builder: _characterCreatorPage,
   ),
@@ -367,7 +422,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Storage',
     section: 'Storage',
     icon: Icons.sd_storage_outlined,
-    keywords: 'data space usage size images pictures chats cache delete clean '
+    keywords:
+        'data space usage size images pictures chats cache delete clean '
         'manage where saved unencrypted privacy',
     builder: _storagePage,
   ),
@@ -375,7 +431,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Backups',
     section: 'Backups',
     icon: Icons.backup_outlined,
-    keywords: 'backup export import restore snapshot zip archive google drive '
+    keywords:
+        'backup export import restore snapshot zip archive google drive '
         'schedule automatic periodic daily weekly monthly keep retention '
         'migrate new phone move everything',
     builder: _backupsPage,
@@ -384,7 +441,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Import a backup',
     section: 'Backups',
     icon: Icons.download_outlined,
-    keywords: 'import restore sillytavern silly tavern agnai agnaistic chub '
+    keywords:
+        'import restore sillytavern silly tavern agnai agnaistic chub '
         'venus card jsonl world info bring in migrate',
     builder: _backupImportPage,
   ),
@@ -392,7 +450,8 @@ const List<_SearchEntry> _searchIndex = [
     title: 'Google Drive',
     section: 'Backups',
     icon: Icons.cloud_outlined,
-    keywords: 'google drive oauth sign in cloud upload account connect '
+    keywords:
+        'google drive oauth sign in cloud upload account connect '
         'client id secret',
     builder: _drivePage,
   ),
@@ -413,6 +472,15 @@ Widget _systemColoursPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.systemColours);
 Widget _fontPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.font);
+Widget _charactersFreeSizePage() => const BrowseAppearanceSettingsPage(
+  highlight: SettingAnchor.charactersFreeSize,
+);
+Widget _galleryFreeSizePage() => const BrowseAppearanceSettingsPage(
+  highlight: SettingAnchor.galleryFreeSize,
+);
+Widget _discoverFreeSizePage() => const BrowseAppearanceSettingsPage(
+  highlight: SettingAnchor.discoverFreeSize,
+);
 Widget _chatAvatarsPage() =>
     const AvatarsSpokePage(highlight: SettingAnchor.chatAvatars);
 Widget _textPlacementPage() =>

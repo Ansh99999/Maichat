@@ -18,8 +18,10 @@ enum CreatorVersion {
   final String label;
   final String blurb;
 
-  static CreatorVersion byName(Object? value,
-      {CreatorVersion fallback = CreatorVersion.v2}) {
+  static CreatorVersion byName(
+    Object? value, {
+    CreatorVersion fallback = CreatorVersion.v2,
+  }) {
     for (final v in values) {
       if (v.name == value) return v;
     }
@@ -45,6 +47,8 @@ enum BrowseLayout {
 /// list changing.
 abstract final class BrowseSection {
   static const String characters = 'characters';
+  static const String gallery = 'gallery';
+  static const String discover = 'discover';
   static const String lorebooks = 'lorebooks';
   static const String scenarios = 'scenarios';
 }
@@ -60,11 +64,16 @@ abstract final class BrowseSection {
 class ViewPrefs {
   const ViewPrefs({
     this.layouts = const <String, String>{},
+    this.freeSize = const <String, bool>{},
     this.creatorVersion = CreatorVersion.v2,
   });
 
   /// Section name (see [BrowseSection]) to [BrowseLayout.name].
   final Map<String, String> layouts;
+
+  /// Picture sections whose cards keep each image's natural proportions.
+  /// Missing and false entries both mean the legacy fixed-card layout.
+  final Map<String, bool> freeSize;
 
   /// Which character editor the app opens. Lives here rather than in its own
   /// store entry for the same reason the layouts do: it is a small UI preference,
@@ -74,25 +83,42 @@ class ViewPrefs {
 
   /// How [section] should be laid out, falling back to [fallback] when nothing
   /// has been chosen yet.
-  BrowseLayout layoutFor(String section,
-          {BrowseLayout fallback = BrowseLayout.grid}) =>
-      BrowseLayout.byName(layouts[section], fallback: fallback);
+  BrowseLayout layoutFor(
+    String section, {
+    BrowseLayout fallback = BrowseLayout.grid,
+  }) => BrowseLayout.byName(layouts[section], fallback: fallback);
 
   ViewPrefs withLayout(String section, BrowseLayout layout) => ViewPrefs(
-        layouts: <String, String>{...layouts, section: layout.name},
-        creatorVersion: creatorVersion,
-      );
+    layouts: <String, String>{...layouts, section: layout.name},
+    freeSize: freeSize,
+    creatorVersion: creatorVersion,
+  );
 
-  ViewPrefs withCreatorVersion(CreatorVersion version) => ViewPrefs(
-        layouts: layouts,
-        creatorVersion: version,
-      );
+  bool freeSizeFor(String section) => freeSize[section] == true;
+
+  ViewPrefs withFreeSize(String section, bool enabled) {
+    final next = <String, bool>{...freeSize};
+    if (enabled) {
+      next[section] = true;
+    } else {
+      next.remove(section);
+    }
+    return ViewPrefs(
+      layouts: layouts,
+      freeSize: next,
+      creatorVersion: creatorVersion,
+    );
+  }
+
+  ViewPrefs withCreatorVersion(CreatorVersion version) =>
+      ViewPrefs(layouts: layouts, freeSize: freeSize, creatorVersion: version);
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'layouts': layouts,
-        if (creatorVersion != CreatorVersion.v2)
-          'creatorVersion': creatorVersion.name,
-      };
+    'layouts': layouts,
+    if (freeSize.isNotEmpty) 'freeSize': freeSize,
+    if (creatorVersion != CreatorVersion.v2)
+      'creatorVersion': creatorVersion.name,
+  };
 
   factory ViewPrefs.fromJson(Map<String, dynamic> json) {
     final raw = json['layouts'];
@@ -103,8 +129,16 @@ class ViewPrefs {
         if (value is String) layouts['${entry.key}'] = value;
       }
     }
+    final rawFreeSize = json['freeSize'];
+    final freeSize = <String, bool>{};
+    if (rawFreeSize is Map) {
+      for (final entry in rawFreeSize.entries) {
+        if (entry.value == true) freeSize['${entry.key}'] = true;
+      }
+    }
     return ViewPrefs(
       layouts: layouts,
+      freeSize: freeSize,
       creatorVersion: CreatorVersion.byName(json['creatorVersion']),
     );
   }
@@ -113,17 +147,17 @@ class ViewPrefs {
   bool operator ==(Object other) =>
       other is ViewPrefs &&
       other.creatorVersion == creatorVersion &&
-      _same(other.layouts, layouts);
+      _same(other.layouts, layouts) &&
+      _same(other.freeSize, freeSize);
 
   @override
   int get hashCode => Object.hash(
-        creatorVersion,
-        Object.hashAllUnordered(
-          layouts.entries.map((e) => '${e.key}=${e.value}'),
-        ),
-      );
+    creatorVersion,
+    Object.hashAllUnordered(layouts.entries.map((e) => '${e.key}=${e.value}')),
+    Object.hashAllUnordered(freeSize.entries.map((e) => '${e.key}=${e.value}')),
+  );
 
-  static bool _same(Map<String, String> a, Map<String, String> b) {
+  static bool _same<K, V>(Map<K, V> a, Map<K, V> b) {
     if (a.length != b.length) return false;
     for (final entry in a.entries) {
       if (b[entry.key] != entry.value) return false;
