@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
@@ -111,44 +113,78 @@ void main() {
     }
   });
 
-  testWidgets('overlay draws title, actions, star and natural artwork only', (
+  testWidgets('stored wide ratio owns two slots on the first frame', (
+    tester,
+  ) async {
+    final wide = _pic('wide');
+    final square = _pic('square');
+    final characters = [
+      Character(id: 'wide', name: 'Wide', avatar: wide),
+      Character(id: 'square', name: 'Square', avatar: square),
+    ];
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'flutter.characters': jsonEncode(
+        characters.map((character) => character.toJson()).toList(),
+      ),
+      'flutter.viewPrefs': jsonEncode(
+        const ViewPrefs(
+          freeSize: <String, bool>{BrowseSection.characters: true},
+          characterImageOverlay: true,
+        ).toJson(),
+      ),
+      'flutter.imageRatios': jsonEncode(<String, double>{
+        wide: 16 / 9,
+        square: 1,
+      }),
+    });
+    tester.view.physicalSize = const Size(424, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final state = AppState();
+    addTearDown(state.dispose);
+    await state.init();
+
+    await tester.pumpWidget(host(state));
+
+    expect(tester.getSize(overlayCard('wide')).width, 400);
+    expect(tester.getSize(overlayCard('square')).width, 194);
+  });
+
+  testWidgets('artwork is bare until first tap, then controls reveal', (
     tester,
   ) async {
     noteAvatarRatio(_pic('one'), 3 / 4);
     final state = await open(tester);
 
     expect(overlayCard('c'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('character-overlay-title-c')),
-      findsOneWidget,
+    final hiddenActions = find.byKey(
+      const ValueKey('character-overlay-actions-c'),
     );
-    expect(
-      find.byKey(const ValueKey('character-overlay-actions-c')),
-      findsOneWidget,
-    );
-    expect(find.byTooltip('Star'), findsOneWidget);
-    expect(tester.getSize(find.byTooltip('Star')), const Size(48, 48));
-    expect(find.byTooltip('Actions'), findsOneWidget);
-    expect(tester.getSize(find.byTooltip('Actions')), const Size(48, 48));
+    expect(hiddenActions.hitTestable(), findsNothing);
     expect(find.byKey(naturalImageFrameKey), findsOneWidget);
     expect(find.byType(PageView), findsNothing);
-    expect(find.byType(AvatarDots), findsNothing);
+
+    await tester.tap(overlayCard('c'));
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(hiddenActions.hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Star').hitTestable(), findsOneWidget);
+    expect(tester.getSize(find.byTooltip('Star')), const Size(48, 48));
 
     await tester.tap(find.byTooltip('Star'));
     await tester.pump();
     expect(state.characterById('c')!.starred, isTrue);
     expect(find.byTooltip('Unstar'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('Actions'));
-    await tester.pumpAndSettle();
-    expect(find.text('New chat'), findsOneWidget);
-    expect(find.text('Edit'), findsOneWidget);
   });
 
-  testWidgets('tapping overlay opens the character sheet', (tester) async {
+  testWidgets('second tap on a revealed card opens the character sheet', (
+    tester,
+  ) async {
     noteAvatarRatio(_pic('one'), 1);
     await open(tester);
 
+    await tester.tap(overlayCard('c'));
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(find.byType(CharacterSheetScreen), findsNothing);
     await tester.tap(overlayCard('c'));
     await tester.pumpAndSettle();
 
@@ -174,8 +210,42 @@ void main() {
     );
   });
 
+  testWidgets('scrolling hides controls without opening a character', (
+    tester,
+  ) async {
+    final now = DateTime(2026, 9, 10);
+    final cards = [
+      for (var i = 0; i < 30; i++)
+        Character(
+          id: 'c$i',
+          name: 'Character $i',
+          avatar: _pic('c$i'),
+          updatedAt: now.subtract(Duration(seconds: i)),
+        ),
+    ];
+    for (final card in cards) {
+      noteAvatarRatio(card.avatar, 1);
+    }
+    await open(tester, characters: cards);
+
+    await tester.tap(overlayCard('c0'));
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(
+      find.byKey(const ValueKey('character-overlay-actions-c0')).hitTestable(),
+      findsOneWidget,
+    );
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -250));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('character-overlay-actions-c0')).hitTestable(),
+      findsNothing,
+    );
+    expect(find.byType(CharacterSheetScreen), findsNothing);
+  });
+
   testWidgets(
-    'multiple avatars page without resizing and commit after 420 ms',
+    'multiple avatars page without resizing and persist immediately',
     (tester) async {
       final one = _pic('one');
       final two = _pic('two');
@@ -199,10 +269,6 @@ void main() {
       await tester.pumpAndSettle(const Duration(milliseconds: 10));
       expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
       expect(tester.getRect(frame), originalRect);
-      expect(state.characterById('c')!.avatar, one);
-
-      await tester.pump(const Duration(milliseconds: 420));
-      await tester.pump();
       expect(state.characterById('c')!.avatar, two);
       expect(state.avatarPoolFor(state.characterById('c')!), [two, one]);
       expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
@@ -211,7 +277,7 @@ void main() {
     },
   );
 
-  testWidgets('returning to the current avatar cancels a pending choice', (
+  testWidgets('swiping back immediately persists the original avatar', (
     tester,
   ) async {
     final one = _pic('one');
@@ -228,12 +294,9 @@ void main() {
 
     await tester.drag(find.byType(PageView), const Offset(-260, 0));
     await tester.pumpAndSettle(const Duration(milliseconds: 10));
-    expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
+    expect(state.characterById('c')!.avatar, two);
     await tester.drag(find.byType(PageView), const Offset(260, 0));
     await tester.pumpAndSettle(const Duration(milliseconds: 10));
-    expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 0);
-
-    await tester.pump(const Duration(milliseconds: 430));
     expect(state.characterById('c')!.avatar, one);
   });
 
@@ -269,16 +332,12 @@ void main() {
 
     await tester.drag(find.byType(PageView).first, const Offset(-260, 0));
     await tester.pumpAndSettle(const Duration(milliseconds: 10));
-    await tester.pump(const Duration(milliseconds: 420));
-    await tester.pump();
 
     expect(state.characterById('c')!.updatedAt, originalUpdated);
     expect(tester.getTopLeft(overlayCard('c')), before);
   });
 
-  testWidgets('delayed avatar choice survives lazy card eviction', (
-    tester,
-  ) async {
+  testWidgets('avatar choice survives lazy card eviction', (tester) async {
     final one = _pic('one');
     final two = _pic('two');
     noteAvatarRatio(one, 1);
@@ -312,9 +371,18 @@ void main() {
       const Offset(0, -6000),
       9000,
     );
-    await tester.pump(const Duration(milliseconds: 430));
-    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(overlayCard('c'), findsNothing);
+    await tester.fling(
+      find.byType(CustomScrollView),
+      const Offset(0, 6000),
+      9000,
+    );
+    await tester.pumpAndSettle();
+
     expect(state.characterById('c')!.avatar, two);
+    expect(overlayCard('c'), findsOneWidget);
+    expect(tester.widget<AvatarDots>(find.byType(AvatarDots).first).index, 0);
   });
 
   testWidgets('genuine pool membership change preserves the visible survivor', (
@@ -340,7 +408,8 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).count, 2);
-    expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 1);
+    expect(tester.widget<AvatarDots>(find.byType(AvatarDots)).index, 0);
+    expect(state.characterById('c')!.avatar, two);
   });
 
   testWidgets('vertical movement scrolls the roster instead of paging', (

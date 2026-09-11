@@ -1434,6 +1434,30 @@ class AppState extends ChangeNotifier {
     await _storage.saveCharacters(_characters);
   }
 
+  /// Persists an avatar choice already applied synchronously by the roster pager.
+  /// The immediate mutation keeps PageView and masonry in one rebuild; this small
+  /// write makes the choice durable without making the gesture await storage.
+  Future<void> _saveDefaultAvatarChoice() => _persistCharacters();
+
+  /// Applies a roster-pager choice synchronously, then saves it in the
+  /// background. Returning immediately lets the PageView survive the same-frame
+  /// provider rebuild without waiting on a platform preferences write.
+  void chooseDefaultAvatar(String characterId, String ref) {
+    final character = characterById(characterId);
+    final trimmed = ref.trim();
+    if (character == null || trimmed.isEmpty || character.avatar == trimmed) {
+      return;
+    }
+    final previous = character.avatar.trim();
+    character.avatars.remove(trimmed);
+    if (previous.isNotEmpty && !character.avatars.contains(previous)) {
+      character.avatars.insert(0, previous);
+    }
+    character.avatar = trimmed;
+    notifyListeners();
+    unawaited(_saveDefaultAvatarChoice());
+  }
+
   /// The whole conversation list, rewritten. Everything that changes a thread
   /// funnels through here (and the siblings below) so the read-only guard after
   /// a failed load is impossible to bypass.

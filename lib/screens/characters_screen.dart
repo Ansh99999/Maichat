@@ -45,10 +45,9 @@ class CharactersScreen extends StatefulWidget {
 
 class _CharactersScreenState extends State<CharactersScreen> {
   final TextEditingController _search = TextEditingController();
-  final Map<String, String> _overlayAnchors = <String, String>{};
-  final Map<String, Timer> _avatarCommitTimers = <String, Timer>{};
-  final Map<String, Future<void> Function()> _pendingAvatarCommits =
-      <String, Future<void> Function()>{};
+  final Map<String, String> _visibleAvatarRefs = <String, String>{};
+  final Map<String, String> _masonryFrameRefs = <String, String>{};
+  String? _revealedCharacterId;
   String _query = '';
   CharacterSort _sort = CharacterSort.recent;
   final Set<String> _tagFilter = <String>{};
@@ -63,43 +62,26 @@ class _CharactersScreenState extends State<CharactersScreen> {
   @override
   void dispose() {
     _search.dispose();
-    for (final timer in _avatarCommitTimers.values) {
-      timer.cancel();
-    }
-    final pending = _pendingAvatarCommits.values.toList(growable: false);
-    for (final commit in pending) {
-      unawaited(commit());
-    }
     super.dispose();
   }
 
-  String _overlayAnchor(AppState state, Character character) {
+  String _visibleAvatar(AppState state, Character character) {
     final pool = state.avatarPoolFor(character);
     if (pool.isEmpty) {
-      _overlayAnchors.remove(character.id);
+      _visibleAvatarRefs.remove(character.id);
       return '';
     }
-    final current = _overlayAnchors[character.id];
-    if (current != null && pool.contains(current)) return current;
-    return _overlayAnchors[character.id] = pool.first;
+    final visible = _visibleAvatarRefs[character.id];
+    if (visible != null && pool.contains(visible)) return visible;
+    return _visibleAvatarRefs[character.id] = character.avatar;
   }
 
-  void _scheduleDefaultAvatar(AppState state, String characterId, String ref) {
-    _avatarCommitTimers.remove(characterId)?.cancel();
-    _pendingAvatarCommits.remove(characterId);
-    if (state.characterById(characterId)?.avatar == ref) return;
+  String _frameAvatar(Character character) =>
+      _masonryFrameRefs.putIfAbsent(character.id, () => character.avatar);
 
-    Future<void> commit() async {
-      _avatarCommitTimers.remove(characterId)?.cancel();
-      _pendingAvatarCommits.remove(characterId);
-      await state.setDefaultAvatar(characterId, ref, touch: false);
-    }
-
-    _pendingAvatarCommits[characterId] = commit;
-    _avatarCommitTimers[characterId] = Timer(
-      const Duration(milliseconds: 420),
-      commit,
-    );
+  void _selectAvatar(AppState state, String characterId, String ref) {
+    _visibleAvatarRefs[characterId] = ref;
+    state.chooseDefaultAvatar(characterId, ref);
   }
 
   // --- filtering / sorting -------------------------------------------------
@@ -373,9 +355,11 @@ class _CharactersScreenState extends State<CharactersScreen> {
   }
   // --- build ---------------------------------------------------------------
 
-  void _onItemTap(AppState state, Character c) {
+  void _onItemTap(AppState state, Character c, {bool overlay = false}) {
     if (_selecting) {
       _toggleSelect(c.id);
+    } else if (overlay && _revealedCharacterId != c.id) {
+      setState(() => _revealedCharacterId = c.id);
     } else {
       openCharacterDetail(context, c.id);
     }
@@ -383,6 +367,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
 
   void _onItemLongPress(Character c) {
     setState(() {
+      _revealedCharacterId = null;
       _selecting = true;
       _selection.add(c.id);
     });
@@ -437,25 +422,37 @@ class _CharactersScreenState extends State<CharactersScreen> {
             ),
       // The search bar and controls ride at the top of the scroll view (not a
       // fixed header), so they scroll away as the roster is browsed.
-      body: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(child: _searchAndControls(state, tags)),
-          if (all.isEmpty)
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: _EmptyRoster(onAdd: _showImportSheet),
-            )
-          else if (visible.isEmpty)
-            const SliverFillRemaining(hasScrollBody: false, child: _NoMatches())
-          else ...[
-            if (hasStar) ...[_header('Starred'), _grid(state, starred)],
-            if (others.isNotEmpty) ...[
-              if (hasStar) _header('All characters'),
-              _grid(state, others),
+      body: NotificationListener<ScrollStartNotification>(
+        onNotification: (notification) {
+          if (notification.dragDetails != null &&
+              _revealedCharacterId != null) {
+            setState(() => _revealedCharacterId = null);
+          }
+          return false;
+        },
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(child: _searchAndControls(state, tags)),
+            if (all.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _EmptyRoster(onAdd: _showImportSheet),
+              )
+            else if (visible.isEmpty)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: _NoMatches(),
+              )
+            else ...[
+              if (hasStar) ...[_header('Starred'), _grid(state, starred)],
+              if (others.isNotEmpty) ...[
+                if (hasStar) _header('All characters'),
+                _grid(state, others),
+              ],
+              SliverToBoxAdapter(child: SizedBox(height: 96 + bottom)),
             ],
-            SliverToBoxAdapter(child: SizedBox(height: 96 + bottom)),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -590,6 +587,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
 
   Widget _grid(AppState state, List<Character> list) {
     void tap(Character c) => _onItemTap(state, c);
+    void overlayTap(Character c) => _onItemTap(state, c, overlay: true);
     void long(Character c) => _onItemLongPress(c);
 
     if (_avatarView(state)) {
@@ -601,13 +599,10 @@ class _CharactersScreenState extends State<CharactersScreen> {
             ? AdaptiveMosaicSliver<Character>(
                 items: list,
                 itemKey: (character) => character.id,
-                imageKey: (character) => imageOverlay
-                    ? _overlayAnchor(state, character)
-                    : character.avatar,
+                imageKey: (character) =>
+                    imageOverlay ? _frameAvatar(character) : character.avatar,
                 ratioOf: (character) => avatarRatio(
-                  imageOverlay
-                      ? _overlayAnchor(state, character)
-                      : character.avatar,
+                  imageOverlay ? _frameAvatar(character) : character.avatar,
                 ),
                 maxCrossAxisExtent: 200,
                 mainAxisSpacing: 12,
@@ -618,14 +613,16 @@ class _CharactersScreenState extends State<CharactersScreen> {
                         key: ValueKey('character-overlay-${character.id}'),
                         character: character,
                         state: state,
-                        anchor: _overlayAnchor(state, character),
+                        frameRef: _frameAvatar(character),
+                        visibleRef: _visibleAvatar(state, character),
+                        revealed: _revealedCharacterId == character.id,
                         selecting: _selecting,
                         selected: _selection.contains(character.id),
                         displayWidth: width,
                         onRatioResolved: onRatioResolved,
                         onDefaultAvatar: (ref) =>
-                            _scheduleDefaultAvatar(state, character.id, ref),
-                        onTap: () => tap(character),
+                            _selectAvatar(state, character.id, ref),
+                        onTap: () => overlayTap(character),
                         onLongPress: () => long(character),
                         onToggleStar: () =>
                             state.toggleCharacterStar(character.id),
@@ -730,7 +727,9 @@ class _CharacterOverlayCard extends StatefulWidget {
     super.key,
     required this.character,
     required this.state,
-    required this.anchor,
+    required this.frameRef,
+    required this.visibleRef,
+    required this.revealed,
     required this.selecting,
     required this.selected,
     required this.displayWidth,
@@ -744,7 +743,9 @@ class _CharacterOverlayCard extends StatefulWidget {
 
   final Character character;
   final AppState state;
-  final String anchor;
+  final String frameRef;
+  final String visibleRef;
+  final bool revealed;
   final bool selecting;
   final bool selected;
   final double displayWidth;
@@ -776,13 +777,14 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
     super.didUpdateWidget(oldWidget);
     final live = widget.state.avatarPoolFor(widget.character);
     if (!setEquals(live.toSet(), _pool.toSet())) {
-      _adopt(preferred: _visibleRef);
+      _adopt(preferred: widget.visibleRef);
       return;
     }
-    final visible = _pool.indexOf(_visibleRef);
+    final visible = _pool.indexOf(widget.visibleRef);
     if (visible >= 0 && visible != _index) {
+      _visibleRef = widget.visibleRef;
       _index = visible;
-      if (_pages?.hasClients ?? false) _pages!.jumpToPage(visible);
+      _jumpAfterFrame(visible);
     }
   }
 
@@ -794,28 +796,47 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
 
   void _adopt({String? preferred}) {
     final next = widget.state.avatarPoolFor(widget.character);
-    final retainedAnchor = widget.anchor;
-    if (retainedAnchor.isNotEmpty && next.contains(retainedAnchor)) {
-      final anchorIndex = next.indexOf(retainedAnchor);
-      if (anchorIndex > 0) {
-        next
-          ..removeAt(anchorIndex)
-          ..insert(0, retainedAnchor);
-      }
-    }
     final ref = preferred != null && next.contains(preferred)
         ? preferred
-        : (next.isEmpty ? '' : next.first);
+        : (next.contains(widget.visibleRef)
+              ? widget.visibleRef
+              : (next.isEmpty ? '' : next.first));
+    if (ref.isNotEmpty) {
+      final refIndex = next.indexOf(ref);
+      if (refIndex > 0) {
+        next
+          ..removeAt(refIndex)
+          ..insert(0, ref);
+      }
+    }
     _pool = next;
     _visibleRef = ref;
     final preferredIndex = next.indexOf(ref);
     _index = preferredIndex < 0 ? 0 : preferredIndex;
-    _pages?.dispose();
-    _pages = PageController(initialPage: _index);
+    if (_pages == null) {
+      _pages = PageController(initialPage: _index);
+    } else {
+      _jumpAfterFrame(_index);
+    }
+  }
+
+  void _jumpAfterFrame(int page) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pages = _pages;
+      if (!mounted || pages == null || !pages.hasClients || _pool.isEmpty) {
+        return;
+      }
+      final safePage = page.clamp(0, _pool.length - 1);
+      if (pages.page?.round() != safePage) {
+        pages.jumpToPage(safePage);
+      }
+    });
   }
 
   void _onPage(int page) {
+    if (page < 0 || page >= _pool.length) return;
     final ref = _pool[page];
+    if (ref == _visibleRef && page == _index) return;
     setState(() {
       _index = page;
       _visibleRef = ref;
@@ -825,7 +846,6 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final fallback = _CardFallback(character: widget.character);
     return CharacterThemeScope(
       theme: widget.character.theme,
@@ -849,11 +869,16 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
             selected: widget.selected,
             button: true,
             label: widget.character.displayName,
+            hint: widget.selecting
+                ? 'Double tap to select'
+                : widget.revealed
+                ? 'Double tap to open'
+                : 'Double tap to show actions',
             child: InkWell(
               onTap: widget.onTap,
               onLongPress: widget.onLongPress,
               child: NaturalFrame(
-                imageRef: widget.anchor,
+                imageRef: widget.frameRef,
                 displayWidth: widget.displayWidth,
                 maxHeightFactor: double.infinity,
                 onRatioResolved: widget.onRatioResolved,
@@ -879,83 +904,22 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
                         itemCount: _pool.length,
                         onPageChanged: _onPage,
                         itemBuilder: (context, index) => _OverlayAvatarPage(
+                          key: ValueKey('character-avatar-${_pool[index]}'),
                           ref: _pool[index],
                           width: size.width,
                           fallback: fallback,
                         ),
                       ),
-                    const _ArtworkVignette(),
-                    Positioned(
-                      top: 4,
-                      left: 4,
-                      child: _GlassIcon(
-                        tooltip: widget.character.starred ? 'Unstar' : 'Star',
-                        icon: widget.character.starred
-                            ? Icons.star
-                            : Icons.star_border,
-                        color: widget.character.starred ? Colors.amber : null,
-                        onTap: widget.onToggleStar,
-                      ),
+                    _RevealedArtworkControls(
+                      character: widget.character,
+                      index: _index,
+                      count: _pool.length,
+                      revealed: widget.revealed,
+                      selecting: widget.selecting,
+                      selected: widget.selected,
+                      onToggleStar: widget.onToggleStar,
+                      onAction: widget.onAction,
                     ),
-                    if (widget.selecting)
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Icon(
-                          widget.selected
-                              ? Icons.check_circle
-                              : Icons.radio_button_unchecked,
-                          color: widget.selected
-                              ? scheme.primary
-                              : Colors.white,
-                          shadows: const [Shadow(blurRadius: 4)],
-                        ),
-                      ),
-                    if (_pool.length > 1)
-                      Positioned(
-                        left: 8,
-                        right: 8,
-                        bottom: 38,
-                        child: IgnorePointer(
-                          child: Center(
-                            child: AvatarDots(
-                              count: _pool.length,
-                              index: _index,
-                              onArtwork: true,
-                            ),
-                          ),
-                        ),
-                      ),
-                    Positioned(
-                      left: 12,
-                      right: widget.selecting ? 12 : 52,
-                      bottom: 10,
-                      child: IgnorePointer(
-                        child: Text(
-                          widget.character.displayName,
-                          key: ValueKey(
-                            'character-overlay-title-${widget.character.id}',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                                shadows: const [Shadow(blurRadius: 4)],
-                              ),
-                        ),
-                      ),
-                    ),
-                    if (!widget.selecting)
-                      Positioned(
-                        right: 4,
-                        bottom: 2,
-                        child: _ArtworkActions(
-                          characterId: widget.character.id,
-                          onAction: widget.onAction,
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -967,8 +931,124 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
   }
 }
 
+class _RevealedArtworkControls extends StatelessWidget {
+  const _RevealedArtworkControls({
+    required this.character,
+    required this.index,
+    required this.count,
+    required this.revealed,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleStar,
+    required this.onAction,
+  });
+
+  final Character character;
+  final int index;
+  final int count;
+  final bool revealed;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onToggleStar;
+  final ValueChanged<CharacterAction> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = revealed || selecting;
+    final scheme = Theme.of(context).colorScheme;
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: !shown,
+        child: ExcludeSemantics(
+          excluding: !shown,
+          child: AnimatedOpacity(
+            opacity: shown ? 1 : 0,
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                const _ArtworkVignette(),
+                if (!selecting)
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    child: _GlassIcon(
+                      tooltip: character.starred ? 'Unstar' : 'Star',
+                      icon: character.starred ? Icons.star : Icons.star_border,
+                      color: character.starred ? Colors.amber : null,
+                      onTap: onToggleStar,
+                    ),
+                  ),
+                if (selecting)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Icon(
+                      selected
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      color: selected ? scheme.primary : Colors.white,
+                      shadows: const [Shadow(blurRadius: 4)],
+                    ),
+                  ),
+                if (!selecting && count > 1)
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 38,
+                    child: IgnorePointer(
+                      child: Center(
+                        child: AvatarDots(
+                          count: count,
+                          index: index,
+                          onArtwork: true,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (!selecting)
+                  Positioned(
+                    left: 12,
+                    right: 52,
+                    bottom: 10,
+                    child: IgnorePointer(
+                      child: Text(
+                        character.displayName,
+                        key: ValueKey(
+                          'character-overlay-title-${character.id}',
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          shadows: const [Shadow(blurRadius: 4)],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (!selecting)
+                  Positioned(
+                    right: 4,
+                    bottom: 2,
+                    child: _ArtworkActions(
+                      characterId: character.id,
+                      onAction: onAction,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _OverlayAvatarPage extends StatelessWidget {
   const _OverlayAvatarPage({
+    super.key,
     required this.ref,
     required this.width,
     required this.fallback,

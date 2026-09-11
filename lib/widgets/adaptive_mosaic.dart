@@ -56,6 +56,7 @@ class AdaptiveMosaicSliver<T> extends StatefulWidget {
 class _AdaptiveMosaicSliverState<T> extends State<AdaptiveMosaicSliver<T>> {
   final Map<Object, _ResolvedRatio> _resolvedRatios =
       <Object, _ResolvedRatio>{};
+  final Map<Object, int> _renderedSpans = <Object, int>{};
   bool _rebuildQueued = false;
 
   double? _ratioOf(T item) {
@@ -72,9 +73,11 @@ class _AdaptiveMosaicSliverState<T> extends State<AdaptiveMosaicSliver<T>> {
   void _onRatio(T item, double ratio) {
     if (!ratio.isFinite || ratio <= 0) return;
     final key = widget.itemKey(item);
-    final wasWide = _isWide(_ratioOf(item));
+    final renderedSpan = _renderedSpans[key] ?? _spanOf(item);
     _resolvedRatios[key] = _ResolvedRatio(widget.imageKey(item), ratio);
-    if (wasWide == _isWide(ratio) || _rebuildQueued) return;
+    if (renderedSpan == (_isWide(ratio) ? 2 : 1) || _rebuildQueued) {
+      return;
+    }
     _rebuildQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _rebuildQueued = false;
@@ -86,12 +89,17 @@ class _AdaptiveMosaicSliverState<T> extends State<AdaptiveMosaicSliver<T>> {
   Widget build(BuildContext context) {
     final indexByKey = <Key, int>{};
     final entries = <_MasonryEntry>[];
+    final currentKeys = <Object>{};
     for (var index = 0; index < widget.items.length; index++) {
       final item = widget.items[index];
       final key = widget.itemKey(item);
+      final span = _spanOf(item);
+      currentKeys.add(key);
+      _renderedSpans[key] = span;
       indexByKey[ValueKey(key)] = index;
-      entries.add(_MasonryEntry(key, widget.imageKey(item), _spanOf(item)));
+      entries.add(_MasonryEntry(key, widget.imageKey(item), span));
     }
+    _renderedSpans.removeWhere((key, _) => !currentKeys.contains(key));
     return _MasonrySliver(
       delegate: SliverChildBuilderDelegate(
         (context, index) {
