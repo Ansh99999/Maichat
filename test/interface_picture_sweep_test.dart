@@ -9,8 +9,10 @@ import 'package:maichat/state/app_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A real 1x1 PNG, so what is written is a picture a decoder would accept.
-final _png = base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA'
-    'DUlEQVR42mP8z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==');
+final _png = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA'
+  'DUlEQVR42mP8z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==',
+);
 
 /// The picture sweep deletes every file its keep-list does not name, and the list
 /// used to name only characters, lorebooks, the gallery and the per-conversation
@@ -38,22 +40,45 @@ void main() {
     return state;
   }
 
-  int filesOnDisk() =>
-      pictures.listSync().whereType<File>().length;
+  Future<AppState> reopen() async {
+    final marker = File('${pictures.path}/startup-orphan.img')
+      ..writeAsBytesSync(const [0]);
+    final state = await boot();
+    for (var attempt = 0; attempt < 100; attempt++) {
+      if (!marker.existsSync()) return state;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(marker.existsSync(), isFalse);
+    return state;
+  }
+
+  int filesOnDisk() => pictures.listSync().whereType<File>().length;
+
+  Future<void> waitForFileCount(int expected) async {
+    for (var attempt = 0; attempt < 100; attempt++) {
+      if (filesOnDisk() == expected) return;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(filesOnDisk(), expected);
+  }
 
   test('a participant-bar picture survives the next sweep', () async {
     final state = await boot();
     final ref = await state.storePicture(_png);
     expect(ref, isNotNull, reason: 'the picture should have been filed');
     await state.updateChatInterface(
-        state.chatInterface.copyWith(groupBarImage: ref));
+      state.chatInterface.copyWith(groupBarImage: ref),
+    );
     expect(filesOnDisk(), 1);
 
     // A fresh app over the same store and the same directory: init sweeps.
-    final reopened = await boot();
+    final reopened = await reopen();
     expect(reopened.chatInterface.groupBarImage, ref);
-    expect(filesOnDisk(), 1,
-        reason: 'the interface claims this picture, so it must be kept');
+    expect(
+      filesOnDisk(),
+      1,
+      reason: 'the interface claims this picture, so it must be kept',
+    );
   });
   test("a chat's own copy of the interface keeps its picture too", () async {
     final state = await boot();
@@ -64,30 +89,33 @@ void main() {
       messages: [],
       updatedAt: DateTime.now(),
     );
-    conversation.interfaceOverride =
-        const ChatInterface().copyWith(groupBarImage: ref);
+    conversation.interfaceOverride = const ChatInterface().copyWith(
+      groupBarImage: ref,
+    );
     await state.importConversations([conversation]);
     expect(filesOnDisk(), 1);
 
-    final reopened = await boot();
-    expect(reopened.conversationById('c1')?.interfaceOverride?.groupBarImage,
-        ref);
-    expect(filesOnDisk(), 1,
-        reason: 'a per-chat copy names its own pictures');
+    final reopened = await reopen();
+    expect(
+      reopened.conversationById('c1')?.interfaceOverride?.groupBarImage,
+      ref,
+    );
+    expect(filesOnDisk(), 1, reason: 'a per-chat copy names its own pictures');
   });
 
   test("a saved look's picture is kept until the look is dropped", () async {
     final state = await boot();
     final ref = await state.storePicture(_png);
     await state.updateChatInterface(
-        state.chatInterface.copyWith(backgroundImage: ref));
+      state.chatInterface.copyWith(backgroundImage: ref),
+    );
     final saved = await state.saveInterfacePreset('With a background');
     // Hand the app-wide settings back to the defaults: now the *look* is the only
     // thing referring to the picture.
     await state.updateChatInterface(const ChatInterface());
     expect(state.chatInterface.backgroundImage, isNull);
 
-    final reopened = await boot();
+    final reopened = await reopen();
     expect(reopened.savedInterfacePresets.single.ui.backgroundImage, ref);
     expect(filesOnDisk(), 1, reason: 'a saved look claims its own pictures');
 
@@ -102,17 +130,17 @@ void main() {
     expect(filesOnDisk(), 1);
 
     // Nobody claimed it, so it is exactly what the sweep is for.
-    await boot();
+    await reopen();
+    await waitForFileCount(0);
     expect(filesOnDisk(), 0);
   });
 
   test('the model names its own pictures in one place', () {
     const bare = ChatInterface();
     expect(bare.pictureRefs, isEmpty);
-    expect(
-      const ChatInterface(groupBarImage: 'local:bar.png').pictureRefs,
-      ['local:bar.png'],
-    );
+    expect(const ChatInterface(groupBarImage: 'local:bar.png').pictureRefs, [
+      'local:bar.png',
+    ]);
     expect(
       const ChatInterface(
         groupBarImage: 'local:bar.png',
@@ -125,4 +153,3 @@ void main() {
     expect(const ChatInterface(groupBarImage: '').pictureRefs, isEmpty);
   });
 }
-

@@ -18,6 +18,7 @@ import '../models/provider.dart';
 import '../models/scenario.dart';
 import '../models/settings.dart';
 import '../models/view_prefs.dart';
+import 'image_ratio_cache.dart';
 import 'tokenizer.dart';
 
 /// The persisted provider list plus which one is active.
@@ -65,6 +66,7 @@ class Storage {
   static const _responseHintsKey = 'responseHints';
   static const _backupPrefsKey = 'backupPrefs';
   static const _backupsKey = 'backups';
+  static const _imageRatiosKey = 'imageRatios';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -329,8 +331,7 @@ class Storage {
       if (json is List) {
         return [
           for (final entry in json)
-            if (entry is Map<String, dynamic>)
-              ?InterfacePreset.fromJson(entry),
+            if (entry is Map<String, dynamic>) ?InterfacePreset.fromJson(entry),
         ];
       }
     } catch (_) {
@@ -487,14 +488,13 @@ class Storage {
     return const PresetState(<Preset>[], null);
   }
 
-  Future<void> savePresets(PresetState state) async =>
-      (await _prefs).setString(
-        _presetsKey,
-        jsonEncode({
-          'presets': state.presets.map((p) => p.toJson()).toList(),
-          'defaultId': state.defaultId,
-        }),
-      );
+  Future<void> savePresets(PresetState state) async => (await _prefs).setString(
+    _presetsKey,
+    jsonEncode({
+      'presets': state.presets.map((p) => p.toJson()).toList(),
+      'defaultId': state.defaultId,
+    }),
+  );
 
   /// App-wide macro variables ({{setglobalvar}} scope).
   Future<Map<String, String>> loadGlobalVars() async {
@@ -522,10 +522,12 @@ class Storage {
     try {
       final json = jsonDecode(raw);
       if (json is Map) {
-        return json.map((k, v) => MapEntry(
-              k.toString(),
-              (v as List?)?.map((e) => e.toString()).toList() ?? <String>[],
-            ));
+        return json.map(
+          (k, v) => MapEntry(
+            k.toString(),
+            (v as List?)?.map((e) => e.toString()).toList() ?? <String>[],
+          ),
+        );
       }
     } catch (_) {
       // Same as everywhere else: never let bad data wedge the app.
@@ -536,6 +538,37 @@ class Storage {
   Future<void> saveModelCache(Map<String, List<String>> cache) async =>
       (await _prefs).setString(_modelCacheKey, jsonEncode(cache));
 
+  /// Compact derived image metadata. Keys are exact safe image references;
+  /// malformed entries are ignored so cache damage can never block startup.
+  Future<Map<String, double>> loadImageRatios() async {
+    final raw = (await _prefs).getString(_imageRatiosKey);
+    if (raw == null) return <String, double>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final result = <String, double>{};
+        for (final entry in decoded.entries) {
+          final value = entry.value;
+          final ratio = value is num ? value.toDouble() : null;
+          final key = durableImageRatioKey(entry.key.toString());
+          if (key != null && ratio != null && ratio.isFinite && ratio > 0) {
+            result[key] = ratio;
+          }
+        }
+        return result;
+      }
+    } catch (_) {
+      // Derived cache data is disposable; an empty cache is always safe.
+    }
+    return <String, double>{};
+  }
+
+  Future<void> saveImageRatios(Map<String, double> ratios) async =>
+      (await _prefs).setString(_imageRatiosKey, jsonEncode(ratios));
+
+  Future<void> clearImageRatios() async =>
+      (await _prefs).remove(_imageRatiosKey);
+
   /// The raw usage ledger, decoded by [UsageLedger.decode] rather than here, so
   /// the shape lives with the thing that understands it.
   Future<String?> loadUsage() async => (await _prefs).getString(_usageKey);
@@ -543,13 +576,14 @@ class Storage {
   Future<void> saveUsage(String encoded) async =>
       (await _prefs).setString(_usageKey, encoded);
 
-  /// Drops the entries that are only a performance cache and cost nothing to
-  /// rebuild: the per-provider model lists and the Discover browsing state. The
+  /// Drops the entries that are only performance caches and cost nothing to
+  /// rebuild: model lists, Discover state, and intrinsic image metadata. The
   /// "Clear cache" action on the Storage screen calls this.
   Future<void> clearCache() async {
     final prefs = await _prefs;
     await prefs.remove(_modelCacheKey);
     await prefs.remove(_discoverKey);
+    await prefs.remove(_imageRatiosKey);
   }
 
   /// The app-wide tokenizer choice (OpenAI / Anthropic / Custom + encoding).

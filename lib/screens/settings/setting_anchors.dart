@@ -11,6 +11,7 @@ enum SettingAnchor {
   systemColours,
   font,
   charactersFreeSize,
+  characterImageOverlay,
   galleryFreeSize,
   discoverFreeSize,
   chatAvatars,

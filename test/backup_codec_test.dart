@@ -8,44 +8,54 @@ import 'package:maichat/services/backup_codec.dart';
 
 /// A store shaped like the real one: JSON lists, a JSON envelope, and a scalar.
 Map<String, StoreEntry> _store() => <String, StoreEntry>{
-      'characters': StoreEntry.of(jsonEncode([
-        {'id': 'c1', 'name': 'Aqua'},
-        {'id': 'c2', 'name': 'Megumin'},
-      ])),
-      'conversations': StoreEntry.of(jsonEncode([
+  'characters': StoreEntry.of(
+    jsonEncode([
+      {'id': 'c1', 'name': 'Aqua'},
+      {'id': 'c2', 'name': 'Megumin'},
+    ]),
+  ),
+  'conversations': StoreEntry.of(
+    jsonEncode([
+      {
+        'id': 'k1',
+        'title': 'First',
+        'messages': [
+          {'role': 'user', 'content': 'hi'},
+          {'role': 'assistant', 'content': 'hello'},
+        ],
+      },
+    ]),
+  ),
+  'providers': StoreEntry.of(
+    jsonEncode({
+      'providers': [
         {
-          'id': 'k1',
-          'title': 'First',
-          'messages': [
-            {'role': 'user', 'content': 'hi'},
-            {'role': 'assistant', 'content': 'hello'},
-          ],
+          'id': 'p1',
+          'name': 'Test',
+          'apiKey': 'sk-secret',
+          'apiKeys': ['sk-secret', 'sk-other'],
         },
-      ])),
-      'providers': StoreEntry.of(jsonEncode({
-        'providers': [
-          {
-            'id': 'p1',
-            'name': 'Test',
-            'apiKey': 'sk-secret',
-            'apiKeys': ['sk-secret', 'sk-other'],
-          },
-        ],
-        'activeId': 'p1',
-      })),
-      'presets': StoreEntry.of(jsonEncode({
-        'presets': [
-          {'id': 'x1', 'name': 'Marinara'},
-        ],
-        'defaultId': 'x1',
-      })),
-      'gallery': StoreEntry.of(jsonEncode([
-        {'id': 'g1', 'image': 'local:pic.png'},
-      ])),
-      'imageGen': StoreEntry.of(jsonEncode({'apiKey': 'img-key'})),
-      'activeConversation': StoreEntry.of('k1'),
-      'somethingNew': StoreEntry.of('a future version wrote this'),
-    };
+      ],
+      'activeId': 'p1',
+    }),
+  ),
+  'presets': StoreEntry.of(
+    jsonEncode({
+      'presets': [
+        {'id': 'x1', 'name': 'Marinara'},
+      ],
+      'defaultId': 'x1',
+    }),
+  ),
+  'gallery': StoreEntry.of(
+    jsonEncode([
+      {'id': 'g1', 'image': 'local:pic.png'},
+    ]),
+  ),
+  'imageGen': StoreEntry.of(jsonEncode({'apiKey': 'img-key'})),
+  'activeConversation': StoreEntry.of('k1'),
+  'somethingNew': StoreEntry.of('a future version wrote this'),
+};
 void main() {
   late Directory root;
   late Directory pictures;
@@ -74,13 +84,13 @@ void main() {
   tearDown(() => root.deleteSync(recursive: true));
 
   BackupPlan plan({bool includesKeys = true}) => BackupPlan(
-        store: includesKeys ? _store() : stripSecrets(_store()),
-        pictures: <File>[picture],
-        vectors: <File>[vector],
-        createdAt: DateTime.utc(2026, 8, 30, 12),
-        appVersion: '1.17.0',
-        includesKeys: includesKeys,
-      );
+    store: includesKeys ? _store() : stripSecrets(_store()),
+    pictures: <File>[picture],
+    vectors: <File>[vector],
+    createdAt: DateTime.utc(2026, 8, 30, 12),
+    appVersion: '1.17.0',
+    includesKeys: includesKeys,
+  );
 
   Future<File> archiveOf([BackupPlan? source]) async {
     final file = File('${root.path}/backup.zip');
@@ -125,8 +135,11 @@ void main() {
       addTearDown(read.close);
 
       for (final key in original.keys) {
-        expect(read.store[key]!.stored, original[key]!.stored,
-            reason: 'entry "$key" did not survive the round trip');
+        expect(
+          read.store[key]!.stored,
+          original[key]!.stored,
+          reason: 'entry "$key" did not survive the round trip',
+        );
       }
     });
 
@@ -136,11 +149,12 @@ void main() {
       expect(read.store['somethingNew']!.stored, 'a future version wrote this');
     });
 
-    test('the backup settings and history are never in a backup', () async {
+    test('backup-owned state and derived caches are never restored', () async {
       final source = BackupPlan(
         store: _store()
           ..['backupPrefs'] = StoreEntry.of('{"schedule":"daily"}')
-          ..['backups'] = StoreEntry.of('[]'),
+          ..['backups'] = StoreEntry.of('[]')
+          ..['imageRatios'] = StoreEntry.of('{"local:old.png":1.5}'),
         createdAt: DateTime.utc(2026),
       );
       // The manifest carries them (the plan was handed them), but a reader
@@ -149,6 +163,7 @@ void main() {
       addTearDown(read.close);
       expect(read.store.containsKey('backupPrefs'), isFalse);
       expect(read.store.containsKey('backups'), isFalse);
+      expect(read.store.containsKey('imageRatios'), isFalse);
     });
 
     test('counts what is in it, messages included', () {
@@ -177,20 +192,25 @@ void main() {
   });
   group('what it refuses', () {
     test('an empty file', () {
-      expect(() => BackupArchive.openBytes(Uint8List(0)),
-          throwsA(isA<BackupFormatException>()));
+      expect(
+        () => BackupArchive.openBytes(Uint8List(0)),
+        throwsA(isA<BackupFormatException>()),
+      );
     });
 
     test('somebody else\'s JSON', () {
-      final bytes =
-          Uint8List.fromList(utf8.encode('{"kind":"agnai-user-backup"}'));
+      final bytes = Uint8List.fromList(
+        utf8.encode('{"kind":"agnai-user-backup"}'),
+      );
       expect(
         () => BackupArchive.openBytes(bytes),
-        throwsA(isA<BackupFormatException>().having(
-          (e) => e.message,
-          'message',
-          contains('not a MaiChat backup'),
-        )),
+        throwsA(
+          isA<BackupFormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('not a MaiChat backup'),
+          ),
+        ),
       );
     });
 
@@ -200,11 +220,13 @@ void main() {
         () => BackupArchive.openBytes(
           Uint8List.fromList(utf8.encode(jsonEncode(json))),
         ),
-        throwsA(isA<BackupFormatException>().having(
-          (e) => e.message,
-          'message',
-          contains('newer version'),
-        )),
+        throwsA(
+          isA<BackupFormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('newer version'),
+          ),
+        ),
       );
     });
 
@@ -252,12 +274,19 @@ void main() {
       final incoming = _store();
       final current = <String, StoreEntry>{
         ...(_store()),
-        'providers': StoreEntry.of(jsonEncode({
-          'providers': [
-            {'id': 'p1', 'name': 'Test', 'apiKey': 'stale', 'apiKeys': ['stale']},
-          ],
-          'activeId': 'p1',
-        })),
+        'providers': StoreEntry.of(
+          jsonEncode({
+            'providers': [
+              {
+                'id': 'p1',
+                'name': 'Test',
+                'apiKey': 'stale',
+                'apiKeys': ['stale'],
+              },
+            ],
+            'activeId': 'p1',
+          }),
+        ),
       };
       final restored = preserveSecrets(current: current, incoming: incoming);
       final providers = restored['providers']!.asMap!['providers'] as List;
@@ -266,28 +295,30 @@ void main() {
   });
   group('merging instead of replacing', () {
     Map<String, StoreEntry> device() => <String, StoreEntry>{
-          'characters': StoreEntry.of(jsonEncode([
-            {'id': 'c1', 'name': 'Aqua the elder'},
-            {'id': 'mine', 'name': 'Kazuma'},
-          ])),
-          'appearance': StoreEntry.of(jsonEncode({'mode': 'amoled'})),
-          'presets': StoreEntry.of(jsonEncode({
-            'presets': [
-              {'id': 'mine', 'name': 'My preset'},
-            ],
-            'defaultId': 'mine',
-          })),
-        };
+      'characters': StoreEntry.of(
+        jsonEncode([
+          {'id': 'c1', 'name': 'Aqua the elder'},
+          {'id': 'mine', 'name': 'Kazuma'},
+        ]),
+      ),
+      'appearance': StoreEntry.of(jsonEncode({'mode': 'amoled'})),
+      'presets': StoreEntry.of(
+        jsonEncode({
+          'presets': [
+            {'id': 'mine', 'name': 'My preset'},
+          ],
+          'defaultId': 'mine',
+        }),
+      ),
+    };
 
     test('an item in both takes the incoming one, and mine is kept', () {
       final merged = mergeStores(device(), _store());
       final characters = merged['characters']!.asList!;
-      final byId = {
-        for (final c in characters) (c as Map)['id']: c['name'],
-      };
-      expect(byId['c1'], 'Aqua');          // the file's version won
-      expect(byId['c2'], 'Megumin');       // arrived from the file
-      expect(byId['mine'], 'Kazuma');      // mine survived
+      final byId = {for (final c in characters) (c as Map)['id']: c['name']};
+      expect(byId['c1'], 'Aqua'); // the file's version won
+      expect(byId['c2'], 'Megumin'); // arrived from the file
+      expect(byId['mine'], 'Kazuma'); // mine survived
       expect(characters.length, 3);
     });
 
@@ -306,15 +337,11 @@ void main() {
     });
 
     test('an empty pointer of mine adopts the file\'s', () {
-      final merged = mergeStores(
-        <String, StoreEntry>{
-          'providers': StoreEntry.of(jsonEncode({
-            'providers': <dynamic>[],
-            'activeId': null,
-          })),
-        },
-        _store(),
-      );
+      final merged = mergeStores(<String, StoreEntry>{
+        'providers': StoreEntry.of(
+          jsonEncode({'providers': <dynamic>[], 'activeId': null}),
+        ),
+      }, _store());
       expect(merged['providers']!.asMap!['activeId'], 'p1');
       expect((merged['providers']!.asMap!['providers'] as List).length, 1);
     });

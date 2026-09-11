@@ -304,6 +304,15 @@ const List<_SearchEntry> _searchIndex = [
     builder: _charactersFreeSizePage,
   ),
   _SearchEntry(
+    title: 'Character labels over artwork',
+    section: 'Browse appearance',
+    icon: Icons.gradient_outlined,
+    keywords:
+        'characters pinterest overlay vignette title name transparent card '
+        'three dots menu swipe avatars artwork labels image character vignette',
+    builder: _characterImageOverlayPage,
+  ),
+  _SearchEntry(
     title: 'Gallery free-size cards',
     section: 'Browse appearance',
     icon: Icons.photo_library_outlined,
@@ -474,6 +483,9 @@ Widget _fontPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.font);
 Widget _charactersFreeSizePage() => const BrowseAppearanceSettingsPage(
   highlight: SettingAnchor.charactersFreeSize,
+);
+Widget _characterImageOverlayPage() => const BrowseAppearanceSettingsPage(
+  highlight: SettingAnchor.characterImageOverlay,
 );
 Widget _galleryFreeSizePage() => const BrowseAppearanceSettingsPage(
   highlight: SettingAnchor.galleryFreeSize,

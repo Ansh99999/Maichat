@@ -79,6 +79,8 @@ class _NaturalFrameState extends State<NaturalFrame> {
   ImageStream? _stream;
   ImageStreamListener? _listener;
   double? _ratio;
+  Object? _reportedCallback;
+  String? _reportedImageRef;
 
   /// The width the picture is drawn at, so the decode is capped near it rather
   /// than at source resolution. Read once per layout pass.
@@ -93,12 +95,30 @@ class _NaturalFrameState extends State<NaturalFrame> {
   @override
   void didUpdateWidget(NaturalFrame old) {
     super.didUpdateWidget(old);
-    if (old.imageRef != widget.imageRef) {
+    final imageChanged = old.imageRef != widget.imageRef;
+    final callbackChanged = old.onRatioResolved != widget.onRatioResolved;
+    if (imageChanged || callbackChanged) {
+      _reportedCallback = null;
+      _reportedImageRef = null;
+    }
+    if (imageChanged) {
       _ratio = null;
       _sync();
-    } else if (old.displayWidth != widget.displayWidth) {
+    } else if (old.displayWidth != widget.displayWidth || callbackChanged) {
       _sync();
     }
+  }
+
+  void _reportRatio(double ratio, String imageRef) {
+    final callback = widget.onRatioResolved;
+    if (callback == null ||
+        (_reportedImageRef == imageRef &&
+            identical(_reportedCallback, callback))) {
+      return;
+    }
+    _reportedImageRef = imageRef;
+    _reportedCallback = callback;
+    callback(ratio);
   }
 
   void _sync() {
@@ -118,10 +138,13 @@ class _NaturalFrameState extends State<NaturalFrame> {
       if (_provider != null) _provider = null;
       return;
     }
+    final imageRef = widget.imageRef;
     final knownRatio = _ratio;
     if (knownRatio != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) widget.onRatioResolved?.call(knownRatio);
+        if (mounted && widget.imageRef == imageRef) {
+          _reportRatio(knownRatio, imageRef);
+        }
       });
     }
     if (provider == _provider) return;
@@ -132,16 +155,25 @@ class _NaturalFrameState extends State<NaturalFrame> {
     final stream = provider.resolve(ImageConfiguration.empty);
     final listener = ImageStreamListener(
       (info, _) {
+        if (!mounted ||
+            widget.imageRef != imageRef ||
+            !identical(_stream, stream)) {
+          return;
+        }
         final w = info.image.width.toDouble();
         final h = info.image.height.toDouble();
         if (w <= 0 || h <= 0) return;
         final ratio = w / h;
-        noteAvatarRatio(widget.imageRef, ratio);
-        widget.onRatioResolved?.call(ratio);
-        if (mounted && ratio != _ratio) setState(() => _ratio = ratio);
+        noteAvatarRatio(imageRef, ratio);
+        _reportRatio(ratio, imageRef);
+        if (ratio != _ratio) setState(() => _ratio = ratio);
       },
       onError: (_, _) {
-        if (mounted && _provider != null) setState(() => _provider = null);
+        if (mounted &&
+            widget.imageRef == imageRef &&
+            identical(_stream, stream)) {
+          setState(() => _provider = null);
+        }
       },
     );
     _stream = stream;

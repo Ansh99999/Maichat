@@ -44,6 +44,24 @@ class BrowseAppearanceSettingsPage extends StatelessWidget {
             active: highlight == SettingAnchor.charactersFreeSize,
             state: state,
           ),
+          SettingHighlight(
+            active: highlight == SettingAnchor.characterImageOverlay,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 40),
+              child: SwitchListTile(
+                dense: true,
+                value: state.characterImageOverlay,
+                onChanged: state.freeSizeCards(BrowseSection.characters)
+                    ? state.setCharacterImageOverlay
+                    : null,
+                secondary: const Icon(Icons.gradient_outlined),
+                title: const Text('Labels over artwork'),
+                subtitle: const Text(
+                  'Vignette, title, actions and swipeable avatars on the picture',
+                ),
+              ),
+            ),
+          ),
           _FreeSizeSwitch(
             title: 'Gallery',
             subtitle: 'Natural-size pictures at every zoom level',

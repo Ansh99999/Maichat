@@ -53,6 +53,7 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
   ImageProvider? _provider;
   ImageStream? _stream;
   ImageStreamListener? _listener;
+  String? _imageRef;
 
   /// Intrinsic width / height of the resolved image, when known.
   double? _ratio;
@@ -65,12 +66,12 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
     return override.isEmpty ? widget.character.avatar : override;
   }
 
-  ImageProvider? _resolveProvider() {
+  ImageProvider? _resolveProvider(String imageRef) {
     // Shared, size-capped and deduplicated: the same picture at the same size
     // is the same provider object everywhere, so it is decoded once and held
     // once no matter how many turns show it.
     return avatarImage(
-      _ref,
+      imageRef,
       displaySize: _diameter,
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
     );
@@ -85,44 +86,47 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
   @override
   void didUpdateWidget(CharacterAvatar old) {
     super.didUpdateWidget(old);
-    if (old.character.avatar != widget.character.avatar ||
-        old.avatarOverride != widget.avatarOverride ||
-        old.fit != widget.fit ||
-        old.size != widget.size ||
-        old.radius != widget.radius) {
-      _ratio = null;
-      _syncStream();
-    }
+    // Character is mutable, so old.character and widget.character can already
+    // expose the same newly assigned avatar here. Compare against the reference
+    // captured by the active stream in _syncStream instead.
+    _syncStream();
   }
-// APPEND-STATE
 
   /// Only free mode needs the intrinsic ratio, so only then do we resolve the
   /// image stream just to measure it.
   void _syncStream() {
-    final provider = _resolveProvider();
+    final imageRef = _ref;
+    final provider = _resolveProvider(imageRef);
     final needsRatio = widget.fit == AvatarFit.free && provider != null;
     if (!needsRatio) {
       _detach();
       _provider = provider;
+      _imageRef = imageRef;
       return;
     }
+    if (_imageRef != imageRef) _ratio = null;
+    _imageRef = imageRef;
     // Something has measured this picture before: start at the right shape
     // rather than opening square and snapping a frame later.
-    _ratio ??= avatarRatio(_ref);
+    _ratio ??= avatarRatio(imageRef);
     if (provider == _provider && _stream != null) return;
     _detach();
     _provider = provider;
     final stream = provider.resolve(ImageConfiguration.empty);
-    final listener = ImageStreamListener((info, _) {
-      final w = info.image.width.toDouble();
-      final h = info.image.height.toDouble();
-      if (h <= 0 || w <= 0) return;
-      final ratio = w / h;
-      noteAvatarRatio(_ref, ratio);
-      if (mounted && ratio != _ratio) setState(() => _ratio = ratio);
-    }, onError: (_, _) {
-      // Bad image: leave the frame square and let the monogram show.
-    });
+    final listener = ImageStreamListener(
+      (info, _) {
+        if (!mounted || _ref != imageRef || !identical(_stream, stream)) return;
+        final w = info.image.width.toDouble();
+        final h = info.image.height.toDouble();
+        if (h <= 0 || w <= 0) return;
+        final ratio = w / h;
+        noteAvatarRatio(imageRef, ratio);
+        if (ratio != _ratio) setState(() => _ratio = ratio);
+      },
+      onError: (_, _) {
+        // Bad image: leave the frame square and let the monogram show.
+      },
+    );
     _stream = stream;
     _listener = listener;
     stream.addListener(listener);
@@ -162,8 +166,10 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
       }
     }
 
-    final radius =
-        widget.shape.radiusFor(w < h ? w : h, rounding: widget.corner);
+    final radius = widget.shape.radiusFor(
+      w < h ? w : h,
+      rounding: widget.corner,
+    );
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: Container(
@@ -201,4 +207,3 @@ class _CharacterAvatarState extends State<CharacterAvatar> {
     );
   }
 }
-

@@ -42,6 +42,7 @@ import '../services/embedding_store.dart';
 import '../services/foreign_backup.dart';
 import '../services/gallery_group.dart';
 import '../services/image_client.dart';
+import '../services/image_ratio_cache.dart';
 import '../services/jank_logger.dart';
 import '../services/macro_context.dart';
 import '../services/macro_engine.dart';
@@ -203,6 +204,10 @@ class AppState extends ChangeNotifier {
   /// disk — see [_writable].
   bool _loadFailed = false;
 
+  /// Cleanup runs after readiness, but a restore must not extract new files while
+  /// that pre-restore keep-list is still being swept.
+  Future<void> _startupAvatarSweep = Future<void>.value();
+
   List<Conversation> get conversations => List.unmodifiable(_conversations);
   List<Provider> get providers => List.unmodifiable(_providers);
   List<Character> get characters => List.unmodifiable(_characters);
@@ -252,18 +257,34 @@ class AppState extends ChangeNotifier {
   /// it off so a manipulation leaves no pending timer to trip the test binding.
   bool debounceFloatSaves = true;
 
-  /// Writes any debounced float position straight away — for a test, or for the
-  /// app being backgrounded before the timer fires.
+  /// Writes any debounced state straight away — for tests, backups, and for the
+  /// app being backgrounded before a timer fires.
   Future<void> flushPendingSaves() async {
     if (_floatPersist?.isActive ?? false) {
       _floatPersist!.cancel();
       _floatPersist = null;
       if (_writable) await _storage.saveConversations(_conversations);
     }
+    if (_imageRatioPersist?.isActive ?? false) {
+      _imageRatioPersist!.cancel();
+      _imageRatioPersist = null;
+      if (_writable && imageRatioCache.durableSnapshot().isNotEmpty) {
+        await _saveImageRatios(imageRatioCache.durableSnapshot());
+      }
+    } else if (imageRatioCache.durableSnapshot().isNotEmpty) {
+      await _imageRatioOperations;
+    }
   }
 
   /// Debounces persisting a float's new position/size — see [settleFloatingImage].
   Timer? _floatPersist;
+
+  /// Ratio discoveries can arrive in a burst as a viewport of images resolves.
+  /// One small cache write is enough, and it never notifies UI listeners.
+  static const Duration _imageRatioSaveDelay = Duration(milliseconds: 450);
+  Timer? _imageRatioPersist;
+  Object? _imageRatioListenerToken;
+  Future<void> _imageRatioOperations = Future<void>.value();
 
   /// A human-readable reason the stored data could not be read, or null.
   /// Non-null means the session is read-only until [retryLoad] succeeds.
@@ -326,6 +347,7 @@ class AppState extends ChangeNotifier {
   /// no way back in. When the load does fail, [_loadFailed] makes the session
   /// read-only so the half-empty state cannot overwrite what is still on disk.
   Future<void> init() async {
+    final timer = Stopwatch()..start();
     try {
       await _load().timeout(loadTimeout);
     } on TimeoutException {
@@ -335,6 +357,18 @@ class AppState extends ChangeNotifier {
     } finally {
       _ready = true;
       notifyListeners();
+      _logStartupPhase('load', timer);
+      // Real file-system futures do not advance in a widget test's fake-async
+      // zone. Only schedule real cleanup when there is a store to sweep; a
+      // no-store AppState needs no cross-zone task at all.
+      if (_avatars != null && _writable) {
+        _startupAvatarSweep = Zone.root.run<Future<void>>(
+          _runStartupAvatarSweep,
+        );
+        unawaited(_startupAvatarSweep);
+      } else {
+        _startupAvatarSweep = Future<void>.value();
+      }
       // Best-effort, non-blocking: surfaces an update affordance if one exists.
       unawaited(checkForUpdates());
       // The schedule is checked here because there is no background worker: a
@@ -397,6 +431,14 @@ class AppState extends ChangeNotifier {
     _modelCache
       ..clear()
       ..addAll(await _storage.loadModelCache());
+    // Hydrate before readiness: a known landscape card must choose its two-slot
+    // span on the first Characters frame, not after its image decodes again. Keep
+    // anything already learned in this process (notably across a store reload),
+    // with the durable store authoritative for matching exact references.
+    final imageRatios = imageRatioCache.durableSnapshot()
+      ..addAll(await _storage.loadImageRatios());
+    imageRatioCache.replaceDurable(imageRatios);
+    _bindImageRatioPersistence();
     _tokenizerConfig = await _storage.loadTokenizerConfig();
     _usage = UsageLedger.decode(await _storage.loadUsage());
     // Folding stale hours down is cheap and only worth persisting when it
@@ -439,6 +481,48 @@ class AppState extends ChangeNotifier {
     unawaited(_sweepVectors());
   }
 
+  Future<void> _saveImageRatios(Map<String, double> ratios) {
+    final snapshot = Map<String, double>.of(ratios);
+    return _serializeImageRatioOperation(
+      () => _storage.saveImageRatios(snapshot),
+    );
+  }
+
+  Future<void> _clearStoredImageRatios() =>
+      _serializeImageRatioOperation(_storage.clearImageRatios);
+
+  Future<void> _serializeImageRatioOperation(
+    Future<void> Function() operation,
+  ) {
+    final result = _imageRatioOperations.then((_) => operation());
+    _imageRatioOperations = result.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('MaiChat: could not persist image ratios ($error)');
+      },
+    );
+    return result;
+  }
+
+  void _bindImageRatioPersistence() {
+    final oldToken = _imageRatioListenerToken;
+    if (oldToken != null) imageRatioCache.unbindDurableChanged(oldToken);
+    _imageRatioListenerToken = imageRatioCache.bindDurableChanged(() {
+      _imageRatioPersist?.cancel();
+      if (!debounceFloatSaves) {
+        if (_writable) {
+          unawaited(_saveImageRatios(imageRatioCache.durableSnapshot()));
+        }
+        return;
+      }
+      _imageRatioPersist = Timer(_imageRatioSaveDelay, () {
+        _imageRatioPersist = null;
+        if (!_writable) return;
+        unawaited(_saveImageRatios(imageRatioCache.durableSnapshot()));
+      });
+    });
+  }
+
   /// Moves any picture still living as base64 in the preferences store into the
   /// pictures directory, once, on the first launch that has this code. A store
   /// written by an older build carries its avatars inline; leaving them there is
@@ -450,6 +534,7 @@ class AppState extends ChangeNotifier {
   Future<void> _adoptStoredAvatars() async {
     final store = _avatars;
     if (store == null) return;
+    final timer = Stopwatch()..start();
     try {
       var moved = 0;
       for (final character in _characters) {
@@ -466,10 +551,27 @@ class AppState extends ChangeNotifier {
         );
         await _persistCharacters();
       }
-      await _sweepAvatars();
     } catch (error) {
       debugPrint('MaiChat: could not move pictures into files ($error)');
+    } finally {
+      _logStartupPhase('avatar adoption', timer);
     }
+  }
+
+  Future<void> _runStartupAvatarSweep() async {
+    final timer = Stopwatch()..start();
+    try {
+      await _sweepAvatars();
+    } catch (error) {
+      debugPrint('MaiChat: startup picture cleanup failed ($error)');
+    } finally {
+      _logStartupPhase('picture cleanup', timer);
+    }
+  }
+
+  void _logStartupPhase(String phase, Stopwatch timer) {
+    if (!kDebugMode && !kProfileMode) return;
+    debugPrint('MaiChat startup: $phase took ${timer.elapsedMilliseconds} ms');
   }
 
   void _fail(String message) {
@@ -1572,12 +1674,18 @@ class AppState extends ChangeNotifier {
     if (removed) notifyListeners();
   }
 
-  /// Drops the rebuild-from-scratch caches (model lists, Discover state). Safe:
-  /// nothing the user authored is lost.
+  /// Drops the rebuild-from-scratch caches (model lists, Discover state, image
+  /// ratios). Safe: nothing the user authored is lost.
   Future<void> clearCaches() async {
     if (!_writable) return;
     _modelCache.clear();
-    await _storage.clearCache();
+    _imageRatioPersist?.cancel();
+    _imageRatioPersist = null;
+    imageRatioCache.clear();
+    // Serialize the whole cache clear behind any ratio save already in flight.
+    // A new ratio learned while this awaits then queues after the clear and is
+    // not accidentally erased with the stale metadata.
+    await _serializeImageRatioOperation(_storage.clearCache);
     notifyListeners();
   }
 
@@ -1921,6 +2029,7 @@ class AppState extends ChangeNotifier {
         'Restart the app and try again.',
       );
     }
+    await _startupAvatarSweep;
     await archive.extractFiles(
       pictures: imageDirectory,
       vectors: _vectors?.directory,
@@ -1942,6 +2051,13 @@ class AppState extends ChangeNotifier {
       replace: replace,
       protect: kBackupExcludedKeys,
     );
+    // Ratios describe files from the pre-restore store. Even though the entry is
+    // excluded/protected, keeping it would let a reused local name inherit stale
+    // geometry. Rebuild this derived cache from decoded restored images instead.
+    _imageRatioPersist?.cancel();
+    _imageRatioPersist = null;
+    imageRatioCache.clear();
+    await _clearStoredImageRatios();
     await reloadFromStore();
     // Anything on disk the restored store does not reference is a leftover.
     await _sweepAvatars();
@@ -2660,6 +2776,21 @@ class AppState extends ChangeNotifier {
   Future<void> setFreeSizeCards(String section, bool enabled) async {
     if (freeSizeCards(section) == enabled) return;
     final next = _viewPrefs.withFreeSize(section, enabled);
+    if (next == _viewPrefs) return;
+    _viewPrefs = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveViewPrefs(_viewPrefs);
+  }
+
+  /// Whether labels and actions sit directly over Characters artwork. The screen
+  /// makes this effective only in its free-size grid; retaining the preference
+  /// through list/fixed modes lets a temporary layout change be reversible.
+  bool get characterImageOverlay => _viewPrefs.characterImageOverlay;
+
+  Future<void> setCharacterImageOverlay(bool enabled) async {
+    if (characterImageOverlay == enabled) return;
+    final next = _viewPrefs.withCharacterImageOverlay(enabled);
     if (next == _viewPrefs) return;
     _viewPrefs = next;
     notifyListeners();
@@ -3833,7 +3964,11 @@ class AppState extends ChangeNotifier {
   /// Makes [ref] the picture [character] wears everywhere ("set as default").
   /// The one it was wearing stays in the pool, so this is a reorder rather than a
   /// replacement — nothing is lost by trying a different face.
-  Future<void> setDefaultAvatar(String characterId, String ref) async {
+  Future<void> setDefaultAvatar(
+    String characterId,
+    String ref, {
+    bool touch = true,
+  }) async {
     final character = characterById(characterId);
     final trimmed = ref.trim();
     if (character == null || trimmed.isEmpty) return;
@@ -3844,7 +3979,7 @@ class AppState extends ChangeNotifier {
       character.avatars.insert(0, previous);
     }
     character.avatar = trimmed;
-    character.updatedAt = DateTime.now();
+    if (touch) character.updatedAt = DateTime.now();
     notifyListeners();
     await _persistCharacters();
   }
@@ -6115,6 +6250,9 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _client.cancel();
+    _floatPersist?.cancel();
+    _imageRatioPersist?.cancel();
+    imageRatioCache.unbindDurableChanged(_imageRatioListenerToken);
     super.dispose();
   }
 }

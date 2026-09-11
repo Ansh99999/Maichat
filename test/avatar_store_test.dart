@@ -12,8 +12,10 @@ import 'package:maichat/widgets/character_avatar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A real 1x1 PNG.
-final _png = base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA'
-    'DUlEQVR42mP8z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==');
+final _png = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA'
+  'DUlEQVR42mP8z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==',
+);
 
 /// A JPEG, by its magic bytes, to check the extension sniffing.
 final _jpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]);
@@ -65,28 +67,55 @@ void main() {
     test('the extension follows the format', () async {
       expect(await store.write(_png), endsWith('.png'));
       expect(await store.write(_jpeg), endsWith('.jpg'));
-      expect(await store.write(Uint8List.fromList([1, 2, 3])),
-          endsWith('.img'));
+      expect(
+        await store.write(Uint8List.fromList([1, 2, 3])),
+        endsWith('.img'),
+      );
     });
 
-    test('adopt moves base64 into a file and leaves other forms alone',
-        () async {
-      final ref = await store.adopt(base64Encode(_png));
-      expect(avatarIsLocal(ref), isTrue);
-      expect(File('${dir.path}/${avatarRefName(ref)}').readAsBytesSync(), _png);
+    test('a sweep requested during a write cannot delete that write', () async {
+      final bytes = Uint8List.fromList([
+        ..._png,
+        ...List<int>.filled(4 * 1024 * 1024, 3),
+      ]);
+      final writing = store.write(bytes);
+      final sweeping = store.sweep(const <String>[]);
 
-      expect(await store.adopt(''), '');
-      expect(await store.adopt('https://x/a.png'), 'https://x/a.png');
-      expect(await store.adopt(ref), ref, reason: 'already a file');
-      expect(await store.adopt('not base64 !!'), 'not base64 !!');
+      final ref = await writing;
+      expect(await sweeping, 0);
+      final file = File('${dir.path}/${avatarRefName(ref)}');
+      expect(file.existsSync(), isTrue);
+
+      expect(await store.sweep(const <String>[]), 1);
+      expect(file.existsSync(), isFalse);
     });
+
+    test(
+      'adopt moves base64 into a file and leaves other forms alone',
+      () async {
+        final ref = await store.adopt(base64Encode(_png));
+        expect(avatarIsLocal(ref), isTrue);
+        expect(
+          File('${dir.path}/${avatarRefName(ref)}').readAsBytesSync(),
+          _png,
+        );
+
+        expect(await store.adopt(''), '');
+        expect(await store.adopt('https://x/a.png'), 'https://x/a.png');
+        expect(await store.adopt(ref), ref, reason: 'already a file');
+        expect(await store.adopt('not base64 !!'), 'not base64 !!');
+      },
+    );
 
     test('sweep deletes only what nothing refers to', () async {
       final kept = await store.write(_png);
       final orphan = await store.write(_jpeg);
       expect(await store.sweep([kept, 'https://x/a.png']), 1);
       expect(File('${dir.path}/${avatarRefName(kept)}').existsSync(), isTrue);
-      expect(File('${dir.path}/${avatarRefName(orphan)}').existsSync(), isFalse);
+      expect(
+        File('${dir.path}/${avatarRefName(orphan)}').existsSync(),
+        isFalse,
+      );
     });
   });
 
@@ -104,13 +133,21 @@ void main() {
       expect(avatarImage('local:missing.png', displaySize: 48), isNull);
     });
 
-    testWidgets('a character whose file vanished shows its initial instead',
-        (tester) async {
-      final character =
-          Character(id: 'c', name: 'Sumire', avatar: 'local:gone.png');
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: CharacterAvatar(character: character, radius: 24)),
-      ));
+    testWidgets('a character whose file vanished shows its initial instead', (
+      tester,
+    ) async {
+      final character = Character(
+        id: 'c',
+        name: 'Sumire',
+        avatar: 'local:gone.png',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CharacterAvatar(character: character, radius: 24),
+          ),
+        ),
+      );
       await tester.pump();
       expect(find.text('S'), findsOneWidget);
     });
@@ -129,10 +166,17 @@ void main() {
       await state.init();
 
       final character = state.characters.single;
-      expect(avatarIsLocal(character.avatar), isTrue,
-          reason: 'the picture is a file now');
-      expect(File('${dir.path}/${avatarRefName(character.avatar)}')
-          .readAsBytesSync(), _png);
+      expect(
+        avatarIsLocal(character.avatar),
+        isTrue,
+        reason: 'the picture is a file now',
+      );
+      expect(
+        File(
+          '${dir.path}/${avatarRefName(character.avatar)}',
+        ).readAsBytesSync(),
+        _png,
+      );
 
       // And the preferences store no longer carries the image.
       final prefs = await SharedPreferences.getInstance();
@@ -140,8 +184,7 @@ void main() {
       expect(prefs.getString('characters'), contains('local:'));
     });
 
-    test('saving a character never puts a picture back in the store',
-        () async {
+    test('saving a character never puts a picture back in the store', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final state = AppState(avatars: store);
       await state.init();
@@ -152,7 +195,10 @@ void main() {
       expect(avatarIsLocal(state.characters.single.avatar), isTrue);
 
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('characters'), isNot(contains(base64Encode(_png))));
+      expect(
+        prefs.getString('characters'),
+        isNot(contains(base64Encode(_png))),
+      );
     });
 
     test('deleting a character takes its picture with it', () async {

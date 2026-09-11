@@ -38,13 +38,14 @@ const String kBackupManifestName = 'maichat-backup.json';
 const String kBackupPictureFolder = 'pictures';
 const String kBackupVectorFolder = 'vectors';
 
-/// Store entries a backup deliberately leaves out.
-///
-/// The backup settings and the list of backups taken are *about* backups, not
-/// data the user authored. Carrying them would mean restoring last month's
-/// snapshot disconnected Google Drive and erased every record since — including
-/// the record of the restore being read.
-const Set<String> kBackupExcludedKeys = <String>{'backupPrefs', 'backups'};
+/// Backup settings/history are about backups, not authored data. Intrinsic
+/// image ratios are a disposable derived cache and must not replace this
+/// device's warm first-paint metadata when a snapshot is restored.
+const Set<String> kBackupExcludedKeys = <String>{
+  'backupPrefs',
+  'backups',
+  'imageRatios',
+};
 
 /// The API-key fields inside each entry that holds one, by store key. Used both
 /// to strip keys out of an export and to keep live keys when a keyless backup
@@ -63,6 +64,7 @@ class BackupFormatException implements Exception {
   @override
   String toString() => message;
 }
+
 /// One stored entry, kept with enough type information to be handed back to
 /// `shared_preferences` unchanged.
 ///
@@ -111,11 +113,13 @@ class StoreEntry {
   Object? get stored => kind == 'json' ? jsonEncode(value) : value;
 
   /// The entry's decoded JSON as a map, or null when it is not one.
-  Map<String, dynamic>? get asMap =>
-      kind == 'json' && value is Map ? Map<String, dynamic>.from(value as Map) : null;
+  Map<String, dynamic>? get asMap => kind == 'json' && value is Map
+      ? Map<String, dynamic>.from(value as Map)
+      : null;
 
   /// The entry's decoded JSON as a list, or null when it is not one.
-  List<dynamic>? get asList => kind == 'json' && value is List ? value as List : null;
+  List<dynamic>? get asList =>
+      kind == 'json' && value is List ? value as List : null;
 
   Map<String, dynamic> toJson() => {'kind': kind, 'value': value};
 
@@ -125,7 +129,9 @@ class StoreEntry {
       final value = json['value'];
       if (kind == 'json') return StoreEntry('json', value);
       if (kind == 'bool') return StoreEntry('bool', value == true);
-      if (kind == 'int') return StoreEntry('int', (value as num?)?.toInt() ?? 0);
+      if (kind == 'int') {
+        return StoreEntry('int', (value as num?)?.toInt() ?? 0);
+      }
       if (kind == 'double') {
         return StoreEntry('double', (value as num?)?.toDouble() ?? 0);
       }
@@ -141,6 +147,7 @@ class StoreEntry {
     return StoreEntry.of(json);
   }
 }
+
 /// What is about to be written into a backup: the store, and the *files* that go
 /// with it — as files, not as bytes.
 ///
@@ -186,18 +193,18 @@ class BackupPlan {
   /// and the archive is deflated anyway, so pretty-printing would buy nothing
   /// but encoding time.
   Map<String, dynamic> get manifest => <String, dynamic>{
-        'kind': kBackupKind,
-        'formatVersion': kBackupFormatVersion,
-        'createdAt': createdAt.toIso8601String(),
-        if (appVersion.isNotEmpty) 'appVersion': appVersion,
-        'includesKeys': includesKeys,
-        'counts': counts.toJson(),
-        'store': {
-          for (final entry in store.entries) entry.key: entry.value.toJson(),
-        },
-        'pictures': pictures.map(_fileName).toList(),
-        'vectors': vectors.map(_fileName).toList(),
-      };
+    'kind': kBackupKind,
+    'formatVersion': kBackupFormatVersion,
+    'createdAt': createdAt.toIso8601String(),
+    if (appVersion.isNotEmpty) 'appVersion': appVersion,
+    'includesKeys': includesKeys,
+    'counts': counts.toJson(),
+    'store': {
+      for (final entry in store.entries) entry.key: entry.value.toJson(),
+    },
+    'pictures': pictures.map(_fileName).toList(),
+    'vectors': vectors.map(_fileName).toList(),
+  };
 }
 
 String _fileName(File file) => file.uri.pathSegments.last;
@@ -217,7 +224,11 @@ Future<void> writeBackupFile(BackupPlan plan, String path) async {
       ArchiveFile.string(kBackupManifestName, jsonEncode(plan.manifest)),
     );
     for (final file in plan.pictures) {
-      await _addStored(encoder, file, '$kBackupPictureFolder/${_fileName(file)}');
+      await _addStored(
+        encoder,
+        file,
+        '$kBackupPictureFolder/${_fileName(file)}',
+      );
     }
     for (final file in plan.vectors) {
       await encoder.addFile(file, '$kBackupVectorFolder/${_fileName(file)}');
@@ -228,11 +239,7 @@ Future<void> writeBackupFile(BackupPlan plan, String path) async {
 }
 
 /// Adds [file] under [name] without recompressing it, reading it as a stream.
-Future<void> _addStored(
-  ZipFileEncoder encoder,
-  File file,
-  String name,
-) async {
+Future<void> _addStored(ZipFileEncoder encoder, File file, String name) async {
   final stream = InputFileStream(file.path);
   try {
     encoder.addArchiveFile(
@@ -278,6 +285,7 @@ BackupCounts countStore(
     vectors: vectors,
   );
 }
+
 /// Whether [bytes] begins with a zip's local-file header.
 bool looksLikeZip(Uint8List bytes) =>
     bytes.length >= 4 &&
@@ -319,6 +327,7 @@ ArchiveFile? _manifestEntry(Archive archive) {
   }
   return null;
 }
+
 /// A backup being read, one entry at a time.
 ///
 /// Opened from a *path* wherever possible: only the manifest is inflated when it
@@ -359,10 +368,10 @@ class BackupArchive {
   final InputFileStream? _input;
 
   BackupCounts get counts => countStore(
-        store,
-        pictures: pictureNames.length,
-        vectors: vectorNames.length,
-      );
+    store,
+    pictures: pictureNames.length,
+    vectors: vectorNames.length,
+  );
 
   /// Opens the backup at [path]. Throws [BackupFormatException] when it is not
   /// one of ours — which is also how the importer tells a MaiChat backup from
@@ -525,6 +534,7 @@ Map<String, dynamic> _parseManifest(Uint8List bytes) {
   }
   return json;
 }
+
 BackupArchive _fromManifest(
   Map<String, dynamic> json, {
   Archive? archive,
@@ -592,14 +602,13 @@ Object? _blankFields(Object? value, List<String> fields) {
         continue;
       }
       final current = entry.value;
-      out[key] = current is List
-          ? current.map((_) => '').toList()
-          : '';
+      out[key] = current is List ? current.map((_) => '').toList() : '';
     }
     return out;
   }
   return value;
 }
+
 /// Fills in blanked API keys in [incoming] from what is live in [current].
 ///
 /// A backup taken with "include API keys" off carries empty key fields. Writing
@@ -615,8 +624,9 @@ Map<String, StoreEntry> preserveSecrets({
   final liveProviders = <String, Map<String, dynamic>>{};
   for (final provider in _nestedList(current['providers'], 'providers')) {
     if (provider is Map && provider['id'] != null) {
-      liveProviders[provider['id'].toString()] =
-          Map<String, dynamic>.from(provider);
+      liveProviders[provider['id'].toString()] = Map<String, dynamic>.from(
+        provider,
+      );
     }
   }
   final incomingProviders = out['providers'];
@@ -627,7 +637,8 @@ Map<String, StoreEntry> preserveSecrets({
       final next = Map<String, dynamic>.from(item);
       final live = liveProviders[next['id']?.toString() ?? ''];
       if (live == null) return next;
-      final keys = (next['apiKeys'] as List?)
+      final keys =
+          (next['apiKeys'] as List?)
               ?.map((k) => k.toString())
               .where((k) => k.trim().isNotEmpty)
               .toList() ??
@@ -660,6 +671,7 @@ List<dynamic> _nestedList(StoreEntry? entry, String field) {
   final list = map?[field];
   return list is List ? list : const <dynamic>[];
 }
+
 /// The store keys that hold a plain list of things with an `id` — the ones a
 /// merge can reconcile item by item.
 const List<String> kBackupIdLists = <String>[
@@ -714,8 +726,10 @@ Map<String, StoreEntry> mergeStores(
     // The device's own pointers win — but only where it has one. A first import
     // into an app with no providers at all should adopt the file's active id
     // rather than end up with a list and nothing selected.
-    final mineFields = {...mineMap}..removeWhere(
-        (key, value) => value == null || (value is String && value.isEmpty));
+    final mineFields = {...mineMap}
+      ..removeWhere(
+        (key, value) => value == null || (value is String && value.isEmpty),
+      );
     out[target.key] = StoreEntry('json', {
       ...theirMap,
       ...mineFields,

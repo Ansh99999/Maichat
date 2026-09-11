@@ -65,6 +65,7 @@ class ViewPrefs {
   const ViewPrefs({
     this.layouts = const <String, String>{},
     this.freeSize = const <String, bool>{},
+    this.characterImageOverlay = false,
     this.creatorVersion = CreatorVersion.v2,
   });
 
@@ -74,6 +75,11 @@ class ViewPrefs {
   /// Picture sections whose cards keep each image's natural proportions.
   /// Missing and false entries both mean the legacy fixed-card layout.
   final Map<String, bool> freeSize;
+
+  /// Whether Characters' free-size grid burns its labels into the artwork.
+  /// It is stored independently so switching layouts does not discard the choice;
+  /// screens apply it only while both the grid and free-size mode are active.
+  final bool characterImageOverlay;
 
   /// Which character editor the app opens. Lives here rather than in its own
   /// store entry for the same reason the layouts do: it is a small UI preference,
@@ -91,6 +97,7 @@ class ViewPrefs {
   ViewPrefs withLayout(String section, BrowseLayout layout) => ViewPrefs(
     layouts: <String, String>{...layouts, section: layout.name},
     freeSize: freeSize,
+    characterImageOverlay: characterImageOverlay,
     creatorVersion: creatorVersion,
   );
 
@@ -106,16 +113,29 @@ class ViewPrefs {
     return ViewPrefs(
       layouts: layouts,
       freeSize: next,
+      characterImageOverlay: characterImageOverlay,
       creatorVersion: creatorVersion,
     );
   }
 
-  ViewPrefs withCreatorVersion(CreatorVersion version) =>
-      ViewPrefs(layouts: layouts, freeSize: freeSize, creatorVersion: version);
+  ViewPrefs withCharacterImageOverlay(bool enabled) => ViewPrefs(
+    layouts: layouts,
+    freeSize: freeSize,
+    characterImageOverlay: enabled,
+    creatorVersion: creatorVersion,
+  );
+
+  ViewPrefs withCreatorVersion(CreatorVersion version) => ViewPrefs(
+    layouts: layouts,
+    freeSize: freeSize,
+    characterImageOverlay: characterImageOverlay,
+    creatorVersion: version,
+  );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'layouts': layouts,
     if (freeSize.isNotEmpty) 'freeSize': freeSize,
+    if (characterImageOverlay) 'characterImageOverlay': true,
     if (creatorVersion != CreatorVersion.v2)
       'creatorVersion': creatorVersion.name,
   };
@@ -139,6 +159,7 @@ class ViewPrefs {
     return ViewPrefs(
       layouts: layouts,
       freeSize: freeSize,
+      characterImageOverlay: json['characterImageOverlay'] == true,
       creatorVersion: CreatorVersion.byName(json['creatorVersion']),
     );
   }
@@ -147,12 +168,14 @@ class ViewPrefs {
   bool operator ==(Object other) =>
       other is ViewPrefs &&
       other.creatorVersion == creatorVersion &&
+      other.characterImageOverlay == characterImageOverlay &&
       _same(other.layouts, layouts) &&
       _same(other.freeSize, freeSize);
 
   @override
   int get hashCode => Object.hash(
     creatorVersion,
+    characterImageOverlay,
     Object.hashAllUnordered(layouts.entries.map((e) => '${e.key}=${e.value}')),
     Object.hashAllUnordered(freeSize.entries.map((e) => '${e.key}=${e.value}')),
   );

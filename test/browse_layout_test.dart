@@ -52,6 +52,36 @@ void main() {
       expect(prefs.freeSizeFor(BrowseSection.discover), isFalse);
     });
 
+    test('character artwork labels are opt-in, compact and type-safe', () {
+      const initial = ViewPrefs();
+      expect(initial.characterImageOverlay, isFalse);
+      expect(initial.toJson(), isNot(contains('characterImageOverlay')));
+
+      final enabled = initial.withCharacterImageOverlay(true);
+      expect(enabled.characterImageOverlay, isTrue);
+      expect(enabled.toJson()['characterImageOverlay'], isTrue);
+      expect(ViewPrefs.fromJson(enabled.toJson()), enabled);
+      expect(enabled, isNot(initial));
+
+      final copied = enabled
+          .withFreeSize(BrowseSection.characters, true)
+          .withLayout(BrowseSection.characters, BrowseLayout.list)
+          .withCreatorVersion(CreatorVersion.v1);
+      expect(copied.characterImageOverlay, isTrue);
+
+      final disabled = enabled.withCharacterImageOverlay(false);
+      expect(disabled.characterImageOverlay, isFalse);
+      expect(disabled.toJson(), isNot(contains('characterImageOverlay')));
+      for (final malformed in <Object?>[null, false, 1, 'true', <Object>[]]) {
+        expect(
+          ViewPrefs.fromJson(<String, dynamic>{
+            'characterImageOverlay': malformed,
+          }).characterImageOverlay,
+          isFalse,
+        );
+      }
+    });
+
     test('free-size round-trips and junk reads as off', () {
       final enabled = const ViewPrefs()
           .withFreeSize(BrowseSection.characters, true)
@@ -148,6 +178,28 @@ void main() {
       final second = await ready();
       expect(second.freeSizeCards(BrowseSection.gallery), isFalse);
     });
+
+    test(
+      'character artwork labels persist with one notice per change',
+      () async {
+        final first = await ready();
+        var notices = 0;
+        first.addListener(() => notices++);
+
+        await first.setCharacterImageOverlay(false);
+        expect(notices, 0);
+        await first.setCharacterImageOverlay(true);
+        expect(notices, 1);
+        await first.setCharacterImageOverlay(true);
+        expect(notices, 1);
+
+        final second = await ready();
+        expect(second.characterImageOverlay, isTrue);
+        await second.setCharacterImageOverlay(false);
+        final third = await ready();
+        expect(third.characterImageOverlay, isFalse);
+      },
+    );
 
     test('a layout outlives the AppState that chose it', () async {
       final first = await ready();

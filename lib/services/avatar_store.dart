@@ -27,8 +27,7 @@ import 'package:path_provider/path_provider.dart';
 const String kAvatarRefPrefix = 'local:';
 
 /// Whether [avatar] names a file in the avatar directory.
-bool avatarIsLocal(String avatar) =>
-    avatar.trim().startsWith(kAvatarRefPrefix);
+bool avatarIsLocal(String avatar) => avatar.trim().startsWith(kAvatarRefPrefix);
 
 /// The reference to persist for [fileName].
 String avatarRef(String fileName) => '$kAvatarRefPrefix$fileName';
@@ -69,6 +68,9 @@ class AvatarStore {
 
   final Directory directory;
 
+  Future<void> _operations = Future<void>.value();
+  final Set<String> _pendingWrites = <String>{};
+
   /// Opens (creating if needed) the app's pictures directory and publishes it
   /// for [avatarRefFile]. Returns null when the platform will not say where to
   /// put it, in which case the app carries on with base64 as before.
@@ -76,7 +78,7 @@ class AvatarStore {
     try {
       final support = await getApplicationSupportDirectory();
       final dir = Directory('${support.path}/avatars');
-      if (!dir.existsSync()) dir.createSync(recursive: true);
+      if (!await dir.exists()) await dir.create(recursive: true);
       avatarDirectory = dir;
       return AvatarStore(dir);
     } catch (error) {
@@ -86,16 +88,27 @@ class AvatarStore {
   }
 
   /// Writes [bytes] and returns the `local:` reference to persist.
-  Future<String> write(Uint8List bytes, {String? basename}) async {
+  Future<String> write(Uint8List bytes, {String? basename}) {
     final name = '${basename ?? _uniqueName()}${_extensionFor(bytes)}';
+    _pendingWrites.add(name);
+    return _serialized(() async {
+      try {
+        await _write(bytes, name);
+        return avatarRef(name);
+      } finally {
+        _pendingWrites.remove(name);
+      }
+    });
+  }
+
+  Future<void> _write(Uint8List bytes, String name) async {
     final file = File('${directory.path}/$name');
     await file.writeAsBytes(bytes, flush: true);
-    return avatarRef(name);
   }
 
   /// Moves a base64 avatar into a file, returning the reference to persist —
   /// or the value unchanged when it is empty, a URL, already local, or not
-  /// decodable.
+  /// decodable. [write] serializes the file operation with sweeps.
   Future<String> adopt(String avatar) async {
     final trimmed = avatar.trim();
     if (trimmed.isEmpty || avatarIsLocal(trimmed)) return avatar;
@@ -115,21 +128,30 @@ class AvatarStore {
   /// Deletes files in the directory that [keep] does not refer to. Called after
   /// a character is deleted, and once at startup to clear anything left behind
   /// by an interrupted write.
-  Future<int> sweep(Iterable<String> keep) async {
-    final referenced = keep.map(avatarRefName).whereType<String>().toSet();
-    var removed = 0;
-    try {
-      for (final entity in directory.listSync()) {
-        if (entity is! File) continue;
-        final name = entity.uri.pathSegments.last;
-        if (referenced.contains(name)) continue;
-        entity.deleteSync();
-        removed++;
+  Future<int> sweep(Iterable<String> keep) {
+    final referenced = keep.map(avatarRefName).whereType<String>().toSet()
+      ..addAll(_pendingWrites);
+    return _serialized(() async {
+      var removed = 0;
+      try {
+        await for (final entity in directory.list()) {
+          if (entity is! File) continue;
+          final name = entity.uri.pathSegments.last;
+          if (referenced.contains(name)) continue;
+          await entity.delete();
+          removed++;
+        }
+      } catch (error) {
+        debugPrint('MaiChat: avatar sweep failed ($error)');
       }
-    } catch (error) {
-      debugPrint('MaiChat: avatar sweep failed ($error)');
-    }
-    return removed;
+      return removed;
+    });
+  }
+
+  Future<T> _serialized<T>(Future<T> Function() operation) {
+    final result = _operations.then((_) => operation());
+    _operations = result.then<void>((_) {}, onError: (_, _) {});
+    return result;
   }
 
   static int _counter = 0;

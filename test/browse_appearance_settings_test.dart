@@ -64,8 +64,36 @@ void main() {
     expect(state.freeSizeCards(BrowseSection.discover), isTrue);
   });
 
+  testWidgets('character artwork labels wait for character free-size mode', (
+    tester,
+  ) async {
+    final state = AppState();
+    await pump(tester, state, const BrowseAppearanceSettingsPage());
+
+    final labels = find.widgetWithText(SwitchListTile, 'Labels over artwork');
+    expect(labels, findsOneWidget);
+    expect(switchFor(tester, 'Labels over artwork').value, isFalse);
+    expect(switchFor(tester, 'Labels over artwork').onChanged, isNull);
+    await tester.tap(labels);
+    await tester.pumpAndSettle();
+    expect(state.characterImageOverlay, isFalse);
+
+    await tester.tap(find.widgetWithText(SwitchListTile, 'Characters'));
+    await tester.pumpAndSettle();
+    expect(switchFor(tester, 'Labels over artwork').onChanged, isNotNull);
+    await tester.tap(labels);
+    await tester.pumpAndSettle();
+    expect(state.characterImageOverlay, isTrue);
+
+    await tester.tap(find.widgetWithText(SwitchListTile, 'Characters'));
+    await tester.pumpAndSettle();
+    expect(state.characterImageOverlay, isTrue);
+    expect(switchFor(tester, 'Labels over artwork').onChanged, isNull);
+  });
+
   for (final entry in const [
     (SettingAnchor.charactersFreeSize, 'Characters'),
+    (SettingAnchor.characterImageOverlay, 'Labels over artwork'),
     (SettingAnchor.galleryFreeSize, 'Gallery'),
     (SettingAnchor.discoverFreeSize, 'Discover'),
   ]) {
@@ -79,7 +107,12 @@ void main() {
         BrowseAppearanceSettingsPage(highlight: entry.$1),
       );
 
-      for (final title in const ['Characters', 'Gallery', 'Discover']) {
+      for (final title in const [
+        'Characters',
+        'Labels over artwork',
+        'Gallery',
+        'Discover',
+      ]) {
         final row = find.widgetWithText(SwitchListTile, title);
         final wrapper = find.ancestor(
           of: row,
@@ -110,6 +143,11 @@ void main() {
 
   for (final entry in const [
     ('character mosaic', 'Characters free-size cards', 'Characters'),
+    (
+      'character vignette',
+      'Character labels over artwork',
+      'Labels over artwork',
+    ),
     ('gallery natural size', 'Gallery free-size cards', 'Gallery'),
     ('discover pinterest', 'Discover free-size cards', 'Discover'),
   ]) {
