@@ -280,6 +280,88 @@ void main() {
       expect(source.characters.single.avatar, avatarRef);
       expect(avatarRefFile(avatarRef)!.existsSync(), isTrue);
     });
+
+    test(
+        'a backup with base64 character avatars restores into picture files without base64 in store',
+        () async {
+      final fresh = await boot(fresh: true);
+      final rawBase64 = base64Encode(_png);
+      final manifest = {
+        'kind': kBackupKind,
+        'formatVersion': kBackupFormatVersion,
+        'store': {
+          'characters': {
+            'kind': 'json',
+            'value': [
+              {
+                'id': 'c_inline',
+                'name': 'Inline Character',
+                'avatar': rawBase64,
+                'avatars': [rawBase64],
+              }
+            ],
+          },
+          'conversations': {
+            'kind': 'json',
+            'value': [
+              {
+                'id': 'conv_override',
+                'title': 'Thread with override',
+                'updatedAt': DateTime.now().toIso8601String(),
+                'messages': [],
+                'characterOverrides': {
+                  'c_override': {
+                    'id': 'c_override',
+                    'name': 'Override Character',
+                    'avatar': rawBase64,
+                    'avatars': [rawBase64],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      };
+
+      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(manifest)));
+      await fresh.restoreBackup(bytes);
+
+      // Character avatar and alternate avatars must have been adopted into files
+      final character = fresh.characters.single;
+      expect(character.avatar, startsWith('local:'));
+      expect(character.avatar, isNot(rawBase64));
+      expect(character.avatars.first, startsWith('local:'));
+      expect(character.avatars.first, isNot(rawBase64));
+
+      // Overrides avatar and alternate avatars must also be adopted into files
+      final conv = fresh.conversations.single;
+      final override = conv.characterOverrides['c_override']!;
+      expect(override.avatar, startsWith('local:'));
+      expect(override.avatar, isNot(rawBase64));
+      expect(override.avatars.first, startsWith('local:'));
+      expect(override.avatars.first, isNot(rawBase64));
+
+      // The files on disk must exist and contain the PNG bytes
+      final charAvatarFile =
+          File('${pictures.path}/${avatarRefName(character.avatar)}');
+      expect(charAvatarFile.existsSync(), isTrue);
+      expect(charAvatarFile.readAsBytesSync(), _png);
+
+      final overrideAvatarFile =
+          File('${pictures.path}/${avatarRefName(override.avatar)}');
+      expect(overrideAvatarFile.existsSync(), isTrue);
+      expect(overrideAvatarFile.readAsBytesSync(), _png);
+
+      // SharedPreferences itself must have no base64
+      final prefs = await SharedPreferences.getInstance();
+      final storedChars = prefs.getString('characters')!;
+      expect(storedChars, isNot(contains(rawBase64)));
+      expect(storedChars, contains('local:'));
+
+      final storedConvs = prefs.getString('conversations')!;
+      expect(storedConvs, isNot(contains(rawBase64)));
+      expect(storedConvs, contains('local:'));
+    });
   });
   group('the schedule', () {
     test('takes one when it is due, and not twice in the same period', () async {

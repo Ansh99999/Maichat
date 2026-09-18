@@ -44,6 +44,7 @@ class PrefsScan {
 
   bool get hasOversized => oversized.isNotEmpty;
   int get oversizedBytes => oversized.fold(0, (sum, b) => sum + b);
+  bool get isLarge => totalBytes >= kLargeStoreBytes;
 }
 
 /// What a repair did.
@@ -70,6 +71,26 @@ class PrefsRepair {
   /// The untouched original, kept rather than deleted.
   final String backupPath;
 }
+
+/// What trimming conversations did.
+@immutable
+class PrefsTrim {
+  const PrefsTrim({
+    required this.bytesBefore,
+    required this.bytesAfter,
+    required this.backupPath,
+  });
+
+  final int bytesBefore;
+  final int bytesAfter;
+
+  /// The untouched original, kept rather than deleted.
+  final String backupPath;
+}
+
+/// A store larger than this is at high risk of crashing Android's XML parser
+/// on startup, even without giant individual picture blobs.
+const int kLargeStoreBytes = 20 * 1024 * 1024;
 
 /// Runs longer than this are treated as an embedded image rather than anything
 /// anyone typed: no ordinary value in this store is a megabyte of unbroken
@@ -349,4 +370,145 @@ bool _isBase64Byte(int byte) =>
     byte == 0x2B || // +
     byte == 0x2F || // /
     byte == 0x3D; // =
+
+enum _TrimState { searching, skippingXml, skippingJson, done }
+
+/// Streams the store through, replaces the `conversations` entry with an empty
+/// list `[]`, and keeps the original file as `<name>.untrimmed-<timestamp>`.
+///
+/// Used as an emergency recovery mechanism when the store file has grown far too
+/// large for Android to parse into memory (e.g. dozens of megabytes of chat history),
+/// allowing the app to open so the user can retain all other data (characters,
+/// presets, providers, settings) and restore backups safely.
+Future<PrefsTrim?> trimPreferencesConversations({File? file}) async {
+  final store = file ?? await preferencesFile();
+  if (store == null || !store.existsSync()) return null;
+
+  final before = store.lengthSync();
+  final temp = File('${store.path}.trimming');
+  if (temp.existsSync()) temp.deleteSync();
+  final sink = temp.openWrite();
+
+  var state = _TrimState.searching;
+  var buffer = '';
+  var found = false;
+
+  final xmlPattern =
+      RegExp(r'<string\s+name=["\x27]flutter\.conversations["\x27][^>]*>');
+  final jsonPattern = RegExp(r'"flutter\.conversations"\s*:\s*"');
+
+  try {
+    await for (final chunk in store.openRead().transform(utf8.decoder)) {
+      buffer += chunk;
+
+      while (true) {
+        if (state == _TrimState.searching) {
+          final xmlMatch = xmlPattern.firstMatch(buffer);
+          final jsonMatch = jsonPattern.firstMatch(buffer);
+
+          if (xmlMatch != null &&
+              (jsonMatch == null || xmlMatch.start <= jsonMatch.start)) {
+            sink.write(buffer.substring(0, xmlMatch.start));
+            final matchedText = xmlMatch.group(0)!;
+            if (matchedText.endsWith('/>')) {
+              sink.write('<string name="flutter.conversations">[]</string>');
+              buffer = buffer.substring(xmlMatch.end);
+              state = _TrimState.done;
+            } else {
+              sink.write('<string name="flutter.conversations">[]</string>');
+              buffer = buffer.substring(xmlMatch.end);
+              state = _TrimState.skippingXml;
+            }
+            found = true;
+            continue;
+          } else if (jsonMatch != null) {
+            sink.write(buffer.substring(0, jsonMatch.start));
+            sink.write('"flutter.conversations": "[]"');
+            buffer = buffer.substring(jsonMatch.end);
+            state = _TrimState.skippingJson;
+            found = true;
+            continue;
+          } else {
+            if (buffer.length > 256) {
+              sink.write(buffer.substring(0, buffer.length - 256));
+              buffer = buffer.substring(buffer.length - 256);
+            }
+            break;
+          }
+        } else if (state == _TrimState.skippingXml) {
+          final endIdx = buffer.indexOf('</string>');
+          if (endIdx != -1) {
+            buffer = buffer.substring(endIdx + '</string>'.length);
+            state = _TrimState.done;
+            continue;
+          } else {
+            if (buffer.length > '</string>'.length) {
+              buffer = buffer.substring(buffer.length - '</string>'.length);
+            }
+            break;
+          }
+        } else if (state == _TrimState.skippingJson) {
+          var closingQuoteIdx = -1;
+          var escaped = false;
+          for (var i = 0; i < buffer.length; i++) {
+            final c = buffer[i];
+            if (escaped) {
+              escaped = false;
+            } else if (c == r'\') {
+              escaped = true;
+            } else if (c == '"') {
+              closingQuoteIdx = i;
+              break;
+            }
+          }
+          if (closingQuoteIdx != -1) {
+            buffer = buffer.substring(closingQuoteIdx + 1);
+            state = _TrimState.done;
+            continue;
+          } else {
+            if (escaped) {
+              buffer = r'\';
+            } else {
+              buffer = '';
+            }
+            break;
+          }
+        } else if (state == _TrimState.done) {
+          sink.write(buffer);
+          buffer = '';
+          break;
+        }
+      }
+    }
+
+    if (state == _TrimState.searching || state == _TrimState.done) {
+      if (buffer.isNotEmpty) {
+        sink.write(buffer);
+      }
+    }
+    await sink.flush();
+    await sink.close();
+  } catch (error) {
+    await sink.close();
+    if (temp.existsSync()) temp.deleteSync();
+    debugPrint('MaiChat: storage trim failed ($error)');
+    rethrow;
+  }
+
+  if (!found) {
+    if (temp.existsSync()) temp.deleteSync();
+    return null;
+  }
+
+  final stamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+  final backup = '${store.path}.untrimmed-$stamp';
+  store.renameSync(backup);
+  temp.renameSync(store.path);
+
+  return PrefsTrim(
+    bytesBefore: before,
+    bytesAfter: File(store.path).lengthSync(),
+    backupPath: backup,
+  );
+}
 

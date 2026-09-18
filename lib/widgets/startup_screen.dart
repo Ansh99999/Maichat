@@ -206,6 +206,97 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
     );
   }
 
+  Future<void> _trimConversations() async {
+    final scan = _scan;
+    if (scan == null || !scan.isLarge) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Trim conversation history?'),
+        content: Text(
+          'The settings store is ${_size(scan.totalBytes)} — more than the phone '
+          'can load in one go, which is why MaiChat cannot open.\n\n'
+          'Trimming will clear conversation history so the app can start. '
+          'Your characters, presets, providers, lorebooks, scenarios, settings '
+          'and gallery will remain untouched.\n\n'
+          'A complete backup of the original store is preserved alongside it '
+          'so no data is permanently lost. Once MaiChat opens, you can restore '
+          'your backup safely.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Trim chats'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _working = true);
+    PrefsTrim? result;
+    Object? failure;
+    try {
+      result = await trimPreferencesConversations();
+    } catch (error) {
+      failure = error;
+    }
+    if (!mounted) return;
+    setState(() => _working = false);
+
+    if (result == null) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Could not trim the store'),
+          content: Text('${failure ?? 'The stored data was not found.'}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    final done = result;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Store trimmed'),
+        content: BrandedText(
+          [
+            'The settings store went from ${_size(done.bytesBefore)} to '
+                '${_size(done.bytesAfter)}.',
+            'Conversation history was cleared so MaiChat can open again. '
+                'Characters, presets, settings, and other data are intact.\n\n'
+                'A full backup of the original file was saved to:\n'
+                '${done.backupPath}',
+            'Android only reads the store once per run, so MaiChat must be '
+                'closed and opened again for this change to take effect.',
+          ].join('\n\n'),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              exit(0);
+            },
+            child: const Text('Close MaiChat'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -247,9 +338,15 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
                       'for good, at full size and still attached to their '
                       'characters. Nothing is deleted in the meantime: saving is '
                       'paused, so what is on disk stays as it is.'
-                  : '${widget.message}\n\nNothing has been deleted: saving is '
-                      'paused until this succeeds, so what is on disk stays as '
-                      'it is.',
+                  : scan != null && scan.isLarge
+                      ? 'The settings file is ${_size(scan.totalBytes)} — '
+                          'more than the phone can load at once.\n\n'
+                          'Trimming conversation history lets MaiChat start while '
+                          'keeping your characters, presets, settings, and other data. '
+                          'A full copy of the original file will be preserved alongside it.'
+                      : '${widget.message}\n\nNothing has been deleted: saving is '
+                          'paused until this succeeds, so what is on disk stays as '
+                          'it is.',
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: scheme.onErrorContainer),
             ),
@@ -270,6 +367,18 @@ class _LoadErrorCardState extends State<LoadErrorCard> {
                           )
                         : const Icon(Icons.drive_file_move_outlined),
                     label: const Text('Move pictures out'),
+                  )
+                else if (scan != null && scan.isLarge)
+                  FilledButton.icon(
+                    onPressed: _working ? null : _trimConversations,
+                    icon: _working
+                        ? const SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.content_cut_outlined),
+                    label: const Text('Trim chats to recover'),
                   ),
                 OutlinedButton.icon(
                   onPressed: _working

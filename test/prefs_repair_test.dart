@@ -187,4 +187,76 @@ void main() {
       expect(pictures.listSync(), isEmpty);
     });
   });
+
+  group('trimming conversations', () {
+    test('isLarge flags stores at or above the threshold', () async {
+      final small = write(androidXml([bigPngBase64(1000)]));
+      final smallScan = await scanPreferences(file: small);
+      expect(smallScan.isLarge, false);
+
+      // Create a file >= 20 MB without oversized base64 runs (many small runs or text)
+      final largeFile = File('${dir.path}/large.xml');
+      final sink = largeFile.openWrite();
+      sink.write('<map><string name="flutter.conversations">[');
+      final chunk = '{"id":"x","text":"${'a' * 10000}"},';
+      for (var i = 0; i < 2100; i++) {
+        sink.write(chunk);
+      }
+      sink.write(']</string></map>');
+      await sink.flush();
+      await sink.close();
+
+      final largeScan = await scanPreferences(file: largeFile);
+      expect(largeScan.totalBytes, greaterThanOrEqualTo(kLargeStoreBytes));
+      expect(largeScan.isLarge, true);
+    });
+
+    test('trims conversations from Android XML store while keeping other keys',
+        () async {
+      final xml = '<?xml version=\'1.0\' encoding=\'utf-8\' standalone=\'yes\' ?>\n'
+          '<map>\n'
+          '    <string name="flutter.characters">[{&quot;id&quot;:&quot;c1&quot;,&quot;name&quot;:&quot;Sumire&quot;}]</string>\n'
+          '    <string name="flutter.conversations">[{&quot;id&quot;:&quot;chat1&quot;,&quot;title&quot;:&quot;Chat to lose&quot;}]</string>\n'
+          '    <string name="flutter.settings">{&quot;theme&quot;:&quot;dark&quot;}</string>\n'
+          '</map>\n';
+      final file = write(xml);
+      final result = await trimPreferencesConversations(file: file);
+
+      expect(result, isNotNull);
+      expect(result!.bytesBefore, xml.length);
+      expect(File(result.backupPath).readAsStringSync(), xml);
+
+      final trimmed = file.readAsStringSync();
+      expect(trimmed, contains('<string name="flutter.conversations">[]</string>'));
+      expect(trimmed, contains('<string name="flutter.characters">[{&quot;id&quot;:&quot;c1&quot;,&quot;name&quot;:&quot;Sumire&quot;}]</string>'));
+      expect(trimmed, contains('<string name="flutter.settings">{&quot;theme&quot;:&quot;dark&quot;}</string>'));
+      expect(trimmed, isNot(contains('Chat to lose')));
+    });
+
+    test('trims conversations from desktop JSON store while keeping other keys',
+        () async {
+      final jsonStore = File('${dir.path}/shared_preferences.json')
+        ..writeAsStringSync(jsonEncode({
+          'flutter.characters': '[{"name":"Sumire"}]',
+          'flutter.conversations': '[{"title":"Chat to lose","messages":["hello"]}]',
+          'flutter.activeConversation': 'c1',
+        }));
+
+      final result = await trimPreferencesConversations(file: jsonStore);
+      expect(result, isNotNull);
+      expect(File(result!.backupPath).existsSync(), true);
+
+      final decoded = jsonDecode(jsonStore.readAsStringSync()) as Map<String, dynamic>;
+      expect(decoded['flutter.conversations'], '[]');
+      expect(decoded['flutter.characters'], '[{"name":"Sumire"}]');
+      expect(decoded['flutter.activeConversation'], 'c1');
+    });
+
+    test('returns null when conversations key does not exist', () async {
+      final file = write('<map><string name="flutter.characters">[]</string></map>');
+      final result = await trimPreferencesConversations(file: file);
+      expect(result, isNull);
+      expect(file.readAsStringSync(), contains('flutter.characters'));
+    });
+  });
 }

@@ -775,3 +775,250 @@ List<dynamic> _mergeById(List<dynamic>? mine, List<dynamic> theirs) {
   }
   return out;
 }
+
+/// Adopts base64 pictures out of raw store entries before they are written to
+/// SharedPreferences.
+///
+/// A backup from an older build or one that carried inline base64 pictures
+/// (avatars, overrides, thumbnails) would otherwise land directly in the
+/// preferences store file. On Android, a large preferences XML blows past the
+/// JVM heap limit during startup parsing, preventing the app from launching.
+Future<Map<String, StoreEntry>> sanitizeStorePictures(
+  Map<String, StoreEntry> store, {
+  required Future<String> Function(String raw) adoptPicture,
+}) async {
+  final out = <String, StoreEntry>{...store};
+
+  // 1. Characters: character.avatar and character.avatars
+  final charactersEntry = out['characters'];
+  if (charactersEntry != null && charactersEntry.asList is List) {
+    var changed = false;
+    final list = <dynamic>[];
+    for (final item in charactersEntry.asList!) {
+      if (item is! Map) {
+        list.add(item);
+        continue;
+      }
+      final character = Map<String, dynamic>.from(item);
+      final avatar = character['avatar'];
+      if (avatar is String && avatar.isNotEmpty) {
+        final adopted = await adoptPicture(avatar);
+        if (adopted != avatar) {
+          character['avatar'] = adopted;
+          changed = true;
+        }
+      }
+      final avatars = character['avatars'];
+      if (avatars is List && avatars.isNotEmpty) {
+        final nextAvatars = <dynamic>[];
+        var avatarsChanged = false;
+        for (final extra in avatars) {
+          if (extra is String && extra.isNotEmpty) {
+            final adopted = await adoptPicture(extra);
+            if (adopted != extra) {
+              nextAvatars.add(adopted);
+              avatarsChanged = true;
+            } else {
+              nextAvatars.add(extra);
+            }
+          } else {
+            nextAvatars.add(extra);
+          }
+        }
+        if (avatarsChanged) {
+          character['avatars'] = nextAvatars;
+          changed = true;
+        }
+      }
+      list.add(character);
+    }
+    if (changed) {
+      out['characters'] = StoreEntry('json', list);
+    }
+  }
+
+  // 2. Conversations: characterOverrides (avatar & avatars), backgroundImage
+  final conversationsEntry = out['conversations'];
+  if (conversationsEntry != null && conversationsEntry.asList is List) {
+    var changed = false;
+    final list = <dynamic>[];
+    for (final item in conversationsEntry.asList!) {
+      if (item is! Map) {
+        list.add(item);
+        continue;
+      }
+      final conv = Map<String, dynamic>.from(item);
+      final bg = conv['backgroundImage'];
+      if (bg is String && bg.isNotEmpty) {
+        final adopted = await adoptPicture(bg);
+        if (adopted != bg) {
+          conv['backgroundImage'] = adopted;
+          changed = true;
+        }
+      }
+      final overrides = conv['characterOverrides'];
+      if (overrides is Map && overrides.isNotEmpty) {
+        var overridesChanged = false;
+        final nextOverrides = <String, dynamic>{};
+        for (final entry in overrides.entries) {
+          final overrideVal = entry.value;
+          if (overrideVal is! Map) {
+            nextOverrides[entry.key.toString()] = overrideVal;
+            continue;
+          }
+          final overrideChar = Map<String, dynamic>.from(overrideVal);
+          final oAvatar = overrideChar['avatar'];
+          if (oAvatar is String && oAvatar.isNotEmpty) {
+            final adopted = await adoptPicture(oAvatar);
+            if (adopted != oAvatar) {
+              overrideChar['avatar'] = adopted;
+              overridesChanged = true;
+            }
+          }
+          final oAvatars = overrideChar['avatars'];
+          if (oAvatars is List && oAvatars.isNotEmpty) {
+            final nextOAvatars = <dynamic>[];
+            var oAvatarsChanged = false;
+            for (final extra in oAvatars) {
+              if (extra is String && extra.isNotEmpty) {
+                final adopted = await adoptPicture(extra);
+                if (adopted != extra) {
+                  nextOAvatars.add(adopted);
+                  oAvatarsChanged = true;
+                } else {
+                  nextOAvatars.add(extra);
+                }
+              } else {
+                nextOAvatars.add(extra);
+              }
+            }
+            if (oAvatarsChanged) {
+              overrideChar['avatars'] = nextOAvatars;
+              overridesChanged = true;
+            }
+          }
+          nextOverrides[entry.key.toString()] = overrideChar;
+        }
+        if (overridesChanged) {
+          conv['characterOverrides'] = nextOverrides;
+          changed = true;
+        }
+      }
+      list.add(conv);
+    }
+    if (changed) {
+      out['conversations'] = StoreEntry('json', list);
+    }
+  }
+
+  // 3. Lorebooks: thumbnail
+  final lorebooksEntry = out['lorebooks'];
+  if (lorebooksEntry != null && lorebooksEntry.asList is List) {
+    var changed = false;
+    final list = <dynamic>[];
+    for (final item in lorebooksEntry.asList!) {
+      if (item is! Map) {
+        list.add(item);
+        continue;
+      }
+      final book = Map<String, dynamic>.from(item);
+      final thumb = book['thumbnail'];
+      if (thumb is String && thumb.isNotEmpty) {
+        final adopted = await adoptPicture(thumb);
+        if (adopted != thumb) {
+          book['thumbnail'] = adopted;
+          changed = true;
+        }
+      }
+      list.add(book);
+    }
+    if (changed) {
+      out['lorebooks'] = StoreEntry('json', list);
+    }
+  }
+
+  // 4. Gallery: image
+  final galleryEntry = out['gallery'];
+  if (galleryEntry != null && galleryEntry.asList is List) {
+    var changed = false;
+    final list = <dynamic>[];
+    for (final item in galleryEntry.asList!) {
+      if (item is! Map) {
+        list.add(item);
+        continue;
+      }
+      final g = Map<String, dynamic>.from(item);
+      final img = g['image'];
+      if (img is String && img.isNotEmpty) {
+        final adopted = await adoptPicture(img);
+        if (adopted != img) {
+          g['image'] = adopted;
+          changed = true;
+        }
+      }
+      list.add(g);
+    }
+    if (changed) {
+      out['gallery'] = StoreEntry('json', list);
+    }
+  }
+
+  // 5. chatInterface: backgroundImage, groupBarImage
+  final chatInterfaceEntry = out['chatInterface'];
+  if (chatInterfaceEntry != null && chatInterfaceEntry.asMap is Map) {
+    final ci = Map<String, dynamic>.from(chatInterfaceEntry.asMap!);
+    var ciChanged = false;
+    for (final field in const ['backgroundImage', 'groupBarImage']) {
+      final val = ci[field];
+      if (val is String && val.isNotEmpty) {
+        final adopted = await adoptPicture(val);
+        if (adopted != val) {
+          ci[field] = adopted;
+          ciChanged = true;
+        }
+      }
+    }
+    if (ciChanged) {
+      out['chatInterface'] = StoreEntry('json', ci);
+    }
+  }
+
+  // 6. interfacePresets: each preset.ui has backgroundImage, groupBarImage
+  final presetsEntry = out['interfacePresets'];
+  if (presetsEntry != null && presetsEntry.asList is List) {
+    var changed = false;
+    final list = <dynamic>[];
+    for (final item in presetsEntry.asList!) {
+      if (item is! Map) {
+        list.add(item);
+        continue;
+      }
+      final preset = Map<String, dynamic>.from(item);
+      final ui = preset['ui'];
+      if (ui is Map) {
+        final nextUi = Map<String, dynamic>.from(ui);
+        var uiChanged = false;
+        for (final field in const ['backgroundImage', 'groupBarImage']) {
+          final val = nextUi[field];
+          if (val is String && val.isNotEmpty) {
+            final adopted = await adoptPicture(val);
+            if (adopted != val) {
+              nextUi[field] = adopted;
+              uiChanged = true;
+            }
+          }
+        }
+        if (uiChanged) {
+          preset['ui'] = nextUi;
+          changed = true;
+        }
+      }
+      list.add(preset);
+    }
+    if (changed) {
+      out['interfacePresets'] = StoreEntry('json', list);
+    }
+  }
+
+  return out;
+}

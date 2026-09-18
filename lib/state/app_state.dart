@@ -543,6 +543,16 @@ class AppState extends ChangeNotifier {
           character.avatar = ref;
           moved++;
         }
+        // Alternate avatars can carry base64 too — the carousel adds a picked
+        // photo directly, and _storeAvatar handles both, so the migration must
+        // match.
+        for (var i = 0; i < character.avatars.length; i++) {
+          final adopted = await store.adopt(character.avatars[i]);
+          if (adopted != character.avatars[i]) {
+            character.avatars[i] = adopted;
+            moved++;
+          }
+        }
       }
       if (moved > 0) {
         debugPrint(
@@ -550,6 +560,48 @@ class AppState extends ChangeNotifier {
           'preferences store and into files',
         );
         await _persistCharacters();
+      }
+      // Per-chat character overrides can also carry base64 avatars — a backup
+      // restored before this code existed, or a card that arrived through a
+      // path that missed _storeAvatar.
+      var overrideMoved = 0;
+      for (final conversation in _conversations) {
+        for (final override in conversation.characterOverrides.values) {
+          final ref = await store.adopt(override.avatar);
+          if (ref != override.avatar) {
+            override.avatar = ref;
+            overrideMoved++;
+          }
+          for (var i = 0; i < override.avatars.length; i++) {
+            final adopted = await store.adopt(override.avatars[i]);
+            if (adopted != override.avatars[i]) {
+              override.avatars[i] = adopted;
+              overrideMoved++;
+            }
+          }
+        }
+      }
+      if (overrideMoved > 0) {
+        debugPrint(
+          'MaiChat: moved $overrideMoved per-chat override picture(s) '
+          'out of the preferences store and into files',
+        );
+        await _saveConversations();
+      }
+      var bookMoved = 0;
+      for (final book in _lorebooks) {
+        final ref = await store.adopt(book.thumbnail);
+        if (ref != book.thumbnail) {
+          book.thumbnail = ref;
+          bookMoved++;
+        }
+      }
+      if (bookMoved > 0) {
+        debugPrint(
+          'MaiChat: moved $bookMoved lorebook thumbnail(s) '
+          'out of the preferences store and into files',
+        );
+        await _persistLorebooks();
       }
     } catch (error) {
       debugPrint('MaiChat: could not move pictures into files ($error)');
@@ -2067,6 +2119,18 @@ class AppState extends ChangeNotifier {
     }
     var incoming = preserveSecrets(current: current, incoming: archive.store);
     if (!replace) incoming = mergeStores(current, incoming);
+
+    var pictureStore = _avatars;
+    if (pictureStore == null && imageDirectory != null) {
+      pictureStore = AvatarStore(imageDirectory!);
+    }
+    pictureStore ??= await AvatarStore.open();
+    if (pictureStore != null) {
+      incoming = await sanitizeStorePictures(
+        incoming,
+        adoptPicture: pictureStore.adopt,
+      );
+    }
 
     await _storage.writeEntries(
       <String, Object?>{
