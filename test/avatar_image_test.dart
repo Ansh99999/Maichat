@@ -45,6 +45,36 @@ void main() {
       expect(identical(a, b), isTrue);
     });
 
+    // The black-avatar-after-swiping bug: a doubling ladder decoded a
+    // full-screen avatar (≈1080 device px on an ordinary phone) at the 2048
+    // bucket — four times the pixels it could show. A poolful of those
+    // exhausted GPU texture memory as they were swiped, and Android painted
+    // the pictures black. The decode must not overshoot the display by more
+    // than one rung.
+    int decodeWidth(ImageProvider? provider) =>
+        (provider as ResizeImage).width!;
+
+    test('a full-screen avatar is not decoded far larger than it is shown', () {
+      // 360 logical px at 3× ≈ 1080 device px.
+      final provider = avatarImage(_png, displaySize: 360, devicePixelRatio: 3);
+      expect(decodeWidth(provider), lessThanOrEqualTo(1280),
+          reason: 'used to land on 2048 — a ~16 MB bitmap for a ~1080px frame');
+    });
+
+    test('decode tracks the display size within one rung', () {
+      // Every wanted size decodes at no more than 1.5× its own side — the gap
+      // between adjacent rungs — so no picture wastes 4× the memory again.
+      for (final wanted in [200, 300, 500, 700, 900, 1100, 1400]) {
+        final provider = avatarImage(
+          _png,
+          displaySize: wanted.toDouble(),
+          devicePixelRatio: 1,
+        );
+        expect(decodeWidth(provider), lessThan(wanted * 2),
+            reason: 'a $wanted px frame must not decode at ${wanted * 2}+ px');
+      }
+    });
+
     test('no picture, junk and URLs behave', () {
       expect(avatarImage('   '), isNull);
       expect(avatarImage('not base64 at all !!!'), isNull);

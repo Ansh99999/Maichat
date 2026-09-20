@@ -44,7 +44,29 @@ const int _maxCachedBytes = 24 * 1024 * 1024;
 /// Bucketing keeps one avatar from occupying a new cache entry for every
 /// slightly different display size. The top bucket only comes into play when
 /// the user has cranked the avatar size right up in Chat Interface settings.
-const List<int> _buckets = [64, 128, 256, 512, 1024, 2048];
+///
+/// The rungs are kept close together on purpose. They used to double
+/// (…512, 1024, 2048), which meant a request could land on a bucket up to
+/// twice the side it needed — four times the pixels, four times the resident
+/// bitmap. A full-screen avatar on an ordinary phone (≈1080 device px) then
+/// decoded at 2048², ~16 MB each, and swiping a pool of them through the
+/// viewer piled enough oversized bitmaps into the image cache to exhaust GPU
+/// texture memory — at which point Android draws the picture as a black
+/// rectangle. Finer rungs cap the overshoot: 1080 now lands on 1280, ~2.5×
+/// less memory, and 2048 is reserved for a surface that genuinely fills it.
+const List<int> _buckets = [
+  64,
+  128,
+  192,
+  256,
+  384,
+  512,
+  768,
+  1024,
+  1280,
+  1536,
+  2048,
+];
 
 int _bucketFor(double? displaySize, double devicePixelRatio) {
   if (displaySize == null || displaySize <= 0) return _buckets.last;
