@@ -1486,10 +1486,22 @@ class AppState extends ChangeNotifier {
     await _storage.saveCharacters(_characters);
   }
 
-  /// Persists an avatar choice already applied synchronously by the roster pager.
-  /// The immediate mutation keeps PageView and masonry in one rebuild; this small
-  /// write makes the choice durable without making the gesture await storage.
-  Future<void> _saveDefaultAvatarChoice() => _persistCharacters();
+  Timer? _defaultAvatarSaveTimer;
+
+  /// Persists a roster-pager avatar choice, shortly after the swipe rather than
+  /// on its settle. `saveCharacters` `jsonEncode`s the whole roster — the largest
+  /// thing in the store — and running that on the UI thread on every page the
+  /// finger passed through made swiping a multi-avatar card stutter. The choice
+  /// is already applied to the model and notified synchronously (so the pager and
+  /// masonry are correct at once); only the disk write waits, and rapid swipes
+  /// collapse into a single write. Mirrors [_saveConversationsSoon].
+  void _saveDefaultAvatarChoiceSoon() {
+    _defaultAvatarSaveTimer?.cancel();
+    _defaultAvatarSaveTimer = Timer(const Duration(milliseconds: 400), () {
+      _defaultAvatarSaveTimer = null;
+      _persistCharacters();
+    });
+  }
 
   /// Applies a roster-pager choice synchronously, then saves it in the
   /// background. Returning immediately lets the PageView survive the same-frame
@@ -1507,7 +1519,7 @@ class AppState extends ChangeNotifier {
     }
     character.avatar = trimmed;
     notifyListeners();
-    unawaited(_saveDefaultAvatarChoice());
+    _saveDefaultAvatarChoiceSoon();
   }
 
   /// The whole conversation list, rewritten. Everything that changes a thread
@@ -6340,6 +6352,7 @@ class AppState extends ChangeNotifier {
     _client.cancel();
     _floatPersist?.cancel();
     _imageRatioPersist?.cancel();
+    _defaultAvatarSaveTimer?.cancel();
     imageRatioCache.unbindDurableChanged(_imageRatioListenerToken);
     super.dispose();
   }

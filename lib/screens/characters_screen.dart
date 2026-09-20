@@ -885,31 +885,42 @@ class _CharacterOverlayCardState extends State<_CharacterOverlayCard> {
                 builder: (context, size, image) => Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (_pool.length < 2)
-                      if (image == null)
-                        fallback
-                      else
-                        SmoothImage(
-                          image: image,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          errorBuilder: (_, _, _) => fallback,
-                        )
-                    else
-                      PageView.builder(
-                        key: ValueKey(
-                          'character-avatar-pages-${widget.character.id}',
-                        ),
-                        controller: _pages,
-                        itemCount: _pool.length,
-                        onPageChanged: _onPage,
-                        itemBuilder: (context, index) => _OverlayAvatarPage(
-                          key: ValueKey('character-avatar-${_pool[index]}'),
-                          ref: _pool[index],
-                          width: size.width,
-                          fallback: fallback,
-                        ),
-                      ),
+                    // The picture renders into its own layer, kept off the one
+                    // the controls composite. `_RevealedArtworkControls` fades
+                    // itself with an `AnimatedOpacity`, which pushes an offscreen
+                    // `saveLayer`; entering multi-select flips every visible
+                    // card's controls at once, so without this boundary each
+                    // card re-rasterises its avatar into that buffer on every
+                    // frame of the fade — a texture-memory spike that painted the
+                    // avatars black on device, and churn that made the swipe
+                    // stutter. The boundary lets the avatar raster once and stay.
+                    RepaintBoundary(
+                      child: _pool.length < 2
+                          ? (image == null
+                                ? fallback
+                                : SmoothImage(
+                                    image: image,
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                    errorBuilder: (_, _, _) => fallback,
+                                  ))
+                          : PageView.builder(
+                              key: ValueKey(
+                                'character-avatar-pages-${widget.character.id}',
+                              ),
+                              controller: _pages,
+                              itemCount: _pool.length,
+                              onPageChanged: _onPage,
+                              itemBuilder: (context, index) => _OverlayAvatarPage(
+                                key: ValueKey(
+                                  'character-avatar-${_pool[index]}',
+                                ),
+                                ref: _pool[index],
+                                width: size.width,
+                                fallback: fallback,
+                              ),
+                            ),
+                    ),
                     _RevealedArtworkControls(
                       character: widget.character,
                       index: _index,

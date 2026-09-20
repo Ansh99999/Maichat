@@ -277,6 +277,49 @@ void main() {
     },
   );
 
+  testWidgets('the swipeable avatar renders in its own repaint boundary', (
+    tester,
+  ) async {
+    // The controls overlay fades with an AnimatedOpacity, which composites an
+    // offscreen saveLayer; entering multi-select flips every visible card's
+    // controls at once. Without a boundary the avatar is re-rastered into that
+    // buffer on every frame of the fade for every card — the texture spike that
+    // painted the avatars black on device, and churn that made the swipe stutter.
+    // The picture must be isolated so it rasters once and stays.
+    final one = _pic('one');
+    final two = _pic('two');
+    noteAvatarRatio(one, 1);
+    noteAvatarRatio(two, 1);
+    await open(
+      tester,
+      characters: [
+        Character(id: 'c', name: 'Aria', avatar: one, avatars: [two]),
+      ],
+    );
+
+    // A boundary that sits *inside* the card and wraps the pager — not the one
+    // the sliver delegate puts around the whole card (which would still be there
+    // if this fix were reverted, so matching it would prove nothing). This one
+    // isolates the picture from the controls that share the card.
+    expect(
+      find.ancestor(
+        of: find.byType(PageView),
+        matching: find.descendant(
+          of: overlayCard('c'),
+          matching: find.byType(RepaintBoundary),
+        ),
+      ),
+      findsOneWidget,
+      reason: 'the pager is isolated in its own repaint boundary within the card',
+    );
+
+    // Long-pressing into selection must not drop the picture — the whole point
+    // of isolating it from the controls that animate on that gesture.
+    await tester.longPress(overlayCard('c'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PageView), findsOneWidget);
+  });
+
   testWidgets('swiping back immediately persists the original avatar', (
     tester,
   ) async {
