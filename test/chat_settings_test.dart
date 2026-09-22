@@ -153,6 +153,26 @@ void main() {
       expect(find.text('You'), findsOneWidget);
     });
 
+    testWidgets('offers a shortcut to the global Regex rules', (tester) async {
+      final state = await boot();
+      final card = Character(id: 'c', name: 'Aria');
+      await state.addCharacter(card);
+      final chatId = state.startChatWithCharacter(card);
+
+      await tester.pumpWidget(host(state, chatId));
+      await tester.pumpAndSettle();
+
+      // The row sits at the foot of the screen, past the participant list.
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pumpAndSettle();
+      expect(find.text('Regex rules'), findsOneWidget);
+
+      await tester.tap(find.text('Regex rules'));
+      await tester.pumpAndSettle();
+      // Lands on the Regex list — its New rule button is unmistakable.
+      expect(find.text('New rule'), findsOneWidget);
+    });
+
     testWidgets('a group chat lists every member', (tester) async {
       final state = await boot();
       await state

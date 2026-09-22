@@ -11,6 +11,7 @@ import '../widgets/character_avatar.dart';
 import '../widgets/scenario_picker_sheet.dart';
 import 'character_editor.dart';
 import 'gallery/gallery_picker_sheet.dart';
+import 'library/regex_screen.dart';
 import 'group_add_sheet.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/chat_ui_scope.dart';
@@ -522,6 +523,29 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
     );
   }
 
+  /// A jump to the global Regex list. The rules are app-wide, not per-chat, so
+  /// the subtitle says as much — this row is a shortcut, not a per-chat toggle.
+  Widget _regexRow(BuildContext context, AppState state) {
+    final rules = state.regexRules;
+    final enabled = rules.where((r) => !r.disabled).length;
+    final String subtitle;
+    if (rules.isEmpty) {
+      subtitle = 'Find-and-replace rules that tidy messages — none yet';
+    } else {
+      subtitle = '$enabled of ${rules.length} on · applies to every chat';
+    }
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.find_replace_outlined),
+      title: const Text('Regex rules'),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const RegexScreen()),
+      ),
+    );
+  }
+
   List<Widget> _sections(
     BuildContext context,
     AppState state,
@@ -632,6 +656,8 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
                   ?.copyWith(color: scheme.primary),
             ),
           ),
+        const Divider(height: 32),
+        _regexRow(context, state),
       ];
 }
 
