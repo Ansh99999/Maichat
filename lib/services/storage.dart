@@ -15,6 +15,7 @@ import '../models/interface_preset.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
+import '../models/regex_rule.dart';
 import '../models/scenario.dart';
 import '../models/settings.dart';
 import '../models/view_prefs.dart';
@@ -49,6 +50,7 @@ class Storage {
   static const _charactersKey = 'characters';
   static const _lorebooksKey = 'lorebooks';
   static const _scenariosKey = 'scenarios';
+  static const _regexRulesKey = 'regexRules';
   static const _galleryKey = 'gallery';
   static const _activeKey = 'activeConversation';
   static const _defaultPersonaKey = 'defaultPersona';
@@ -296,6 +298,32 @@ class Storage {
       (await _prefs).setString(
         _scenariosKey,
         jsonEncode(scenarios.map((s) => s.toJson()).toList()),
+      );
+
+  /// The regex find/replace rules the user has written or imported. Its own
+  /// entry, like the scenarios beside it, so editing one rule does not rewrite
+  /// anything large.
+  Future<List<RegexRule>> loadRegexRules() async {
+    final raw = (await _prefs).getString(_regexRulesKey);
+    if (raw == null) return <RegexRule>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(RegexRule.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Never let bad data wedge startup, as everywhere else here.
+    }
+    return <RegexRule>[];
+  }
+
+  Future<void> saveRegexRules(List<RegexRule> rules) async =>
+      (await _prefs).setString(
+        _regexRulesKey,
+        jsonEncode(rules.map((r) => r.toJson()).toList()),
       );
 
   /// Which shape each browsable section (characters, lorebooks, scenarios) was

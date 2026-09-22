@@ -10,6 +10,7 @@ import '../summary/summary_edit_screen.dart';
 import 'embeddings_screen.dart';
 import 'lorebook_edit_screen.dart';
 import 'lorebooks_screen.dart';
+import 'regex_screen.dart';
 import 'scenario_edit_screen.dart';
 import 'scenarios_screen.dart';
 import 'summaries_screen.dart';
@@ -91,6 +92,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final entries = books.fold<int>(0, (sum, b) => sum + b.entries.length);
     final summaries = context.read<AppState>().conversationsWithSummary.length;
     final scenarios = context.read<AppState>().scenarios.length;
+    final regexRules = context.read<AppState>().regexRules.length;
     final recent = [...books]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return [
@@ -130,6 +132,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
           title: 'Embeddings',
           subtitle: 'Semantic recall of past messages, lore and documents',
           onTap: () => _open(const EmbeddingsScreen()),
+        ),
+      ),
+      SliverToBoxAdapter(
+        child: _SectionCard(
+          icon: Icons.find_replace_outlined,
+          title: 'Regex',
+          subtitle: regexRules == 0
+              ? 'Find-and-replace rules that tidy messages and replies'
+              : '${_count(regexRules, 'rule')} tidying your chats',
+          onTap: () => _open(const RegexScreen()),
         ),
       ),
       if (recent.isNotEmpty) ...[

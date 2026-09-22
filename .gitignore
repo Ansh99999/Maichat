@@ -49,3 +49,6 @@ app.*.map.json
 
 # Kotlin build-session scratch dir (created by Gradle/AGP builds).
 /android/.kotlin/
+
+# Vendored SillyTavern source, kept locally as a reference only — never committed.
+/SillyTavern/

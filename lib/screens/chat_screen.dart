@@ -817,6 +817,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final ui = state.interfaceFor(conversation);
     final character = state.characterFor(conversation, conversation.characterId);
     final persona = state.impersonationFor(conversation);
+    // A cosmetic (display-only) regex pass, when any rule wants one. Null lets
+    // every bubble draw its stored text directly. The fingerprint rides in each
+    // bubble's cache signature so editing a rule refreshes the thread.
+    final regexDisplay = state.regexDisplayTransform(conversation);
+    final regexToken = regexDisplay == null ? null : state.regexDisplaySignature;
     return ListView.builder(
       controller: _scroll,
       // Reversed so the newest turn sits at the bottom (offset 0) and the list
@@ -884,6 +889,7 @@ class _ChatScreenState extends State<ChatScreen> {
           userAvatarOverride,
           pending,
           state.streaming,
+          regexToken,
         ];
         final cached = editing ? null : _bubbles[msgIndex];
         if (cached != null && listEquals(cached.signature, signature)) {
@@ -916,6 +922,7 @@ class _ChatScreenState extends State<ChatScreen> {
           onLongPress: message.content.isEmpty
               ? null
               : () => _showMessageActions(state, conversation, msgIndex),
+          displayTransform: regexDisplay,
         );
         if (editing) return bubble;
         if (_bubbles.length >= _bubbleCacheMax) _bubbles.clear();

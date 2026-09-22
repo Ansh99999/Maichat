@@ -48,10 +48,17 @@ class MessageBubble extends StatelessWidget {
     this.editController,
     this.onEditSave,
     this.onEditCancel,
+    this.displayTransform,
   });
 
   final ChatMessage message;
   final ChatInterface ui;
+
+  /// An optional display-only regex pass applied to the text before it is shown,
+  /// leaving the stored message untouched. Null (the common case, and the
+  /// settings preview) means no cosmetic rewrite. Called with whether this is a
+  /// user turn so a rule can target one side.
+  final String Function(String text, {required bool isUser})? displayTransform;
 
   /// The bot's character, when the chat has one; null for a plain chat or the
   /// user's own turns.
@@ -135,11 +142,16 @@ class MessageBubble extends StatelessWidget {
   /// and updates the instant the user starts impersonating. Mirrors the
   /// prompt-build resolution ([Character.resolveMacros] with the same names) so
   /// the screen and the model always agree on who "{{user}}" is.
-  String get _displayContent => Character.resolveMacros(
-        message.content,
-        charName: character?.displayName ?? '',
-        userName: userPersona?.displayName ?? 'User',
-      );
+  String get _displayContent {
+    final resolved = Character.resolveMacros(
+      message.content,
+      charName: character?.displayName ?? '',
+      userName: userPersona?.displayName ?? 'User',
+    );
+    final transform = displayTransform;
+    if (transform == null) return resolved;
+    return transform(resolved, isUser: message.isUser);
+  }
 
   @override
   Widget build(BuildContext context) {

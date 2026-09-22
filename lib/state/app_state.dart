@@ -26,6 +26,7 @@ import '../models/message_image.dart';
 import '../models/preset.dart';
 import '../models/prompt_block.dart';
 import '../models/provider.dart';
+import '../models/regex_rule.dart';
 import '../models/scenario.dart';
 import '../models/summary.dart';
 import '../models/usage.dart';
@@ -49,6 +50,7 @@ import '../services/macro_engine.dart';
 import '../services/model_context.dart';
 import '../services/prompt_builder.dart';
 import '../services/reasoning.dart';
+import '../services/regex_engine.dart';
 import '../services/storage.dart';
 import '../services/storage_report.dart';
 import '../services/summarizer.dart';
@@ -113,6 +115,7 @@ class AppState extends ChangeNotifier {
   final List<Character> _characters = <Character>[];
   final List<Lorebook> _lorebooks = <Lorebook>[];
   final List<Scenario> _scenarios = <Scenario>[];
+  final List<RegexRule> _regexRules = <RegexRule>[];
   final List<GalleryImage> _gallery = <GalleryImage>[];
   final List<Preset> _presets = <Preset>[];
   final Map<String, String> _globalVars = <String, String>{};
@@ -213,6 +216,12 @@ class AppState extends ChangeNotifier {
   List<Character> get characters => List.unmodifiable(_characters);
   List<Lorebook> get lorebooks => List.unmodifiable(_lorebooks);
   List<Scenario> get scenarios => List.unmodifiable(_scenarios);
+  List<RegexRule> get regexRules => List.unmodifiable(_regexRules);
+
+  /// The enabled rules, in order — what the engine actually runs. Cheap enough
+  /// to build per call; every apply site short-circuits on an empty list.
+  List<RegexRule> get _activeRegexRules =>
+      _regexRules.where((r) => !r.disabled).toList(growable: false);
   List<GalleryImage> get gallery => List.unmodifiable(_gallery);
   List<Preset> get presets => List.unmodifiable(_presets);
   Appearance get appearance => _appearance;
@@ -410,6 +419,9 @@ class AppState extends ChangeNotifier {
     _scenarios
       ..clear()
       ..addAll(await _storage.loadScenarios());
+    _regexRules
+      ..clear()
+      ..addAll(await _storage.loadRegexRules());
     _viewPrefs = await _storage.loadViewPrefs();
     _interfacePresets
       ..clear()
@@ -2820,6 +2832,196 @@ class AppState extends ChangeNotifier {
     return copy;
   }
 
+  // --- Regex rules ---------------------------------------------------------
+  //
+  // A single global list, applied at four points: the user's turn as it is
+  // stored (send), the reply as it is stored (_generate), the outgoing prompt
+  // (_assemble), and the message as it is drawn ([regexDisplay]). The three
+  // ephemerality modes (permanent / display-only / prompt-only) decide which
+  // of those a given rule reaches — see [RegexEngine].
+
+  Future<void> _persistRegexRules() async {
+    if (!_writable) return;
+    await _storage.saveRegexRules(_regexRules);
+  }
+
+  RegexRule? regexRuleById(String id) {
+    for (final r in _regexRules) {
+      if (r.id == id) return r;
+    }
+    return null;
+  }
+
+  /// Replaces the rule sharing [rule]'s id, or adds it (newest first) when new.
+  Future<void> saveRegexRule(RegexRule rule) async {
+    final index = _regexRules.indexWhere((r) => r.id == rule.id);
+    if (index == -1) {
+      _regexRules.insert(0, rule);
+    } else {
+      _regexRules[index] = rule;
+    }
+    notifyListeners();
+    await _persistRegexRules();
+  }
+
+  /// Adds several at once (an import), newest first, persisting once.
+  Future<void> addRegexRules(List<RegexRule> rules) async {
+    if (rules.isEmpty) return;
+    _regexRules.insertAll(0, rules.reversed);
+    notifyListeners();
+    await _persistRegexRules();
+  }
+
+  Future<void> deleteRegexRule(String id) async {
+    _regexRules.removeWhere((r) => r.id == id);
+    notifyListeners();
+    await _persistRegexRules();
+  }
+
+  Future<void> setRegexRuleEnabled(String id, bool enabled) async {
+    final rule = regexRuleById(id);
+    if (rule == null || rule.disabled == !enabled) return;
+    rule.disabled = !enabled;
+    notifyListeners();
+    await _persistRegexRules();
+  }
+
+  Future<RegexRule> duplicateRegexRule(RegexRule rule) async {
+    final copy = rule.duplicate();
+    _regexRules.insert(0, copy);
+    notifyListeners();
+    await _persistRegexRules();
+    return copy;
+  }
+
+  /// Reorders the rule list — rules run top-to-bottom, so order is meaningful
+  /// (an earlier rule's output feeds the next). [newIndex] is the final resting
+  /// index, as the `onReorderItem` callback already adjusts it.
+  Future<void> reorderRegexRule(int oldIndex, int newIndex) async {
+    if (oldIndex < 0 || oldIndex >= _regexRules.length) return;
+    final target = newIndex.clamp(0, _regexRules.length - 1);
+    final rule = _regexRules.removeAt(oldIndex);
+    _regexRules.insert(target, rule);
+    notifyListeners();
+    await _persistRegexRules();
+  }
+
+  /// The names used when resolving `{{user}}`/`{{char}}` inside a rule for
+  /// [conversation]. Mirrors the display bubble's own resolution.
+  ({String user, String char}) _regexNames(Conversation? conversation) {
+    if (conversation == null) return (user: 'User', char: '');
+    final impersonation = impersonationFor(conversation);
+    final character = characterFor(conversation, conversation.characterId);
+    return (
+      user: impersonation?.displayName ?? 'User',
+      char: character?.displayName ?? conversation.characterName ?? '',
+    );
+  }
+
+  /// Applies the permanent [RegexTarget.userInput] rules to a message the user
+  /// just typed, returning the text to store. A no-op when nothing applies.
+  String applyRegexToUserInput(String text, {Conversation? conversation}) {
+    final rules = _activeRegexRules;
+    if (!RegexEngine.hasWork(rules, target: RegexTarget.userInput)) return text;
+    final names = _regexNames(conversation);
+    return RegexEngine.apply(
+      rules,
+      text,
+      target: RegexTarget.userInput,
+      userName: names.user,
+      charName: names.char,
+    );
+  }
+
+  /// Applies the permanent rules for [target] to a reply (or its reasoning) as
+  /// it is finalised into the chat. A no-op when nothing applies.
+  String applyRegexToOutput(
+    String text, {
+    required RegexTarget target,
+    Conversation? conversation,
+  }) {
+    final rules = _activeRegexRules;
+    if (!RegexEngine.hasWork(rules, target: target)) return text;
+    final names = _regexNames(conversation);
+    return RegexEngine.apply(
+      rules,
+      text,
+      target: target,
+      userName: names.user,
+      charName: names.char,
+    );
+  }
+
+  /// A cheap fingerprint of the display-affecting rules, so a widget cache
+  /// (the chat's per-bubble cache) rebuilds when a cosmetic rule is edited,
+  /// toggled or reordered. Null when no display rule applies. Order matters, so
+  /// the running index is folded in.
+  int? get regexDisplaySignature {
+    var hash = 0;
+    var any = false;
+    for (var i = 0; i < _regexRules.length; i++) {
+      final r = _regexRules[i];
+      if (r.disabled || !r.markdownOnly) continue;
+      if (!r.actsOn(RegexTarget.userInput) && !r.actsOn(RegexTarget.aiOutput)) {
+        continue;
+      }
+      any = true;
+      hash = Object.hash(hash, i, r.find, r.replace, r.macroMode,
+          Object.hashAll(r.placement), Object.hashAll(r.trimStrings));
+    }
+    return any ? hash : null;
+  }
+
+  /// The display-only transform for [conversation], or null when no display
+  /// rule applies — so the message bubble can skip the work entirely.
+  ///
+  /// Only user/AI targets are honoured on display (reasoning has its own block),
+  /// and depth is left unset — a cosmetic rewrite runs wherever the message is
+  /// shown regardless of how far back it has scrolled.
+  String Function(String text, {required bool isUser})? regexDisplayTransform(
+      Conversation? conversation) {
+    final rules = _activeRegexRules;
+    final userWork =
+        RegexEngine.hasWork(rules, target: RegexTarget.userInput, isDisplay: true);
+    final aiWork =
+        RegexEngine.hasWork(rules, target: RegexTarget.aiOutput, isDisplay: true);
+    if (!userWork && !aiWork) return null;
+    final names = _regexNames(conversation);
+    return (String text, {required bool isUser}) => RegexEngine.apply(
+          rules,
+          text,
+          target: isUser ? RegexTarget.userInput : RegexTarget.aiOutput,
+          isDisplay: true,
+          userName: names.user,
+          charName: names.char,
+        );
+  }
+
+  /// Applies the prompt-only rules to one history [message] as the prompt is
+  /// assembled. Returns the same instance untouched when nothing applies, so the
+  /// caches downstream (token counts) recognise unchanged text.
+  ChatMessage _applyRegexToPrompt(
+    ChatMessage message, {
+    required int depth,
+    required String userName,
+    required String charName,
+    required List<RegexRule> rules,
+  }) {
+    final target = message.isUser ? RegexTarget.userInput : RegexTarget.aiOutput;
+    final next = RegexEngine.apply(
+      rules,
+      message.content,
+      target: target,
+      isPrompt: true,
+      depth: depth,
+      userName: userName,
+      charName: charName,
+    );
+    return identical(next, message.content) || next == message.content
+        ? message
+        : message.copyWith(content: next);
+  }
+
   /// Applies a scenario to one chat. [scenarioId] names the library scenario it
   /// came from (null for one written on the spot); [text] is a wording for this
   /// chat alone, which wins over the library copy. Passing neither clears the
@@ -4472,10 +4674,14 @@ class AppState extends ChangeNotifier {
     final speaking = conversation.isGroup
         ? impersonationFor(conversation)
         : null;
+    // Permanent user-input regex rewrites the turn as it is stored (the chat
+    // title and the empty check above stay on what was actually typed).
+    final storedPrompt =
+        applyRegexToUserInput(prompt, conversation: conversation);
     conversation.messages.add(
       ChatMessage(
         role: 'user',
-        content: prompt,
+        content: storedPrompt,
         images: images,
         speakerId: speaking?.id,
         speakerName: speaking?.displayName,
@@ -5004,11 +5210,26 @@ class AppState extends ChangeNotifier {
           );
         }
       } else {
+        // Permanent regex rewrites the reply (and its reasoning) as it is
+        // stored — applied to the newly-arrived text only, so a continuation
+        // does not re-run over the prefix that was already processed.
         _replaceAt(
           conversation,
           target,
-          content: prefix + answer,
-          reasoning: _joinThinking(prefixReasoning, thinking),
+          content: prefix +
+              applyRegexToOutput(
+                answer,
+                target: RegexTarget.aiOutput,
+                conversation: conversation,
+              ),
+          reasoning: _joinThinking(
+            prefixReasoning,
+            applyRegexToOutput(
+              thinking,
+              target: RegexTarget.reasoning,
+              conversation: conversation,
+            ),
+          ),
           thinkingMs: thinkingMs,
         );
       }
@@ -5020,8 +5241,20 @@ class AppState extends ChangeNotifier {
         _finishStopped(
           conversation,
           target,
-          prefix + answer,
-          reasoning: _joinThinking(prefixReasoning, thinking),
+          prefix +
+              applyRegexToOutput(
+                answer,
+                target: RegexTarget.aiOutput,
+                conversation: conversation,
+              ),
+          reasoning: _joinThinking(
+            prefixReasoning,
+            applyRegexToOutput(
+              thinking,
+              target: RegexTarget.reasoning,
+              conversation: conversation,
+            ),
+          ),
           thinkingMs: thinkingMs,
         );
       } else {
@@ -5033,8 +5266,20 @@ class AppState extends ChangeNotifier {
           _replaceAt(
             conversation,
             target,
-            content: prefix + answer,
-            reasoning: _joinThinking(prefixReasoning, thinking),
+            content: prefix +
+                applyRegexToOutput(
+                  answer,
+                  target: RegexTarget.aiOutput,
+                  conversation: conversation,
+                ),
+            reasoning: _joinThinking(
+              prefixReasoning,
+              applyRegexToOutput(
+                thinking,
+                target: RegexTarget.reasoning,
+                conversation: conversation,
+              ),
+            ),
           );
           _appendErrorTurn(conversation, e.message);
         } else {
@@ -5747,7 +5992,7 @@ class AppState extends ChangeNotifier {
     // with its speaker ("Name: …") — the shape SillyTavern uses for groups — and
     // the responder is told who else is present and asked to reply only as
     // itself. A one-to-one thread is untouched (no labels, no roster).
-    final history = conversation.isGroup
+    var history = conversation.isGroup
         ? [
             for (final m in priorTurns)
               m.copyWith(
@@ -5757,6 +6002,30 @@ class AppState extends ChangeNotifier {
               ),
           ]
         : priorTurns;
+    // Prompt-only regex rewrites the outgoing copy of the history — the stored
+    // chat is untouched. Depth is the distance from the newest turn (0 = newest),
+    // matching how the depth window is described in the editor. Skipped entirely
+    // when no prompt-only rule targets a message role, so the common case (no
+    // regex, or only permanent/display rules) copies nothing.
+    final promptRules = _activeRegexRules;
+    final promptRegexNeeded = RegexEngine.hasWork(promptRules,
+            target: RegexTarget.userInput, isPrompt: true) ||
+        RegexEngine.hasWork(promptRules,
+            target: RegexTarget.aiOutput, isPrompt: true);
+    if (promptRegexNeeded) {
+      final charName = character?.displayName ?? conversation.characterName ?? '';
+      final count = history.length;
+      history = [
+        for (var i = 0; i < count; i++)
+          _applyRegexToPrompt(
+            history[i],
+            depth: count - 1 - i,
+            userName: userName,
+            charName: charName,
+            rules: promptRules,
+          ),
+      ];
+    }
     if (conversation.isGroup && character != null) {
       addPrefix(
         'Group',

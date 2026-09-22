@@ -223,6 +223,22 @@ bar or the overflow menu.
   fold and by chat settings). A scenario arrives by one of three routes and they
   are ranked in `AppState.scenarioFor` alone: the chat's own text, the library
   scenario `Conversation.scenarioId` names, then `Character.activeScenario`.
+- **Regex (find/replace rules):** `models/regex_rule.dart` (SillyTavern-faithful
+  JSON so a rule round-trips with ST), `services/regex_engine.dart` (the port of
+  ST's Regex extension engine — pattern compile + LRU cache, `$1`/`$<name>`/
+  `{{match}}` substitution, the three ephemerality modes), `services/regex_codec.dart`
+  (import single/array/`regex_scripts`-wrapped JSON, export ST-compatible),
+  the `regexRules` store entry, and `screens/library/regex_screen.dart` +
+  `regex_edit_screen.dart` (a Library card, with a live test panel). A single
+  **global** list — no per-character/preset scopes in v1. Applied at four points,
+  all through `AppState`: `send()` (permanent user-input rules rewrite the stored
+  turn), `_generate()` finalize (permanent AI-output/reasoning rules rewrite the
+  reply), `_assemble()` (prompt-only rules transform the outgoing `history` copy;
+  depth = distance from newest), and `MessageBubble.displayTransform` (display-only
+  rules, supplied by `chat_screen` from `AppState.regexDisplayTransform`; the
+  `regexDisplaySignature` rides in the per-bubble cache key so editing a cosmetic
+  rule refreshes the thread). Backups pick it up for free — the store is dumped
+  key by key. `RegexEngine.hasWork` short-circuits every site when no rule applies.
 - **Browse layout:** cards-vs-rows for Characters / Lorebooks / Scenarios is a
   *persisted* preference (`models/view_prefs.dart`, the `viewPrefs` store entry,
   `AppState.browseLayout`/`setBrowseLayout`) — no screen holds it in a field.
