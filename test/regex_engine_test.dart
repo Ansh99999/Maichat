@@ -34,14 +34,19 @@ void main() {
   setUp(RegexEngine.clearCache);
 
   group('runRule — patterns and flags', () {
-    test('bare pattern replaces the first match only (no global flag)', () {
+    test('a bare pattern replaces every match (forgiving default)', () {
       expect(RegexEngine.runRule(rule(find: 'a', replace: 'X'), 'banana'),
-          'bXnana');
+          'bXnXnX');
     });
 
     test('the global flag replaces every match', () {
       expect(RegexEngine.runRule(rule(find: '/a/g', replace: 'X'), 'banana'),
           'bXnXnX');
+    });
+
+    test('a delimited pattern without /g replaces only the first match', () {
+      expect(RegexEngine.runRule(rule(find: '/a/', replace: 'X'), 'banana'),
+          'bXnana');
     });
 
     test('the ignore-case flag matches regardless of case', () {

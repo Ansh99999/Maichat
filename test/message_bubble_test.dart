@@ -18,6 +18,38 @@ void main() {
         Column(mainAxisSize: MainAxisSize.min, children: children),
       );
 
+  testWidgets('displayTransform rewrites the shown text', (tester) async {
+    await tester.pumpWidget(host(
+      ListView(
+        children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'ok ok ok'),
+            ui: const ChatInterface(),
+            displayTransform: (text, {required bool isUser}) =>
+                text.replaceAll('ok', 'YES'),
+          ),
+        ],
+      ),
+    ));
+    expect(find.textContaining('YES YES YES'), findsWidgets);
+    expect(find.textContaining('ok ok ok'), findsNothing);
+  });
+
+  testWidgets('no displayTransform shows the stored text unchanged',
+      (tester) async {
+    await tester.pumpWidget(host(
+      ListView(
+        children: [
+          MessageBubble(
+            message: ChatMessage(role: 'assistant', content: 'ok ok ok'),
+            ui: const ChatInterface(),
+          ),
+        ],
+      ),
+    ));
+    expect(find.textContaining('ok ok ok'), findsWidgets);
+  });
+
   // Every placement × bubble mode should lay out without throwing (guards the
   // Row/Column/WidgetSpan layout and the flat-vs-bubble branches).
   for (final placement in TextPlacement.values) {

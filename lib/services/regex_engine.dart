@@ -62,6 +62,7 @@ class RegexEngine {
     String body = input;
     String flags = '';
     // Delimited form: /body/flags — the shape used when sharing rules.
+    var delimited = false;
     if (input.length >= 2 && input.startsWith('/')) {
       final lastSlash = input.lastIndexOf('/');
       if (lastSlash > 0) {
@@ -69,6 +70,7 @@ class RegexEngine {
         if (RegExp(r'^[a-z]*$', caseSensitive: false).hasMatch(maybeFlags)) {
           body = input.substring(1, lastSlash);
           flags = maybeFlags.toLowerCase();
+          delimited = true;
         }
       }
     }
@@ -82,7 +84,13 @@ class RegexEngine {
         dotAll: flags.contains('s'),
         unicode: flags.contains('u'),
       );
-      return _Compiled(regex, flags.contains('g'));
+      // A bare pattern replaces *every* match — that is what "find and replace"
+      // means to someone who has not memorised regex flags, and it is the single
+      // biggest "why did only the first one change" surprise. The delimited
+      // /pattern/flags form is honoured exactly as written (no `g` = first only),
+      // so rules shared to and from SillyTavern keep their meaning.
+      final global = delimited ? flags.contains('g') : true;
+      return _Compiled(regex, global);
     } catch (_) {
       // An invalid pattern (or a JS flag Dart has no equivalent for that made
       // the body unparseable) simply does not apply.

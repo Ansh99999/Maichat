@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../models/regex_rule.dart';
 import '../../services/regex_codec.dart';
 import '../../state/app_state.dart';
+import '../../widgets/library_drawer.dart';
 import 'regex_edit_screen.dart';
 import 'regex_info.dart';
 
@@ -26,15 +27,39 @@ class RegexScreen extends StatefulWidget {
 }
 
 class _RegexScreenState extends State<RegexScreen> {
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
   void _open(Widget screen) => Navigator.of(context)
       .push(MaterialPageRoute<void>(builder: (_) => screen));
+
+  /// Rules matching the current search — by name, pattern, or replacement.
+  List<RegexRule> _filtered(List<RegexRule> rules) {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return rules;
+    return rules
+        .where((r) =>
+            r.displayName.toLowerCase().contains(q) ||
+            r.find.toLowerCase().contains(q) ||
+            r.replace.toLowerCase().contains(q))
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final rules = state.regexRules;
+    final searching = _query.trim().isNotEmpty;
+    final shown = _filtered(rules);
 
     return Scaffold(
+      drawer: const LibraryDrawer(selected: LibrarySection.regex),
       body: CustomScrollView(
         slivers: [
           SliverAppBar.large(
@@ -52,31 +77,34 @@ class _RegexScreenState extends State<RegexScreen> {
               ),
             ],
           ),
+          if (rules.isNotEmpty)
+            SliverToBoxAdapter(child: _searchField(context)),
           if (rules.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
               child: _Empty(),
             )
+          else if (shown.isEmpty)
+            SliverToBoxAdapter(child: _NoMatch(query: _query.trim()))
+          // While searching, ordering is meaningless, so show a plain list; the
+          // full list stays reorderable when nothing is typed.
+          else if (searching)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
+              sliver: SliverList.builder(
+                itemCount: shown.length,
+                itemBuilder: (context, index) =>
+                    _ruleRow(state, shown[index], index, draggable: false),
+              ),
+            )
           else
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
               sliver: SliverReorderableList(
-                itemCount: rules.length,
+                itemCount: shown.length,
                 onReorderItem: state.reorderRegexRule,
-                itemBuilder: (context, index) {
-                  final rule = rules[index];
-                  return _RuleRow(
-                    key: ValueKey(rule.id),
-                    rule: rule,
-                    index: index,
-                    onTap: () => _open(RegexEditScreen(ruleId: rule.id)),
-                    onToggle: (on) =>
-                        state.setRegexRuleEnabled(rule.id, on),
-                    onDuplicate: () => state.duplicateRegexRule(rule),
-                    onExport: () => _exportRule(rule),
-                    onDelete: () => _confirmDelete(rule),
-                  );
-                },
+                itemBuilder: (context, index) =>
+                    _ruleRow(state, shown[index], index, draggable: true),
               ),
             ),
         ],
@@ -88,6 +116,41 @@ class _RegexScreenState extends State<RegexScreen> {
       ),
     );
   }
+
+  Widget _ruleRow(AppState state, RegexRule rule, int index,
+          {required bool draggable}) =>
+      _RuleRow(
+        key: ValueKey(rule.id),
+        rule: rule,
+        index: index,
+        draggable: draggable,
+        onTap: () => _open(RegexEditScreen(ruleId: rule.id)),
+        onToggle: (on) => state.setRegexRuleEnabled(rule.id, on),
+        onDuplicate: () => state.duplicateRegexRule(rule),
+        onExport: () => _exportRule(rule),
+        onDelete: () => _confirmDelete(rule),
+      );
+
+  Widget _searchField(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: SearchBar(
+          controller: _search,
+          hintText: 'Search rules',
+          leading: const Icon(Icons.search),
+          trailing: [
+            if (_query.isNotEmpty)
+              IconButton(
+                tooltip: 'Clear',
+                icon: const Icon(Icons.close),
+                onPressed: () {
+                  _search.clear();
+                  setState(() => _query = '');
+                },
+              ),
+          ],
+          onChanged: (value) => setState(() => _query = value),
+        ),
+      );
 
   // --- delete --------------------------------------------------------------
 
@@ -274,10 +337,15 @@ class _RuleRow extends StatelessWidget {
     required this.onDuplicate,
     required this.onExport,
     required this.onDelete,
+    this.draggable = true,
   });
 
   final RegexRule rule;
   final int index;
+
+  /// Whether to show the reorder handle. Off while searching, where the list is
+  /// filtered and a drag would move the wrong rule.
+  final bool draggable;
   final VoidCallback onTap;
   final ValueChanged<bool> onToggle;
   final VoidCallback onDuplicate;
@@ -295,13 +363,20 @@ class _RuleRow extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       child: ListTile(
         contentPadding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
-        leading: ReorderableDragStartListener(
-          index: index,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Icon(Icons.drag_indicator, color: scheme.onSurfaceVariant),
-          ),
-        ),
+        leading: draggable
+            ? ReorderableDragStartListener(
+                index: index,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child:
+                      Icon(Icons.drag_indicator, color: scheme.onSurfaceVariant),
+                ),
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(Icons.find_replace_outlined,
+                    color: scheme.onSurfaceVariant),
+              ),
         title: Text(
           rule.displayName,
           maxLines: 1,
@@ -343,6 +418,31 @@ class _RuleRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _NoMatch extends StatelessWidget {
+  const _NoMatch({required this.query});
+
+  final String query;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 40, 32, 32),
+      child: Column(
+        children: [
+          Icon(Icons.search_off, size: 40, color: scheme.onSurfaceVariant),
+          const SizedBox(height: 14),
+          Text(
+            'No rules match "$query"',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ],
       ),
     );
   }

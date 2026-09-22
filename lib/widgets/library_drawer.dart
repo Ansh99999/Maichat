@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../screens/library/lorebooks_screen.dart';
 import '../screens/library/embeddings_screen.dart';
+import '../screens/library/regex_screen.dart';
 import '../screens/library/scenarios_screen.dart';
 import '../screens/library/summaries_screen.dart';
 
 /// Which Library destination is currently on screen, so the drawer can show it
 /// selected.
-enum LibrarySection { home, lorebooks, summaries, scenarios, embeddings }
+enum LibrarySection { home, lorebooks, summaries, scenarios, embeddings, regex }
 
 /// The navigation drawer for the Library area (lorebooks, scenarios,
 /// embeddings).
@@ -103,6 +104,16 @@ class LibraryDrawer extends StatelessWidget {
                       context,
                       LibrarySection.embeddings,
                       const EmbeddingsScreen(),
+                    ),
+                  ),
+                  _NavItem(
+                    icon: Icons.find_replace_outlined,
+                    label: 'Regex',
+                    selected: selected == LibrarySection.regex,
+                    onTap: () => _go(
+                      context,
+                      LibrarySection.regex,
+                      const RegexScreen(),
                     ),
                   ),
                 ],
