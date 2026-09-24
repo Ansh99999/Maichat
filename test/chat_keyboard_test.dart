@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/screens/chat_screen.dart';
@@ -96,7 +97,8 @@ void main() {
         reason: 'the composer still rides up with the keyboard');
   });
 
-  /// The other half of the same cost, and the bigger one.
+  /// The other half of the same cost, and the bigger one — for the **legacy**
+  /// send bar, which is furniture at the foot of the chat.
   ///
   /// Not rebuilding the thread is not enough on its own: letting the Scaffold
   /// shrink the body still *lays the list out again* on every frame of the
@@ -104,9 +106,11 @@ void main() {
   /// painted again — a screenful of markdown, HTML and selectable text, fifteen
   /// times on the way up. So the keyboard no longer resizes this screen at all: the
   /// thread and the composer are slid, which the compositor does for free.
-  testWidgets('the keyboard slides the chat rather than relaying it out',
+  testWidgets('the legacy keyboard slides the chat rather than relaying it out',
       (tester) async {
     final state = await boot();
+    await state.updateChatInterface(
+        state.chatInterface.copyWith(composerStyle: ComposerStyle.legacy));
     final dpr = tester.view.devicePixelRatio;
     tester.view.padding = FakeViewPadding(bottom: 32 * dpr, top: 24 * dpr);
     tester.view.viewPadding = FakeViewPadding(bottom: 32 * dpr, top: 24 * dpr);
@@ -142,6 +146,63 @@ void main() {
     expect(tester.getTopLeft(thread).dy, moreOrLessEquals(threadTop - lift,
         epsilon: 0.5));
     // Which leaves the composer sitting on the keyboard, not under it.
+    expect(tester.getBottomLeft(composerField).dy,
+        lessThanOrEqualTo(tester.view.physicalSize.height / dpr - 300 + 0.5));
+  });
+
+  /// The expressive composer floats over a **static** thread, so the keyboard
+  /// must lift *only the box* — the conversation, its floating pictures and its
+  /// avatars stay pinned exactly where they were. Sliding the whole screen (as the
+  /// legacy path does) is what the round-3 report called out: the thread must not
+  /// move at all, and only the composer rides up to sit on the keyboard.
+  testWidgets('the expressive keyboard lifts only the composer, never the thread',
+      (tester) async {
+    final state = await boot();
+    // Default is the expressive composer, but pin it so the intent is on the page.
+    await state.updateChatInterface(
+        state.chatInterface.copyWith(composerStyle: ComposerStyle.expressive));
+    final dpr = tester.view.devicePixelRatio;
+    tester.view.padding = FakeViewPadding(bottom: 32 * dpr, top: 24 * dpr);
+    tester.view.viewPadding = FakeViewPadding(bottom: 32 * dpr, top: 24 * dpr);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(home: ChatScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    final thread = find.byType(ListView);
+    final composerField = find.byKey(const Key('composer-field'));
+    final threadHeight = tester.getSize(thread).height;
+    final threadTop = tester.getTopLeft(thread).dy;
+    // A message bubble that must not budge — the reader's eye is on the words, not
+    // on the ListView's own rectangle.
+    final bubbleTop = tester.getTopLeft(find.text('Gulls, mostly.')).dy;
+    final offset = tester.widget<ListView>(thread).controller!.position.pixels;
+    final composerBottom = tester.getBottomLeft(composerField).dy;
+
+    tester.view.viewInsets = FakeViewPadding(bottom: 300 * dpr);
+    tester.view.padding = FakeViewPadding(top: 24 * dpr);
+    await tester.pump();
+
+    // The thread did not move: same size, same position, same reader, same words
+    // in the same place. Nothing but the composer stirred.
+    expect(tester.getSize(thread).height, threadHeight,
+        reason: 'the thread was resized by the keyboard');
+    expect(tester.getTopLeft(thread).dy, moreOrLessEquals(threadTop, epsilon: 0.5),
+        reason: 'the keyboard slid the whole thread up');
+    expect(tester.getTopLeft(find.text('Gulls, mostly.')).dy,
+        moreOrLessEquals(bubbleTop, epsilon: 0.5),
+        reason: 'a message moved when only the composer should have');
+    expect(tester.widget<ListView>(thread).controller!.position.pixels, offset,
+        reason: 'the keyboard moved the reader');
+
+    // The composer alone rode up, by the keyboard's height less the nav bar it
+    // covers, to sit on the keyboard rather than under it.
+    final lift = composerBottom - tester.getBottomLeft(composerField).dy;
+    expect(lift, moreOrLessEquals(300 - 32, epsilon: 0.5),
+        reason: 'the composer did not lift clear of the keyboard');
     expect(tester.getBottomLeft(composerField).dy,
         lessThanOrEqualTo(tester.view.physicalSize.height / dpr - 300 + 0.5));
   });

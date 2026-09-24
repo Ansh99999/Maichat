@@ -751,9 +751,16 @@ class _ChatScreenState extends State<ChatScreen> {
                     : ui.backgroundOpacity,
               ),
             ),
-          _KeyboardShift(
-            child: _chatBody(state, conversation, ui, topInset, floatingComposer),
-          ),
+          // The legacy send bar is furniture at the foot of the chat, so the
+          // whole column slides as one to clear the keyboard. The expressive
+          // composer floats over a static thread and lifts on its own — see
+          // [_chatBody] — so it must not be wrapped in the slide.
+          if (floatingComposer)
+            _chatBody(state, conversation, ui, topInset, true)
+          else
+            _KeyboardShift(
+              child: _chatBody(state, conversation, ui, topInset, false),
+            ),
           // The soft squares that float over the thread without boxing it in: the
           // drawer on the left, and — unless it has been put away — the looks
           // sheet on the right.
@@ -803,6 +810,15 @@ class _ChatScreenState extends State<ChatScreen> {
   /// caret pushes the conversation. The thread reserves [_composerDockHeight] of
   /// bottom padding (the composer's measured resting height) so the newest turn
   /// still comes to rest just above the dock rather than hidden behind it.
+  ///
+  /// Crucially the keyboard does **not** slide this whole body the way it slides
+  /// the legacy column: the thread, its floating pictures and its avatars all hold
+  /// still, and only the composer rises to sit above the keyboard, wrapped in
+  /// [_ComposerKeyboardLift]. A reversed, bottom-anchored thread reads identically
+  /// whether or not it moves, so there is nothing to gain from dragging the whole
+  /// screen up — and everything to lose: it lurched the conversation on every
+  /// frame of the keyboard's rise. Lifting one small, already-boundaried layer is
+  /// a re-composite, not a screenful of relayout.
   Widget _chatBody(AppState state, Conversation conversation, ChatInterface ui,
       double topInset, bool floatingComposer) {
     // Sits at the bottom-right of the thread, just above the composer, and only
@@ -902,16 +918,35 @@ class _ChatScreenState extends State<ChatScreen> {
 
     // Floating: the thread owns the whole body and the composer is laid over its
     // bottom edge, so growth overlays the conversation instead of resizing it.
+    // This path applies the safe-area padding itself (there is no [_KeyboardShift]
+    // wrapping it) and reads only the *stable* viewPadding, so the thread never
+    // moves for the keyboard. The composer alone lifts, inside
+    // [_ComposerKeyboardLift], which reads the keyboard inset in its own build.
+    final view = MediaQuery.viewPaddingOf(context);
     return Stack(
       children: [
-        Positioned.fill(child: thread),
+        Positioned.fill(
+          child: Padding(
+            padding: EdgeInsets.only(
+              top: view.top,
+              left: view.left,
+              right: view.right,
+              bottom: view.bottom,
+            ),
+            child: RepaintBoundary(child: thread),
+          ),
+        ),
         Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [groupBar, composer],
+          left: view.left,
+          right: view.right,
+          bottom: view.bottom,
+          child: _ComposerKeyboardLift(
+            child: RepaintBoundary(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [groupBar, composer],
+              ),
+            ),
           ),
         ),
       ],
@@ -1961,6 +1996,31 @@ enum _DeleteScope {
 ///
 /// The keyboard covers the navigation bar on its way up, so the first
 /// `viewPadding.bottom` pixels of it cost the composer nothing.
+/// Lifts **only** the floating expressive composer clear of the soft keyboard.
+///
+/// The legacy [_KeyboardShift] slides the whole chat — thread, floats and send
+/// bar together — because its send bar is part of the column. The expressive
+/// composer instead floats over a full-height, static thread, so the thread,
+/// its floating pictures and its avatars must hold perfectly still while only the
+/// composer rises. This reads the keyboard inset in its own build (so nothing
+/// above it rebuilds mid-animation — the chat depends on the stable viewPadding
+/// alone) and translates its child, which is already a [RepaintBoundary]: the
+/// lift is one re-composited layer per frame, no relayout and no repaint of the
+/// conversation.
+class _ComposerKeyboardLift extends StatelessWidget {
+  const _ComposerKeyboardLift({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final view = MediaQuery.viewPaddingOf(context);
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final lift = (keyboard - view.bottom).clamp(0.0, double.infinity);
+    return Transform.translate(offset: Offset(0, -lift), child: child);
+  }
+}
+
 class _KeyboardShift extends StatelessWidget {
   const _KeyboardShift({required this.child});
 
