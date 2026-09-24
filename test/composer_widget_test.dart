@@ -164,6 +164,52 @@ void main() {
     expect(find.byTooltip('Send'), findsOneWidget);
   });
 
+  testWidgets('the expressive composer floats over the thread, not in a slot',
+      (tester) async {
+    final state = await boot();
+    await pump(tester, state);
+
+    // The thread fills the whole body and the box is laid over its bottom edge,
+    // so the conversation is visible behind and around the composer rather than
+    // stopping at a send bar. The list therefore extends *past* the box's top.
+    final listBottom = tester.getRect(find.byType(ListView)).bottom;
+    final boxTop = tester.getRect(find.byKey(field)).top;
+    expect(listBottom, greaterThan(boxTop),
+        reason: 'the thread runs behind the floating composer');
+  });
+
+  testWidgets('the legacy composer takes a slot below the thread',
+      (tester) async {
+    final state = await boot();
+    await state.updateChatInterface(
+        state.chatInterface.copyWith(composerStyle: ComposerStyle.legacy));
+    await pump(tester, state);
+
+    // The counterpart: the flat send bar is furniture below the thread, so the
+    // list ends at (does not run under) the composer.
+    final listBottom = tester.getRect(find.byType(ListView)).bottom;
+    final boxTop = tester.getRect(find.byKey(field)).top;
+    expect(listBottom, lessThanOrEqualTo(boxTop + 1),
+        reason: 'the legacy thread stops at the send bar');
+  });
+
+  testWidgets('opening a panel over the expressive composer never moves the '
+      'thread', (tester) async {
+    final state = await boot();
+    await pump(tester, state);
+
+    // A turn to watch. Opening the operations strip rises a riser out of the box
+    // and must overlay the conversation, not shove it up the way a Column slot
+    // would — the whole point of floating the composer.
+    final before = tester.getRect(find.text('Hi')).top;
+    await tester.tap(find.byKey(ops));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('composer-image-button')), findsOneWidget);
+    final after = tester.getRect(find.text('Hi')).top;
+    expect((after - before).abs(), lessThan(1.0),
+        reason: 'the thread stays put while the panel overlays it');
+  });
+
   testWidgets('send is dead with an empty box and lives once text is typed',
       (tester) async {
     final state = await boot();

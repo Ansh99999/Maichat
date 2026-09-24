@@ -73,6 +73,15 @@ class _ChatScreenState extends State<ChatScreen> {
   // primary-tinted glow while the box holds focus, so a rebuild has to run when
   // focus comes and goes.
   final FocusNode _composerFocus = FocusNode();
+  // The expressive composer floats over the thread rather than taking a slot in
+  // the column below it: the thread fills the whole height and shows through
+  // around the rounded box, and the box's panels grow *over* the thread instead
+  // of shoving it. The thread reserves this much room at its bottom so the newest
+  // turn clears the resting box — measured off the box itself (font scale, a
+  // persona row or not) rather than guessed, and only the resting box counts, so
+  // opening a panel never changes it.
+  final GlobalKey _composerDockKey = GlobalKey();
+  double _composerDockHeight = 0;
   final ScrollController _scroll = ScrollController();
 
   /// The index of the message currently being edited in place, or null.
@@ -211,6 +220,34 @@ class _ChatScreenState extends State<ChatScreen> {
   /// composer-only rebuild, and the thread above it is a `const`-bounded subtree.
   void _onComposerFocus() {
     if (mounted) setState(() {});
+  }
+
+  /// Reads the resting height of the expressive composer box after a frame and,
+  /// if it has changed, rebuilds so the thread's bottom padding tracks it. The
+  /// key sits on the box alone (not its risers), so a panel opening never grows
+  /// this — that is what lets the panels overlay the thread instead of pushing
+  /// it. Called from build via a post-frame callback; the guard keeps it from
+  /// looping once the height settles.
+  ///
+  /// The reserve is the box's *resting* height, never the taller size it takes
+  /// while a long message is being typed. If it grew with the box, a reversed,
+  /// bottom-anchored thread would shove the whole conversation up on every line —
+  /// exactly the "typing pushes the chat" the floating composer exists to avoid.
+  /// So it is taken while the box is empty (its resting layout, which also picks
+  /// up a font/theme change once the box is cleared) and otherwise only allowed
+  /// to shrink; a box grown by typing overlays the thread and leaves the reserve
+  /// alone.
+  void _measureComposerDock() {
+    final box = _composerDockKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final height = box.size.height;
+    if ((height - _composerDockHeight).abs() <= 0.5) return;
+    final resting = _composerDockHeight == 0 ||
+        _input.text.isEmpty ||
+        height < _composerDockHeight;
+    if (resting) {
+      setState(() => _composerDockHeight = height);
+    }
   }
 
   /// Reads [conversationId]'s hint into the box, when it is not already the one
@@ -658,6 +695,14 @@ class _ChatScreenState extends State<ChatScreen> {
     // ones apply.
     final ui = state.interfaceFor(conversation);
     final bg = ui.backgroundColor != null ? Color(ui.backgroundColor!) : null;
+    // The expressive composer floats over the thread; the legacy send bar keeps
+    // its slot in the column below it. Only the floating one needs its resting
+    // height measured, and only it reserves room at the thread's bottom.
+    final floatingComposer = ui.composerStyle == ComposerStyle.expressive;
+    if (floatingComposer) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _measureComposerDock());
+    }
 
     return Scaffold(
       backgroundColor: bg,
@@ -707,95 +752,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           _KeyboardShift(
-            child: Column(
-              children: [
-                Expanded(
-                  child: conversation.isEmpty
-                      ? _EmptyState(
-                          configured: state.isConfigured,
-                          onSettings: _openSettings,
-                        )
-                      : Stack(
-                          children: [
-                            // The thread is its own retained layer, so moving a
-                            // floating picture over it re-composites that one
-                            // cached layer instead of re-recording the whole
-                            // message viewport (every visible bubble) on the UI
-                            // thread each frame. Without this boundary a float's
-                            // repaint bubbles past the list to a far ancestor and
-                            // re-records it — the drag/pinch stutter on a busy
-                            // chat. Scrolling still repaints the list as normal;
-                            // this only isolates it from its siblings.
-                            RepaintBoundary(
-                              child: _messageList(conversation, state, topInset),
-                            ),
-                            // Pictures pinned over the thread. Above the messages
-                            // and below the composer, so a float can be moved
-                            // anywhere in the conversation without ever covering
-                            // the send bar.
-                            Positioned.fill(
-                              child: FloatingImagesLayer(
-                                conversationId: conversation.id,
-                              ),
-                            ),
-                            // Sits at the bottom-right of the thread, just above
-                            // the composer, and only while scrolled well up.
-                            Positioned(
-                              right: 12,
-                              bottom: 12,
-                              child: _JumpToLatestButton(
-                                visible: _showJumpToEnd || _unread > 0,
-                                unread: _unread,
-                                opacity: ui.jumpButtonOpacity,
-                                // A reply is still being written down there, and
-                                // while the reader is away the newest turn is held
-                                // still on purpose — so the button says so rather
-                                // than letting a frozen turn read as a stalled
-                                // one.
-                                live: state.streaming && !_stick,
-                                onTap: () =>
-                                    setState(() => _stickToLatest(animated: true)),
-                              ),
-                            ),
-                          ],
-                        ),
-                ),
-                // The participant bar slides up from the composer when opened
-                // and collapses back into it when hidden. Anchored to the
-                // bottom so the growth reads as rising out of the send bar, the
-                // Android way; at rest it settles to the bar's full height so
-                // every chip keeps its hit region.
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.bottomCenter,
-                  child: (_showGroupBar && conversation.isGroup)
-                      ? _GroupBar(
-                          conversation: conversation,
-                          participants: state.participantsOf(conversation),
-                          user: state.impersonationFor(conversation),
-                          ui: ui,
-                          onChip: (id) {
-                            state.speakAs(id);
-                            _stickToLatest();
-                          },
-                          onUser: () => _openImpersonatePicker(state),
-                          onRemove: (id) =>
-                              state.removeParticipant(conversation.id, id),
-                          onResponder: (value) =>
-                              state.toggleGroupResponder(conversation.id, value),
-                          onClose: () => setState(() => _showGroupBar = false),
-                        )
-                      : const SizedBox(width: double.infinity),
-                ),
-                // Its own retained layer. The caret in the message box blinks
-                // twice a second and the strips above it animate open and shut;
-                // without a boundary each of those repaints re-records the layer
-                // it shares with the chat's background picture and everything
-                // floating over the thread.
-                RepaintBoundary(child: _composer(state)),
-              ],
-            ),
+            child: _chatBody(state, conversation, ui, topInset, floatingComposer),
           ),
           // The soft squares that float over the thread without boxing it in: the
           // drawer on the left, and — unless it has been put away — the looks
@@ -830,7 +787,139 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _messageList(Conversation conversation, AppState state, double top) {
+  /// The thread, the group bar and the composer, laid out one of two ways.
+  ///
+  /// The legacy composer takes a slot at the bottom of a [Column]: the thread is
+  /// an [Expanded] above it, so opening a strip or growing the box shortens the
+  /// thread's viewport and — a reversed, bottom-anchored list — shoves the whole
+  /// conversation up. That is right for the flat send bar, which is part of the
+  /// chat's furniture.
+  ///
+  /// The expressive composer floats *over* the thread instead. The thread fills
+  /// the whole body ([Positioned.fill]) with the chat visible around and behind
+  /// the box — no slab of Scaffold surface under it — and the composer is pinned
+  /// to the bottom in its own [Positioned]. Growing the box or rising a strip out
+  /// of it then overlays the thread rather than resizing it, so nothing below the
+  /// caret pushes the conversation. The thread reserves [_composerDockHeight] of
+  /// bottom padding (the composer's measured resting height) so the newest turn
+  /// still comes to rest just above the dock rather than hidden behind it.
+  Widget _chatBody(AppState state, Conversation conversation, ChatInterface ui,
+      double topInset, bool floatingComposer) {
+    // Sits at the bottom-right of the thread, just above the composer, and only
+    // while scrolled well up. For the floating composer it clears the dock.
+    final jumpButton = Positioned(
+      right: 12,
+      bottom: 12 + (floatingComposer ? _composerDockHeight : 0),
+      child: _JumpToLatestButton(
+        visible: _showJumpToEnd || _unread > 0,
+        unread: _unread,
+        opacity: ui.jumpButtonOpacity,
+        // A reply is still being written down there, and while the reader is away
+        // the newest turn is held still on purpose — so the button says so rather
+        // than letting a frozen turn read as a stalled one.
+        live: state.streaming && !_stick,
+        onTap: () => setState(() => _stickToLatest(animated: true)),
+      ),
+    );
+
+    final thread = conversation.isEmpty
+        ? _EmptyState(
+            configured: state.isConfigured,
+            onSettings: _openSettings,
+          )
+        : Stack(
+            children: [
+              // The thread is its own retained layer, so moving a floating picture
+              // over it re-composites that one cached layer instead of re-recording
+              // the whole message viewport (every visible bubble) on the UI thread
+              // each frame. Without this boundary a float's repaint bubbles past the
+              // list to a far ancestor and re-records it — the drag/pinch stutter on
+              // a busy chat. Scrolling still repaints the list as normal; this only
+              // isolates it from its siblings.
+              RepaintBoundary(
+                child: _messageList(
+                  conversation,
+                  state,
+                  topInset,
+                  // The reserve clears the box's resting height plus the
+                  // composer Container's own vertical padding, so the newest turn
+                  // comes to rest just above the dock.
+                  bottom: floatingComposer ? _composerDockHeight + 16 : 8,
+                ),
+              ),
+              // Pictures pinned over the thread. Above the messages and below the
+              // composer, so a float can be moved anywhere in the conversation
+              // without ever covering the send bar.
+              Positioned.fill(
+                child: FloatingImagesLayer(conversationId: conversation.id),
+              ),
+              jumpButton,
+            ],
+          );
+
+    // The participant bar slides up from the composer when opened and collapses
+    // back into it when hidden. Anchored to the bottom so the growth reads as
+    // rising out of the send bar, the Android way; at rest it settles to the
+    // bar's full height so every chip keeps its hit region.
+    final groupBar = AnimatedSize(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.bottomCenter,
+      child: (_showGroupBar && conversation.isGroup)
+          ? _GroupBar(
+              conversation: conversation,
+              participants: state.participantsOf(conversation),
+              user: state.impersonationFor(conversation),
+              ui: ui,
+              onChip: (id) {
+                state.speakAs(id);
+                _stickToLatest();
+              },
+              onUser: () => _openImpersonatePicker(state),
+              onRemove: (id) => state.removeParticipant(conversation.id, id),
+              onResponder: (value) =>
+                  state.toggleGroupResponder(conversation.id, value),
+              onClose: () => setState(() => _showGroupBar = false),
+            )
+          : const SizedBox(width: double.infinity),
+    );
+
+    // Its own retained layer. The caret in the message box blinks twice a second
+    // and the strips above it animate open and shut; without a boundary each of
+    // those repaints re-records the layer it shares with the chat's background
+    // picture and everything floating over the thread.
+    final composer = RepaintBoundary(child: _composer(state));
+
+    if (!floatingComposer) {
+      return Column(
+        children: [
+          Expanded(child: thread),
+          groupBar,
+          composer,
+        ],
+      );
+    }
+
+    // Floating: the thread owns the whole body and the composer is laid over its
+    // bottom edge, so growth overlays the conversation instead of resizing it.
+    return Stack(
+      children: [
+        Positioned.fill(child: thread),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [groupBar, composer],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _messageList(Conversation conversation, AppState state, double top,
+      {double bottom = 8}) {
     final ui = state.interfaceFor(conversation);
     final character = state.characterFor(conversation, conversation.characterId);
     final persona = state.impersonationFor(conversation);
@@ -852,8 +941,11 @@ class _ChatScreenState extends State<ChatScreen> {
       // markdown/HTML renderers cache parsed output, so a turn rebuilds cheaply
       // when it scrolls back on. Keeps a 3000-message thread's memory bounded.
       addAutomaticKeepAlives: false,
-      // Leave room so the first bubble clears the floating hamburger.
-      padding: EdgeInsets.fromLTRB(0, top + 56, 0, 8),
+      // Leave room so the first bubble clears the floating hamburger, and — for
+      // the expressive composer, which floats over the thread rather than taking a
+      // slot below it — room at the bottom so the newest turn rests clear of the
+      // dock instead of behind it.
+      padding: EdgeInsets.fromLTRB(0, top + 56, 0, bottom),
       itemCount: conversation.messages.length,
       itemBuilder: (context, index) {
         final msgIndex = conversation.messages.length - 1 - index;
@@ -1575,6 +1667,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     return AnimatedContainer(
+      key: _composerDockKey,
       duration: const Duration(milliseconds: 150),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
@@ -2015,13 +2108,20 @@ class _HintBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final faded = theme.colorScheme.onSurfaceVariant;
+    // Inside the expressive riser the field is rounded to echo the composer's own
+    // shape, and it is inset from the riser's top so its corners clear the 28px
+    // rounded clip that would otherwise crop the top-left one square. The legacy
+    // box keeps its plain rectangular outline flush against the flat send bar.
+    final border = flush
+        ? OutlineInputBorder(borderRadius: BorderRadius.circular(18))
+        : const OutlineInputBorder();
     return Container(
       key: const Key('hint-box'),
       width: double.infinity,
       // No fill and no frame of its own: the box is the field's own outline, and
       // behind it is the same background the rest of the chat has.
       margin: flush
-          ? const EdgeInsets.fromLTRB(6, 6, 6, 2)
+          ? const EdgeInsets.fromLTRB(10, 12, 8, 2)
           : const EdgeInsets.only(bottom: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2039,7 +2139,7 @@ class _HintBar extends StatelessWidget {
               decoration: InputDecoration(
                 hintText: 'Guide the next reply…',
                 isDense: true,
-                border: const OutlineInputBorder(),
+                border: border,
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 // Where the hint lands, as the field's own helper line — so it

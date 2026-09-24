@@ -193,9 +193,12 @@ void main() {
 
     final list = find.byType(ListView).first;
     final gesture = await tester.startGesture(tester.getCenter(list));
-    // Small pulls: the first two are eaten by touch slop, as on a real screen.
+    // Small pulls, kept well inside the stick band. Touch slop eats the first of
+    // them, as on a real screen; how much depends on where over the thread the
+    // finger lands, so the drag is sized to stay short of the follow threshold
+    // rather than pinned to an exact pixel.
     for (var i = 0; i < 4; i++) {
-      await gesture.moveBy(const Offset(0, 10));
+      await gesture.moveBy(const Offset(0, 6));
       await tester.pump();
     }
     final held = scroll(tester).pixels;
