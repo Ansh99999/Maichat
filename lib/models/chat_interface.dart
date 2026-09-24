@@ -282,6 +282,51 @@ enum ContentWidth {
   }
 }
 
+/// Which composer (the message box at the bottom of a chat) is drawn.
+///
+/// [legacy] is the original flat send bar — avatar, field, ⋯ and Send in one
+/// row. [expressive] is the Material 3 Expressive box: a single rounded, outlined
+/// panel with a roomy field, the persona avatar and name along the bottom-left,
+/// and ⋯ + Send at the bottom-right. Read app-wide only (like
+/// [ChatInterface.groupChatsEnabled]) so it is a preference, not something a
+/// saved look can flip out from under you.
+enum ComposerStyle {
+  legacy('Legacy'),
+  expressive('Expressive');
+
+  const ComposerStyle(this.label);
+
+  final String label;
+
+  static ComposerStyle byName(String? name) {
+    for (final s in values) {
+      if (s.name == name) return s;
+    }
+    return ComposerStyle.expressive;
+  }
+}
+
+/// What fills the expressive composer's box behind its text.
+///
+/// [theme] follows the Material surface colour; [color] paints a chosen opaque
+/// colour; [image] draws a picture (with optional frosted blur and opacity).
+enum ComposerBackground {
+  theme('Material theme'),
+  color('Solid colour'),
+  image('Picture');
+
+  const ComposerBackground(this.label);
+
+  final String label;
+
+  static ComposerBackground byName(String? name) {
+    for (final b in values) {
+      if (b.name == name) return b;
+    }
+    return ComposerBackground.theme;
+  }
+}
+
 /// Where the per-message action bar sits relative to a message.
 enum ActionBarPlacement {
   belowMessage('Below message'),
@@ -674,6 +719,14 @@ class ChatInterface {
     this.looksButtonOpacity = kDefaultChromeOpacity,
     this.backgroundImage,
     this.backgroundOpacity = 1,
+    this.composerStyle = ComposerStyle.expressive,
+    this.composerLiveFormatting = true,
+    this.composerBackground = ComposerBackground.theme,
+    this.composerBackgroundColor,
+    this.composerBackgroundImage,
+    this.composerBackgroundBlur = false,
+    this.composerBackgroundOpacity = 1,
+    this.composerOutline = true,
   });
 
   final AvatarStyle botAvatar;
@@ -818,6 +871,39 @@ class ChatInterface {
   final String? backgroundImage;
   final double backgroundOpacity;
 
+  /// Which composer is drawn (legacy flat bar vs the Expressive box). Read
+  /// app-wide only — a per-chat copy just inherits whatever it was frozen at, so
+  /// this behaves as a preference rather than something one thread can disagree
+  /// about, and [lookOnly] resets it so a saved look never switches it.
+  final ComposerStyle composerStyle;
+
+  /// Whether the expressive composer formats markdown as it is typed (asterisks
+  /// italicise their run, `**` bolds, and so on). App-wide, like [composerStyle].
+  final bool composerLiveFormatting;
+
+  /// The expressive composer box's background: the Material surface, a solid
+  /// colour, or a picture. Appearance, so it is honoured per chat and carried by
+  /// a saved look.
+  final ComposerBackground composerBackground;
+
+  /// ARGB fill for the box when [composerBackground] is [ComposerBackground.color].
+  final int? composerBackgroundColor;
+
+  /// A picture behind the box when [composerBackground] is
+  /// [ComposerBackground.image]: a `local:<file>` reference or an `http(s)` URL.
+  final String? composerBackgroundImage;
+
+  /// Whether that picture is drawn through a frosted-glass blur. The blur is on
+  /// the picture itself (a one-time raster), never a `BackdropFilter` over the
+  /// thread behind it — that reads the framebuffer back every frame and janks.
+  final bool composerBackgroundBlur;
+
+  /// 0..1 opacity for the box's colour/picture fill.
+  final double composerBackgroundOpacity;
+
+  /// Whether the expressive box is drawn with an outline (tinted from the theme).
+  final bool composerOutline;
+
   /// The inline actions, in order.
   List<MessageAction> get inlineActions => [
         for (final p in messageActions)
@@ -846,6 +932,8 @@ class ChatInterface {
         groupChatsEnabled: false,
         responseHintEnabled: false,
         responseHintDepth: kDefaultResponseHintDepth,
+        composerStyle: ComposerStyle.expressive,
+        composerLiveFormatting: true,
       );
 
   /// [look]'s appearance over this interface's own behaviour switches — the one
@@ -854,6 +942,8 @@ class ChatInterface {
         groupChatsEnabled: groupChatsEnabled,
         responseHintEnabled: responseHintEnabled,
         responseHintDepth: responseHintDepth,
+        composerStyle: composerStyle,
+        composerLiveFormatting: composerLiveFormatting,
       );
 
   /// Every picture file this look refers to.
@@ -866,6 +956,9 @@ class ChatInterface {
         if (groupBarImage != null && groupBarImage!.isNotEmpty) groupBarImage!,
         if (backgroundImage != null && backgroundImage!.isNotEmpty)
           backgroundImage!,
+        if (composerBackgroundImage != null &&
+            composerBackgroundImage!.isNotEmpty)
+          composerBackgroundImage!,
       ];
 // APPEND-CI-2
 
@@ -908,6 +1001,14 @@ class ChatInterface {
     double? looksButtonOpacity,
     Object? backgroundImage = _unset,
     double? backgroundOpacity,
+    ComposerStyle? composerStyle,
+    bool? composerLiveFormatting,
+    ComposerBackground? composerBackground,
+    Object? composerBackgroundColor = _unset,
+    Object? composerBackgroundImage = _unset,
+    bool? composerBackgroundBlur,
+    double? composerBackgroundOpacity,
+    bool? composerOutline,
   }) =>
       ChatInterface(
         botAvatar: botAvatar ?? this.botAvatar,
@@ -953,6 +1054,20 @@ class ChatInterface {
             ? this.backgroundImage
             : backgroundImage as String?,
         backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
+        composerStyle: composerStyle ?? this.composerStyle,
+        composerLiveFormatting:
+            composerLiveFormatting ?? this.composerLiveFormatting,
+        composerBackground: composerBackground ?? this.composerBackground,
+        composerBackgroundColor:
+            _pick(composerBackgroundColor, this.composerBackgroundColor),
+        composerBackgroundImage: identical(composerBackgroundImage, _unset)
+            ? this.composerBackgroundImage
+            : composerBackgroundImage as String?,
+        composerBackgroundBlur:
+            composerBackgroundBlur ?? this.composerBackgroundBlur,
+        composerBackgroundOpacity:
+            composerBackgroundOpacity ?? this.composerBackgroundOpacity,
+        composerOutline: composerOutline ?? this.composerOutline,
       );
 
   /// Writes [style] to one role and, when [syncAvatars] is on, mirrors its look
@@ -1027,6 +1142,18 @@ class ChatInterface {
         if (backgroundImage != null && backgroundImage!.isNotEmpty)
           'backgroundImage': backgroundImage,
         if (backgroundOpacity != 1) 'backgroundOpacity': backgroundOpacity,
+        'composerStyle': composerStyle.name,
+        'composerLiveFormatting': composerLiveFormatting,
+        'composerBackground': composerBackground.name,
+        if (composerBackgroundColor != null)
+          'composerBackgroundColor': composerBackgroundColor,
+        if (composerBackgroundImage != null &&
+            composerBackgroundImage!.isNotEmpty)
+          'composerBackgroundImage': composerBackgroundImage,
+        if (composerBackgroundBlur) 'composerBackgroundBlur': true,
+        if (composerBackgroundOpacity != 1)
+          'composerBackgroundOpacity': composerBackgroundOpacity,
+        if (!composerOutline) 'composerOutline': false,
       };
 
   factory ChatInterface.fromJson(Map<String, dynamic> json) {
@@ -1104,6 +1231,21 @@ class ChatInterface {
       backgroundImage: (json['backgroundImage'] as String?)?.trim(),
       backgroundOpacity:
           ((json['backgroundOpacity'] as num?)?.toDouble() ?? 1).clamp(0.0, 1.0),
+      composerStyle: ComposerStyle.byName(json['composerStyle'] as String?),
+      composerLiveFormatting:
+          json['composerLiveFormatting'] as bool? ?? true,
+      composerBackground:
+          ComposerBackground.byName(json['composerBackground'] as String?),
+      composerBackgroundColor: (json['composerBackgroundColor'] as num?)?.toInt(),
+      composerBackgroundImage:
+          (json['composerBackgroundImage'] as String?)?.trim().isEmpty ?? true
+              ? null
+              : (json['composerBackgroundImage'] as String).trim(),
+      composerBackgroundBlur: json['composerBackgroundBlur'] as bool? ?? false,
+      composerBackgroundOpacity:
+          ((json['composerBackgroundOpacity'] as num?)?.toDouble() ?? 1)
+              .clamp(0.0, 1.0),
+      composerOutline: json['composerOutline'] as bool? ?? true,
     );
   }
 
@@ -1191,7 +1333,15 @@ class ChatInterface {
       other.looksButtonEnabled == looksButtonEnabled &&
       other.looksButtonOpacity == looksButtonOpacity &&
       other.backgroundImage == backgroundImage &&
-      other.backgroundOpacity == backgroundOpacity;
+      other.backgroundOpacity == backgroundOpacity &&
+      other.composerStyle == composerStyle &&
+      other.composerLiveFormatting == composerLiveFormatting &&
+      other.composerBackground == composerBackground &&
+      other.composerBackgroundColor == composerBackgroundColor &&
+      other.composerBackgroundImage == composerBackgroundImage &&
+      other.composerBackgroundBlur == composerBackgroundBlur &&
+      other.composerBackgroundOpacity == composerBackgroundOpacity &&
+      other.composerOutline == composerOutline;
 
   @override
   int get hashCode => Object.hash(
@@ -1224,7 +1374,14 @@ class ChatInterface {
             responseHintEnabled, responseHintDepth,
             Object.hash(menuButtonOpacity, jumpButtonOpacity,
                 Object.hash(looksButtonEnabled, looksButtonOpacity),
-                backgroundImage, backgroundOpacity)),
+                backgroundImage, backgroundOpacity,
+                // The composer settings share this last slot too — folded into
+                // their own nested hash because the outer calls are at the
+                // 20-argument ceiling.
+                Object.hash(composerStyle, composerLiveFormatting,
+                    composerBackground, composerBackgroundColor,
+                    composerBackgroundImage, composerBackgroundBlur,
+                    composerBackgroundOpacity, composerOutline))),
       );
 }
 

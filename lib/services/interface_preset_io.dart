@@ -63,6 +63,9 @@ Map<String, dynamic> exportInterfacePreset(
     }
     if (ui.groupBarImage == ref) ui = ui.copyWith(groupBarImage: null);
     if (ui.backgroundImage == ref) ui = ui.copyWith(backgroundImage: null);
+    if (ui.composerBackgroundImage == ref) {
+      ui = ui.copyWith(composerBackgroundImage: null);
+    }
   }
   return {
     'format': kInterfacePresetFormat,
@@ -129,6 +132,7 @@ Future<InterfacePreset> importInterfacePreset(
   ui = ui.copyWith(
     groupBarImage: _resolve(ui.groupBarImage, rewritten),
     backgroundImage: _resolve(ui.backgroundImage, rewritten),
+    composerBackgroundImage: _resolve(ui.composerBackgroundImage, rewritten),
   );
 
   final name = (json['name'] as String?)?.trim();

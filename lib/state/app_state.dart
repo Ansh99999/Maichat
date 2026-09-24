@@ -1371,6 +1371,13 @@ class AppState extends ChangeNotifier {
   /// global interface so a per-chat style copy can't silently disable it.
   bool get groupChatsEnabled => _chatInterface.groupChatsEnabled;
 
+  /// Which composer is drawn, read app-wide (like [groupChatsEnabled]) so it is a
+  /// preference rather than something a per-chat copy or a saved look can flip.
+  ComposerStyle get composerStyle => _chatInterface.composerStyle;
+
+  /// Whether the expressive composer formats markdown as it is typed. App-wide.
+  bool get composerLiveFormatting => _chatInterface.composerLiveFormatting;
+
   /// The AI characters taking part in [conversation], in speaking order,
   /// resolved against the roster (and per-chat overrides). Characters that no
   /// longer resolve are dropped, so a deleted member never crashes a send.

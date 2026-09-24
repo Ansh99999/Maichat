@@ -89,8 +89,185 @@ List<InlineSpan> buildMessageSpans(String text, MarkdownStyles styles) {
   return spans;
 }
 
-/// Drops the parsed-span cache. For tests.
-void clearMessageSpanCache() => _spanCache.clear();
+/// Drops the parsed-span caches. For tests.
+void clearMessageSpanCache() {
+  _spanCache.clear();
+  _composerCache.clear();
+}
+
+/// Parsed composer spans by `stylesHash:text`, most recently used last.
+final LinkedHashMap<String, List<InlineSpan>> _composerCache =
+    LinkedHashMap<String, List<InlineSpan>>();
+
+/// Renders [text] for the **composer** (an editable field) as inline markdown
+/// styling that preserves every source character exactly.
+///
+/// Unlike [buildMessageSpans], this never strips a marker, decodes an entity, or
+/// inserts a glyph: concatenating every span's `text` yields [text] character
+/// for character. That is a hard requirement for backing a [TextEditingController]
+/// — a single dropped or added character desyncs the caret and corrupts editing.
+/// It is inline-only (no headings, bullets or blockquotes), since those are block
+/// transforms that would have to insert markup. Colours come from the same
+/// [MarkdownStyles] the rendered message uses, so what is typed previews as what
+/// will be shown.
+List<InlineSpan> buildComposerSpans(String text, MarkdownStyles styles) {
+  final key = '${styles.hashCode}:$text';
+  final cached = _composerCache.remove(key);
+  if (cached != null) {
+    _composerCache[key] = cached; // Re-insert as most recently used.
+    return cached;
+  }
+  final spans =
+      List<InlineSpan>.unmodifiable(_composerInline(text, styles.base, styles));
+  _composerCache[key] = spans;
+  while (_composerCache.length > _spanCacheMax) {
+    _composerCache.remove(_composerCache.keys.first);
+  }
+  return spans;
+}
+
+/// The char-preserving inline pass behind [buildComposerSpans]. Recognises the
+/// same runs as [_inline] — user wrap rules, `code`, ~~strike~~, emphasis and
+/// "quotes" — but always emits the markers (styled with their run) rather than
+/// consuming them, so the output covers [s] exactly.
+List<InlineSpan> _composerInline(String s, TextStyle style, MarkdownStyles cfg,
+    [int depth = 0]) {
+  if (depth > _maxDepth) {
+    return [TextSpan(text: s, style: style)];
+  }
+  final spans = <InlineSpan>[];
+  final buf = StringBuffer();
+  void flush() {
+    if (buf.isNotEmpty) {
+      spans.add(TextSpan(text: buf.toString(), style: style));
+      buf.clear();
+    }
+  }
+
+  var i = 0;
+  while (i < s.length) {
+    final c = s[i];
+
+    // A user's own wrapping rule — tried first, markers always kept here.
+    final wrapResume = _composerWrap(s, i, style, cfg, spans, flush, depth);
+    if (wrapResume != -1) {
+      i = wrapResume;
+      continue;
+    }
+
+    // Inline code — keep the backticks, style the whole run between them.
+    if (c == '`') {
+      final end = s.indexOf('`', i + 1);
+      if (end > i) {
+        flush();
+        spans.add(TextSpan(
+          text: s.substring(i, end + 1),
+          style: style.copyWith(
+            fontFamily: 'monospace',
+            color: cfg.codeForeground,
+            backgroundColor: cfg.codeBackground,
+          ),
+        ));
+        i = end + 1;
+        continue;
+      }
+    }
+
+    // Strikethrough ~~...~~
+    if (c == '~' && i + 1 < s.length && s[i + 1] == '~') {
+      final end = s.indexOf('~~', i + 2);
+      if (end > i + 1) {
+        flush();
+        final ns = style.copyWith(decoration: TextDecoration.lineThrough);
+        spans.add(TextSpan(text: '~~', style: ns));
+        spans.addAll(_composerInline(s.substring(i + 2, end), ns, cfg, depth + 1));
+        spans.add(TextSpan(text: '~~', style: ns));
+        i = end + 2;
+        continue;
+      }
+    }
+
+    // Emphasis * / _ (1 = italic, 2 = bold, 3 = both).
+    if (c == '*' || c == '_') {
+      var run = 1;
+      while (i + run < s.length && s[i + run] == c) {
+        run++;
+      }
+      final next = i + run < s.length ? s[i + run] : '';
+      final boundaryOk = c == '*' || !_isWord(i == 0 ? '' : s[i - 1]);
+      if (next.isNotEmpty && !_isSpace(next) && boundaryOk) {
+        final close = _findClose(s, i + run, c, run);
+        if (close != -1) {
+          flush();
+          var ns = style.copyWith(color: cfg.emphasis);
+          if (run >= 3) {
+            ns = ns.copyWith(
+                fontWeight: FontWeight.bold, fontStyle: FontStyle.italic);
+          } else if (run == 2) {
+            ns = ns.copyWith(fontWeight: FontWeight.bold);
+          } else {
+            ns = ns.copyWith(fontStyle: FontStyle.italic);
+          }
+          final marker = c * run;
+          spans.add(TextSpan(text: marker, style: ns));
+          spans.addAll(
+              _composerInline(s.substring(i + run, close), ns, cfg, depth + 1));
+          spans.add(TextSpan(text: marker, style: ns));
+          i = close + run;
+          continue;
+        }
+      }
+    }
+
+    // "Quoted" text — colour the marks and their contents.
+    if (c == '"' || c == '“') {
+      final closeChar = c == '“' ? '”' : '"';
+      final end = s.indexOf(closeChar, i + 1);
+      if (end > i) {
+        flush();
+        final qStyle = style.copyWith(color: cfg.quote);
+        spans.add(TextSpan(text: c, style: qStyle));
+        spans.addAll(
+            _composerInline(s.substring(i + 1, end), qStyle, cfg, depth + 1));
+        spans.add(TextSpan(text: closeChar, style: qStyle));
+        i = end + 1;
+        continue;
+      }
+    }
+
+    buf.write(c);
+    i++;
+  }
+  flush();
+  return spans;
+}
+
+/// [_wrap] for the composer: the markers are always emitted (even for a
+/// `hideMarkers` rule) because the controller still holds those characters, and
+/// hiding one would desync the caret.
+int _composerWrap(
+  String s,
+  int i,
+  TextStyle style,
+  MarkdownStyles cfg,
+  List<InlineSpan> spans,
+  void Function() flush,
+  int depth,
+) {
+  for (final rule in cfg.wraps) {
+    final match = matchWrap(s, i, rule);
+    if (match == null) continue;
+    final (from, end, resume) = match;
+    flush();
+    final inner =
+        rule.color == null ? style : style.copyWith(color: Color(rule.color!));
+    spans.add(TextSpan(text: rule.start, style: inner));
+    spans.addAll(_composerInline(s.substring(from, end), inner, cfg, depth + 1));
+    spans.add(TextSpan(text: rule.end, style: inner));
+    return resume;
+  }
+  return -1;
+}
 
 List<InlineSpan> _parseMessage(String text, MarkdownStyles styles) {
   final lines = _preprocessHtmlBlocks(text).split('\n');
