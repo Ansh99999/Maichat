@@ -5,6 +5,7 @@ import '../../widgets/interface_preset_sheet.dart';
 import 'chat_interface/actions_page.dart';
 import 'chat_interface/avatars_page.dart';
 import 'chat_interface/colours_page.dart';
+import 'chat_interface/composer_page.dart';
 import 'chat_interface/group_bar_page.dart';
 import 'chat_interface/layout_page.dart';
 import 'chat_interface/names_page.dart';
@@ -118,6 +119,14 @@ class ChatInterfaceSettingsPage extends StatelessWidget {
         changed: _actionChanges(ui),
         anchors: const {SettingAnchor.messageActions},
         open: (a) => ActionsSpokePage(highlight: a, scope: scope),
+      ),
+      _Spoke(
+        icon: Icons.chat_bubble_outline,
+        title: 'Composer',
+        summary: _composerSummary(ui),
+        changed: _composerChanges(ui),
+        anchors: const {SettingAnchor.composer},
+        open: (a) => ComposerSpokePage(highlight: a, scope: scope),
       ),
     ];
     // The participant bar is only a thing while group chats are switched on, so
@@ -377,6 +386,22 @@ int _groupBarChanges(ChatInterface ui) =>
     (ui.groupBarHeight != _d.groupBarHeight ? 1 : 0) +
     (ui.groupBarColor != null ? 1 : 0) +
     (ui.groupBarImage != null ? 1 : 0);
+
+String _composerSummary(ChatInterface ui) => [
+      ui.composerBackground.label,
+      if (ui.composerBackground == ComposerBackground.image &&
+          ui.composerBackgroundBlur)
+        'frosted',
+      ui.composerOutline ? 'outlined' : 'no outline',
+    ].join(' · ');
+
+int _composerChanges(ChatInterface ui) =>
+    (ui.composerBackground != _d.composerBackground ? 1 : 0) +
+    (ui.composerBackgroundColor != null ? 1 : 0) +
+    (ui.composerBackgroundImage != null ? 1 : 0) +
+    (ui.composerBackgroundBlur != _d.composerBackgroundBlur ? 1 : 0) +
+    (ui.composerBackgroundOpacity != _d.composerBackgroundOpacity ? 1 : 0) +
+    (ui.composerOutline != _d.composerOutline ? 1 : 0);
 
 
 

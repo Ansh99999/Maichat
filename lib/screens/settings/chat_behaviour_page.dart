@@ -112,6 +112,42 @@ class ChatBehaviourPage extends StatelessWidget {
               : 'Switching this on adds a Group chat bar page to Chat '
                   'Interface, for how the participant strip looks.',
         ),
+        const Divider(height: 24),
+        settingHeader(context, 'Composer'),
+        settingNote(
+          context,
+          'The box you type a reply into. The Expressive composer is a single '
+          'rounded card with a roomy text area and the persona shown at its '
+          'foot; the Legacy composer is the older flat row. How the Expressive '
+          "box looks — its background and outline — is in Chat Interface ▸ "
+          'Composer.',
+        ),
+        SettingHighlight(
+          active: highlight == SettingAnchor.composerStyle,
+          child: SettingEnumRow<ComposerStyle>(
+            icon: Icons.chat_bubble_outline,
+            label: 'Composer style',
+            value: ui.composerStyle,
+            values: ComposerStyle.values,
+            labelOf: (s) => s.label,
+            onChanged: (v) {
+              update(ui.copyWith(composerStyle: v));
+              notifySetting(context, '${v.label} composer');
+            },
+          ),
+        ),
+        SettingSwitch(
+          icon: Icons.auto_fix_high_outlined,
+          title: 'Live formatting',
+          subtitle: 'Style **bold**, *italic* and more as you type, in the '
+              'Expressive composer (needs markdown on)',
+          value: ui.composerLiveFormatting,
+          onChanged: (v) {
+            update(ui.copyWith(composerLiveFormatting: v));
+            notifySetting(
+                context, v ? 'Live formatting on' : 'Live formatting off');
+          },
+        ),
       ];
 }
 

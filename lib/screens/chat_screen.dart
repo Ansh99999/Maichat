@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +24,7 @@ import '../widgets/floating_images_layer.dart';
 import '../widgets/interface_preset_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
+import '../widgets/message_markdown.dart';
 import '../widgets/picture_viewer.dart';
 import '../widgets/smooth_image.dart';
 import '../widgets/startup_screen.dart';
@@ -65,7 +68,7 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final TextEditingController _input = TextEditingController();
+  final _ComposerController _input = _ComposerController();
   final ScrollController _scroll = ScrollController();
 
   /// The index of the message currently being edited in place, or null.
@@ -1217,6 +1220,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final persona = state.impersonationFor(state.active);
     final conversation = state.active;
     final groupEnabled = state.groupChatsEnabled;
+    final ui = state.interfaceFor(conversation);
+    // Live markdown formatting is only wired into the expressive composer, and
+    // only when both it and markdown rendering are switched on. Rebuilt every
+    // frame the composer builds so a settings change takes effect at once; the
+    // controller keeps the last builder between keystrokes (buildTextSpan runs
+    // without a parent rebuild), which is the same value, so nothing flickers.
+    final live = ui.composerStyle == ComposerStyle.expressive &&
+        ui.composerLiveFormatting &&
+        ui.markdown;
+    _input.styleBuilder =
+        live ? (base) => _composerMarkdownStyles(ui, scheme, base) : null;
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 8, 12, 12),
       decoration: BoxDecoration(
@@ -1380,51 +1394,210 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
           ),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // The impersonate avatar sits alone on the left, so the send bar
-              // stays a single row tall.
-              _ImpersonateButton(
-                persona: persona,
-                onTap: () => _openImpersonatePicker(state),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  key: const Key('composer-field'),
-                  controller: _input,
-                  minLines: 1,
-                  maxLines: 5,
-                  textInputAction: TextInputAction.newline,
-                  keyboardType: TextInputType.multiline,
-                  decoration: InputDecoration(
-                    hintText:
-                        persona == null ? 'Message' : 'Message as ${persona.displayName}',
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // The operations button — a permanent home for per-chat actions,
-              // grouped with Send on the right so it never adds height to the
-              // send bar. Group chat is the first, and it shows whether or not
-              // group chats are switched on.
-              IconButton(
-                key: const Key('composer-ops-button'),
-                tooltip: 'More',
-                visualDensity: VisualDensity.compact,
-                isSelected: _showOps,
-                onPressed: () => setState(() => _showOps = !_showOps),
-                icon: const Icon(Icons.more_horiz),
-              ),
-              _sendButton(state),
-            ],
-          ),
+          if (ui.composerStyle == ComposerStyle.legacy)
+            _legacyComposerRow(state, persona)
+          else
+            _expressiveComposerBox(state, ui, persona),
         ],
       ),
+    );
+  }
+
+  /// The legacy composer's send bar: impersonate avatar, a bordered field, the
+  /// ⋯ operations button and Send, all in one row. Unchanged from before the
+  /// expressive composer arrived.
+  Widget _legacyComposerRow(AppState state, Character? persona) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        // The impersonate avatar sits alone on the left, so the send bar
+        // stays a single row tall.
+        _ImpersonateButton(
+          persona: persona,
+          onTap: () => _openImpersonatePicker(state),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextField(
+            key: const Key('composer-field'),
+            controller: _input,
+            minLines: 1,
+            maxLines: 5,
+            textInputAction: TextInputAction.newline,
+            keyboardType: TextInputType.multiline,
+            decoration: InputDecoration(
+              hintText: persona == null
+                  ? 'Message'
+                  : 'Message as ${persona.displayName}',
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // The operations button — a permanent home for per-chat actions,
+        // grouped with Send on the right so it never adds height to the
+        // send bar.
+        IconButton(
+          key: const Key('composer-ops-button'),
+          tooltip: 'More',
+          visualDensity: VisualDensity.compact,
+          isSelected: _showOps,
+          onPressed: () => setState(() => _showOps = !_showOps),
+          icon: const Icon(Icons.more_horiz),
+        ),
+        _sendButton(state),
+      ],
+    );
+  }
+
+  /// The Material 3 Expressive composer: one rounded, optionally outlined box
+  /// with a roomy text area, and a bottom row carrying the persona avatar and
+  /// name on the left and the ⋯ + Send controls on the right. Its background
+  /// follows the [ChatInterface] — the Material surface, a solid colour, or a
+  /// picture (which may be frosted or faded).
+  Widget _expressiveComposerBox(
+      AppState state, ChatInterface ui, Character? persona) {
+    final scheme = Theme.of(context).colorScheme;
+    final personaName = persona?.displayName ??
+        (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim());
+    final radius = BorderRadius.circular(28);
+    final opacity = ui.composerBackgroundOpacity.clamp(0.0, 1.0);
+
+    // The layer painted behind the content, if any. Theme mode paints nothing
+    // extra — the box's own fill is the surface.
+    Widget? background;
+    switch (ui.composerBackground) {
+      case ComposerBackground.theme:
+        break;
+      case ComposerBackground.color:
+        if (ui.composerBackgroundColor != null) {
+          background = ColoredBox(
+            color:
+                Color(ui.composerBackgroundColor!).withValues(alpha: opacity),
+          );
+        }
+      case ComposerBackground.image:
+        final ref = ui.composerBackgroundImage;
+        if (ref != null && ref.isNotEmpty) {
+          final provider = avatarImage(
+            ref,
+            displaySize: MediaQuery.sizeOf(context).width,
+            devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+          );
+          if (provider != null) {
+            Widget img = Image(
+              image: provider,
+              fit: BoxFit.cover,
+              // Paint-level alpha, not an Opacity widget (which forces a
+              // save-layer) — same look, cheaper. Mirrors [_ChatBackground].
+              opacity: AlwaysStoppedAnimation<double>(opacity),
+              errorBuilder: (_, _, _) => const SizedBox.shrink(),
+            );
+            if (ui.composerBackgroundBlur) {
+              // Frost the composer's OWN picture — a one-time raster of a small
+              // image. NOT a BackdropFilter over the thread behind it, which is
+              // the per-frame framebuffer readback the project bans for jank.
+              img = ImageFiltered(
+                imageFilter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                child: img,
+              );
+            }
+            background = img;
+          }
+        }
+    }
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: radius,
+        border: ui.composerOutline
+            ? Border.all(color: scheme.outline, width: 1)
+            : null,
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: Stack(
+          children: [
+            if (background != null)
+              Positioned.fill(child: IgnorePointer(child: background)),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  child: TextField(
+                    key: const Key('composer-field'),
+                    controller: _input,
+                    minLines: 3,
+                    maxLines: null,
+                    textInputAction: TextInputAction.newline,
+                    keyboardType: TextInputType.multiline,
+                    decoration: const InputDecoration(
+                      hintText: 'Type your reply..',
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 0, 8, 8),
+                  child: Row(
+                    children: [
+                      _ImpersonateButton(
+                        persona: persona,
+                        onTap: () => _openImpersonatePicker(state),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          personaName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        key: const Key('composer-ops-button'),
+                        tooltip: 'More',
+                        visualDensity: VisualDensity.compact,
+                        isSelected: _showOps,
+                        onPressed: () => setState(() => _showOps = !_showOps),
+                        icon: const Icon(Icons.more_horiz),
+                      ),
+                      _sendButton(state),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The [MarkdownStyles] the expressive composer's live formatter paints with,
+  /// built to match how the same text renders in a bubble (see
+  /// [MessageBubble]'s inline renderer) so what is typed previews as what will
+  /// be shown. [base] is the field's own resolved text style.
+  MarkdownStyles _composerMarkdownStyles(
+      ChatInterface ui, ColorScheme scheme, TextStyle base) {
+    final color = base.color ?? scheme.onSurface;
+    return MarkdownStyles(
+      base: base,
+      emphasis: ui.emphasisColor != null ? Color(ui.emphasisColor!) : color,
+      quote: ui.quoteColor != null ? Color(ui.quoteColor!) : color,
+      codeBackground: scheme.surfaceContainerLowest,
+      codeForeground: scheme.onSurface,
+      link: scheme.primary,
+      wraps: ui.activeTextWrapRules,
     );
   }
 
@@ -1505,6 +1678,45 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 // APPEND-MARKER-2
+
+/// The composer's text controller, extended to paint the field's contents with
+/// live inline-markdown formatting as it is typed.
+///
+/// When [styleBuilder] is set, [buildTextSpan] returns a span whose visible text
+/// is [text] **character for character** ([buildComposerSpans] never adds, drops
+/// or reorders a character) — anything else would desync the caret from the
+/// glyphs. When it is null the field renders plainly, which is the legacy
+/// composer and any time live formatting is off.
+///
+/// While an IME composition is in flight the plain [super] span is used instead:
+/// it carries the composing underline the platform expects, and re-styling
+/// mid-composition breaks CJK and predictive input. Formatting resumes the
+/// moment the composition commits.
+class _ComposerController extends TextEditingController {
+  /// Builds the styles the field is formatted with, given the field's own
+  /// resolved [TextStyle]. Null disables live formatting.
+  MarkdownStyles Function(TextStyle base)? styleBuilder;
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final build = styleBuilder;
+    final composing =
+        withComposing && value.isComposingRangeValid && !value.composing.isCollapsed;
+    if (build == null || text.isEmpty || composing) {
+      return super
+          .buildTextSpan(context: context, style: style, withComposing: withComposing);
+    }
+    final base = style ?? const TextStyle();
+    return TextSpan(
+      style: style,
+      children: buildComposerSpans(text, build(base)),
+    );
+  }
+}
 
 /// Which delete the reader picked in the confirmation — see [_deleteMessage].
 enum _DeleteScope {
