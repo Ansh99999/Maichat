@@ -229,6 +229,40 @@ void main() {
       expect(landed.isBuiltIn, isFalse);
     });
 
+    test("a look carries the composer's own background picture", () async {
+      final state = await boot();
+      final ref = await state.storePicture(_png);
+      await state.updateChatInterface(state.chatInterface.copyWith(
+        composerBackground: ComposerBackground.image,
+        composerBackgroundImage: ref,
+        composerBackgroundBlur: true,
+      ));
+      final saved = await state.saveInterfacePreset('Framed composer');
+
+      final file = exportInterfacePreset(
+        saved!,
+        read: (r) => avatarRefFile(r)!.readAsBytesSync(),
+      );
+      expect((file['pictures'] as Map).keys, [ref],
+          reason: 'the composer picture is carried like any other');
+
+      final elsewhere = Directory.systemTemp.createTempSync('elsewhere');
+      addTearDown(() => elsewhere.deleteSync(recursive: true));
+      final store = AvatarStore(elsewhere);
+      final landed = await importInterfacePreset(
+        jsonDecode(jsonEncode(file)),
+        store: (bytes) async => store.write(bytes),
+      );
+
+      expect(landed.ui.composerBackground, ComposerBackground.image);
+      expect(landed.ui.composerBackgroundBlur, isTrue);
+      expect(landed.ui.composerBackgroundImage, isNotNull);
+      expect(
+        avatarRefFile(landed.ui.composerBackgroundImage!)!.readAsBytesSync(),
+        _png,
+      );
+    });
+
     test('a reference whose file has gone is dropped, not exported dangling',
         () async {
       const preset = InterfacePreset(

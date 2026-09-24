@@ -42,6 +42,14 @@ void main() {
       backgroundColor: 0xFF010203,
       emphasisColor: 0xFF00FF00,
       quoteColor: 0xFF123456,
+      composerStyle: ComposerStyle.legacy,
+      composerLiveFormatting: false,
+      composerBackground: ComposerBackground.image,
+      composerBackgroundColor: 0xFF445566,
+      composerBackgroundImage: 'local:composer.png',
+      composerBackgroundBlur: true,
+      composerBackgroundOpacity: 0.4,
+      composerOutline: false,
     );
 
     final restored = ChatInterface.fromJson(original.toJson());
@@ -54,6 +62,70 @@ void main() {
     expect(restored.emphasisColor, 0xFF00FF00);
     expect(restored.quoteColor, 0xFF123456);
     expect(restored.botAvatar.offset.dx, 10);
+    expect(restored.composerStyle, ComposerStyle.legacy);
+    expect(restored.composerLiveFormatting, isFalse);
+    expect(restored.composerBackground, ComposerBackground.image);
+    expect(restored.composerBackgroundColor, 0xFF445566);
+    expect(restored.composerBackgroundImage, 'local:composer.png');
+    expect(restored.composerBackgroundBlur, isTrue);
+    expect(restored.composerBackgroundOpacity, 0.4);
+    expect(restored.composerOutline, isFalse);
+  });
+
+  test('composer defaults: expressive, live formatting, theme, outlined', () {
+    const ui = ChatInterface();
+    expect(ui.composerStyle, ComposerStyle.expressive);
+    expect(ui.composerLiveFormatting, isTrue);
+    expect(ui.composerBackground, ComposerBackground.theme);
+    expect(ui.composerBackgroundColor, isNull);
+    expect(ui.composerBackgroundImage, isNull);
+    expect(ui.composerBackgroundBlur, isFalse);
+    expect(ui.composerBackgroundOpacity, 1);
+    expect(ui.composerOutline, isTrue);
+  });
+
+  test('the composer picture and colour clear back to null via the sentinel',
+      () {
+    const set = ChatInterface(
+      composerBackgroundColor: 0xFF445566,
+      composerBackgroundImage: 'local:c.png',
+    );
+    final cleared = set.copyWith(
+      composerBackgroundColor: null,
+      composerBackgroundImage: null,
+    );
+    expect(cleared.composerBackgroundColor, isNull);
+    expect(cleared.composerBackgroundImage, isNull);
+    // Omitting them leaves them alone rather than clearing.
+    final kept = set.copyWith(composerOutline: false);
+    expect(kept.composerBackgroundColor, 0xFF445566);
+    expect(kept.composerBackgroundImage, 'local:c.png');
+  });
+
+  test('composer opacity is clamped on the way in', () {
+    final json = const ChatInterface().toJson();
+    json['composerBackgroundOpacity'] = 2.5;
+    expect(ChatInterface.fromJson(json).composerBackgroundOpacity, 1);
+    json['composerBackgroundOpacity'] = -1.0;
+    expect(ChatInterface.fromJson(json).composerBackgroundOpacity, 0);
+  });
+
+  test('a look strips the composer feature flags but keeps its looks', () {
+    const ui = ChatInterface(
+      composerStyle: ComposerStyle.legacy,
+      composerLiveFormatting: false,
+      composerBackground: ComposerBackground.image,
+      composerBackgroundImage: 'local:c.png',
+      composerOutline: false,
+    );
+    final look = ui.lookOnly;
+    // Feature flags reset to their defaults — a look cannot flip them.
+    expect(look.composerStyle, ComposerStyle.expressive);
+    expect(look.composerLiveFormatting, isTrue);
+    // Cosmetics travel with the look.
+    expect(look.composerBackground, ComposerBackground.image);
+    expect(look.composerBackgroundImage, 'local:c.png');
+    expect(look.composerOutline, isFalse);
   });
 
   test('name typography + alignment round trip', () {

@@ -135,6 +135,24 @@ void main() {
     expect(filesOnDisk(), 0);
   });
 
+  test('a composer-background picture survives the next sweep', () async {
+    final state = await boot();
+    final ref = await state.storePicture(_png);
+    expect(ref, isNotNull, reason: 'the picture should have been filed');
+    await state.updateChatInterface(
+      state.chatInterface.copyWith(composerBackgroundImage: ref),
+    );
+    expect(filesOnDisk(), 1);
+
+    final reopened = await reopen();
+    expect(reopened.chatInterface.composerBackgroundImage, ref);
+    expect(
+      filesOnDisk(),
+      1,
+      reason: 'the composer claims this picture, so it must be kept',
+    );
+  });
+
   test('the model names its own pictures in one place', () {
     const bare = ChatInterface();
     expect(bare.pictureRefs, isEmpty);
@@ -145,11 +163,14 @@ void main() {
       const ChatInterface(
         groupBarImage: 'local:bar.png',
         backgroundImage: 'local:bg.png',
+        composerBackgroundImage: 'local:composer.png',
       ).pictureRefs,
-      ['local:bar.png', 'local:bg.png'],
+      ['local:bar.png', 'local:bg.png', 'local:composer.png'],
     );
     // An empty string is not a reference, and must not become a keep-list entry
     // that matches a file name of its own.
     expect(const ChatInterface(groupBarImage: '').pictureRefs, isEmpty);
+    expect(
+        const ChatInterface(composerBackgroundImage: '').pictureRefs, isEmpty);
   });
 }

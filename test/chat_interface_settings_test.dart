@@ -35,7 +35,7 @@ void main() {
   }
 
   group('the hub', () {
-    testWidgets('leads to six spokes and says where each stands',
+    testWidgets('leads to seven spokes and says where each stands',
         (tester) async {
       final state = AppState();
       await pump(tester, state, const ChatInterfaceSettingsPage());
@@ -47,6 +47,7 @@ void main() {
         'Colours',
         'Text',
         'Message actions',
+        'Composer',
       ]) {
         expect(find.text(row), findsOneWidget, reason: '$row row is missing');
       }
@@ -54,6 +55,8 @@ void main() {
       // Defaults: nothing has been changed, so no pill anywhere.
       expect(find.textContaining('changed'), findsNothing);
       expect(find.text('Hidden'), findsOneWidget); // names are off by default
+      // The composer's default summary: theme background, an outline.
+      expect(find.text('Material theme · outlined'), findsOneWidget);
     });
     testWidgets('counts what has been changed away from the defaults',
         (tester) async {
