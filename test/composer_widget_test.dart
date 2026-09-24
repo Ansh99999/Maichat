@@ -131,6 +131,39 @@ void main() {
     });
   }
 
+  testWidgets('the expressive ops panel opens the attachment tray in a riser',
+      (tester) async {
+    final state = await boot();
+    await pump(tester, state);
+
+    // Open the ops strip, then the picture tray it holds. Both the tray and the
+    // composer must survive — the expressive panels rise out of the box as their
+    // own rounded risers rather than sitting in the legacy slab.
+    await tester.tap(find.byKey(ops));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('composer-image-button')));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('attach-tray')), findsOneWidget);
+    expect(find.byKey(field), findsOneWidget);
+    expect(find.byTooltip('Send'), findsOneWidget);
+  });
+
+  testWidgets('focusing the expressive composer does not throw', (tester) async {
+    final state = await boot();
+    await pump(tester, state);
+
+    // Tapping into the box lights its outline glow (a focus-driven rebuild); it
+    // must repaint cleanly, with every key still in place.
+    await tester.tap(find.byKey(field));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(field), findsOneWidget);
+    expect(find.byKey(ops), findsOneWidget);
+    expect(find.byTooltip('Send'), findsOneWidget);
+  });
+
   testWidgets('send is dead with an empty box and lives once text is typed',
       (tester) async {
     final state = await boot();

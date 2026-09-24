@@ -69,6 +69,10 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _ComposerController _input = _ComposerController();
+  // The expressive composer's outline follows the Material theme and lifts into a
+  // primary-tinted glow while the box holds focus, so a rebuild has to run when
+  // focus comes and goes.
+  final FocusNode _composerFocus = FocusNode();
   final ScrollController _scroll = ScrollController();
 
   /// The index of the message currently being edited in place, or null.
@@ -178,6 +182,7 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     JankLogger.instance.breadcrumb('chat screen opened');
     _scroll.addListener(_onScroll);
+    _composerFocus.addListener(_onComposerFocus);
     // Never pop the soft keyboard just because the chat opened — drop any focus
     // carried in from the previous screen once the first frame is laid out.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -189,6 +194,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _scroll.removeListener(_onScroll);
+    _composerFocus.removeListener(_onComposerFocus);
+    _composerFocus.dispose();
     // Leaving the chat is one of the points a hint must survive; the box may well
     // still be open with something typed in it.
     _flushHint();
@@ -197,6 +204,13 @@ class _ChatScreenState extends State<ChatScreen> {
     _input.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// Repaints the composer's outline when its focus changes — the expressive box
+  /// glows in the theme's primary colour while it is the active field. Cheap: a
+  /// composer-only rebuild, and the thread above it is a `const`-bounded subtree.
+  void _onComposerFocus() {
+    if (mounted) setState(() {});
   }
 
   /// Reads [conversationId]'s hint into the box, when it is not already the one
@@ -1231,12 +1245,29 @@ class _ChatScreenState extends State<ChatScreen> {
         ui.markdown;
     _input.styleBuilder =
         live ? (base) => _composerMarkdownStyles(ui, scheme, base) : null;
+
+    // The expressive composer ditches the flat surface-and-divider slab the legacy
+    // send bar sits on: its rounded box and the panels that rise out of it float
+    // over the thread's own background instead. Which panels are open decides which
+    // one takes the rounded top of the merged stack — the topmost open one — while
+    // every seam below it (and the composer's own top) goes square so the whole
+    // run reads as one shape rising from the box.
+    final expressive = ui.composerStyle == ComposerStyle.expressive;
+    final hintOpen = _showHintBar && state.responseHintEnabled;
+    final attachIsTop = expressive && _showAttachBar;
+    final hintIsTop = expressive && !_showAttachBar && hintOpen;
+    final opsIsTop = expressive && !_showAttachBar && !hintOpen && _showOps;
+    final panelAboveBox = expressive && (_showAttachBar || hintOpen || _showOps);
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 8, 12, 12),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        border: Border(top: BorderSide(color: scheme.outlineVariant)),
-      ),
+      padding: expressive
+          ? const EdgeInsets.fromLTRB(8, 6, 8, 10)
+          : const EdgeInsets.fromLTRB(8, 8, 12, 12),
+      decoration: expressive
+          ? null
+          : BoxDecoration(
+              color: scheme.surface,
+              border: Border(top: BorderSide(color: scheme.outlineVariant)),
+            ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1251,12 +1282,19 @@ class _ChatScreenState extends State<ChatScreen> {
             alignment: Alignment.bottomCenter,
             child: !_showAttachBar
                 ? const SizedBox(width: double.infinity)
-                : _AttachBar(
-                    attachments: _attachments,
-                    onGallery: () => _attachFromGallery(state),
-                    onDevice: () => _attachFromDevice(state),
-                    onRemove: (i) => setState(() => _attachments.removeAt(i)),
-                    onClose: () => setState(() => _showAttachBar = false),
+                : _maybeRiser(
+                    expressive: expressive,
+                    roundTop: attachIsTop,
+                    outline: ui.composerOutline,
+                    scheme: scheme,
+                    child: _AttachBar(
+                      flush: expressive,
+                      attachments: _attachments,
+                      onGallery: () => _attachFromGallery(state),
+                      onDevice: () => _attachFromDevice(state),
+                      onRemove: (i) => setState(() => _attachments.removeAt(i)),
+                      onClose: () => setState(() => _showAttachBar = false),
+                    ),
                   ),
           ),
           // The response-hint box: above the operations strip that opens it, so
@@ -1270,14 +1308,21 @@ class _ChatScreenState extends State<ChatScreen> {
             alignment: Alignment.bottomCenter,
             child: !(_showHintBar && state.responseHintEnabled)
                 ? const SizedBox(width: double.infinity)
-                : _HintBar(
-                    controller: _hint,
-                    depth: state.responseHintDepth,
-                    onChanged: (text) => _onHintChanged(state, text),
-                    onClose: () {
-                      _flushHint();
-                      setState(() => _showHintBar = false);
-                    },
+                : _maybeRiser(
+                    expressive: expressive,
+                    roundTop: hintIsTop,
+                    outline: ui.composerOutline,
+                    scheme: scheme,
+                    child: _HintBar(
+                      flush: expressive,
+                      controller: _hint,
+                      depth: state.responseHintDepth,
+                      onChanged: (text) => _onHintChanged(state, text),
+                      onClose: () {
+                        _flushHint();
+                        setState(() => _showHintBar = false);
+                      },
+                    ),
                   ),
           ),
           // The operations strip: one row of symbols opened by the composer's ⋯
@@ -1303,10 +1348,17 @@ class _ChatScreenState extends State<ChatScreen> {
                 // fill the width and let its own contents settle to the right —
                 // under the ⋯ button they belong to. It also leaves AnimatedSize
                 // animating the height alone.
-                : SizedBox(
-                    width: double.infinity,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 6, right: 4),
+                : _maybeRiser(
+                    expressive: expressive,
+                    roundTop: opsIsTop,
+                    outline: ui.composerOutline,
+                    scheme: scheme,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Padding(
+                        padding: expressive
+                            ? const EdgeInsets.fromLTRB(6, 4, 6, 4)
+                            : const EdgeInsets.only(bottom: 6, right: 4),
                       // Seven symbols is more than a narrow phone can fit at a
                       // full 48dp touch target each, and a Row that overflows
                       // simply clips whatever hangs off the end. Anchored to the
@@ -1391,13 +1443,14 @@ class _ChatScreenState extends State<ChatScreen> {
                           ],
                         ),
                       ),
+                      ),
                     ),
                   ),
           ),
           if (ui.composerStyle == ComposerStyle.legacy)
             _legacyComposerRow(state, persona)
           else
-            _expressiveComposerBox(state, ui, persona),
+            _expressiveComposerBox(state, ui, persona, panelAboveBox),
         ],
       ),
     );
@@ -1457,12 +1510,24 @@ class _ChatScreenState extends State<ChatScreen> {
   /// name on the left and the ⋯ + Send controls on the right. Its background
   /// follows the [ChatInterface] — the Material surface, a solid colour, or a
   /// picture (which may be frosted or faded).
+  ///
+  /// [panelAbove] is true while a riser (attachments, hint, ops) is open on top
+  /// of the box; the box then squares off its own top corners so it merges into
+  /// the single rounded shape the panels form above it.
   Widget _expressiveComposerBox(
-      AppState state, ChatInterface ui, Character? persona) {
+      AppState state, ChatInterface ui, Character? persona, bool panelAbove) {
     final scheme = Theme.of(context).colorScheme;
     final personaName = persona?.displayName ??
         (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim());
-    final radius = BorderRadius.circular(28);
+    const rounded = Radius.circular(28);
+    final topRadius = panelAbove ? Radius.zero : rounded;
+    final radius = BorderRadius.only(
+      topLeft: topRadius,
+      topRight: topRadius,
+      bottomLeft: rounded,
+      bottomRight: rounded,
+    );
+    final focused = _composerFocus.hasFocus;
     final opacity = ui.composerBackgroundOpacity.clamp(0.0, 1.0);
 
     // The layer painted behind the content, if any. Theme mode paints nothing
@@ -1509,12 +1574,30 @@ class _ChatScreenState extends State<ChatScreen> {
         }
     }
 
-    return DecoratedBox(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
         borderRadius: radius,
+        // The outline follows the Material theme and lifts into a primary-tinted,
+        // thicker line the moment the box takes focus — with a soft glow of the
+        // same colour spilling past its edge, the "selected" cue the user asked
+        // for. A plain (unfocused) box still carries a clear 2px outline.
         border: ui.composerOutline
-            ? Border.all(color: scheme.outline, width: 1)
+            ? Border.all(
+                color: focused ? scheme.primary : scheme.outline,
+                width: focused ? 2.5 : 2,
+              )
+            : null,
+        boxShadow: (ui.composerOutline && focused)
+            ? [
+                BoxShadow(
+                  color: scheme.primary.withValues(alpha: 0.32),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+              ]
             : null,
       ),
       child: ClipRRect(
@@ -1527,11 +1610,14 @@ class _ChatScreenState extends State<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 220),
+                  // Roughly two lines at rest — a reply box, not a paragraph
+                  // slab — growing to a capped scroll for a longer message.
+                  constraints: const BoxConstraints(maxHeight: 132),
                   child: TextField(
                     key: const Key('composer-field'),
                     controller: _input,
-                    minLines: 3,
+                    focusNode: _composerFocus,
+                    minLines: 1,
                     maxLines: null,
                     textInputAction: TextInputAction.newline,
                     keyboardType: TextInputType.multiline,
@@ -1539,7 +1625,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       hintText: 'Type your reply..',
                       border: InputBorder.none,
                       isDense: true,
-                      contentPadding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                      contentPadding: EdgeInsets.fromLTRB(20, 14, 20, 6),
                     ),
                   ),
                 ),
@@ -1583,7 +1669,43 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// The [MarkdownStyles] the expressive composer's live formatter paints with,
+  /// Wraps a composer panel (attachments, hint, ops) so it reads as its own
+  /// rounded box rising out of the expressive composer: the top two corners are
+  /// rounded only when it is the topmost open panel, the bottom is square, and it
+  /// has no bottom border — so it and everything below it (down to the box) fuse
+  /// into one shape whose bottom is attached to the composer. In the legacy
+  /// composer this is a no-op and the panel keeps its own flat styling.
+  Widget _maybeRiser({
+    required bool expressive,
+    required bool roundTop,
+    required bool outline,
+    required ColorScheme scheme,
+    required Widget child,
+  }) {
+    if (!expressive) return child;
+    const r = Radius.circular(28);
+    final radius = BorderRadius.only(
+      topLeft: roundTop ? r : Radius.zero,
+      topRight: roundTop ? r : Radius.zero,
+    );
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: radius,
+        border: outline
+            ? Border(
+                top: BorderSide(color: scheme.outline, width: 2),
+                left: BorderSide(color: scheme.outline, width: 2),
+                right: BorderSide(color: scheme.outline, width: 2),
+              )
+            : null,
+      ),
+      child: ClipRRect(borderRadius: radius, child: child),
+    );
+  }
+
+
   /// built to match how the same text renders in a bubble (see
   /// [MessageBubble]'s inline renderer) so what is typed previews as what will
   /// be shown. [base] is the field's own resolved text style.
@@ -1873,6 +1995,7 @@ class _HintBar extends StatelessWidget {
     required this.depth,
     required this.onChanged,
     required this.onClose,
+    this.flush = false,
   });
 
   final TextEditingController controller;
@@ -1884,6 +2007,10 @@ class _HintBar extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onClose;
 
+  /// True inside the expressive composer, where an outer riser supplies the box:
+  /// the bar then drops its own bottom margin so it sits flush in that riser.
+  final bool flush;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1893,7 +2020,9 @@ class _HintBar extends StatelessWidget {
       width: double.infinity,
       // No fill and no frame of its own: the box is the field's own outline, and
       // behind it is the same background the rest of the chat has.
-      margin: const EdgeInsets.only(bottom: 6),
+      margin: flush
+          ? const EdgeInsets.fromLTRB(6, 6, 6, 2)
+          : const EdgeInsets.only(bottom: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1954,6 +2083,7 @@ class _AttachBar extends StatelessWidget {
     required this.onDevice,
     required this.onRemove,
     required this.onClose,
+    this.flush = false,
   });
 
   final List<MessageImage> attachments;
@@ -1961,6 +2091,11 @@ class _AttachBar extends StatelessWidget {
   final VoidCallback onDevice;
   final ValueChanged<int> onRemove;
   final VoidCallback onClose;
+
+  /// True inside the expressive composer: an outer riser draws the box, so the
+  /// tray drops its own rounded fill and bottom margin and just lays out its
+  /// contents flush within it.
+  final bool flush;
 
   /// Height of the picture band. Tall enough to actually see what is queued —
   /// the point of the preview — while leaving the thread visible above it.
@@ -1981,12 +2116,14 @@ class _AttachBar extends StatelessWidget {
     return Container(
       key: const Key('attach-tray'),
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 6),
+      margin: flush ? EdgeInsets.zero : const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.fromLTRB(10, 10, 4, 6),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(16),
-      ),
+      decoration: flush
+          ? null
+          : BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(16),
+            ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -303,15 +303,27 @@ void main() {
         ),
       );
 
-  /// The tray's own background, and the scheme it was drawn under.
+  /// The tray's own visible background, and the scheme it was drawn under. In the
+  /// expressive composer the tray itself is flush (no fill of its own) and the
+  /// rounded riser it rises in supplies the surface, so the colour is read from
+  /// whichever container actually paints it.
   (Color, ColorScheme) tray(WidgetTester tester) {
     final finder = find.byKey(const Key('attach-tray'));
-    final decoration =
-        tester.widget<Container>(finder).decoration! as BoxDecoration;
-    return (
-      decoration.color!,
-      Theme.of(tester.element(finder)).colorScheme,
-    );
+    Color? fill = (tester.widget<Container>(finder).decoration as BoxDecoration?)
+        ?.color;
+    if (fill == null) {
+      final riser = tester.widgetList<Container>(
+        find.ancestor(of: finder, matching: find.byType(Container)),
+      );
+      for (final c in riser) {
+        final colour = (c.decoration as BoxDecoration?)?.color;
+        if (colour != null) {
+          fill = colour;
+          break;
+        }
+      }
+    }
+    return (fill!, Theme.of(tester.element(finder)).colorScheme);
   }
 
   testWidgets('the tray is drawn on the theme\'s own surface — light',
