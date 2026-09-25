@@ -5,10 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/character.dart';
+import '../models/folder.dart';
 import '../models/lorebook.dart';
 import '../models/view_prefs.dart';
 import '../services/character_codec.dart';
 import '../services/character_sources.dart';
+import '../services/folder_io.dart';
 import '../state/app_state.dart';
 import '../widgets/adaptive_mosaic.dart';
 import '../widgets/app_drawer.dart';
@@ -21,7 +23,8 @@ import '../widgets/smooth_image.dart';
 import '../widgets/tag_filter_sheet.dart';
 import 'character_actions.dart';
 import 'character_editor.dart';
-import 'folders/folders_screen.dart';
+import 'folders/folder_edit_screen.dart';
+import 'folders/folder_window.dart';
 
 /// How the roster is ordered.
 enum CharacterSort {
@@ -54,6 +57,10 @@ class _CharactersScreenState extends State<CharactersScreen> {
   final Set<String> _tagFilter = <String>{};
   bool _selecting = false;
   final Set<String> _selection = <String>{};
+
+  /// When on, the roster is replaced in place by the folder list — no separate
+  /// screen. The Folders control below the search bar toggles it.
+  bool _showingFolders = false;
 
   /// Cards or rows, read live from the stored preference rather than mirrored in
   /// a field — the choice outlives the screen, so the screen must not own it.
@@ -395,12 +402,52 @@ class _CharactersScreenState extends State<CharactersScreen> {
     if (picked != null) setState(() => _sort = picked);
   }
 
+  // --- folders -------------------------------------------------------------
+
+  List<String> _allFolderTags(List<Folder> folders) =>
+      ({for (final f in folders) ...f.tags}.toList()..sort());
+
+  List<Folder> _visibleFolders(List<Folder> folders) {
+    final q = _query.trim().toLowerCase();
+    return folders.where((f) {
+        if (_tagFilter.isNotEmpty &&
+            !_tagFilter.every((t) => f.tags.contains(t))) {
+          return false;
+        }
+        return q.isEmpty || f.matches(q);
+      }).toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  /// Swap the roster for the folder list (and back), resetting the search and
+  /// tag filter since they mean different things in each mode.
+  void _toggleFolders() => setState(() {
+    _showingFolders = !_showingFolders;
+    _selecting = false;
+    _selection.clear();
+    _tagFilter.clear();
+    _query = '';
+    _search.clear();
+  });
+
+  Future<void> _createFolder() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<Folder>(builder: (_) => const FolderEditScreen()),
+    );
+  }
+
+  Future<void> _importFolder(AppState state) async {
+    final folder = await FolderIO.importFolder(context, state);
+    if (folder != null) await state.addFolder(folder);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     if (!state.ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    if (_showingFolders) return _foldersScaffold(state);
     final all = state.characters;
     final tags = _allTags(all);
     final visible = _visible(all);
@@ -508,14 +555,17 @@ class _CharactersScreenState extends State<CharactersScreen> {
   }
 
   Widget _searchAndControls(AppState state, List<String> tags) {
-    final avatarView = _avatarView(state);
+    final folders = _showingFolders;
+    final avatarView = folders
+        ? state.browseLayout(BrowseSection.folders) == BrowseLayout.grid
+        : _avatarView(state);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
       child: Column(
         children: [
           SearchBar(
             controller: _search,
-            hintText: 'Search characters',
+            hintText: folders ? 'Search folders' : 'Search characters',
             padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(horizontal: 14),
             ),
@@ -538,11 +588,15 @@ class _CharactersScreenState extends State<CharactersScreen> {
               Expanded(
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: _ControlChip(
-                    icon: Icons.sort,
-                    label: _sort.label,
-                    onTap: _pickSort,
-                  ),
+                  // Folders have a fixed ordering, so the sort control makes no
+                  // sense there — swap it for a spacer that keeps the row shape.
+                  child: folders
+                      ? const SizedBox.shrink()
+                      : _ControlChip(
+                          icon: Icons.sort,
+                          label: _sort.label,
+                          onTap: _pickSort,
+                        ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -556,13 +610,10 @@ class _CharactersScreenState extends State<CharactersScreen> {
               ),
               const SizedBox(width: 8),
               _ControlChip(
-                icon: Icons.folder_outlined,
+                icon: folders ? Icons.folder : Icons.folder_outlined,
                 label: 'Folders',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const FoldersScreen(),
-                  ),
-                ),
+                selected: folders,
+                onTap: _toggleFolders,
               ),
               const SizedBox(width: 8),
               IconButton(
@@ -573,13 +624,104 @@ class _CharactersScreenState extends State<CharactersScreen> {
                       : Icons.grid_view_outlined,
                 ),
                 onPressed: () => state.setBrowseLayout(
-                  BrowseSection.characters,
+                  folders ? BrowseSection.folders : BrowseSection.characters,
                   avatarView ? BrowseLayout.list : BrowseLayout.grid,
                 ),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  // --- folders view (in place of the roster) -------------------------------
+
+  Widget _foldersScaffold(AppState state) {
+    final folders = state.folders;
+    final tags = _allFolderTags(folders);
+    final visible = _visibleFolders(folders);
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    return Scaffold(
+      drawer: const AppDrawer(selected: DrawerSection.characters),
+      appBar: AppBar(
+        title: const Text('Characters'),
+        actions: [
+          IconButton(
+            tooltip: 'Import folder',
+            icon: const Icon(Icons.download_outlined),
+            onPressed: () => _importFolder(state),
+          ),
+          IconButton(
+            tooltip: 'New folder',
+            icon: const Icon(Icons.create_new_folder_outlined),
+            onPressed: _createFolder,
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _createFolder,
+        icon: const Icon(Icons.add),
+        label: const Text('New folder'),
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: _searchAndControls(state, tags)),
+          if (folders.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _EmptyFolders(onCreate: _createFolder),
+            )
+          else if (visible.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: Text('No folders match those filters.')),
+            )
+          else
+            _folderList(state, visible),
+          SliverToBoxAdapter(child: SizedBox(height: 96 + bottom)),
+        ],
+      ),
+    );
+  }
+
+  Widget _folderList(AppState state, List<Folder> folders) {
+    final grid = state.browseLayout(BrowseSection.folders) == BrowseLayout.grid;
+    if (grid) {
+      return SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        sliver: SliverGrid.builder(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 220,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 0.88,
+          ),
+          itemCount: folders.length,
+          itemBuilder: (context, index) => _FolderCard(
+            folder: folders[index],
+            onTap: () => showFolderWindow(context, folderId: folders[index].id),
+          ),
+        ),
+      );
+    }
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      sliver: SliverList.builder(
+        itemCount: folders.length,
+        itemBuilder: (context, index) {
+          final folder = folders[index];
+          return ListTile(
+            leading: _FolderPicture(folder: folder, size: 48),
+            title: Text(folder.displayName),
+            subtitle: Text(
+              '${folder.characterIds.length} character'
+              '${folder.characterIds.length == 1 ? '' : 's'}',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => showFolderWindow(context, folderId: folder.id),
+          );
+        },
       ),
     );
   }
@@ -1556,7 +1698,6 @@ class _EmptyRoster extends StatelessWidget {
 /// Shown when a search / tag filter matches nothing.
 class _NoMatches extends StatelessWidget {
   const _NoMatches();
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1580,4 +1721,121 @@ class _NoMatches extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A folder in the roster's folder mode. Tapping opens the folder window.
+class _FolderCard extends StatelessWidget {
+  const _FolderCard({required this.folder, required this.onTap});
+
+  final Folder folder;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: _FolderPicture(folder: folder, size: double.infinity),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    folder.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    '${folder.characterIds.length} character'
+                    '${folder.characterIds.length == 1 ? '' : 's'}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderPicture extends StatelessWidget {
+  const _FolderPicture({required this.folder, required this.size});
+  final Folder folder;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = avatarImage(
+      folder.avatar,
+      displaySize: size.isFinite ? size : 220,
+    );
+    final tint = folder.color == 0
+        ? Theme.of(context).colorScheme.secondaryContainer
+        : Color(folder.color).withValues(alpha: 0.22);
+    if (image != null) {
+      return Image(image: image, width: size, height: size, fit: BoxFit.cover);
+    }
+    return ColoredBox(
+      color: tint,
+      child: Center(
+        child: Icon(
+          Icons.folder_rounded,
+          size: size.isFinite ? size * 0.56 : 72,
+          color: folder.color == 0
+              ? Theme.of(context).colorScheme.onSecondaryContainer
+              : Color(folder.color),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyFolders extends StatelessWidget {
+  const _EmptyFolders({required this.onCreate});
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.folder_open_outlined, size: 56),
+          const SizedBox(height: 16),
+          Text('No folders yet', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          const Text(
+            'Group characters with the lorebooks, presets, and pictures they use.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: onCreate,
+            icon: const Icon(Icons.add),
+            label: const Text('Create folder'),
+          ),
+        ],
+      ),
+    ),
+  );
 }

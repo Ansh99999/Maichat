@@ -9,9 +9,9 @@ import 'package:maichat/models/preset.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/screens/folders/folder_edit_screen.dart';
 import 'package:maichat/screens/folders/folder_essentials_screen.dart';
-import 'package:maichat/screens/folders/folder_home_screen.dart';
 import 'package:maichat/screens/folders/folder_settings_screen.dart';
-import 'package:maichat/screens/folders/folders_screen.dart';
+import 'package:maichat/screens/folders/folder_window.dart';
+import 'package:maichat/screens/characters_screen.dart';
 import 'package:maichat/services/avatar_store.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/state/app_state.dart';
@@ -83,7 +83,11 @@ void main() {
 
   testWidgets('FoldersScreen builds and lists the folder', (tester) async {
     final state = await boot();
-    await tester.pumpWidget(host(state, const FoldersScreen()));
+    await tester.pumpWidget(host(state, const CharactersScreen()));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    // Switch the roster over to the inline folder list.
+    await tester.tap(find.text('Folders'));
     await tester.pump();
     expect(tester.takeException(), isNull);
     expect(find.text('Noir'), findsWidgets);
@@ -112,11 +116,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('FolderHomeScreen builds and tints from the folder', (tester) async {
+  testWidgets('folder window opens and tints from the folder', (tester) async {
     final state = await boot();
-    await tester.pumpWidget(host(state, const FolderHomeScreen(folderId: 'f1')));
+    await tester.pumpWidget(
+      host(
+        state,
+        Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () => showFolderWindow(context, folderId: 'f1'),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
     await tester.pump();
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    expect(find.text('Noir'), findsWidgets);
     expect(find.text('Kit'), findsWidgets);
   });
 

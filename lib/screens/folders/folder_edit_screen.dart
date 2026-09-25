@@ -29,6 +29,7 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
   late Folder _draft;
   late TextEditingController _name;
   late TextEditingController _description;
+  late TextEditingController _tags;
   final TextEditingController _characterSearch = TextEditingController();
   String _characterQuery = '';
   bool _saving = false;
@@ -45,20 +46,37 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
     _draft = folder;
     _name = TextEditingController(text: folder.name);
     _description = TextEditingController(text: folder.description);
+    _tags = TextEditingController(text: folder.tags.join(', '));
   }
 
   @override
   void dispose() {
     _name.dispose();
     _description.dispose();
+    _tags.dispose();
     _characterSearch.dispose();
     super.dispose();
+  }
+
+  /// Tags are typed as one comma-separated line (like the name), so parse them
+  /// back into the list, trimming blanks and keeping the first of any repeats.
+  List<String> _parseTags() {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in _tags.text.split(',')) {
+      final tag = raw.trim();
+      if (tag.isNotEmpty && seen.add(tag.toLowerCase())) result.add(tag);
+    }
+    return result;
   }
 
   void _syncText() {
     _draft
       ..name = _name.text.trim()
-      ..description = _description.text.trim();
+      ..description = _description.text.trim()
+      ..tags
+          .clear();
+    _draft.tags.addAll(_parseTags());
   }
 
   Future<void> _save(AppState state) async {
@@ -104,6 +122,7 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
     if (imported == null || !mounted) return;
     _name.dispose();
     _description.dispose();
+    _tags.dispose();
     setState(() => _adopt(imported));
   }
 
@@ -182,40 +201,6 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
       ),
     );
     if (picked != null) setState(() => _draft.color = picked);
-  }
-
-  Future<void> _addTag() async {
-    final controller = TextEditingController();
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add tag'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Tag',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    final tag = value?.trim() ?? '';
-    if (tag.isNotEmpty && !_draft.tags.contains(tag)) {
-      setState(() => _draft.tags.add(tag));
-    }
   }
 
   Future<void> _addCharacters(AppState state) async {
@@ -407,24 +392,17 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          for (final tag in _draft.tags)
-                            InputChip(
-                              label: Text(tag),
-                              onDeleted: () =>
-                                  setState(() => _draft.tags.remove(tag)),
-                            ),
-                          ActionChip(
-                            avatar: const Icon(Icons.add, size: 18),
-                            label: const Text('Tag'),
-                            onPressed: _addTag,
-                          ),
-                        ],
+                    SizedBox(
+                      height: 56,
+                      child: TextField(
+                        controller: _tags,
+                        textCapitalization: TextCapitalization.none,
+                        decoration: const InputDecoration(
+                          labelText: 'Tags',
+                          hintText: 'detective, rain',
+                          helperText: 'Separate with commas',
+                          border: OutlineInputBorder(),
+                        ),
                       ),
                     ),
                   ],
@@ -453,11 +431,6 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.inventory_2_outlined),
             title: const Text('Essentials'),
-            subtitle: Text(
-              '${_draft.lorebookIds.length} lorebooks · '
-              '${_draft.scenarioIds.length} scenarios · '
-              '${_draft.presetIds.length} presets',
-            ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(

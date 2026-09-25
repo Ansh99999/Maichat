@@ -19,6 +19,9 @@ class _FolderEssentialsScreenState extends State<FolderEssentialsScreen> {
   bool _selecting = false;
   final Set<String> _selection = <String>{};
 
+  /// null shows every kind dumped together; a kind narrows the flat list.
+  FolderItemKind? _filter;
+
   String _key(FolderItemKind kind, String id) => '${kind.name}:$id';
 
   void _toggle(FolderItemKind kind, String id) {
@@ -266,18 +269,62 @@ class _FolderEssentialsScreenState extends State<FolderEssentialsScreen> {
     ],
   };
 
+  /// Every referenced item across all kinds, in a stable order, as one flat
+  /// list — narrowed to a single kind when a filter is set.
+  List<({FolderItemKind kind, String id})> _entries() {
+    const order = [
+      FolderItemKind.lorebook,
+      FolderItemKind.scenario,
+      FolderItemKind.preset,
+      FolderItemKind.provider,
+      FolderItemKind.document,
+      FolderItemKind.gallery,
+      FolderItemKind.character,
+    ];
+    final out = <({FolderItemKind kind, String id})>[];
+    for (final kind in order) {
+      if (_filter != null && kind != _filter) continue;
+      for (final id in _ids(kind).toList()) {
+        out.add((kind: kind, id: id));
+      }
+    }
+    return out;
+  }
+
+  Future<void> _pickFilter() async {
+    final choice = await showModalBottomSheet<Object>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.clear_all),
+              title: const Text('All items'),
+              trailing: _filter == null ? const Icon(Icons.check) : null,
+              onTap: () => Navigator.of(context).pop('all'),
+            ),
+            const Divider(height: 1),
+            for (final kind in FolderItemKind.values)
+              ListTile(
+                leading: Icon(_icon(kind)),
+                title: Text(_title(kind)),
+                trailing: _filter == kind ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.of(context).pop(kind),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    setState(() => _filter = choice is FolderItemKind ? choice : null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final groups = <_Group>[
-      _Group(FolderItemKind.lorebook, widget.folder.lorebookIds),
-      _Group(FolderItemKind.document, widget.folder.documentIds),
-      _Group(FolderItemKind.scenario, widget.folder.scenarioIds),
-      _Group(FolderItemKind.gallery, widget.folder.galleryImageIds),
-      _Group(FolderItemKind.preset, widget.folder.presetIds),
-      _Group(FolderItemKind.provider, widget.folder.providerIds),
-      _Group(FolderItemKind.character, widget.folder.characterIds),
-    ];
+    final entries = _entries();
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -316,33 +363,48 @@ class _FolderEssentialsScreenState extends State<FolderEssentialsScreen> {
             icon: const Icon(Icons.checklist_outlined),
           ),
           IconButton(
+            tooltip: _filter == null
+                ? 'Filter by kind'
+                : 'Filtered: ${_title(_filter!)}',
+            onPressed: _pickFilter,
+            icon: Icon(
+              _filter == null ? Icons.filter_list : Icons.filter_list_alt,
+              color: _filter == null
+                  ? null
+                  : Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          IconButton(
             tooltip: 'Add essentials',
             onPressed: () => _chooseKind(state),
             icon: const Icon(Icons.add),
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.only(bottom: 24),
-        children: [
-          for (final group in groups) ...[
-            _SectionHeading(title: _title(group.kind), icon: _icon(group.kind)),
-            if (group.ids.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(56, 4, 16, 12),
+      body: entries.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
                 child: Text(
-                  'Nothing added',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  _filter == null
+                      ? 'Nothing added yet. Use + to add lorebooks, presets, '
+                            'providers, pictures and more.'
+                      : 'No ${_title(_filter!).toLowerCase()} in this folder.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
-              )
-            else
-              for (final id in group.ids.toList())
-                _itemTile(state, group.kind, id),
-          ],
-        ],
-      ),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.only(bottom: 24),
+              itemCount: entries.length,
+              itemBuilder: (context, index) {
+                final entry = entries[index];
+                return _itemTile(state, entry.kind, entry.id);
+              },
+            ),
     );
   }
 
@@ -398,35 +460,6 @@ class _Choice {
   const _Choice(this.id, this.label);
   final String id;
   final String label;
-}
-
-class _Group {
-  const _Group(this.kind, this.ids);
-  final FolderItemKind kind;
-  final List<String> ids;
-}
-
-class _SectionHeading extends StatelessWidget {
-  const _SectionHeading({required this.title, required this.icon});
-  final String title;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
-    child: Row(
-      children: [
-        Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-      ],
-    ),
-  );
 }
 
 String _title(FolderItemKind kind) => switch (kind) {
