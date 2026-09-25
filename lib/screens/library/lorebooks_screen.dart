@@ -6,9 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/lorebook.dart';
+import '../../models/folder.dart';
 import '../../models/view_prefs.dart';
 import '../../services/lorebook_codec.dart';
 import '../../state/app_state.dart';
+import '../../widgets/add_to_folder_sheet.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/library_drawer.dart';
@@ -359,6 +361,12 @@ class _LorebooksScreenState extends State<LorebooksScreen> {
       case _LoreAction.duplicate:
         await state.duplicateLorebook(book);
         _say('Lorebook duplicated.');
+      case _LoreAction.addToFolder:
+        await showAddToFolderSheet(
+          context,
+          kind: FolderItemKind.lorebook,
+          itemId: book.id,
+        );
       case _LoreAction.delete:
         await _confirmDelete(state, book);
     }
@@ -696,6 +704,7 @@ enum _LoreAction {
   edit('Edit', Icons.edit_outlined),
   download('Download', Icons.download_outlined),
   duplicate('Duplicate', Icons.copy_all_outlined),
+  addToFolder('Add to folder…', Icons.create_new_folder_outlined),
   delete('Delete', Icons.delete_outline);
 
   const _LoreAction(this.label, this.icon);

@@ -25,6 +25,8 @@ class Conversation {
     this.impersonateName,
     this.presetId,
     this.presetOverride,
+    this.folderId,
+    this.providerOverride,
     this.scenarioId,
     this.scenarioOverride = '',
     this.backgroundImage,
@@ -85,6 +87,22 @@ class Conversation {
   /// A chat-specific preset copy that overrides [presetId] when present — the
   /// "save for this chat only" case from the in-chat preset editor.
   Preset? presetOverride;
+
+  /// The **folder** this chat is bound to, by [Folder.id], or null for an
+  /// ordinary un-foldered chat. Set when the chat is opened from a folder (or
+  /// from the character's sole folder). A character may live in several folders,
+  /// but a chat answers to exactly one — so every folder-aware default (preset,
+  /// provider, lorebooks, shared memory) resolves against this single id and two
+  /// folders never fight over the same thread. If the folder is later deleted the
+  /// id is cleared (see `AppState.deleteFolder`) and the chat reverts to normal.
+  String? folderId;
+
+  /// A per-chat provider override, by `Provider.id`. When set it wins over the
+  /// app-global active provider for this thread alone — the folder-provider case,
+  /// where a chat opened under a folder runs on that folder's default provider
+  /// without changing every other chat. Null means "use the app-wide active
+  /// provider". Read through `AppState.providerFor`, never directly.
+  String? providerOverride;
 
   /// The library [Scenario] plugged into this thread, by id — the second of the
   /// three ways a chat gets a scenario (the character's own card is the first,
@@ -246,6 +264,8 @@ class Conversation {
         presetOverride: presetOverride == null
             ? null
             : Preset.fromJson(presetOverride!.toJson()),
+        folderId: folderId,
+        providerOverride: providerOverride,
         scenarioId: scenarioId,
         scenarioOverride: scenarioOverride,
         backgroundImage: backgroundImage,
@@ -293,6 +313,8 @@ class Conversation {
         if (impersonateName != null) 'impersonateName': impersonateName,
         if (presetId != null) 'presetId': presetId,
         if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
+        if (folderId != null) 'folderId': folderId,
+        if (providerOverride != null) 'providerOverride': providerOverride,
         if (scenarioId != null) 'scenarioId': scenarioId,
         if (scenarioOverride.trim().isNotEmpty)
           'scenarioOverride': scenarioOverride,
@@ -344,6 +366,13 @@ class Conversation {
         presetOverride: json['presetOverride'] is Map<String, dynamic>
             ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)
             : null,
+        folderId: (json['folderId'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['folderId'] as String).trim(),
+        providerOverride:
+            (json['providerOverride'] as String?)?.trim().isEmpty ?? true
+                ? null
+                : (json['providerOverride'] as String).trim(),
         scenarioId: (json['scenarioId'] as String?)?.trim().isEmpty ?? true
             ? null
             : (json['scenarioId'] as String).trim(),

@@ -679,6 +679,7 @@ const List<String> kBackupIdLists = <String>[
   'conversations',
   'lorebooks',
   'scenarios',
+  'folders',
   'gallery',
   'documents',
 ];

@@ -21,6 +21,7 @@ import '../widgets/smooth_image.dart';
 import '../widgets/tag_filter_sheet.dart';
 import 'character_actions.dart';
 import 'character_editor.dart';
+import 'folders/folders_screen.dart';
 
 /// How the roster is ordered.
 enum CharacterSort {
@@ -552,6 +553,16 @@ class _CharactersScreenState extends State<CharactersScreen> {
                     : '${_tagFilter.length} tag${_tagFilter.length == 1 ? '' : 's'}',
                 selected: _tagFilter.isNotEmpty,
                 onTap: () => _showTagFilter(tags),
+              ),
+              const SizedBox(width: 8),
+              _ControlChip(
+                icon: Icons.folder_outlined,
+                label: 'Folders',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const FoldersScreen(),
+                  ),
+                ),
               ),
               const SizedBox(width: 8),
               IconButton(

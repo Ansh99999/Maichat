@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/character.dart';
+import '../models/folder.dart';
 import '../models/lorebook.dart';
 import '../services/character_codec.dart';
 import '../state/app_state.dart';
+import '../widgets/add_to_folder_sheet.dart';
 import 'chats_screen.dart';
 import 'character_sheet_screen.dart';
 import 'character_editor.dart';
@@ -24,6 +26,7 @@ enum CharacterAction {
   chatList('Chat list', Icons.forum_outlined),
   gallery('Gallery', Icons.photo_library_outlined),
   duplicate('Duplicate', Icons.copy_all_outlined),
+  addToFolder('Add to folder…', Icons.create_new_folder_outlined),
   delete('Delete', Icons.delete_outline);
 
   const CharacterAction(this.label, this.icon);
@@ -82,6 +85,12 @@ Future<void> runCharacterAction(
           const SnackBar(content: Text('Character duplicated.')),
         );
       }
+    case CharacterAction.addToFolder:
+      await showAddToFolderSheet(
+        context,
+        kind: FolderItemKind.character,
+        itemId: character.id,
+      );
     case CharacterAction.delete:
       await confirmDeleteCharacter(context, state, character);
   }

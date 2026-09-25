@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/provider.dart';
+import '../../models/folder.dart';
 import '../../state/app_state.dart';
+import '../../widgets/add_to_folder_sheet.dart';
 import '../../widgets/app_drawer.dart';
 import 'provider_edit_screen.dart';
 import 'providers_io.dart';
@@ -326,7 +328,37 @@ class _ProviderCard extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: selecting ? null : const Icon(Icons.chevron_right),
+        trailing: selecting
+            ? null
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert),
+                    onSelected: (v) {
+                      if (v == 'folder') {
+                        showAddToFolderSheet(
+                          context,
+                          kind: FolderItemKind.provider,
+                          itemId: provider.id,
+                        );
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: 'folder',
+                        child: ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          leading: Icon(Icons.create_new_folder_outlined),
+                          title: Text('Add to folder…'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
       ),
     );
   }

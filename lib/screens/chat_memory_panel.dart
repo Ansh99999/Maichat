@@ -41,11 +41,21 @@ class _ChatMemoryPanelState extends State<ChatMemoryPanel> {
   Future<void> _addBook(AppState state) async {
     final conversation = state.active;
     final active = conversation.lorebookIds.toSet();
-    final choices = [
+    final available = [
       for (final book in state.lorebooks)
         if (!active.contains(book.id)) book,
     ]..sort((a, b) =>
         a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    // A foldered chat reaches the folder's curated lorebooks first: they float
+    // to the top of the picker, in folder order, ahead of the rest of the
+    // library (which keeps its alphabetical order).
+    final folder = state.folderForChat(conversation);
+    final folderIds = folder?.lorebookIds ?? const <String>[];
+    final byId = {for (final b in available) b.id: b};
+    final choices = <Lorebook>[
+      for (final id in folderIds) ?byId.remove(id),
+      ...byId.values,
+    ];
 
     final chosen = await showModalBottomSheet<String>(
       context: context,

@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/preset.dart';
+import '../../models/folder.dart';
 import '../../services/preset_io.dart';
 import '../../state/app_state.dart';
+import '../../widgets/add_to_folder_sheet.dart';
 import '../../widgets/app_drawer.dart';
 import '../../widgets/brand_mark.dart';
 import 'preset_edit_screen.dart';
@@ -235,6 +237,7 @@ class _PresetTile extends StatelessWidget {
             PopupMenuItem(value: 'copy', child: Text('Duplicate')),
             PopupMenuItem(value: 'download', child: Text('Download')),
             PopupMenuItem(value: 'default', child: Text('Set as default')),
+            PopupMenuItem(value: 'folder', child: Text('Add to folder…')),
             PopupMenuItem(value: 'delete', child: Text('Delete')),
           ],
         ),
@@ -255,6 +258,12 @@ class _PresetTile extends StatelessWidget {
         await _confirmDelete(context, state);
       case 'download':
         await _download(context);
+      case 'folder':
+        await showAddToFolderSheet(
+          context,
+          kind: FolderItemKind.preset,
+          itemId: preset.id,
+        );
     }
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/folder.dart';
 import '../../models/preset.dart';
 import '../../state/app_state.dart';
 import 'preset_editor_body.dart';
@@ -25,9 +26,25 @@ class _ChatPresetPanelState extends State<ChatPresetPanel> {
 
   void _choose(AppState state, Preset preset) {
     state.setConversationPreset(state.active.id, preset.id);
+    _announce(preset.displayName);
+  }
+
+  /// Picking a preset the folder curated: bind the chat to it, and when the
+  /// folder kept an override copy, pin that copy as the chat's preset so the
+  /// folder's shadow — not the bare library preset — is what the chat uses.
+  void _chooseFolder(AppState state, Folder folder, String presetId) {
+    state.setConversationPreset(state.active.id, presetId);
+    final override = folder.presetOverrides[presetId];
+    if (override != null) {
+      state.saveChatPresetOverride(state.active.id, override);
+    }
+    _announce(state.folderPreset(folder, presetId)?.displayName ?? 'preset');
+  }
+
+  void _announce(String name) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Preset changed to "${preset.displayName}"'),
+        content: Text('Preset changed to "$name"'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -86,10 +103,36 @@ class _ChatPresetPanelState extends State<ChatPresetPanel> {
   Widget _list(BuildContext context) {
     final state = context.watch<AppState>();
     final current = state.presetFor(state.active);
+    final folder = state.folderForChat(state.active);
     final q = _query.trim().toLowerCase();
-    final presets = [
+    bool matches(Preset p) =>
+        q.isEmpty || p.displayName.toLowerCase().contains(q);
+
+    // The folder's curated presets (overrides applied) come first; the rest of
+    // the library follows under its own heading. Only a foldered chat with
+    // folder presets shows the split — everyone else sees the flat list.
+    final folderIds = folder == null ? const <String>[] : folder.presetIds;
+    final folderRows = <Widget>[];
+    final shownFolderIds = <String>{};
+    for (final id in folderIds) {
+      final p = state.folderPreset(folder!, id);
+      if (p == null || !matches(p)) continue;
+      shownFolderIds.add(id);
+      folderRows.add(
+        _PresetRow(
+          preset: p,
+          isCurrent: current?.id == p.id,
+          isDefault: folder.defaultPresetId == id,
+          onChoose: () => _chooseFolder(state, folder, id),
+          onEdit: () => setState(
+            () => _editing = Preset.fromJson(p.toJson()),
+          ),
+        ),
+      );
+    }
+    final appPresets = [
       for (final p in state.presets)
-        if (q.isEmpty || p.displayName.toLowerCase().contains(q)) p,
+        if (matches(p) && !shownFolderIds.contains(p.id)) p,
     ];
 
     return Column(
@@ -111,12 +154,18 @@ class _ChatPresetPanelState extends State<ChatPresetPanel> {
           ),
         ),
         Expanded(
-          child: presets.isEmpty
+          child: (folderRows.isEmpty && appPresets.isEmpty)
               ? const Center(child: Text('No presets'))
               : ListView(
                   padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                   children: [
-                    for (final p in presets)
+                    if (folderRows.isNotEmpty) ...[
+                      const _SectionLabel('Folder presets'),
+                      ...folderRows,
+                      const Divider(height: 16),
+                      const _SectionLabel('App presets'),
+                    ],
+                    for (final p in appPresets)
                       _PresetRow(
                         preset: p,
                         isCurrent: current?.id == p.id,
@@ -259,10 +308,12 @@ class _PresetRow extends StatelessWidget {
     required this.isCurrent,
     required this.onChoose,
     required this.onEdit,
+    this.isDefault = false,
   });
 
   final Preset preset;
   final bool isCurrent;
+  final bool isDefault;
   final VoidCallback onChoose;
   final VoidCallback onEdit;
 
@@ -313,9 +364,37 @@ class _PresetRow extends StatelessWidget {
                 ),
               ),
             ],
+            if (isDefault) ...[
+              const SizedBox(width: 6),
+              Icon(Icons.star, size: 16, color: scheme.primary),
+            ],
           ],
         ),
         trailing: const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+}
+
+/// A small uppercase heading separating the "Folder presets" and "App presets"
+/// groups in the panel list.
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Text(
+        text.toUpperCase(),
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+        ),
       ),
     );
   }

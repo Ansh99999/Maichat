@@ -3350,8 +3350,64 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final providers = state.providers;
-    final active = state.activeProvider;
+    final conversation = state.active;
+    // A foldered chat picks a per-chat provider (an override that wins over the
+    // app-global active one); an ordinary chat switches the global provider as
+    // before. [providerFor] already collapses to the active provider when there
+    // is no override, so it is the right "what is selected" read either way.
+    final folder = state.folderForChat(conversation);
+    final foldered = folder != null;
+    final effective = state.providerFor(conversation);
+    final hasOverride = conversation.providerOverride != null;
     final bottom = MediaQuery.paddingOf(context).bottom;
+
+    void choose(String id) {
+      if (foldered) {
+        state.setConversationProvider(conversation.id, id);
+      } else {
+        state.selectProvider(id);
+      }
+    }
+
+    final folderProviderIds = foldered ? folder.providerIds : const <String>[];
+    final shownFolderIds = <String>{
+      for (final id in folderProviderIds)
+        if (state.providerById(id) != null) id,
+    };
+
+    Widget providerTile(Provider provider, {bool isDefault = false}) =>
+        RadioListTile<String>(
+          value: provider.id,
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  provider.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isDefault) ...[
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.star,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ],
+            ],
+          ),
+          subtitle: Text(
+            provider.kind.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        );
+
+    final appProviders = [
+      for (final p in providers)
+        if (!shownFolderIds.contains(p.id)) p,
+    ];
 
     return SafeArea(
       child: Padding(
@@ -3363,7 +3419,7 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
               child: Text(
-                'Provider',
+                foldered ? 'Provider (this chat)' : 'Provider',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
@@ -3376,41 +3432,55 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
             else
               Flexible(
                 child: RadioGroup<String>(
-                  groupValue: active?.id,
+                  groupValue: effective?.id,
                   onChanged: (id) {
-                    if (id != null) state.selectProvider(id);
+                    if (id != null) choose(id);
                   },
                   child: ListView(
                     shrinkWrap: true,
                     children: [
-                      for (final provider in providers)
-                        RadioListTile<String>(
-                          value: provider.id,
-                          title: Text(
-                            provider.displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            provider.kind.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
+                      if (shownFolderIds.isNotEmpty) ...[
+                        const _ProviderSectionLabel('Folder providers'),
+                        for (final id in folderProviderIds)
+                          if (state.providerById(id) case final p?)
+                            providerTile(
+                              p,
+                              isDefault: folder!.defaultProviderId == id,
+                            ),
+                        const Divider(height: 16),
+                        const _ProviderSectionLabel('App providers'),
+                      ],
+                      for (final provider in appProviders)
+                        providerTile(provider),
                     ],
                   ),
                 ),
               ),
+            if (foldered && hasOverride)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.undo, size: 18),
+                    label: const Text('Use the app provider'),
+                    onPressed: () =>
+                        state.setConversationProvider(conversation.id, null),
+                  ),
+                ),
+              ),
             const Divider(height: 1),
-            if (active != null)
+            if (effective != null)
               ListTile(
                 leading: const Icon(Icons.memory_outlined),
                 title: const Text('Model'),
                 subtitle: Text(
-                  active.model.trim().isEmpty ? 'None selected' : active.model,
+                  effective.model.trim().isEmpty
+                      ? 'None selected'
+                      : effective.model,
                 ),
                 trailing: const Icon(Icons.expand_more),
-                onTap: () => _browseModels(state, active),
+                onTap: () => _browseModels(state, effective),
               ),
             ListTile(
               leading: const Icon(Icons.settings_outlined),
@@ -3418,6 +3488,30 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
               onTap: widget.onManage,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small uppercase heading separating "Folder providers" from "App providers"
+/// in the quick-settings sheet.
+class _ProviderSectionLabel extends StatelessWidget {
+  const _ProviderSectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 2),
+      child: Text(
+        text.toUpperCase(),
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
         ),
       ),
     );

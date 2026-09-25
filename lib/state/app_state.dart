@@ -17,6 +17,7 @@ import '../models/conversation.dart';
 import '../models/discover.dart';
 import '../models/embedding.dart';
 import '../models/floating_image.dart';
+import '../models/folder.dart';
 import '../models/gallery_image.dart';
 import '../models/image_gen.dart';
 import '../models/interface_preset.dart';
@@ -115,6 +116,7 @@ class AppState extends ChangeNotifier {
   final List<Character> _characters = <Character>[];
   final List<Lorebook> _lorebooks = <Lorebook>[];
   final List<Scenario> _scenarios = <Scenario>[];
+  final List<Folder> _folders = <Folder>[];
   final List<RegexRule> _regexRules = <RegexRule>[];
   final List<GalleryImage> _gallery = <GalleryImage>[];
   final List<Preset> _presets = <Preset>[];
@@ -216,6 +218,7 @@ class AppState extends ChangeNotifier {
   List<Character> get characters => List.unmodifiable(_characters);
   List<Lorebook> get lorebooks => List.unmodifiable(_lorebooks);
   List<Scenario> get scenarios => List.unmodifiable(_scenarios);
+  List<Folder> get folders => List.unmodifiable(_folders);
   List<RegexRule> get regexRules => List.unmodifiable(_regexRules);
 
   /// The enabled rules, in order — what the engine actually runs. Cheap enough
@@ -419,6 +422,9 @@ class AppState extends ChangeNotifier {
     _scenarios
       ..clear()
       ..addAll(await _storage.loadScenarios());
+    _folders
+      ..clear()
+      ..addAll(await _storage.loadFolders());
     _regexRules
       ..clear()
       ..addAll(await _storage.loadRegexRules());
@@ -2839,6 +2845,177 @@ class AppState extends ChangeNotifier {
     return copy;
   }
 
+  // --- Folders -------------------------------------------------------------
+  //
+  // A folder bundles characters with references to the essentials they share
+  // (lorebooks, scenarios, presets, providers, documents, gallery pictures) and
+  // a folder theme. Membership lives here, by id, so a character can belong to
+  // several folders at once. A chat binds to exactly one governing folder
+  // ([Conversation.folderId]), so folder-aware resolution never has to reconcile
+  // two folders fighting over the same chat. Everything a folder points at is a
+  // reference into a global collection; a folder may keep an override *copy*
+  // that shadows the library original inside this folder alone, read back
+  // through [folderPreset]/[folderLorebook]/[folderScenario] so the fallback to
+  // the library item happens in one place.
+
+  Future<void> _persistFolders() async {
+    if (!_writable) return;
+    await _storage.saveFolders(_folders);
+  }
+
+  Folder? folderById(String? id) {
+    if (id == null) return null;
+    for (final f in _folders) {
+      if (f.id == id) return f;
+    }
+    return null;
+  }
+
+  /// Every folder that lists [characterId] as a member — a character may be in
+  /// several at once, so this returns a list, in the folder roster's own order.
+  List<Folder> foldersOfCharacter(String characterId) =>
+      _folders.where((f) => f.holds(characterId)).toList();
+
+  /// The folder governing [conversation], or null for an ordinary chat.
+  Folder? folderForChat(Conversation? conversation) =>
+      folderById(conversation?.folderId);
+
+  Future<void> addFolder(Folder folder) async {
+    _folders.insert(0, folder);
+    notifyListeners();
+    await _persistFolders();
+  }
+
+  /// Upsert by id — the editor saves a clone, so this replaces the stored copy
+  /// in place (or inserts it when the folder is new), bumping [updatedAt].
+  Future<void> saveFolder(Folder folder) async {
+    folder.updatedAt = DateTime.now();
+    final index = _folders.indexWhere((f) => f.id == folder.id);
+    if (index == -1) {
+      _folders.insert(0, folder);
+    } else {
+      _folders[index] = folder;
+    }
+    notifyListeners();
+    await _persistFolders();
+  }
+
+  /// Deletes a folder and unbinds every chat that was running under it, so no
+  /// thread is left pointing at a folder that is gone (the same cross-cleanup
+  /// [deleteScenario] does for `scenarioId`). The essentials themselves are
+  /// untouched — a folder only ever referenced them.
+  Future<void> deleteFolder(String id) async {
+    _folders.removeWhere((f) => f.id == id);
+    var touchedChats = false;
+    for (final conversation in _conversations) {
+      if (conversation.folderId == id) {
+        conversation.folderId = null;
+        touchedChats = true;
+      }
+    }
+    notifyListeners();
+    await _persistFolders();
+    if (touchedChats) await _saveConversations();
+  }
+
+  /// Deep-copies a folder under a fresh id and returns that id.
+  Future<String> duplicateFolder(String id) async {
+    final folder = folderById(id);
+    if (folder == null) return id;
+    final json = folder.toJson();
+    final newId = DateTime.now().microsecondsSinceEpoch.toString();
+    json['id'] = newId;
+    json['name'] = '${folder.displayName} (copy)';
+    await addFolder(Folder.fromJson(json));
+    return newId;
+  }
+
+  List<String> _folderList(Folder folder, FolderItemKind kind) => switch (kind) {
+        FolderItemKind.character => folder.characterIds,
+        FolderItemKind.lorebook => folder.lorebookIds,
+        FolderItemKind.scenario => folder.scenarioIds,
+        FolderItemKind.preset => folder.presetIds,
+        FolderItemKind.provider => folder.providerIds,
+        FolderItemKind.document => folder.documentIds,
+        FolderItemKind.gallery => folder.galleryImageIds,
+      };
+
+  /// Adds [itemId] to [folderId]'s list for [kind] (idempotent). The one door
+  /// every "Add to folder" affordance goes through.
+  Future<void> addToFolder(
+    String folderId,
+    FolderItemKind kind,
+    String itemId,
+  ) async {
+    final folder = folderById(folderId);
+    if (folder == null) return;
+    final list = _folderList(folder, kind);
+    if (list.contains(itemId)) return;
+    list.add(itemId);
+    folder.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistFolders();
+  }
+
+  /// Removes [itemId] from [folderId]'s list for [kind]; also clears the folder
+  /// default when the removed item was it.
+  Future<void> removeFromFolder(
+    String folderId,
+    FolderItemKind kind,
+    String itemId,
+  ) async {
+    final folder = folderById(folderId);
+    if (folder == null) return;
+    final list = _folderList(folder, kind);
+    if (!list.remove(itemId)) return;
+    if (kind == FolderItemKind.preset && folder.defaultPresetId == itemId) {
+      folder.defaultPresetId = null;
+    }
+    if (kind == FolderItemKind.provider && folder.defaultProviderId == itemId) {
+      folder.defaultProviderId = null;
+    }
+    folder.updatedAt = DateTime.now();
+    notifyListeners();
+    await _persistFolders();
+  }
+
+  // Override-aware reads: the folder's shadow copy if it kept one, else the
+  // library original. Null when the referenced item has since been deleted.
+  Preset? folderPreset(Folder folder, String id) =>
+      folder.presetOverrides[id] ?? presetById(id);
+  Lorebook? folderLorebook(Folder folder, String id) =>
+      folder.lorebookOverrides[id] ?? lorebookById(id);
+  Scenario? folderScenario(Folder folder, String id) =>
+      folder.scenarioOverrides[id] ?? scenarioById(id);
+
+  /// The folder's presets/providers/lorebooks in folder order, overrides
+  /// applied, dropping any whose referenced item is gone — the "Folder …" half
+  /// of the split lists the chat-time pickers draw.
+  List<Preset> folderPresets(Folder folder) =>
+      [for (final id in folder.presetIds) ?folderPreset(folder, id)];
+  List<Provider> folderProviders(Folder folder) =>
+      [for (final id in folder.providerIds) ?providerById(id)];
+  List<Lorebook> folderLorebooks(Folder folder) =>
+      [for (final id in folder.lorebookIds) ?folderLorebook(folder, id)];
+
+  /// The provider [conversation] runs on: a per-chat override wins over the
+  /// app-global active provider, so a foldered chat can use the folder's
+  /// provider without disturbing every other chat. The single resolution point
+  /// — the send path and the quick-settings sheet both read it.
+  Provider? providerFor(Conversation? conversation) =>
+      providerById(conversation?.providerOverride) ?? activeProvider;
+
+  /// Sets (or clears, with null) the per-chat provider override.
+  Future<void> setConversationProvider(
+    String conversationId,
+    String? providerId,
+  ) =>
+      _editConversation(
+        conversationId,
+        (c) => c.providerOverride =
+            (providerId == null || providerId.isEmpty) ? null : providerId,
+      );
+
   // --- Regex rules ---------------------------------------------------------
   //
   // A single global list, applied at four points: the user's turn as it is
@@ -4468,7 +4645,14 @@ class AppState extends ChangeNotifier {
   /// stores the composed persona as the thread's (invisible) system prompt, and
   /// seeds its greetings as the opening assistant turn when there are any.
   /// Returns the new conversation's id so the caller can navigate to it.
-  String startChatWithCharacter(Character character) {
+  ///
+  /// When the chat is opened under a folder — [folderId] passed explicitly from
+  /// a folder screen, or inferred when the character belongs to exactly one
+  /// folder — the thread is bound to it ([Conversation.folderId]) and seeded
+  /// with the folder's defaults: its default preset and provider (the latter as
+  /// a per-chat [providerOverride]), its lorebooks when [Folder.autoLorebooks]
+  /// is on, and its documents when [Folder.sharedEmbeddings] is on.
+  String startChatWithCharacter(Character character, {String? folderId}) {
     final conversation = Conversation.empty()
       ..title = character.displayName
       ..characterId = character.id
@@ -4481,6 +4665,40 @@ class AppState extends ChangeNotifier {
     if (persona != null && persona.id != character.id) {
       conversation.impersonateId = persona.id;
       conversation.impersonateName = persona.displayName;
+    }
+    // Bind the governing folder: the one asked for, else the character's sole
+    // folder (ambiguous membership stays unbound — no folder wins by accident).
+    Folder? folder = folderById(folderId);
+    if (folder == null && folderId == null) {
+      final owning = foldersOfCharacter(character.id);
+      if (owning.length == 1) folder = owning.first;
+    }
+    if (folder != null) {
+      conversation.folderId = folder.id;
+      if (folder.defaultPresetId != null &&
+          presetById(folder.defaultPresetId!) != null) {
+        conversation.presetId = folder.defaultPresetId;
+      }
+      if (folder.defaultProviderId != null &&
+          providerById(folder.defaultProviderId) != null) {
+        conversation.providerOverride = folder.defaultProviderId;
+      }
+      if (folder.autoLorebooks) {
+        for (final id in folder.lorebookIds) {
+          if (lorebookById(id) != null &&
+              !conversation.lorebookIds.contains(id)) {
+            conversation.lorebookIds.add(id);
+          }
+        }
+      }
+      if (folder.sharedEmbeddings) {
+        for (final id in folder.documentIds) {
+          if (documentById(id) != null &&
+              !conversation.documentIds.contains(id)) {
+            conversation.documentIds.add(id);
+          }
+        }
+      }
     }
     final greetings = _greetingSwipes(character);
     if (greetings.isNotEmpty) {
@@ -4667,7 +4885,7 @@ class AppState extends ChangeNotifier {
     final preset = current == null
         ? presetById(_defaultPresetId)
         : presetFor(current);
-    if (_resolveProvider(preset) == null) return;
+    if (_resolveProvider(preset, conversation: current) == null) return;
 
     final conversation = active;
 
@@ -4782,7 +5000,7 @@ class AppState extends ChangeNotifier {
     if (_streaming) return null;
     final conversation = active;
     final preset = presetFor(conversation);
-    final base = _resolveProvider(preset);
+    final base = _resolveProvider(preset, conversation: conversation);
     if (base == null) return null;
     final blocked = blockingBudget(base, base.model);
     if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
@@ -5044,7 +5262,7 @@ class AppState extends ChangeNotifier {
     Character? responder,
   }) async {
     final preset = presetFor(conversation);
-    final base = _resolveProvider(preset);
+    final base = _resolveProvider(preset, conversation: conversation);
     if (base == null) return;
 
     // A blocking budget refuses the send before anything is spent. Reported as an
@@ -5667,7 +5885,7 @@ class AppState extends ChangeNotifier {
         }
       }
     }
-    base ??= _resolveProvider(presetFor(c));
+    base ??= _resolveProvider(presetFor(c), conversation: c);
     if (base == null) return null;
     final model = cfg.model?.trim() ?? '';
     final resolved = model.isNotEmpty ? base.copyWith(model: model) : base;
@@ -5779,8 +5997,11 @@ class AppState extends ChangeNotifier {
     _summaryNoticeSeq++;
   }
 
-  Provider? _resolveProvider(Preset? preset) {
-    Provider? base = activeProvider;
+  Provider? _resolveProvider(Preset? preset, {Conversation? conversation}) {
+    // A chat's per-chat provider override wins over the app-global active one;
+    // [providerFor] collapses to `activeProvider` when there is no override, so
+    // an ordinary chat resolves exactly as before.
+    Provider? base = providerFor(conversation);
     // Fall back to the preset's bound provider only when there is no active one.
     if (base == null && preset?.providerId != null) {
       for (final p in _providers) {
@@ -5885,8 +6106,9 @@ class AppState extends ChangeNotifier {
   /// about what the app transmits can be checked against the actual bytes
   /// instead of an approximation. Null when no provider is configured.
   String? requestPreview(AssembledPrompt assembled) {
-    final preset = presetFor(_activeOrNull() ?? active);
-    final provider = _resolveProvider(preset);
+    final conversation = _activeOrNull() ?? active;
+    final preset = presetFor(conversation);
+    final provider = _resolveProvider(preset, conversation: conversation);
     if (provider == null) return null;
     return _client.requestPreview(
       _applyKey(provider),
@@ -5906,7 +6128,7 @@ class AppState extends ChangeNotifier {
     Character? responder,
   }) {
     final preset = presetFor(conversation);
-    final model = _resolveProvider(preset)?.model ?? '';
+    final model = _resolveProvider(preset, conversation: conversation)?.model ?? '';
 
     final considered = historyEnd == null
         ? conversation.messages

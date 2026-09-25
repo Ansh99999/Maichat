@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/embedding.dart';
+import '../../models/folder.dart';
 import '../../services/document_sources.dart';
 import '../../state/app_state.dart';
+import '../../widgets/add_to_folder_sheet.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/library_drawer.dart';
 import '../../widgets/tag_filter_sheet.dart';
@@ -620,10 +622,19 @@ class _DocCard extends StatelessWidget {
         ),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
-          onSelected: (v) => switch (v) {
-            'edit' => onTap(),
-            'delete' => onDelete(),
-            _ => null,
+          onSelected: (v) {
+            switch (v) {
+              case 'edit':
+                onTap();
+              case 'delete':
+                onDelete();
+              case 'folder':
+                showAddToFolderSheet(
+                  context,
+                  kind: FolderItemKind.document,
+                  itemId: doc.id,
+                );
+            }
           },
           itemBuilder: (context) => const [
             PopupMenuItem(
@@ -633,6 +644,14 @@ class _DocCard extends StatelessWidget {
                   dense: true,
                   leading: Icon(Icons.edit_outlined),
                   title: Text('Open & edit'),
+                )),
+            PopupMenuItem(
+                value: 'folder',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: Icon(Icons.create_new_folder_outlined),
+                  title: Text('Add to folder…'),
                 )),
             PopupMenuItem(
                 value: 'delete',

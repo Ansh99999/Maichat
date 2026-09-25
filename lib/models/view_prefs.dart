@@ -51,6 +51,7 @@ abstract final class BrowseSection {
   static const String discover = 'discover';
   static const String lorebooks = 'lorebooks';
   static const String scenarios = 'scenarios';
+  static const String folders = 'folders';
 }
 
 /// Which shape each browsable section was last left in.

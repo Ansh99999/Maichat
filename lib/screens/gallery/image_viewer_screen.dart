@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/floating_image.dart';
+import '../../models/folder.dart';
 import '../../models/gallery_image.dart';
 import '../../state/app_state.dart';
 import '../../services/jank_logger.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/photo_surface.dart';
+import '../../widgets/add_to_folder_sheet.dart';
 import 'gallery_actions.dart';
 
 /// What a viewer offers beyond looking, chosen by where it was opened from.
@@ -325,6 +327,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     onStar: () => state.toggleGalleryStar(current.id),
                     onAvatar: () => _toggleAvatar(state, current),
                     onSend: () => _sendToChat(state, current),
+                    onAddToFolder: () => showAddToFolderSheet(
+                      context,
+                      kind: FolderItemKind.gallery,
+                      itemId: current.id,
+                    ),
                     onDelete: () => _delete(state, current),
                   ),
                 ),
@@ -499,6 +506,7 @@ class _ActionBar extends StatelessWidget {
     required this.onStar,
     required this.onAvatar,
     required this.onSend,
+    required this.onAddToFolder,
     required this.onDelete,
   });
 
@@ -514,6 +522,7 @@ class _ActionBar extends StatelessWidget {
   final VoidCallback onStar;
   final VoidCallback onAvatar;
   final VoidCallback onSend;
+  final VoidCallback onAddToFolder;
   final VoidCallback onDelete;
 
   @override
@@ -600,6 +609,11 @@ class _ActionBar extends StatelessWidget {
                 tint: isAvatar ? Colors.lightBlueAccent : null,
                 dim: !canBeAvatar,
                 onTap: onAvatar,
+              ),
+              _ViewerAction(
+                icon: Icons.create_new_folder_outlined,
+                label: 'Folder',
+                onTap: onAddToFolder,
               ),
               _ViewerAction(
                 icon: Icons.delete_outline,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/character.dart';
+import '../../models/folder.dart';
 import '../../models/gallery_image.dart';
 import '../../models/view_prefs.dart';
 import '../../services/gallery_group.dart';
@@ -72,6 +73,12 @@ class _GalleryScreenState extends State<GalleryScreen> {
   String? _ownerFilter;
   bool _filterUnowned = false;
 
+  /// A "Folder Gallery" filter, in the whole-app gallery only: when set, the
+  /// gallery shows the union of the folder's own pictures and every picture
+  /// belonging to one of its characters. Wins over [_ownerFilter] /
+  /// [_filterUnowned] while it is set.
+  String? _folderFilter;
+
   GalleryZoom _zoom = kDefaultGalleryZoom;
 
   bool _selecting = false;
@@ -117,11 +124,24 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final filtered = pool.where((image) {
       if (_starredOnly && !image.starred) return false;
       if (!_isAlbum) {
-        if (_filterUnowned && image.characterId != null) return false;
-        if (!_filterUnowned &&
-            _ownerFilter != null &&
-            image.characterId != _ownerFilter) {
-          return false;
+        final folder = _folderFilter == null
+            ? null
+            : state.folderById(_folderFilter);
+        if (folder != null) {
+          // The folder's own pictures, plus everything owned by one of its
+          // characters.
+          final owned = image.characterId != null &&
+              folder.characterIds.contains(image.characterId);
+          if (!owned && !folder.galleryImageIds.contains(image.id)) {
+            return false;
+          }
+        } else {
+          if (_filterUnowned && image.characterId != null) return false;
+          if (!_filterUnowned &&
+              _ownerFilter != null &&
+              image.characterId != _ownerFilter) {
+            return false;
+          }
         }
       }
       // Every chosen tag must be present — the same AND semantics the character
@@ -278,16 +298,33 @@ class _GalleryScreenState extends State<GalleryScreen> {
       builder: (context) => _OwnerFilterSheet(
         characters: state.characters,
         countOf: state.galleryCountFor,
-        selected: _filterUnowned
-            ? const _OwnerChoice.unowned()
-            : _OwnerChoice(_ownerFilter),
+        folders: state.folders,
+        folderCountOf: (folder) => _folderImageCount(state, folder),
+        selected: _folderFilter != null
+            ? _OwnerChoice.folder(_folderFilter)
+            : _filterUnowned
+                ? const _OwnerChoice.unowned()
+                : _OwnerChoice(_ownerFilter),
       ),
     );
     if (picked == null) return;
     setState(() {
+      _folderFilter = picked.folderId;
       _filterUnowned = picked.unowned;
       _ownerFilter = picked.unowned ? null : picked.characterId;
     });
+  }
+
+  /// Pictures a "Folder Gallery" filter would show: the folder's own pictures
+  /// plus everything owned by one of its characters.
+  int _folderImageCount(AppState state, Folder folder) {
+    final owners = folder.characterIds.toSet();
+    final ids = folder.galleryImageIds.toSet();
+    return state.gallery
+        .where((image) =>
+            (image.characterId != null && owners.contains(image.characterId)) ||
+            ids.contains(image.id))
+        .length;
   }
 
   void _say(String message) => ScaffoldMessenger.of(context).showSnackBar(
@@ -486,7 +523,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
                 child: _ControlChip(
                   icon: Icons.person_outline,
                   label: _ownerLabel(state),
-                  selected: _filterUnowned || _ownerFilter != null,
+                  selected: _filterUnowned ||
+                      _ownerFilter != null ||
+                      _folderFilter != null,
                   onTap: () => _pickOwner(state),
                 ),
               ),
@@ -498,6 +537,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
   );
 
   String _ownerLabel(AppState state) {
+    if (_folderFilter != null) {
+      return state.folderById(_folderFilter)?.displayName ?? 'Folder';
+    }
     if (_filterUnowned) return 'Unassigned';
     final owner = state.characterById(_ownerFilter);
     return owner?.displayName ?? 'Everyone';
@@ -866,22 +908,37 @@ class _ControlChip extends StatelessWidget {
 
 /// Which character's pictures to show, in the whole-app gallery.
 class _OwnerChoice {
-  const _OwnerChoice(this.characterId) : unowned = false;
-  const _OwnerChoice.unowned() : characterId = null, unowned = true;
+  const _OwnerChoice(this.characterId)
+      : unowned = false,
+        folderId = null;
+  const _OwnerChoice.unowned()
+      : characterId = null,
+        unowned = true,
+        folderId = null;
+  const _OwnerChoice.folder(this.folderId)
+      : characterId = null,
+        unowned = false;
 
   final String? characterId;
   final bool unowned;
+
+  /// When set, a "Folder Gallery" filter rather than a single character.
+  final String? folderId;
 }
 
 class _OwnerFilterSheet extends StatelessWidget {
   const _OwnerFilterSheet({
     required this.characters,
     required this.countOf,
+    required this.folders,
+    required this.folderCountOf,
     required this.selected,
   });
 
   final List<Character> characters;
   final int Function(String? characterId) countOf;
+  final List<Folder> folders;
+  final int Function(Folder folder) folderCountOf;
   final _OwnerChoice selected;
 
   @override
@@ -897,7 +954,9 @@ class _OwnerFilterSheet extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.people_alt_outlined),
             title: const Text('Everyone'),
-            trailing: (!selected.unowned && selected.characterId == null)
+            trailing: (!selected.unowned &&
+                    selected.characterId == null &&
+                    selected.folderId == null)
                 ? const Icon(Icons.check)
                 : null,
             onTap: () => Navigator.of(context).pop(const _OwnerChoice(null)),
@@ -914,6 +973,26 @@ class _OwnerFilterSheet extends StatelessWidget {
               onTap: () =>
                   Navigator.of(context).pop(const _OwnerChoice.unowned()),
             ),
+          // "Folder Gallery" entries: a folder's own pictures plus its
+          // characters' pictures, gathered under the folder's name.
+          for (final folder in folders)
+            if (folderCountOf(folder) > 0)
+              ListTile(
+                leading: Icon(
+                  Icons.folder_outlined,
+                  color: folder.color == 0 ? null : Color(folder.color),
+                ),
+                title: Text(folder.displayName),
+                subtitle: Text(
+                  'Folder Gallery · ${folderCountOf(folder)} '
+                  'picture${folderCountOf(folder) == 1 ? '' : 's'}',
+                ),
+                trailing: selected.folderId == folder.id
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () =>
+                    Navigator.of(context).pop(_OwnerChoice.folder(folder.id)),
+              ),
           const Divider(height: 1),
           for (final character in characters)
             // A character with no pictures is not worth a row in a filter.

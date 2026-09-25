@@ -9,6 +9,7 @@ import '../models/chat_interface.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
 import '../models/embedding.dart';
+import '../models/folder.dart';
 import '../models/gallery_image.dart';
 import '../models/image_gen.dart';
 import '../models/interface_preset.dart';
@@ -50,6 +51,7 @@ class Storage {
   static const _charactersKey = 'characters';
   static const _lorebooksKey = 'lorebooks';
   static const _scenariosKey = 'scenarios';
+  static const _foldersKey = 'folders';
   static const _regexRulesKey = 'regexRules';
   static const _galleryKey = 'gallery';
   static const _activeKey = 'activeConversation';
@@ -298,6 +300,32 @@ class Storage {
       (await _prefs).setString(
         _scenariosKey,
         jsonEncode(scenarios.map((s) => s.toJson()).toList()),
+      );
+
+  /// The folders that bundle characters with their shared essentials. Its own
+  /// entry, like the scenarios beside it — a folder edit never rewrites anything
+  /// large. Backups pick this key up automatically, entry by entry.
+  Future<List<Folder>> loadFolders() async {
+    final raw = (await _prefs).getString(_foldersKey);
+    if (raw == null) return <Folder>[];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return json
+            .whereType<Map<String, dynamic>>()
+            .map(Folder.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Same as everywhere else: never let bad data wedge the app.
+    }
+    return <Folder>[];
+  }
+
+  Future<void> saveFolders(List<Folder> folders) async =>
+      (await _prefs).setString(
+        _foldersKey,
+        jsonEncode(folders.map((f) => f.toJson()).toList()),
       );
 
   /// The regex find/replace rules the user has written or imported. Its own

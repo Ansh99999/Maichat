@@ -6,9 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/scenario.dart';
+import '../../models/folder.dart';
 import '../../models/view_prefs.dart';
 import '../../services/scenario_codec.dart';
 import '../../state/app_state.dart';
+import '../../widgets/add_to_folder_sheet.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/export_sheet.dart';
 import '../../widgets/library_drawer.dart';
@@ -361,6 +363,12 @@ class _ScenariosScreenState extends State<ScenariosScreen> {
       case _ScenarioAction.duplicate:
         await state.duplicateScenario(scenario);
         _say('Scenario duplicated.');
+      case _ScenarioAction.addToFolder:
+        await showAddToFolderSheet(
+          context,
+          kind: FolderItemKind.scenario,
+          itemId: scenario.id,
+        );
       case _ScenarioAction.delete:
         await _confirmDelete(state, scenario);
     }
@@ -698,6 +706,7 @@ enum _ScenarioAction {
   copyText('Copy text', Icons.copy_outlined),
   download('Download', Icons.download_outlined),
   duplicate('Duplicate', Icons.copy_all_outlined),
+  addToFolder('Add to folder…', Icons.create_new_folder_outlined),
   delete('Delete', Icons.delete_outline);
 
   const _ScenarioAction(this.label, this.icon);
