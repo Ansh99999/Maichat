@@ -120,6 +120,8 @@ class _FolderWindowState extends State<_FolderWindow> {
         PopupMenuItem(value: 'edit', child: Text('Edit')),
         PopupMenuItem(value: 'import', child: Text('Import')),
         PopupMenuItem(value: 'export', child: Text('Export')),
+        PopupMenuDivider(),
+        PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
     );
     if (!mounted) return;
@@ -136,7 +138,35 @@ class _FolderWindowState extends State<_FolderWindow> {
         if (imported != null) await state.addFolder(imported);
       case 'export':
         await FolderIO.exportFolder(context, folder, state);
+      case 'delete':
+        await _delete(state, folder);
     }
+  }
+
+  Future<void> _delete(AppState state, Folder folder) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete folder?'),
+        content: Text(
+          '"${folder.displayName}" will be removed. Its characters and library '
+          'items will be kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await state.deleteFolder(folder.id);
+    if (mounted) Navigator.of(context).pop(); // close the window
   }
 
   @override
