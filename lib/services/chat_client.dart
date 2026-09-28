@@ -152,7 +152,16 @@ class ChatClient {
   ///
   /// [Provider.customHeaders] is merged last so a user can deliberately override
   /// anything above — including the auth header — which is the point of it.
-  Map<String, String> _headers(Provider provider, {bool stream = false}) {
+  Map<String, String> _headers(Provider provider, {bool stream = false}) =>
+      requestHeaders(provider, stream: stream);
+
+  /// [_headers], for the other clients that talk to the same provider (the
+  /// Character Studio's `AgentClient`), so auth and custom headers are decided
+  /// in one place.
+  static Map<String, String> requestHeaders(
+    Provider provider, {
+    bool stream = false,
+  }) {
     final key = provider.apiKey.trim();
     return {
       'Content-Type': 'application/json',
@@ -471,7 +480,10 @@ class ChatClient {
 
   /// Token usage out of an OpenAI-shaped `usage` object, covering the field names
   /// the chat and Responses dialects use for the same numbers.
-  static TokenUsage? _openAiUsage(Object? raw) {
+  static TokenUsage? _openAiUsage(Object? raw) => openAiUsage(raw);
+
+  /// [_openAiUsage], shared with `AgentClient`.
+  static TokenUsage? openAiUsage(Object? raw) {
     if (raw is! Map<String, dynamic>) return null;
     final input = (raw['prompt_tokens'] ?? raw['input_tokens']) as num?;
     final output = (raw['completion_tokens'] ?? raw['output_tokens']) as num?;
@@ -494,7 +506,10 @@ class ChatClient {
 
   /// Token usage out of Gemini's `usageMetadata`. Gemini reports a running total
   /// on every chunk rather than a final tally, so the last one seen wins.
-  static TokenUsage? _geminiUsage(Object? raw) {
+  static TokenUsage? _geminiUsage(Object? raw) => geminiUsage(raw);
+
+  /// [_geminiUsage], shared with `AgentClient`.
+  static TokenUsage? geminiUsage(Object? raw) {
     if (raw is! Map<String, dynamic>) return null;
     final input = raw['promptTokenCount'] as num?;
     final output = raw['candidatesTokenCount'] as num?;
@@ -1196,7 +1211,12 @@ class ChatClient {
     return flat.length <= 300 ? flat : '${flat.substring(0, 300)}...';
   }
 
-  static String _describeErrorBody(Map<String, dynamic> json) {
+  static String _describeErrorBody(Map<String, dynamic> json) =>
+      describeErrorBody(json);
+
+  /// The sentence an error body carries, shared with `AgentClient` so a failed
+  /// agent turn reads like a failed reply.
+  static String describeErrorBody(Map<String, dynamic> json) {
     final error = json['error'];
     if (error is Map<String, dynamic>) {
       final message = error['message'];
