@@ -62,6 +62,13 @@ class AgentRunOutcome {
 const int kFreshToolTurns = 2;
 const int _staleToolChars = 400;
 
+/// What the model is told on its last allowed step, sent with no tools so it
+/// can only answer in words (OpenCode's max-steps prompt, in spirit).
+const String kStepLimitNote =
+    '[Studio note] You have reached the step limit for this message, so tools '
+    'are switched off. Reply in words only: summarise what was done, what '
+    'remains, and what the user should do next (for example, reply "continue").';
+
 /// Runs one agent: ask the model, run the tools it calls, hand back the
 /// results, and repeat until it answers in words, runs out of steps, or is
 /// stopped.
@@ -125,6 +132,15 @@ class AgentRunner {
     var lastText = '';
     for (var step = 0; step < maxSteps; step++) {
       if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
+      // The last allowed step (after at least one working one) goes out with
+      // no tools and a note asking for a summary, so a run that hits the
+      // ceiling still ends with an account of where it got to.
+      final last = step == maxSteps - 1 && step > 0;
+      if (last) {
+        final note = AgentMessage.user(kStepLimitNote);
+        transcript.add(note);
+        observer.onMessage?.call(name, note);
+      }
       final client = AgentClient();
       _clients.add(client);
       final text = StringBuffer();
@@ -134,7 +150,7 @@ class AgentRunner {
         await for (final delta in turn(
           client,
           [AgentMessage.system(systemPrompt), ...wireView(transcript)],
-          specs,
+          last ? const <ToolSpec>[] : specs,
         )) {
           if (delta.text.isNotEmpty) {
             text.write(delta.text);
@@ -155,11 +171,14 @@ class AgentRunner {
       }
       // A cancelled stream may have yielded calls; a call with no result
       // would poison the transcript, so a stop mid-stream keeps words only.
-      if (_cancelled) calls.clear();
+      // A model that calls a tool on the summary step (it was offered none)
+      // is held to words the same way.
+      if (_cancelled || last) calls.clear();
       final said = text.toString().trim();
       if (said.isNotEmpty) lastText = said;
       if (said.isEmpty && calls.isEmpty) {
         if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
+        if (last) return AgentRunOutcome(AgentRunEnd.stepLimit, lastText);
         // A turn with no words and no calls (thinking alone, or nothing) is an
         // answer too, but it is not recorded: resending an empty assistant
         // turn is something several hosts reject outright.
@@ -174,6 +193,7 @@ class AgentRunner {
       transcript.add(assistant);
       observer.onMessage?.call(name, assistant);
       if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
+      if (last) return AgentRunOutcome(AgentRunEnd.stepLimit, lastText);
       if (calls.isEmpty) return AgentRunOutcome(AgentRunEnd.finished, lastText);
 
       // All of a turn's calls run together: helpers asked for side by side
@@ -204,7 +224,7 @@ class AgentRunner {
     } else if (call.argumentError != null) {
       result = AgentMessage.toolResult(call, call.argumentError!, isError: true);
     } else {
-      final out = await tool.call(context, call.arguments);
+      final out = await tool.call(context.forCall(call), call.arguments);
       result = AgentMessage.toolResult(call, out.text, isError: out.isError);
     }
     observer.onToolEnd?.call(name, call, result);
@@ -212,7 +232,9 @@ class AgentRunner {
   }
 
   /// The transcript as it is sent: whole, except that tool output from before
-  /// the last [kFreshToolTurns] assistant turns is cut short.
+  /// the last [kFreshToolTurns] assistant turns is cut down to its head and
+  /// tail with a marker in the middle (the way Codex truncates tool output),
+  /// so the model still sees what the result was about and how it ended.
   static List<AgentMessage> wireView(List<AgentMessage> transcript) {
     var assistantsSeen = 0;
     var cutoff = 0;
@@ -233,12 +255,23 @@ class AgentRunner {
               id: transcript[i].toolCallId ?? '',
               name: transcript[i].toolName ?? '',
             ),
-            '${transcript[i].text.substring(0, _staleToolChars)}… '
-            '[older tool output shortened; call the tool again if you need it]',
+            shortenMiddle(transcript[i].text),
             isError: transcript[i].isError,
           )
         else
           transcript[i],
     ];
+  }
+
+  /// [text] with its middle cut out, keeping the first and last
+  /// [_staleToolChars] / 2 characters and saying how much went.
+  static String shortenMiddle(String text) {
+    const keep = _staleToolChars ~/ 2;
+    if (text.length <= _staleToolChars) return text;
+    final cut = text.length - keep * 2;
+    // Roughly four characters to a token — only a hint for the model.
+    return '${text.substring(0, keep)}\n…${(cut / 4).ceil()} tokens truncated '
+        '(older tool output; call the tool again if you need it)…\n'
+        '${text.substring(text.length - keep)}';
   }
 }

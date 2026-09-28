@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/agent_message.dart';
+import 'package:maichat/models/message_image.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/services/agent_client.dart';
 import 'package:maichat/services/chat_client.dart';
@@ -759,6 +760,93 @@ void main() {
     );
     expect(responses.text, 'Ok.');
     expect(responses.toolCalls.single.id, 'r1');
+  });
+
+  group('pictures on a user turn', () {
+    const url = MessageImage(ref: 'https://img.tld/a.png', mime: 'image/png');
+    const stored = MessageImage(ref: 'local:b.png', mime: 'image/jpeg', data: 'QkFTRTY0');
+    const gone = MessageImage(ref: 'local:c.png');
+    final turn = [
+      AgentMessage.user('Like these.', images: const [url, stored, gone]),
+    ];
+    Provider kindOf(ProviderKind kind) => Provider(
+          id: 'p',
+          name: 't',
+          kind: kind,
+          baseUrl: 'https://host.tld/v1',
+          model: 'm',
+        );
+    Map<String, dynamic> bodyFor(ProviderKind kind) => AgentClient.body(
+        kindOf(kind), turn, const [], const AgentParams());
+
+    test('OpenAI chat: text then image_url parts, a gone file dropped', () {
+      final content =
+          ((bodyFor(ProviderKind.openai)['messages'] as List).single as Map)['content']
+              as List;
+      expect(content, [
+        {'type': 'text', 'text': 'Like these.'},
+        {
+          'type': 'image_url',
+          'image_url': {'url': 'https://img.tld/a.png'},
+        },
+        {
+          'type': 'image_url',
+          'image_url': {'url': 'data:image/jpeg;base64,QkFTRTY0'},
+        },
+      ]);
+    });
+
+    test('Responses: input_image with a flat image_url', () {
+      final content = ((bodyFor(ProviderKind.openaiResponses)['input'] as List)
+          .single as Map)['content'] as List;
+      expect(content.skip(1), [
+        {'type': 'input_image', 'image_url': 'https://img.tld/a.png'},
+        {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,QkFTRTY0'},
+      ]);
+    });
+
+    test('Anthropic: image blocks before the text', () {
+      final blocks = ((bodyFor(ProviderKind.anthropic)['messages'] as List)
+          .single as Map)['content'] as List;
+      expect(blocks, [
+        {
+          'type': 'image',
+          'source': {'type': 'url', 'url': 'https://img.tld/a.png'},
+        },
+        {
+          'type': 'image',
+          'source': {
+            'type': 'base64',
+            'media_type': 'image/jpeg',
+            'data': 'QkFTRTY0',
+          },
+        },
+        {'type': 'text', 'text': 'Like these.'},
+      ]);
+    });
+
+    test('Gemini: inlineData only, the URL-only picture left out', () {
+      final parts = ((bodyFor(ProviderKind.gemini)['contents'] as List)
+          .single as Map)['parts'] as List;
+      expect(parts, [
+        {'text': 'Like these.'},
+        {
+          'inlineData': {'mimeType': 'image/jpeg', 'data': 'QkFTRTY0'},
+        },
+      ]);
+    });
+
+    test('a turn without pictures keeps the plain string', () {
+      final body = AgentClient.body(kindOf(ProviderKind.openai),
+          [AgentMessage.user('hi')], const [], const AgentParams());
+      expect(((body['messages'] as List).single as Map)['content'], 'hi');
+    });
+
+    test('images are saved as refs only', () {
+      final json = jsonEncode(turn.single.toJson());
+      expect(json, contains('local:b.png'));
+      expect(json, isNot(contains('QkFTRTY0')));
+    });
   });
 
   test('messages survive a save and load', () {

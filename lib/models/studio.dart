@@ -162,6 +162,51 @@ class StudioOp {
       );
 }
 
+/// Where one step of an agent's plan stands.
+enum StudioTodoStatus {
+  pending('pending'),
+  inProgress('in_progress'),
+  completed('completed');
+
+  const StudioTodoStatus(this.wire);
+
+  /// The name the `todo_write` tool uses.
+  final String wire;
+
+  static StudioTodoStatus? fromWire(Object? value) {
+    for (final s in StudioTodoStatus.values) {
+      if (s.wire == value || s.name == value) return s;
+    }
+    return null;
+  }
+}
+
+/// One step of an agent's plan, written with the `todo_write` tool so a long
+/// build shows where it is.
+class StudioTodo {
+  const StudioTodo({required this.content, this.status = StudioTodoStatus.pending});
+
+  final String content;
+  final StudioTodoStatus status;
+
+  Map<String, dynamic> toJson() => {'content': content, 'status': status.wire};
+
+  static StudioTodo? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final content = (json['content'] as String? ?? '').trim();
+    if (content.isEmpty) return null;
+    return StudioTodo(
+      content: content,
+      status: StudioTodoStatus.fromWire(json['status']) ?? StudioTodoStatus.pending,
+    );
+  }
+
+  static List<StudioTodo> listFrom(Object? json) => [
+        if (json is List)
+          for (final t in json) ?StudioTodo.fromJson(t),
+      ];
+}
+
 /// Where a sub-agent's run stands.
 enum StudioAgentStatus { running, done, failed, cancelled }
 
@@ -183,7 +228,11 @@ class StudioSubagent {
     this.inputTokens = 0,
     this.outputTokens = 0,
     this.report,
+    List<StudioTodo>? todos,
+    List<String>? resumeCallIds,
   })  : transcript = transcript ?? <AgentMessage>[],
+        todos = todos ?? <StudioTodo>[],
+        resumeCallIds = resumeCallIds ?? <String>[],
         startedAt = startedAt ?? DateTime.now();
 
   final String id;
@@ -204,7 +253,12 @@ class StudioSubagent {
   final String role;
 
   final List<AgentMessage> transcript;
-  final DateTime startedAt;
+
+  /// The `task` calls that carried it on since, by `task_id`.
+  final List<String> resumeCallIds;
+
+  /// When its current run began — reset when it is carried on.
+  DateTime startedAt;
   DateTime? endedAt;
   StudioAgentStatus status;
   int inputTokens;
@@ -213,7 +267,14 @@ class StudioSubagent {
   /// What it reported back, once it has.
   String? report;
 
+  /// Its own plan, from its `todo_write` calls.
+  final List<StudioTodo> todos;
+
   String get label => 'Subagent $number';
+
+  /// How many tools it has called so far.
+  int get toolCallCount =>
+      transcript.fold(0, (n, m) => n + m.toolCalls.length);
 
   bool get running => status == StudioAgentStatus.running;
 
@@ -237,6 +298,8 @@ class StudioSubagent {
         'inputTokens': inputTokens,
         'outputTokens': outputTokens,
         if (report != null) 'report': report,
+        if (todos.isNotEmpty) 'todos': [for (final t in todos) t.toJson()],
+        if (resumeCallIds.isNotEmpty) 'resumeCallIds': resumeCallIds,
       };
 
   factory StudioSubagent.fromJson(Map<String, dynamic> json) {
@@ -265,6 +328,11 @@ class StudioSubagent {
       inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
       outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
       report: json['report'] as String?,
+      todos: StudioTodo.listFrom(json['todos']),
+      resumeCallIds: [
+        if (json['resumeCallIds'] is List)
+          for (final c in json['resumeCallIds'] as List) '$c',
+      ],
     );
   }
 }
@@ -283,6 +351,7 @@ class StudioSession {
     List<AgentMessage>? transcript,
     List<StudioOp>? ops,
     List<StudioSubagent>? subagents,
+    List<StudioTodo>? todos,
     this.sourceCharacterId,
     this.folderId,
     this.appliedAt,
@@ -295,6 +364,7 @@ class StudioSession {
   })  : transcript = transcript ?? <AgentMessage>[],
         ops = ops ?? <StudioOp>[],
         subagents = subagents ?? <StudioSubagent>[],
+        todos = todos ?? <StudioTodo>[],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -306,6 +376,9 @@ class StudioSession {
 
   /// Every sub-agent this session has spawned, oldest first.
   final List<StudioSubagent> subagents;
+
+  /// The main agent's plan, from its `todo_write` calls.
+  final List<StudioTodo> todos;
 
   /// The library character this session was opened from, when it was.
   final String? sourceCharacterId;
@@ -396,6 +469,7 @@ class StudioSession {
         'ops': [for (final o in ops) o.toJson()],
         if (subagents.isNotEmpty)
           'subagents': [for (final a in subagents) a.toJson()],
+        if (todos.isNotEmpty) 'todos': [for (final t in todos) t.toJson()],
         if (sourceCharacterId != null) 'sourceCharacterId': sourceCharacterId,
         if (folderId != null) 'folderId': folderId,
         if (appliedAt != null) 'appliedAt': appliedAt!.toIso8601String(),
@@ -430,6 +504,7 @@ class StudioSession {
             for (final a in json['subagents'] as List)
               if (a is Map) StudioSubagent.fromJson(Map<String, dynamic>.from(a)),
         ],
+        todos: StudioTodo.listFrom(json['todos']),
         sourceCharacterId: json['sourceCharacterId'] as String?,
         folderId: json['folderId'] as String?,
         appliedAt: DateTime.tryParse(json['appliedAt'] as String? ?? ''),
@@ -454,6 +529,7 @@ class StudioConfig {
     this.stream = true,
     this.maxSteps = kStudioDefaultMaxSteps,
     this.subAgents = true,
+    this.maxParallelSubagents = kStudioDefaultParallelSubagents,
     this.systemPrompt = '',
   });
 
@@ -470,8 +546,12 @@ class StudioConfig {
   /// asked to report — the ceiling on what a single "go" can spend.
   final int maxSteps;
 
-  /// Whether the agent may hand work to helpers (`delegate`).
+  /// Whether the agent may hand work to sub-agents (the `task` tool).
   final bool subAgents;
+
+  /// How many sub-agents may work at once. More can be asked for — the rest
+  /// wait for a place rather than failing.
+  final int maxParallelSubagents;
 
   /// The builder's instructions, or empty for the built-in ones.
   final String systemPrompt;
@@ -484,6 +564,7 @@ class StudioConfig {
     bool? stream,
     int? maxSteps,
     bool? subAgents,
+    int? maxParallelSubagents,
     String? systemPrompt,
   }) =>
       StudioConfig(
@@ -494,6 +575,7 @@ class StudioConfig {
         stream: stream ?? this.stream,
         maxSteps: maxSteps ?? this.maxSteps,
         subAgents: subAgents ?? this.subAgents,
+        maxParallelSubagents: maxParallelSubagents ?? this.maxParallelSubagents,
         systemPrompt: systemPrompt ?? this.systemPrompt,
       );
 
@@ -505,6 +587,8 @@ class StudioConfig {
         if (!stream) 'stream': false,
         'maxSteps': maxSteps,
         if (!subAgents) 'subAgents': false,
+        if (maxParallelSubagents != kStudioDefaultParallelSubagents)
+          'maxParallelSubagents': maxParallelSubagents,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
       };
 
@@ -517,8 +601,14 @@ class StudioConfig {
         maxSteps: ((json['maxSteps'] as num?)?.toInt() ?? kStudioDefaultMaxSteps)
             .clamp(1, 200),
         subAgents: json['subAgents'] as bool? ?? true,
+        maxParallelSubagents: ((json['maxParallelSubagents'] as num?)?.toInt() ??
+                kStudioDefaultParallelSubagents)
+            .clamp(1, 50),
         systemPrompt: json['systemPrompt'] as String? ?? '',
       );
 }
 
 const int kStudioDefaultMaxSteps = 40;
+
+/// How many sub-agents work at once unless the user says otherwise.
+const int kStudioDefaultParallelSubagents = 20;

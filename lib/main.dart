@@ -20,6 +20,7 @@ import 'services/avatar_store.dart';
 import 'services/backup_store.dart';
 import 'services/embedding_store.dart';
 import 'services/image_cache_tuning.dart';
+import 'services/studio/studio_store.dart';
 import 'state/app_state.dart';
 
 Future<void> main() async {
@@ -39,15 +40,25 @@ Future<void> main() async {
   // The folder the app keeps its own backups in, so a scheduled export has
   // somewhere to write without a save dialog.
   final backups = await BackupStore.open();
+  // Studio sessions are files too, and the picture sweep at startup has to
+  // know which pictures they name before anything opens them.
+  final studio = await StudioStore.open();
   runApp(MaiChatApp(
     avatars: avatars,
     embeddings: embeddings,
     backups: backups,
+    studio: studio,
   ));
 }
 
 class MaiChatApp extends StatelessWidget {
-  const MaiChatApp({super.key, this.avatars, this.embeddings, this.backups});
+  const MaiChatApp({
+    super.key,
+    this.avatars,
+    this.embeddings,
+    this.backups,
+    this.studio,
+  });
 
   /// The pictures directory, or null when the platform would not name one.
   final AvatarStore? avatars;
@@ -58,6 +69,10 @@ class MaiChatApp extends StatelessWidget {
   /// The backups directory, or null when the platform would not name one.
   final BackupStore? backups;
 
+  /// The Studio's sessions directory, or null when the platform would not name
+  /// one.
+  final StudioStore? studio;
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<AppState>(
@@ -65,6 +80,7 @@ class MaiChatApp extends StatelessWidget {
         avatars: avatars,
         embeddings: embeddings,
         backups: backups,
+        studio: studio,
       )..init(),
       // Outside the builder so a late palette does not rebuild app state.
       child: DynamicColorBuilder(

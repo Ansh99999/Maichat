@@ -208,6 +208,17 @@ class StudioController extends ChangeNotifier {
       noticeIsError = true;
     } finally {
       _lead = null;
+      for (final a in session.subagents) {
+        if (a.running) {
+          a
+            ..status = StudioAgentStatus.cancelled
+            ..endedAt ??= DateTime.now();
+        }
+      }
+      for (final waiting in _taskQueue) {
+        waiting.complete();
+      }
+      _taskQueue.clear();
       for (final live in _live.values) {
         live
           ..clearWords()
@@ -263,61 +274,198 @@ class StudioController extends ChangeNotifier {
         },
       );
 
-  /// Runs a helper for the `delegate` call currently being answered.
-  Future<String> _runHelper(String helper, String task) async {
+  // --- sub-agents ------------------------------------------------------------
+
+  /// How many sub-agents are working now, and who is waiting for a place.
+  int _tasksRunning = 0;
+  final List<Completer<void>> _taskQueue = <Completer<void>>[];
+
+  /// Whether any sub-agent is working right now.
+  bool get anySubagentRunning => session.subagents.any((a) => a.running);
+
+  /// The plan of the agent named [agentId] ([kMainAgent] or a sub-agent's
+  /// id), from its `todo_write` calls.
+  List<StudioTodo> todosFor(String agentId) => agentId == kMainAgent
+      ? session.todos
+      : subagent(agentId)?.todos ?? const <StudioTodo>[];
+
+  /// The sub-agent a `task` call started (or carried on), if any.
+  StudioSubagent? subagentForCall(String callId) {
+    for (final a in session.subagents) {
+      if (a.callId == callId || a.resumeCallIds.contains(callId)) return a;
+    }
+    return null;
+  }
+
+  Future<void> _takeTaskPlace() async {
+    while (_tasksRunning >= state.studioConfig.maxParallelSubagents) {
+      final turn = Completer<void>();
+      _taskQueue.add(turn);
+      await turn.future;
+    }
+    _tasksRunning++;
+  }
+
+  void _giveTaskPlace() {
+    _tasksRunning--;
+    if (_taskQueue.isNotEmpty) _taskQueue.removeAt(0).complete();
+  }
+
+  /// Runs one sub-agent for a `task` call: a fresh agent with its own
+  /// conversation, or — with [taskId] — the one that already has that id,
+  /// carried on with the new prompt. Waits for a place when
+  /// [StudioConfig.maxParallelSubagents] are already working.
+  Future<StudioTaskOutcome> _runTask({
+    required String agentType,
+    required String description,
+    required String prompt,
+    required String callId,
+    String? taskId,
+  }) async {
     final lead = _lead;
-    if (lead == null) return 'The run was stopped.';
-    // Which delegate call this is: the newest one still waiting on this helper
-    // with no run of its own yet.
-    final callId = activeCalls.values
-            .where((c) =>
-                c.name == 'delegate' &&
-                c.arguments['helper'] == helper &&
-                !helpers.containsKey(c.id))
-            .map((c) => c.id)
-            .firstOrNull ??
-        'helper-${helpers.length}';
-    final run = HelperRun(callId: callId, helper: helper, task: task);
-    helpers[callId] = run;
-    notifyListeners();
+    StudioTaskOutcome ended(String label, String id, String status, String report) =>
+        StudioTaskOutcome(label: label, taskId: id, status: status, report: report);
+    if (lead == null || lead.cancelled) {
+      return ended('', '', 'cancelled', 'The run was stopped before this task began.');
+    }
+    StudioSubagent? agent;
+    if (taskId != null) {
+      agent = subagent(taskId);
+      if (agent == null) {
+        final known = session.subagents.map((a) => '${a.id} (${a.label})');
+        return ended('', taskId, 'failed',
+            'No sub-agent has task_id "$taskId". '
+            '${known.isEmpty ? 'None exist yet; leave task_id out to start one.' : 'Known: ${known.join(', ')}.'}');
+      }
+      if (agent.running) {
+        return ended(agent.label, agent.id, 'failed',
+            '${agent.label} is still working; wait for its report first.');
+      }
+    }
+    await _takeTaskPlace();
+    try {
+      if (lead.cancelled) {
+        return ended(agent?.label ?? '', agent?.id ?? '', 'cancelled',
+            'The run was stopped before this task began.');
+      }
+      final StudioSubagent sub;
+      if (agent == null) {
+        final number = session.subagents.length + 1;
+        sub = StudioSubagent(
+          id: '${DateTime.now().microsecondsSinceEpoch}-$number',
+          number: number,
+          description: description,
+          prompt: prompt,
+          callId: callId,
+          role: agentType,
+          transcript: [AgentMessage.user(prompt)],
+        );
+        session.subagents.add(sub);
+      } else {
+        sub = agent
+          ..transcript.add(AgentMessage.user(prompt))
+          ..resumeCallIds.add(callId)
+          ..status = StudioAgentStatus.running
+          ..startedAt = DateTime.now()
+          ..endedAt = null
+          ..report = null;
+      }
+      _save();
+      notifyListeners();
+      return await _runSubagent(lead, sub);
+    } finally {
+      _giveTaskPlace();
+    }
+  }
+
+  Future<StudioTaskOutcome> _runSubagent(AgentRunner lead, StudioSubagent sub) async {
     final services = _AppStudioServices(this)..lead = lead;
+    final live = liveFor(sub.id)..clearWords();
     final child = AgentRunner(
-      name: helper,
-      systemPrompt: studioHelperPrompt(helper),
-      tools: studioToolsFor(helper),
+      name: sub.id,
+      systemPrompt: studioAgentPrompt(sub.role),
+      tools: studioToolsFor(sub.role),
       context: StudioToolContext(
         session: session,
         services: services,
-        agent: helper,
+        agent: sub.label,
+        subagent: sub,
       ),
-      turn: _turn,
-      // A helper does one task; half the lead's ceiling is plenty.
-      maxSteps: (state.studioConfig.maxSteps / 2).ceil().clamp(4, 40),
-      observer: AgentObserver(
-        onToolStart: (_, call) {
-          run.steps.add(describeCall(call));
+      turn: (client, messages, tools) => state.streamAgentTurn(
+        client: client,
+        messages: messages,
+        tools: tools,
+        onSpend: (usage, cost) {
+          sub
+            ..inputTokens += usage.inputTokens
+            ..outputTokens += usage.outputTokens;
+          session.addUsage(usage, cost);
           _paintSoon();
         },
-        onToolEnd: (_, _, _) {
+      ),
+      maxSteps: state.studioConfig.maxSteps,
+      observer: AgentObserver(
+        onText: (_, delta) {
+          live.text += delta;
+          _paintSoon();
+        },
+        onReasoning: (_, delta) {
+          live.reasoning += delta;
+          _paintSoon();
+        },
+        onToolStart: (_, call) {
+          live.activeCalls[call.id] = call;
+          _paintSoon();
+        },
+        onToolEnd: (_, call, _) {
+          live.activeCalls.remove(call.id);
+          _save();
+          _paintSoon();
+        },
+        onMessage: (_, message) {
+          if (message.role == AgentRole.assistant) live.clearWords();
           _save();
           _paintSoon();
         },
       ),
     );
+    String report;
     try {
-      final outcome = await lead.runChild(child, [AgentMessage.user(task)]);
-      final report = outcome.lastText.trim();
-      return switch (outcome.end) {
-        AgentRunEnd.cancelled => 'Stopped by the user.${report.isEmpty ? '' : ' Partial report: $report'}',
-        AgentRunEnd.stepLimit => 'Ran out of steps before finishing.${report.isEmpty ? '' : ' Report so far: $report'}',
-        AgentRunEnd.finished => report.isEmpty ? 'Done (no report).' : report,
-      };
+      final outcome = await lead.runChild(child, sub.transcript);
+      final said = outcome.lastText.trim();
+      switch (outcome.end) {
+        case AgentRunEnd.finished:
+          sub.status = StudioAgentStatus.done;
+          report = said.isEmpty ? 'Done (it gave no report).' : said;
+        case AgentRunEnd.stepLimit:
+          sub.status = StudioAgentStatus.done;
+          report = 'Stopped at the step limit. '
+              '${said.isEmpty ? '' : 'Its account: $said'}';
+        case AgentRunEnd.cancelled:
+          sub.status = StudioAgentStatus.cancelled;
+          report = 'Stopped by the user.${said.isEmpty ? '' : ' Partial report: $said'}';
+      }
     } on ChatApiException catch (e) {
-      return 'The helper failed: ${e.message}';
-    } finally {
-      run.done = true;
-      _paintSoon();
+      sub.status = StudioAgentStatus.failed;
+      report = 'It failed: ${e.message}';
+    } catch (e) {
+      sub.status = StudioAgentStatus.failed;
+      report = 'It failed: $e';
     }
+    sub
+      ..report = report.trim()
+      ..endedAt = DateTime.now();
+    live
+      ..clearWords()
+      ..activeCalls.clear();
+    _save();
+    _paintSoon();
+    return StudioTaskOutcome(
+      label: sub.label,
+      taskId: sub.id,
+      status: sub.status.name,
+      report: sub.report!,
+    );
   }
 
   // --- the draft ---------------------------------------------------------------
@@ -507,9 +655,19 @@ String describeCall(ToolCall call) {
     'list_library' => 'Looked through the library',
     'read_library_item' => 'Read a library ${quoted(a['kind'])}',
     'attach_library_lorebook' => 'Attached a library lorebook',
+    'task' =>
+      '${studioAgentTypeLabel((a['agent_type'] ?? 'general').toString())} — ${quoted(a['description'])}',
+    'todo_write' => _planLine(a['todos']),
+    // Sessions from before `task` replaced it still show sensibly.
     'delegate' => '${quoted(a['helper']).replaceAll('_', ' ')}: ${quoted(a['task'])}',
     _ => call.name,
   };
+}
+
+String _planLine(Object? todos) {
+  if (todos is! List) return 'Updated the plan';
+  final done = todos.where((t) => t is Map && t['status'] == 'completed').length;
+  return 'Updated the plan ($done/${todos.length} done)';
 }
 
 /// [StudioServices] over the real app.
@@ -572,8 +730,20 @@ class _AppStudioServices implements StudioServices {
   }
 
   @override
-  Future<String> delegate({required String helper, required String task}) =>
-      controller._runHelper(helper, task);
+  Future<StudioTaskOutcome> runTask({
+    required String agentType,
+    required String description,
+    required String prompt,
+    required String callId,
+    String? taskId,
+  }) =>
+      controller._runTask(
+        agentType: agentType,
+        description: description,
+        prompt: prompt,
+        callId: callId,
+        taskId: taskId,
+      );
 }
 
 /// Keeps open sessions' controllers alive across screens. A controller is made

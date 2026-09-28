@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeServices implements StudioServices {
   final List<String> delegated = <String>[];
+  final List<String> callIds = <String>[];
   final List<List<String>> playtests = <List<String>>[];
   Completer<void>? holdDelegates;
   int delegatesRunning = 0;
@@ -54,15 +55,27 @@ class _FakeServices implements StudioServices {
   }
 
   @override
-  Future<String> delegate({required String helper, required String task}) async {
-    delegated.add('$helper: $task');
+  Future<StudioTaskOutcome> runTask({
+    required String agentType,
+    required String description,
+    required String prompt,
+    required String callId,
+    String? taskId,
+  }) async {
+    delegated.add('$agentType: $prompt');
+    callIds.add(callId);
     delegatesRunning++;
     if (delegatesRunning > mostDelegatesAtOnce) {
       mostDelegatesAtOnce = delegatesRunning;
     }
     await holdDelegates?.future;
     delegatesRunning--;
-    return '$helper did it';
+    return StudioTaskOutcome(
+      label: 'Subagent ${delegated.length}',
+      taskId: 'id-${delegated.length}',
+      status: 'done',
+      report: '$agentType did it',
+    );
   }
 }
 
@@ -318,17 +331,102 @@ void main() {
       expect(tooMany.isError, isTrue);
     });
 
-    test('helpers get only their trade', () {
+    test('sub-agents get only their trade, and never task', () {
       List<String> names(String agent, {bool subAgents = true}) =>
           [for (final t in studioToolsFor(agent, subAgents: subAgents)) t.name];
-      expect(names('critic'), ['get_draft', 'read_document', 'playtest']);
+      expect(names('critic'),
+          ['get_draft', 'read_document', 'playtest', 'todo_write']);
       expect(names('lore_writer'), isNot(contains('set_fields')));
       expect(names('writer'), isNot(contains('upsert_lore_entry')));
-      for (final helper in kStudioHelpers.keys) {
-        expect(names(helper), isNot(contains('delegate')));
+      expect(names('general'), containsAll(['set_fields', 'upsert_lore_entry']));
+      for (final type in kStudioAgentTypes.keys) {
+        expect(names(type), isNot(contains('task')));
+        expect(names(type), contains('todo_write'));
       }
-      expect(names('studio'), contains('delegate'));
-      expect(names('studio', subAgents: false), isNot(contains('delegate')));
+      expect(names('studio'), containsAll(['task', 'todo_write']));
+      expect(names('studio', subAgents: false), isNot(contains('task')));
+    });
+
+    test('task validates its type and reports as data', () async {
+      final bad = await call('task', {
+        'description': 'x',
+        'prompt': 'y',
+        'agent_type': 'wizard',
+      });
+      expect(bad.isError, isTrue);
+      expect(bad.text, contains('general'));
+      final missing = await call('task', {'description': 'x'});
+      expect(missing.isError, isTrue);
+      expect(jsonDecode(missing.text)['error'], contains('"prompt" is required'));
+      final ok = _json(await call('task', {
+        'description': 'Write greetings',
+        'prompt': 'Write three greetings.',
+      }));
+      expect(ok['subagent'], 'Subagent 1');
+      expect(ok['task_id'], 'id-1');
+      expect(ok['status'], 'done');
+      expect(ok['report'], 'general did it');
+      // No agent_type means general.
+      expect(services.delegated.single, startsWith('general:'));
+    });
+
+    test('todo_write replaces the plan and allows one step in progress',
+        () async {
+      final two = await call('todo_write', {
+        'todos': [
+          {'content': 'Name her', 'status': 'in_progress'},
+          {'content': 'Write lore', 'status': 'in_progress'},
+        ],
+      });
+      expect(two.isError, isTrue);
+      expect(two.text, contains('exactly one'));
+      expect(session.todos, isEmpty);
+      final badStatus = await call('todo_write', {
+        'todos': [
+          {'content': 'Name her', 'status': 'doing'},
+        ],
+      });
+      expect(badStatus.isError, isTrue);
+      expect(badStatus.text, contains('pending, in_progress or completed'));
+      final ok = _json(await call('todo_write', {
+        'todos': [
+          {'content': 'Name her', 'status': 'completed'},
+          {'content': 'Write lore', 'status': 'in_progress'},
+          {'content': 'Playtest', 'status': 'pending'},
+        ],
+      }));
+      expect(ok['done'], 1);
+      expect(session.todos.map((t) => t.status), [
+        StudioTodoStatus.completed,
+        StudioTodoStatus.inProgress,
+        StudioTodoStatus.pending,
+      ]);
+      // A plan is not a change to the draft.
+      expect(session.ops, isEmpty);
+      final back = StudioSession.fromJson(
+        jsonDecode(jsonEncode(session.toJson())) as Map<String, dynamic>,
+      );
+      expect(back.todos.map((t) => t.content),
+          ['Name her', 'Write lore', 'Playtest']);
+      expect(back.todos[1].status, StudioTodoStatus.inProgress);
+    });
+
+    test("a sub-agent's todo_write writes its own plan", () async {
+      final sub = StudioSubagent(
+        id: 'a',
+        number: 1,
+        description: 'd',
+        prompt: 'p',
+        callId: 'c',
+      );
+      final subCtx = ctx.as(sub.label, subagent: sub);
+      await kStudioTools['todo_write']!.call(subCtx, {
+        'todos': [
+          {'content': 'Mine', 'status': 'pending'},
+        ],
+      });
+      expect(sub.todos.single.content, 'Mine');
+      expect(session.todos, isEmpty);
     });
   });
 
@@ -440,27 +538,47 @@ void main() {
       expect(sent[1].where((m) => m.role == AgentRole.tool), hasLength(3));
     });
 
-    test('stops at the step ceiling', () async {
-      final loop = List.generate(
-        10,
-        (i) => [
-          AgentDelta(toolCalls: [ToolCall(id: 'g$i', name: 'get_draft')]),
+    test('the last step is a summary with no tools', () async {
+      final loop = [
+        for (var i = 0; i < 2; i++)
+          [
+            AgentDelta(toolCalls: [ToolCall(id: 'g$i', name: 'get_draft')]),
+          ],
+        // Offered no tools, it calls one anyway — and is held to words.
+        const [
+          AgentDelta(text: 'Did two reads; the lore is left. Reply continue.'),
+          AgentDelta(toolCalls: [ToolCall(id: 'late', name: 'get_draft')]),
         ],
-      );
+      ];
+      final sent = <List<AgentMessage>>[];
+      final offered = <int>[];
+      var i = 0;
       final runner = AgentRunner(
         name: 'studio',
         systemPrompt: '',
         tools: studioToolsFor('studio'),
         context: ctx,
-        turn: scripted(loop, []),
+        turn: (client, messages, tools) async* {
+          sent.add(List.of(messages));
+          offered.add(tools.length);
+          for (final d in loop[i++]) {
+            yield d;
+          }
+        },
         maxSteps: 3,
       );
       final transcript = <AgentMessage>[AgentMessage.user('go')];
       final outcome = await runner.run(transcript);
       expect(outcome.end, AgentRunEnd.stepLimit);
-      // Three turns, each answered — the transcript can be sent again.
-      expect(transcript.where((m) => m.role == AgentRole.assistant), hasLength(3));
-      expect(transcript.where((m) => m.role == AgentRole.tool), hasLength(3));
+      expect(outcome.lastText, contains('the lore is left'));
+      expect(offered[0], greaterThan(0));
+      expect(offered[1], greaterThan(0));
+      expect(offered[2], 0);
+      expect(sent[2].last.text, kStepLimitNote);
+      // Every call that was made is answered, and the late one was dropped.
+      expect(transcript.where((m) => m.role == AgentRole.tool), hasLength(2));
+      expect(transcript.last.role, AgentRole.assistant);
+      expect(transcript.last.toolCalls, isEmpty);
     });
 
     test('a stop mid-stream keeps the words and drops the unanswered calls',
@@ -491,7 +609,7 @@ void main() {
       expect(session.workspace.character.name, '');
     });
 
-    test('delegate calls in one turn run at the same time', () async {
+    test('task calls in one turn run at the same time', () async {
       services.holdDelegates = Completer<void>();
       final runner = AgentRunner(
         name: 'studio',
@@ -503,13 +621,21 @@ void main() {
             const AgentDelta(toolCalls: [
               ToolCall(
                 id: 'd1',
-                name: 'delegate',
-                arguments: {'helper': 'writer', 'task': 'greetings'},
+                name: 'task',
+                arguments: {
+                  'description': 'Greetings',
+                  'agent_type': 'writer',
+                  'prompt': 'greetings',
+                },
               ),
               ToolCall(
                 id: 'd2',
-                name: 'delegate',
-                arguments: {'helper': 'lore_writer', 'task': 'the marsh'},
+                name: 'task',
+                arguments: {
+                  'description': 'The marsh',
+                  'agent_type': 'lore_writer',
+                  'prompt': 'the marsh',
+                },
               ),
             ]),
           ],
@@ -527,6 +653,8 @@ void main() {
           transcript.where((m) => m.role == AgentRole.tool).toList();
       expect(results.map((m) => m.toolCallId), ['d1', 'd2']);
       expect(results.first.text, contains('writer did it'));
+      // Each task knew which call it was answering.
+      expect(services.callIds, ['d1', 'd2']);
     });
 
     test('old tool output is shortened on the wire, not in the transcript', () {
@@ -548,7 +676,10 @@ void main() {
       ];
       final wire = AgentRunner.wireView(transcript);
       expect(wire[2].text.length, lessThan(600));
-      expect(wire[2].text, contains('shortened'));
+      // Cut from the middle: the head and the tail survive, with a marker.
+      expect(wire[2].text, contains('tokens truncated'));
+      expect(wire[2].text, startsWith('x' * 200));
+      expect(wire[2].text, endsWith('x' * 200));
       expect(wire[2].toolCallId, '1');
       expect(wire[4].text, big);
       expect(wire[6].text, big);

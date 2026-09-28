@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/agent_message.dart';
+import '../models/message_image.dart';
 import '../models/provider.dart';
 import '../models/usage.dart';
 import 'chat_client.dart';
@@ -273,8 +274,34 @@ class AgentClient {
         };
       case AgentRole.user:
       case AgentRole.system:
-        return {'role': 'user', 'content': m.text};
+        final pictures = [
+          for (final i in m.images)
+            if (_url(i) != null)
+              {
+                'type': 'image_url',
+                'image_url': <String, dynamic>{'url': _url(i)},
+              },
+        ];
+        return {
+          'role': 'user',
+          'content': pictures.isEmpty
+              ? m.text
+              : [
+                  if (m.text.isNotEmpty) {'type': 'text', 'text': m.text},
+                  ...pictures,
+                ],
+        };
     }
+  }
+
+  /// What an OpenAI-shaped image part carries: the picture's own address when
+  /// it lives online, a data URL when its bytes were resolved for the wire, and
+  /// null when neither (a picture whose file has gone is dropped, not sent
+  /// empty).
+  static String? _url(MessageImage image) {
+    if (image.isUrl) return image.ref.trim();
+    if (!image.hasData) return null;
+    return 'data:${image.mime};base64,${image.data}';
   }
 
   static List<Map<String, dynamic>> _responsesItems(AgentMessage m) {
@@ -313,6 +340,8 @@ class AgentClient {
             'role': 'user',
             'content': [
               {'type': 'input_text', 'text': m.text},
+              for (final i in m.images)
+                if (_url(i) != null) {'type': 'input_image', 'image_url': _url(i)},
             ],
           },
         ];
@@ -358,8 +387,28 @@ class AgentClient {
           });
         case AgentRole.user:
         case AgentRole.system:
-          (userBlocks ??= <Map<String, dynamic>>[])
-              .add({'type': 'text', 'text': m.text});
+          final blocks = userBlocks ??= <Map<String, dynamic>>[];
+          // Pictures first, the way Anthropic's own guidance orders them.
+          for (final i in m.images) {
+            if (i.isUrl) {
+              blocks.add({
+                'type': 'image',
+                'source': {'type': 'url', 'url': i.ref.trim()},
+              });
+            } else if (i.hasData) {
+              blocks.add({
+                'type': 'image',
+                'source': {
+                  'type': 'base64',
+                  'media_type': i.mime,
+                  'data': i.data,
+                },
+              });
+            }
+          }
+          if (m.text.isNotEmpty || m.images.isEmpty) {
+            blocks.add({'type': 'text', 'text': m.text});
+          }
       }
     }
     flushUser();
@@ -415,7 +464,20 @@ class AgentClient {
           });
         case AgentRole.user:
         case AgentRole.system:
-          (userParts ??= <Map<String, dynamic>>[]).add({'text': m.text});
+          final parts = userParts ??= <Map<String, dynamic>>[];
+          parts.add({'text': m.text});
+          // Gemini has no URL form for an inline picture; one that only lives
+          // online is left out rather than sent as something it rejects.
+          for (final i in m.images) {
+            if (!i.isUrl && i.hasData) {
+              parts.add({
+                'inlineData': <String, dynamic>{
+                  'mimeType': i.mime,
+                  'data': i.data,
+                },
+              });
+            }
+          }
       }
     }
     flushUser();
