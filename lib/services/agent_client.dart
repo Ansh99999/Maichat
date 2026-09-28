@@ -596,6 +596,13 @@ class _StreamReader {
   /// output index), or by arrival order for Gemini.
   final Map<int, _PartialCall> _calls = <int, _PartialCall>{};
 
+  /// OpenAI chat only: which of [_calls] a host's `index` currently points at.
+  /// Not the index itself, because gateways reuse it — one that converts
+  /// Gemini's stream restarts `index` at 0 in every chunk, so parallel calls
+  /// arriving in separate chunks all say 0.
+  final Map<int, int> _byWireIndex = <int, int>{};
+  int _nextKey = 0;
+
   AgentDelta? read(String payload) {
     final Object? json;
     try {
@@ -665,22 +672,38 @@ class _StreamReader {
       for (final entry in raw) {
         if (entry is! Map) continue;
         final id = entry['id'] as String?;
-        // Most hosts address a call's pieces by `index`. A few gateways leave
-        // it out and send each call whole; a new id then means a new call.
-        var index = (entry['index'] as num?)?.toInt();
-        if (index == null) {
-          final last = _calls.isEmpty ? null : _calls[_calls.keys.last];
-          index = (last == null || (id != null && id != last.id))
-              ? _calls.length
-              : _calls.keys.last;
+        final fn = entry['function'];
+        final name = fn is Map ? fn['name'] as String? : null;
+        final wireIndex = (entry['index'] as num?)?.toInt();
+        // Most hosts address a call's pieces by `index`, with the id and name
+        // on the first piece only. So a piece is a *new* call when it has no
+        // call to join yet, or when it brings an id (or a name) other than the
+        // one its index already holds — that is a host reusing the index.
+        final currentKey = wireIndex == null
+            ? (_calls.isEmpty ? null : _calls.keys.last)
+            : _byWireIndex[wireIndex];
+        final current = currentKey == null ? null : _calls[currentKey];
+        final args = fn is Map ? fn['arguments'] : null;
+        final startsNew = current == null ||
+            (id != null && id.isNotEmpty && current.id != null && current.id != id) ||
+            (name != null && name.isNotEmpty && current.name.isNotEmpty &&
+                current.name != name) ||
+            // No id and the same tool: a fresh object opening after the
+            // current one is already whole is a second call, not more of it.
+            (args is String &&
+                args.trimLeft().startsWith('{') &&
+                _isWholeObject(current.arguments.toString()));
+        final int index;
+        if (startsNew) {
+          index = _nextKey++;
+          if (wireIndex != null) _byWireIndex[wireIndex] = index;
+        } else {
+          index = currentKey!;
         }
         final partial = _calls.putIfAbsent(index, _PartialCall.new);
         if (id != null && id.isNotEmpty) partial.id = id;
-        final fn = entry['function'];
         if (fn is Map) {
-          final name = fn['name'];
-          if (name is String && name.isNotEmpty) partial.name = name;
-          final args = fn['arguments'];
+          if (name != null && name.isNotEmpty) partial.name = name;
           if (args is String) {
             partial.arguments.write(args);
           } else if (args is Map) {
@@ -695,6 +718,16 @@ class _StreamReader {
       reasoning: reasoning is String ? reasoning : '',
       usage: usage,
     );
+  }
+
+  static bool _isWholeObject(String text) {
+    final t = text.trim();
+    if (t.isEmpty || !t.startsWith('{') || !t.endsWith('}')) return false;
+    try {
+      return jsonDecode(t) is Map;
+    } catch (_) {
+      return false;
+    }
   }
 
   AgentDelta? _responses(Map<String, dynamic> json) {

@@ -239,6 +239,61 @@ void main() {
       expect(calls[1].arguments['field'], 'tags');
     });
 
+    test('parallel calls that each restart `index` at 0 stay separate',
+        () async {
+      // The shape AIClient2API's Gemini converter sends: every chunk numbers
+      // its own calls from 0, so two delegate calls in two chunks both say 0.
+      Map<String, dynamic> chunk(String id, String task) => {
+            'choices': [
+              {
+                'delta': {
+                  'tool_calls': [
+                    {
+                      'index': 0,
+                      'id': id,
+                      'type': 'function',
+                      'function': {
+                        'name': 'delegate',
+                        'arguments': jsonEncode({'helper': 'writer', 'task': task}),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+      await serve([chunk('a', 'greetings'), chunk('b', 'lore'), '[DONE]']);
+      final calls = callsOf(await run(ProviderKind.openai));
+      expect(calls.map((c) => c.id), ['a', 'b']);
+      expect(calls.map((c) => c.arguments['task']), ['greetings', 'lore']);
+      expect(calls.every((c) => c.argumentError == null), isTrue);
+    });
+
+    test('same tool, no ids, reused index: a new object is a new call',
+        () async {
+      Map<String, dynamic> chunk(String task) => {
+            'choices': [
+              {
+                'delta': {
+                  'tool_calls': [
+                    {
+                      'index': 0,
+                      'function': {
+                        'name': 'delegate',
+                        'arguments': jsonEncode({'helper': 'critic', 'task': task}),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+      await serve([chunk('one'), chunk('two'), chunk('three'), '[DONE]']);
+      final calls = callsOf(await run(ProviderKind.openai));
+      expect(calls.map((c) => c.arguments['task']), ['one', 'two', 'three']);
+      expect(calls.map((c) => c.id).toSet(), hasLength(3));
+    });
+
     test('broken argument JSON becomes an error on the call', () async {
       await serve([
         {
