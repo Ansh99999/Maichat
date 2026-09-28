@@ -667,7 +667,9 @@ class AppState extends ChangeNotifier {
   /// Asks GitHub whether a newer release exists and, if so, exposes it via
   /// [availableUpdate]. Silent on any failure.
   Future<void> checkForUpdates() async {
-    final info = await _updateService.checkLatest(kAppVersion);
+    final info = kIsBeta
+        ? await _updateService.checkBeta(kBetaBuild)
+        : await _updateService.checkLatest(kAppVersion);
     if (info != null) {
       _availableUpdate = info;
       notifyListeners();

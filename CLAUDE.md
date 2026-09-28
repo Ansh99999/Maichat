@@ -49,7 +49,7 @@ the code are the source of truth — verify file:line claims before relying on t
 
 ## Release & version discipline
 
-- CI (`.github/workflows/build-apk.yml`): on push/PR to `main`, on `v*` tags, and
+- CI (`.github/workflows/build-apk.yml`): on push to `main`/`beta`, PR to `main`, on `v*` tags, and
   on manual dispatch — runs analyze + test, then builds APKs. On a `v*` tag it
   cuts a GitHub Release with **keystore-signed** APKs (signing decodes
   `KEYSTORE_BASE64` etc. from repo secrets into `android/key.properties`; the
@@ -60,6 +60,16 @@ the code are the source of truth — verify file:line claims before relying on t
   drift — keep it that way.
 - Debug-signed installs (early versions) must be uninstalled before installing a
   real-key release; the signatures don't match for in-place upgrade.
+- **MaiChat Beta** is the `beta` branch built as a second app that installs
+  beside MaiChat (`me.maitavern.maichat.beta`, label "MaiChat Beta", own data,
+  own Drive folder "MaiChat Beta Backups" so retention never prunes the real
+  app's backups). The single switch is `--dart-define=MAICHAT_BETA=true`: Dart
+  reads it as `kIsBeta`, and `android/app/build.gradle.kts` decodes it from
+  Flutter's `dart-defines` Gradle property for the package and label. CI sets it
+  on pushes to `beta` and republishes the rolling `beta-latest` **prerelease**
+  (`MaiChat-Beta-<version>-b<run>.apk`); the beta's updater reads that tag and
+  compares run numbers (`kBetaBuild`), while the real app's `releases/latest`
+  never sees a prerelease. APKs are built on GitHub Actions, not locally.
 
 ## How the user wants me to work
 

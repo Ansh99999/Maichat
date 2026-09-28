@@ -40,9 +40,9 @@ class AboutSettingsPage extends StatelessWidget {
               // The row that *is* the app's identity card: the mark stands in
               // for the generic info glyph.
               leading: MaiChatMark(),
-              title: Text(kMaiChatName),
+              title: Text(kAppDisplayName),
               subtitle: Text('A mobile-first AI chat frontend.'),
-              trailing: Text(version),
+              trailing: Text(kAppVersionLabel),
             ),
           ),
           const Divider(height: 8),

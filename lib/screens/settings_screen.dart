@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../app_info.dart';
 import '../models/view_prefs.dart';
 import '../state/app_state.dart';
 import 'backups/backups_screen.dart';
@@ -95,7 +96,7 @@ class SettingsScreen extends StatelessWidget {
           _SectionTile(
             icon: Icons.info_outline,
             title: 'About',
-            subtitle: 'Version ${AboutSettingsPage.version}',
+            subtitle: 'Version $kAppVersionLabel',
             onTap: () => _open(context, const AboutSettingsPage()),
           ),
         ],

@@ -29,6 +29,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../app_info.dart';
 import '../models/backup.dart';
 
 /// The OAuth client this app ships with, so connecting Drive is one tap rather
@@ -104,7 +105,7 @@ class DriveClient {
     http.Client? client,
     this.endpoints = const DriveEndpoints(),
     UriLauncher? launcher,
-    this.folderName = 'MaiChat Backups',
+    this.folderName = kIsBeta ? 'MaiChat Beta Backups' : 'MaiChat Backups',
     this.consentTimeout = const Duration(minutes: 5),
     this.loopbackHost = '127.0.0.1',
     String? bundledClientId,

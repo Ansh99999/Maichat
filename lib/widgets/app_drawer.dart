@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../app_info.dart';
 import '../models/appearance.dart';
 import '../services/discover/discover_sources.dart';
 import '../services/update_service.dart';
@@ -15,7 +16,6 @@ import '../screens/presets/presets_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/providers/providers_screen.dart';
 import '../screens/section_screen.dart';
-import '../screens/settings/about_settings_page.dart';
 import '../screens/settings_screen.dart';
 import 'character_avatar.dart';
 import 'brand_mark.dart';
@@ -154,7 +154,7 @@ class AppDrawer extends StatelessWidget {
                     // the app, so BrandedText finds nothing to mark and renders
                     // it plainly.
                     child: BrandedText(
-                      sites == null ? kMaiChatName : 'Discover',
+                      sites == null ? kAppDisplayName : 'Discover',
                       // A shade under the default: at headline size the mark is
                       // already the biggest thing in the row.
                       markScale: 1.15,
@@ -390,7 +390,7 @@ class _DrawerFooter extends StatelessWidget {
               onPressed: () => _showUpdate(context, state.availableUpdate!),
             ),
           Text(
-            'v${AboutSettingsPage.version}',
+            'v$kAppVersionLabel',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -413,7 +413,7 @@ class _DrawerFooter extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Version ${update.version} is available '
-                '(you have ${AboutSettingsPage.version}).'),
+                '(you have $kAppVersionLabel).'),
             if (notes.isNotEmpty) ...[
               const SizedBox(height: 12),
               ConstrainedBox(

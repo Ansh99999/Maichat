@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import 'app_info.dart';
 import 'models/appearance.dart';
 import 'screens/home_screen.dart';
 import 'services/avatar_store.dart';
@@ -75,7 +76,7 @@ class MaiChatApp extends StatelessWidget {
               final seed = Color(appearance.seedColor);
               final amoled = appearance.mode == AppThemeMode.amoled;
               return MaterialApp(
-                title: 'MaiChat',
+                title: kAppDisplayName,
                 debugShowCheckedModeBanner: false,
                 showPerformanceOverlay: state.perfOverlay,
                 themeMode: _themeMode(appearance.mode),

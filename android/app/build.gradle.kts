@@ -4,8 +4,28 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+import java.util.Base64
 import java.util.Properties
 import java.io.FileInputStream
+
+// MaiChat Beta is the same code built as a second app that installs beside
+// MaiChat (its own package, label and data). The one switch is the Dart define
+// `MAICHAT_BETA=true`, read here out of the `dart-defines` property Flutter
+// hands Gradle (comma-separated, each base64 "KEY=VALUE"), so the Dart side
+// (`kIsBeta`) and the Android identity can never disagree.
+val dartDefines: Map<String, String> =
+    (project.findProperty("dart-defines") as String?)
+        ?.split(",")
+        ?.mapNotNull { encoded ->
+            runCatching { String(Base64.getDecoder().decode(encoded)) }.getOrNull()
+        }
+        ?.mapNotNull { pair ->
+            val parts = pair.split("=", limit = 2)
+            if (parts.size == 2) parts[0] to parts[1] else null
+        }
+        ?.toMap()
+        ?: emptyMap()
+val isBeta = dartDefines["MAICHAT_BETA"] == "true"
 
 // Release signing pulled from android/key.properties, which is not committed.
 // Falls back to unsigned (debug) if the file is missing, so a fresh checkout
@@ -28,8 +48,10 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "me.maitavern.maichat"
+        // The namespace (and so the Kotlin package of MainActivity) stays put;
+        // only the installed identity changes for the beta.
+        applicationId = if (isBeta) "me.maitavern.maichat.beta" else "me.maitavern.maichat"
+        manifestPlaceholders["appLabel"] = if (isBeta) "MaiChat Beta" else "MaiChat"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

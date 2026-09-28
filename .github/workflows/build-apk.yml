@@ -1,13 +1,17 @@
 name: Build APK
 
 # Builds the release APK on pushes and tags to main and on manual dispatch, and
-# attaches it to a GitHub Release on a version tag. Pull requests run analyze +
+# attaches it to a GitHub Release on a version tag. A push to `beta` builds
+# MaiChat Beta instead — a second app (`me.maitavern.maichat.beta`, "MaiChat
+# Beta") that installs beside MaiChat — and republishes it as the rolling
+# `beta-latest` prerelease, which the beta's own update check reads and the
+# real app's never sees (`releases/latest` skips prereleases). Pull requests run analyze +
 # test only (no APK) for fast feedback; the profile APK is built on demand via
 # "Run workflow" (workflow_dispatch), since it is a diagnostic, not a release
 # artifact — building it on every run roughly doubled the wall-clock.
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -26,6 +30,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # The one switch for a beta build: the Dart define and, through Flutter's
+      # `dart-defines` Gradle property, the Android package and label.
+      MAICHAT_BETA: ${{ github.ref == 'refs/heads/beta' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,17 +113,27 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           flutter build apk --release \
+            --dart-define=MAICHAT_BETA="$MAICHAT_BETA" \
+            --dart-define=MAICHAT_BETA_BUILD="${{ github.run_number }}" \
             --dart-define=MAICHAT_DRIVE_CLIENT_ID="${{ secrets.DRIVE_CLIENT_ID }}" \
             --dart-define=MAICHAT_DRIVE_CLIENT_SECRET="${{ secrets.DRIVE_CLIENT_SECRET }}"
 
       - name: Rename to MaiChat-<version>.apk
         # Give the single output a friendly, versioned name so the download is
-        # obviously "the app", not app-release.apk.
+        # obviously "the app", not app-release.apk. A beta also carries the run
+        # number (`MaiChat-Beta-<version>-b<run>.apk`): its update check reads the
+        # build back out of that name, since the version does not move between
+        # beta builds.
         if: github.event_name != 'pull_request'
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          if [ "$MAICHAT_BETA" = "true" ]; then
+            NAME="MaiChat-Beta-${VERSION}-b${{ github.run_number }}.apk"
+          else
+            NAME="MaiChat-${VERSION}.apk"
+          fi
           mv build/app/outputs/flutter-apk/app-release.apk \
-             "build/app/outputs/flutter-apk/MaiChat-${VERSION}.apk"
+             "build/app/outputs/flutter-apk/${NAME}"
 
       - name: Upload APK as workflow artifact
         if: github.event_name != 'pull_request'
@@ -133,6 +151,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           flutter build apk --profile \
+            --dart-define=MAICHAT_BETA="$MAICHAT_BETA" \
+            --dart-define=MAICHAT_BETA_BUILD="${{ github.run_number }}" \
             --dart-define=MAICHAT_DRIVE_CLIENT_ID="${{ secrets.DRIVE_CLIENT_ID }}" \
             --dart-define=MAICHAT_DRIVE_CLIENT_SECRET="${{ secrets.DRIVE_CLIENT_SECRET }}"
 
@@ -158,3 +178,21 @@ jobs:
           files: build/app/outputs/flutter-apk/MaiChat-*.apk
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      - name: Publish the rolling beta release (beta branch only)
+        # Replaces `beta-latest` with this build: the old release and its tag go,
+        # and a fresh prerelease is cut at this commit, so the tag always names
+        # what the APK was built from. A prerelease never shows up as
+        # `releases/latest`, which is what keeps MaiChat's own update prompt
+        # pointed at real releases only.
+        if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete beta-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create beta-latest --repo "$GITHUB_REPOSITORY" \
+            build/app/outputs/flutter-apk/MaiChat-Beta-*-b${{ github.run_number }}.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "MaiChat Beta (build ${{ github.run_number }})" \
+            --notes "Rolling beta build ${{ github.run_number }} from \`beta\` at ${GITHUB_SHA::7}. Installs beside MaiChat as a separate app (MaiChat Beta) with its own data."
