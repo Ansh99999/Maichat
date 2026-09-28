@@ -162,6 +162,113 @@ class StudioOp {
       );
 }
 
+/// Where a sub-agent's run stands.
+enum StudioAgentStatus { running, done, failed, cancelled }
+
+/// One sub-agent the Studio spawned: a fresh agent with its own conversation,
+/// given one task by the main agent, working on the same draft, reporting back
+/// once. Kept on the session so its chat can be opened and read afterwards.
+class StudioSubagent {
+  StudioSubagent({
+    required this.id,
+    required this.number,
+    required this.description,
+    required this.prompt,
+    required this.callId,
+    this.role = 'general',
+    List<AgentMessage>? transcript,
+    DateTime? startedAt,
+    this.endedAt,
+    this.status = StudioAgentStatus.running,
+    this.inputTokens = 0,
+    this.outputTokens = 0,
+    this.report,
+  })  : transcript = transcript ?? <AgentMessage>[],
+        startedAt = startedAt ?? DateTime.now();
+
+  final String id;
+
+  /// Its place in the session, from 1 — "Subagent 3".
+  final int number;
+
+  /// The few words the main agent gave it, shown beside its number.
+  final String description;
+
+  /// The task, as the main agent wrote it — its conversation's first message.
+  final String prompt;
+
+  /// The spawning tool call, which its report answers.
+  final String callId;
+
+  /// What kind of agent it is (`general`, `writer`, `lore_writer`, `critic`…).
+  final String role;
+
+  final List<AgentMessage> transcript;
+  final DateTime startedAt;
+  DateTime? endedAt;
+  StudioAgentStatus status;
+  int inputTokens;
+  int outputTokens;
+
+  /// What it reported back, once it has.
+  String? report;
+
+  String get label => 'Subagent $number';
+
+  bool get running => status == StudioAgentStatus.running;
+
+  int get tokens => inputTokens + outputTokens;
+
+  /// How long it has run (or ran).
+  Duration elapsed([DateTime? now]) =>
+      (endedAt ?? now ?? DateTime.now()).difference(startedAt);
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'number': number,
+        'description': description,
+        'prompt': prompt,
+        'callId': callId,
+        'role': role,
+        'transcript': [for (final m in transcript) m.toJson()],
+        'startedAt': startedAt.toIso8601String(),
+        if (endedAt != null) 'endedAt': endedAt!.toIso8601String(),
+        'status': status.name,
+        'inputTokens': inputTokens,
+        'outputTokens': outputTokens,
+        if (report != null) 'report': report,
+      };
+
+  factory StudioSubagent.fromJson(Map<String, dynamic> json) {
+    var status = StudioAgentStatus.values.firstWhere(
+      (s) => s.name == json['status'],
+      orElse: () => StudioAgentStatus.done,
+    );
+    final ended = DateTime.tryParse(json['endedAt'] as String? ?? '');
+    // A run cannot survive the app closing; one saved mid-run was cut off.
+    if (status == StudioAgentStatus.running) status = StudioAgentStatus.cancelled;
+    return StudioSubagent(
+      id: json['id'] as String? ?? '',
+      number: (json['number'] as num?)?.toInt() ?? 0,
+      description: json['description'] as String? ?? '',
+      prompt: json['prompt'] as String? ?? '',
+      callId: json['callId'] as String? ?? '',
+      role: json['role'] as String? ?? 'general',
+      transcript: [
+        if (json['transcript'] is List)
+          for (final m in json['transcript'] as List)
+            if (m is Map) AgentMessage.fromJson(Map<String, dynamic>.from(m)),
+      ],
+      startedAt: DateTime.tryParse(json['startedAt'] as String? ?? ''),
+      endedAt: ended,
+      status: status,
+      inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
+      outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
+      report: json['report'] as String?,
+    );
+  }
+}
+
 /// How many snapshots a session keeps. Older changes stay listed but can no
 /// longer be rewound to; without a cap a long session's file would carry a
 /// full copy of the character per edit.
@@ -175,6 +282,7 @@ class StudioSession {
     required this.workspace,
     List<AgentMessage>? transcript,
     List<StudioOp>? ops,
+    List<StudioSubagent>? subagents,
     this.sourceCharacterId,
     this.folderId,
     this.appliedAt,
@@ -186,6 +294,7 @@ class StudioSession {
     DateTime? updatedAt,
   })  : transcript = transcript ?? <AgentMessage>[],
         ops = ops ?? <StudioOp>[],
+        subagents = subagents ?? <StudioSubagent>[],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -194,6 +303,9 @@ class StudioSession {
   StudioWorkspace workspace;
   final List<AgentMessage> transcript;
   final List<StudioOp> ops;
+
+  /// Every sub-agent this session has spawned, oldest first.
+  final List<StudioSubagent> subagents;
 
   /// The library character this session was opened from, when it was.
   final String? sourceCharacterId;
@@ -282,6 +394,8 @@ class StudioSession {
         'workspace': workspace.toJson(),
         'transcript': [for (final m in transcript) m.toJson()],
         'ops': [for (final o in ops) o.toJson()],
+        if (subagents.isNotEmpty)
+          'subagents': [for (final a in subagents) a.toJson()],
         if (sourceCharacterId != null) 'sourceCharacterId': sourceCharacterId,
         if (folderId != null) 'folderId': folderId,
         if (appliedAt != null) 'appliedAt': appliedAt!.toIso8601String(),
@@ -310,6 +424,11 @@ class StudioSession {
           if (json['ops'] is List)
             for (final o in json['ops'] as List)
               if (o is Map) StudioOp.fromJson(Map<String, dynamic>.from(o)),
+        ],
+        subagents: [
+          if (json['subagents'] is List)
+            for (final a in json['subagents'] as List)
+              if (a is Map) StudioSubagent.fromJson(Map<String, dynamic>.from(a)),
         ],
         sourceCharacterId: json['sourceCharacterId'] as String?,
         folderId: json['folderId'] as String?,

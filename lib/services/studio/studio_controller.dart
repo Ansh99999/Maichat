@@ -7,6 +7,7 @@ import '../../models/character.dart';
 import '../../models/embedding.dart';
 import '../../models/folder.dart';
 import '../../models/lorebook.dart';
+import '../../models/message_image.dart';
 import '../../models/studio.dart';
 import '../../state/app_state.dart';
 import '../agent_client.dart';
@@ -16,6 +17,25 @@ import 'agent_runner.dart';
 import 'studio_prompt.dart';
 import 'studio_store.dart';
 import 'studio_tools.dart';
+
+/// The id [StudioController.liveFor] and [StudioController.transcriptFor] use
+/// for the main agent; a sub-agent is named by its [StudioSubagent.id].
+const String kMainAgent = 'main';
+
+/// What one agent is doing right now, before it lands in its transcript: the
+/// reply being written, its thinking, and the calls it is waiting on.
+class StudioLive {
+  String text = '';
+  String reasoning = '';
+
+  /// Calls that have started and not yet answered, by call id.
+  final Map<String, ToolCall> activeCalls = <String, ToolCall>{};
+
+  void clearWords() {
+    text = '';
+    reasoning = '';
+  }
+}
 
 /// A helper's run, as the lead's `delegate` chip shows it while it works.
 class HelperRun {
@@ -72,13 +92,36 @@ class StudioController extends ChangeNotifier {
   /// Whether the agent is working.
   bool get running => _lead != null;
 
-  /// The lead's reply as it is being written, before it lands in the
-  /// transcript.
-  String liveText = '';
-  String liveReasoning = '';
+  final Map<String, StudioLive> _live = <String, StudioLive>{};
 
-  /// Calls that have started and not yet answered, by call id.
-  final Map<String, ToolCall> activeCalls = <String, ToolCall>{};
+  /// What the agent named [agentId] ([kMainAgent] or a sub-agent's id) is
+  /// doing right now.
+  StudioLive liveFor(String agentId) =>
+      _live.putIfAbsent(agentId, StudioLive.new);
+
+  /// The conversation of the agent named [agentId].
+  List<AgentMessage> transcriptFor(String agentId) => agentId == kMainAgent
+      ? session.transcript
+      : subagent(agentId)?.transcript ?? const <AgentMessage>[];
+
+  /// Every sub-agent this session has spawned, oldest first.
+  List<StudioSubagent> get subagents => session.subagents;
+
+  bool get hasSubagents => session.subagents.isNotEmpty;
+
+  StudioSubagent? subagent(String id) {
+    for (final a in session.subagents) {
+      if (a.id == id) return a;
+    }
+    return null;
+  }
+
+  /// The main agent's reply as it is being written.
+  String get liveText => liveFor(kMainAgent).text;
+  String get liveReasoning => liveFor(kMainAgent).reasoning;
+
+  /// The main agent's calls that have started and not yet answered.
+  Map<String, ToolCall> get activeCalls => liveFor(kMainAgent).activeCalls;
 
   /// Helper runs, by the `delegate` call id that started them.
   final Map<String, HelperRun> helpers = <String, HelperRun>{};
@@ -98,10 +141,14 @@ class StudioController extends ChangeNotifier {
 
   // --- running ---------------------------------------------------------------
 
-  /// Sends the user's [text] and runs the agent until it answers.
-  Future<void> send(String text) async {
+  /// Sends the user's [text] (and any [images]) and runs the agent until it
+  /// answers.
+  Future<void> send(
+    String text, {
+    List<MessageImage> images = const <MessageImage>[],
+  }) async {
     final message = text.trim();
-    if (message.isEmpty || running) return;
+    if ((message.isEmpty && images.isEmpty) || running) return;
     notice = null;
     if (_handEdits.isNotEmpty) {
       session.transcript.add(AgentMessage.user(
@@ -110,7 +157,7 @@ class StudioController extends ChangeNotifier {
       ));
       _handEdits.clear();
     }
-    session.transcript.add(AgentMessage.user(message));
+    session.transcript.add(AgentMessage.user(message, images: images));
     if (session.title.trim().isEmpty && session.workspace.character.name.isEmpty) {
       session.title = _titleFrom(message);
     }
@@ -143,8 +190,7 @@ class StudioController extends ChangeNotifier {
     );
     services.lead = lead;
     _lead = lead;
-    liveText = '';
-    liveReasoning = '';
+    liveFor(kMainAgent).clearWords();
     helpers.clear();
     notifyListeners();
     try {
@@ -162,9 +208,11 @@ class StudioController extends ChangeNotifier {
       noticeIsError = true;
     } finally {
       _lead = null;
-      liveText = '';
-      liveReasoning = '';
-      activeCalls.clear();
+      for (final live in _live.values) {
+        live
+          ..clearWords()
+          ..activeCalls.clear();
+      }
       session.updatedAt = DateTime.now();
       _save();
       if (!_disposed) notifyListeners();
@@ -186,20 +234,20 @@ class StudioController extends ChangeNotifier {
   AgentObserver get _observer => AgentObserver(
         onText: (agent, delta) {
           if (agent != 'studio') return;
-          liveText += delta;
+          liveFor(kMainAgent).text += delta;
           _paintSoon();
         },
         onReasoning: (agent, delta) {
           if (agent != 'studio') return;
-          liveReasoning += delta;
+          liveFor(kMainAgent).reasoning += delta;
           _paintSoon();
         },
         onToolStart: (agent, call) {
-          if (agent == 'studio') activeCalls[call.id] = call;
+          if (agent == 'studio') liveFor(kMainAgent).activeCalls[call.id] = call;
           _paintSoon();
         },
         onToolEnd: (agent, call, result) {
-          activeCalls.remove(call.id);
+          liveFor(kMainAgent).activeCalls.remove(call.id);
           _save();
           _paintSoon();
         },
@@ -208,8 +256,7 @@ class StudioController extends ChangeNotifier {
           // The words are in the transcript now; the live copy starts over for
           // the next turn.
           if (message.role == AgentRole.assistant) {
-            liveText = '';
-            liveReasoning = '';
+            liveFor(kMainAgent).clearWords();
           }
           _save();
           _paintSoon();

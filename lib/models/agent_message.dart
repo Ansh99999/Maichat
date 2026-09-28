@@ -10,6 +10,8 @@ library;
 
 import 'dart:convert';
 
+import 'message_image.dart';
+
 /// A tool the model may call: a name, a sentence on what it is for, and a JSON
 /// Schema for its arguments.
 ///
@@ -132,13 +134,18 @@ class AgentMessage {
     this.toolCallId,
     this.toolName,
     this.isError = false,
-  }) : toolCalls = toolCalls ?? const <ToolCall>[];
+    List<MessageImage>? images,
+  })  : toolCalls = toolCalls ?? const <ToolCall>[],
+        images = images ?? const <MessageImage>[];
 
   factory AgentMessage.system(String text) =>
       AgentMessage(role: AgentRole.system, text: text);
 
-  factory AgentMessage.user(String text) =>
-      AgentMessage(role: AgentRole.user, text: text);
+  factory AgentMessage.user(
+    String text, {
+    List<MessageImage> images = const <MessageImage>[],
+  }) =>
+      AgentMessage(role: AgentRole.user, text: text, images: images);
 
   factory AgentMessage.toolResult(
     ToolCall call,
@@ -165,6 +172,23 @@ class AgentMessage {
   /// A tool result that reports a failure rather than an answer.
   final bool isError;
 
+  /// Pictures attached to a user turn. Stored as refs, like a chat turn's
+  /// (`MessageImage.ref` — a `local:` file or a URL); the base64 only ever
+  /// exists on the copy handed to the wire.
+  final List<MessageImage> images;
+
+  /// This turn with [images] replaced — how the wire copy gets its data.
+  AgentMessage withImages(List<MessageImage> images) => AgentMessage(
+        role: role,
+        text: text,
+        reasoning: reasoning,
+        toolCalls: toolCalls,
+        toolCallId: toolCallId,
+        toolName: toolName,
+        isError: isError,
+        images: images,
+      );
+
   Map<String, dynamic> toJson() => {
         'role': role.name,
         if (text.isNotEmpty) 'text': text,
@@ -174,6 +198,7 @@ class AgentMessage {
         if (toolCallId != null) 'toolCallId': toolCallId,
         if (toolName != null) 'toolName': toolName,
         if (isError) 'isError': true,
+        if (images.isNotEmpty) 'images': [for (final i in images) i.toJson()],
       };
 
   factory AgentMessage.fromJson(Map<String, dynamic> json) => AgentMessage(
@@ -191,5 +216,10 @@ class AgentMessage {
         toolCallId: json['toolCallId'] as String?,
         toolName: json['toolName'] as String?,
         isError: json['isError'] as bool? ?? false,
+        images: [
+          if (json['images'] is List)
+            for (final i in json['images'] as List)
+              if (i is Map) MessageImage.fromJson(Map<String, dynamic>.from(i)),
+        ],
       );
 }
