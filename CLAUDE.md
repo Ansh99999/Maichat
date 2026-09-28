@@ -423,34 +423,60 @@ bar or the overflow menu.
   from the drawer footer, the composer's operations strip, and
   `MessageAction.imagine`.
 - **Character Studio (beta):** an agent that builds a character from a
-  described "vibe" through tool calls. Reached from Characters (app-bar
-  sparkle, the Add sheet, and a character's ⋮ → "Open in Studio"). Layers:
-  `models/agent_message.dart` (`AgentMessage`/`ToolSpec`/`ToolCall` — *not*
-  `ChatMessage`, which is saved in every chat) and `services/agent_client.dart`
-  (tool calling for all four wire formats; kept apart from `streamChat` so the
-  roleplay wire and its one-system-message rule are untouched; a call is
-  yielded only once its arguments are whole; Gemini's `thoughtSignature` is
-  echoed and a made-up id is never sent back; `test/agent_client_test.dart`
-  pins every dialect's bytes). `models/studio.dart` — a `StudioSession` is a
-  **draft** (`StudioWorkspace`: character, lorebooks by id, documents) plus
-  transcript, `StudioOp`s (each a whole-workspace snapshot taken in the same
-  synchronous step as the change, via `StudioSession.edit`, capped at
-  `kStudioSnapshotLimit`; rewinding is *to a point*), and spend.
-  `services/studio/`: `studio_tools.dart` (21 tools over the workspace behind a
-  `StudioServices` interface; helpers get subsets via `studioToolsFor`),
-  `agent_runner.dart` (the loop — answers **every** call even when stopped, runs
-  one turn's calls with `Future.wait` so `delegate` helpers work in parallel,
-  shortens stale tool output on the wire only), `studio_prompt.dart`,
-  `studio_store.dart` (one JSON **file** per session under `studio/`, never
-  prefs; not yet included in backups), `studio_controller.dart` (runs a session,
-  kept alive by `StudioHub` while its agent works; apply = upsert by id).
-  AppState owns only `studioConfig` (its own provider/model, like the image
-  studio), `streamAgentTurn` (budget + key rotation + ledger, own client, never
-  touches `_streaming`) and `playtestCharacter`, which sends a draft through the
-  real `_assemble` as per-chat character/lorebook overrides on a throwaway,
-  never-stored `Conversation`. Tests: `studio_test.dart`,
-  `studio_controller_test.dart` (end to end against a loopback model),
-  `studio_ui_test.dart`.
+  described "vibe" through tool calls, in the style of Claude Code / OpenCode /
+  Codex. Reached from Characters (app-bar sparkle, the Add sheet, a character's
+  ⋮ → "Open in Studio"). Layers:
+  - Wire: `models/agent_message.dart` (`AgentMessage`/`ToolSpec`/`ToolCall`,
+    picture refs on user turns — *not* `ChatMessage`, which is saved in every
+    chat) and `services/agent_client.dart` (tool calling for all four wire
+    formats, kept apart from `streamChat` so the roleplay wire and its
+    one-system-message rule are untouched). A call is yielded only once its
+    arguments are whole. A gateway may **reuse `index`** for parallel calls
+    (AIClient2API's Gemini converter restarts it at 0 per chunk) — a piece with
+    a new id/name, or a new object after a whole one, starts a new call; that
+    bug once merged parallel sub-agent calls into invalid JSON. Gemini's
+    `thoughtSignature` is echoed and a made-up id never sent back.
+    `test/agent_client_test.dart` pins every dialect's bytes.
+  - Model: `models/studio.dart` — a `StudioSession` is a **draft**
+    (`StudioWorkspace`: character, lorebooks by id, documents) plus transcript,
+    `StudioOp`s (whole-workspace snapshot taken in the same synchronous step as
+    the change via `StudioSession.edit`, capped at `kStudioSnapshotLimit`;
+    rewind is *to a point*), `StudioSubagent`s (own transcript, timing, tokens,
+    status, plan), the lead's `todos`, and spend.
+  - Agents: `services/studio/` — `studio_tools.dart` (draft tools over a
+    `StudioServices` interface; `task` spawns sub-agents — any number, run in
+    parallel up to `StudioConfig.maxParallelSubagents`, the rest queue; depth 1;
+    `task_id` resumes one; `todo_write` plans), `agent_runner.dart` (answers
+    **every** call even when stopped; a turn's calls run with `Future.wait`;
+    stale tool output is middle-truncated on the wire only; the last allowed
+    step is a tool-less summary turn), `studio_prompt.dart`, `studio_store.dart`
+    (one JSON **file** per session under `studio/`, never prefs; the picture
+    sweep keeps what sessions refer to via `StudioStore.pictureRefs`; not yet in
+    backups), `studio_controller.dart` (runs a session, live state per agent via
+    `liveFor(kMainAgent | subagentId)`, kept alive by `StudioHub` while working;
+    apply = upsert by id).
+  - AppState owns only `studioConfig` (own provider/model, like the image
+    studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
+    never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
+    (the draft through the real `_assemble` as per-chat overrides on a
+    throwaway, never-stored `Conversation`).
+  - UI: `screens/studio/` — `studio_screen.dart` is a chat-first shell
+    (hamburger drawer: Home / Settings / Sessions; the composer copies both chat
+    styles, legacy and expressive, without persona — `chat_screen.dart` is
+    untouched; ⋮ → Add image / More actions → Show other areas, which raises the
+    Interface | Draft | Changes capsule). The top-right sub-agent button opens
+    `shell/liquid_panel.dart` (a spring-driven metaball clip; content laid out
+    once, only the clip/paint animate) listing Main + sub-agents with ticking
+    time • tokens; a row teleports the chat into that agent's transcript.
+    `studio_draft_view.dart` + `draft/` is the Draft page (Chrome-style tabs:
+    Character, Images, Lorebook, Embeddings, Documents, Scenarios; a
+    ratio-aware header — square/portrait top-right, landscape full width). The
+    Lorebook tab reuses `LorebookEditScreen` through its optional `onSave`
+    (draft mode — never writes the library). Every hand edit goes through
+    `controller.editByHand`.
+  - Tests: `studio_test.dart`, `studio_agents_test.dart`,
+    `studio_controller_test.dart` (end to end against a loopback model),
+    `studio_ui_test.dart`, `studio_draft_ui_test.dart`.
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by
   `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over
