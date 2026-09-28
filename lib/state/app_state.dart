@@ -21,6 +21,7 @@ import '../models/folder.dart';
 import '../models/gallery_image.dart';
 import '../models/image_gen.dart';
 import '../models/interface_preset.dart';
+import '../models/agent_message.dart';
 import '../models/lorebook.dart';
 import '../models/message.dart';
 import '../models/message_image.dart';
@@ -29,9 +30,11 @@ import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../models/regex_rule.dart';
 import '../models/scenario.dart';
+import '../models/studio.dart';
 import '../models/summary.dart';
 import '../models/usage.dart';
 import '../models/view_prefs.dart';
+import '../services/agent_client.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
 import '../services/avatar_store.dart';
@@ -433,6 +436,7 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(await _storage.loadInterfacePresets());
     _imageGen = await _storage.loadImageGen();
+    _studioConfig = await _storage.loadStudioConfig();
     _summaryFolds
       ..clear()
       ..addAll(await _storage.loadSummaryFolds());
@@ -5167,6 +5171,209 @@ class AppState extends ChangeNotifier {
       await _persistUsage();
       notifyListeners();
     }
+  }
+
+  // --- Character Studio ---------------------------------------------------
+  //
+  // The Studio runs its own agents with their own clients, so it neither waits
+  // on nor blocks a chat: none of this touches [_streaming]. What it shares with
+  // a send is everything that makes a request safe to make — the budget refusal,
+  // key rotation, and the usage ledger.
+
+  StudioConfig _studioConfig = const StudioConfig();
+
+  /// How the Studio talks to its model.
+  StudioConfig get studioConfig => _studioConfig;
+
+  Future<void> updateStudioConfig(StudioConfig next) async {
+    _studioConfig = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveStudioConfig(next);
+  }
+
+  /// The provider the Studio will use, with its model applied: the one named in
+  /// [studioConfig] when it still exists, else the one chats use.
+  Provider? studioProvider() {
+    Provider? base;
+    final id = _studioConfig.providerId;
+    if (id != null) {
+      for (final p in _providers) {
+        if (p.id == id) base = p;
+      }
+    }
+    base ??= _resolveProvider(defaultPreset);
+    if (base == null) return null;
+    final model = _studioConfig.model.trim();
+    return model.isEmpty || model == base.model ? base : base.copyWith(model: model);
+  }
+
+  /// One metered agent turn for the Studio over [client] (which the caller owns,
+  /// so it can cancel it). [onSpend] is told what the turn cost once it ends —
+  /// the host's own counts when it sent any, the tokenizer's estimate otherwise.
+  Stream<AgentDelta> streamAgentTurn({
+    required AgentClient client,
+    required List<AgentMessage> messages,
+    required List<ToolSpec> tools,
+    void Function(TokenUsage usage, double cost)? onSpend,
+  }) async* {
+    final base = studioProvider();
+    if (base == null) {
+      throw ChatApiException('Set up a provider in Settings first.');
+    }
+    final blocked = blockingBudget(base, base.model);
+    if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
+    final provider = _applyKey(base);
+    TokenUsage? reported;
+    final written = StringBuffer();
+    var ok = false;
+    try {
+      await for (final delta in client.stream(
+        provider: provider,
+        messages: messages,
+        tools: tools,
+        params: AgentParams(
+          temperature: _studioConfig.temperature,
+          maxTokens: _studioConfig.maxTokens,
+          stream: _studioConfig.stream,
+        ),
+      )) {
+        if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);
+        written.write(delta.text);
+        for (final call in delta.toolCalls) {
+          written.write(jsonEncode(call.arguments));
+        }
+        yield delta;
+      }
+      ok = true;
+    } on ChatApiException {
+      _advanceKeyOnError(base);
+      rethrow;
+    } finally {
+      var input = 0;
+      for (final m in messages) {
+        input += _tokenizer.estimate(m.text) + _perMessageOverhead;
+      }
+      final usage = reported ??
+          TokenUsage(
+            inputTokens: ok || written.isNotEmpty ? input : 0,
+            outputTokens: _tokenizer.estimate(written.toString()),
+            estimated: true,
+          );
+      recordUsage(base, base.model, usage);
+      final price = base.priceOf(base.model)
+          ?.costOf(usage.inputTokens, usage.outputTokens);
+      onSpend?.call(usage, (price?.input ?? 0) + (price?.output ?? 0));
+      await _persistUsage();
+      notifyListeners();
+    }
+  }
+
+  /// Folds a newly reported usage into what a turn has reported so far.
+  /// Anthropic splits its counts across two events (input first, output last);
+  /// Gemini and the OpenAI dialects send a running or final total, so the
+  /// larger of each number wins.
+  static TokenUsage _mergeUsage(TokenUsage? so, TokenUsage next) {
+    if (so == null) return next;
+    return TokenUsage(
+      inputTokens: max(so.inputTokens, next.inputTokens),
+      outputTokens: max(so.outputTokens, next.outputTokens),
+      reasoningTokens: max(so.reasoningTokens, next.reasoningTokens),
+      cachedTokens: max(so.cachedTokens, next.cachedTokens),
+    );
+  }
+
+  /// Plays [character] — a Studio draft, not necessarily a stored card — in a
+  /// throwaway chat and returns its replies, one per line of [userTurns].
+  ///
+  /// The chat is never stored. It carries the draft as a per-chat character
+  /// override and the draft's [lorebooks] as per-chat book overrides, so the
+  /// request goes through [_assemble] exactly as a real chat with the finished
+  /// card would: the chat's preset, persona, provider, lorebook scan and regex
+  /// rules all apply. That is the point of a playtest — it is the real prompt,
+  /// not a re-derivation of it.
+  Future<List<String>> playtestCharacter({
+    required Character character,
+    List<Lorebook> lorebooks = const <Lorebook>[],
+    required List<String> userTurns,
+    int greetingIndex = 0,
+    ChatClient? client,
+  }) async {
+    final now = DateTime.now();
+    final greetings = character.greetings;
+    final conversation = Conversation(
+      id: 'studio-playtest-${now.microsecondsSinceEpoch}',
+      title: 'Playtest',
+      messages: <ChatMessage>[],
+      updatedAt: now,
+      characterId: character.id,
+      characterName: character.displayName,
+      overrideDefinitions: true,
+      characterOverrides: {character.id: character},
+      lorebookOverrides: {for (final b in lorebooks) b.id: b},
+    );
+    final persona = impersonationFor(conversation);
+    final userName = persona?.displayName ?? 'User';
+    if (greetings.isNotEmpty) {
+      conversation.messages.add(ChatMessage(
+        role: 'assistant',
+        content: Character.resolveMacros(
+          greetings[greetingIndex.clamp(0, greetings.length - 1)],
+          charName: character.displayName,
+          userName: userName,
+        ),
+      ));
+    }
+    final chat = client ?? ChatClient();
+    final replies = <String>[];
+    for (final turn in userTurns) {
+      conversation.messages.add(ChatMessage(role: 'user', content: turn));
+      final preset = presetFor(conversation);
+      final base = _resolveProvider(preset, conversation: conversation);
+      if (base == null) {
+        throw ChatApiException('Set up a provider in Settings first.');
+      }
+      final blocked = blockingBudget(base, base.model);
+      if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
+      final assembled = _assemble(conversation);
+      final provider = _applyKey(base);
+      final raw = StringBuffer();
+      TokenUsage? reported;
+      try {
+        await for (final delta in chat.streamChat(
+          provider: provider,
+          history: assembled.messages,
+          params: assembled.params,
+        )) {
+          raw.write(delta.text);
+          if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);
+        }
+      } on ChatApiException {
+        _advanceKeyOnError(base);
+        rethrow;
+      } finally {
+        recordUsage(
+          base,
+          base.model,
+          reported ??
+              TokenUsage(
+                inputTokens: assembled.totalTokens,
+                outputTokens: _tokenizer.estimate(raw.toString()),
+                estimated: true,
+              ),
+        );
+      }
+      final tags = ReasoningTags(
+        start: preset?.thinkStartTag.trim() ?? '',
+        end: preset?.thinkEndTag.trim() ?? '',
+      );
+      final reply = splitReasoning(raw.toString(), tags).text.trim();
+      replies.add(reply);
+      conversation.messages.add(ChatMessage(role: 'assistant', content: reply));
+    }
+    await _persistUsage();
+    notifyListeners();
+    return replies;
   }
 
   /// What the model is told when it is writing the user's line rather than the

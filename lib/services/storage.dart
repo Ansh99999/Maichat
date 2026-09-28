@@ -12,6 +12,7 @@ import '../models/embedding.dart';
 import '../models/folder.dart';
 import '../models/gallery_image.dart';
 import '../models/image_gen.dart';
+import '../models/studio.dart';
 import '../models/interface_preset.dart';
 import '../models/lorebook.dart';
 import '../models/preset.dart';
@@ -66,6 +67,7 @@ class Storage {
   static const _viewPrefsKey = 'viewPrefs';
   static const _interfacePresetsKey = 'interfacePresets';
   static const _imageGenKey = 'imageGen';
+  static const _studioConfigKey = 'studioConfig';
   static const _summaryFoldsKey = 'summaryFolds';
   static const _responseHintsKey = 'responseHints';
   static const _backupPrefsKey = 'backupPrefs';
@@ -418,6 +420,23 @@ class Storage {
 
   Future<void> saveImageGen(ImageGenConfig config) async =>
       (await _prefs).setString(_imageGenKey, jsonEncode(config.toJson()));
+
+  /// How the Character Studio talks to its model. A small entry of its own; the
+  /// sessions themselves are files (`StudioStore`), never preferences.
+  Future<StudioConfig> loadStudioConfig() async {
+    final raw = (await _prefs).getString(_studioConfigKey);
+    if (raw == null) return const StudioConfig();
+    try {
+      final json = jsonDecode(raw);
+      if (json is Map<String, dynamic>) return StudioConfig.fromJson(json);
+    } catch (_) {
+      // Defaults beat a startup failure.
+    }
+    return const StudioConfig();
+  }
+
+  Future<void> saveStudioConfig(StudioConfig config) async =>
+      (await _prefs).setString(_studioConfigKey, jsonEncode(config.toJson()));
 
   /// Which memory blocks are folded shut, as `{conversationId: [segmentId, …]}`.
   ///
