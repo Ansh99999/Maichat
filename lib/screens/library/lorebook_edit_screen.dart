@@ -41,13 +41,24 @@ enum _EntrySort {
 /// and keying by index would hand one entry's controller to another. Nothing is
 /// written into the model until Save.
 class LorebookEditScreen extends StatefulWidget {
-  const LorebookEditScreen({super.key, this.book, this.conversationId});
+  const LorebookEditScreen({
+    super.key,
+    this.book,
+    this.conversationId,
+    this.onSave,
+  });
 
   final Lorebook? book;
 
   /// When set, the editor was opened inside a chat: saving offers "this chat
   /// only" (a per-chat override) as well as "global". Null means library-only.
   final String? conversationId;
+
+  /// When set, Save hands the edited copy here instead of writing it to the
+  /// library — the Character Studio edits a *draft* book this way, with the
+  /// same editor, and records the change itself. Takes precedence over
+  /// [conversationId].
+  final Future<void> Function(Lorebook book)? onSave;
 
   @override
   State<LorebookEditScreen> createState() => _LorebookEditScreenState();
@@ -325,6 +336,14 @@ class _LorebookEditScreenState extends State<LorebookEditScreen> {
           .toList()
       ..thumbnail = _thumbnail
       ..color = _color;
+
+    final onSave = widget.onSave;
+    if (onSave != null) {
+      await onSave(_book);
+      if (!mounted) return;
+      Navigator.of(context).pop(_book);
+      return;
+    }
 
     final state = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
