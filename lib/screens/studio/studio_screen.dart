@@ -4,6 +4,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../../models/studio.dart';
 import '../../services/studio/studio_controller.dart';
 import '../../services/studio/studio_store.dart';
+import '../../services/studio/studio_tools.dart';
 import '../../state/app_state.dart';
 import 'shell/area_capsule.dart';
 import 'shell/liquid_panel.dart';
@@ -394,7 +395,9 @@ class _StudioScreenState extends State<StudioScreen> {
     final theme = Theme.of(context);
     final viewed =
         _viewing == kMainAgent ? null : _controller.subagent(_viewing);
-    final running = _controller.subagents.where((a) => a.running).length;
+    final running = _controller.anySubagentRunning
+        ? _controller.subagents.where((a) => a.running).length
+        : 0;
     return AppBar(
       key: _barKey,
       leading: Builder(
@@ -418,7 +421,9 @@ class _StudioScreenState extends State<StudioScreen> {
               overflow: TextOverflow.ellipsis,
             ),
             Text(
-              viewed == null ? _spend(session) : 'Sub-agent · read-only',
+              viewed == null
+                  ? _spend(session)
+                  : '${studioAgentTypeLabel(viewed.role)} · read-only',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
