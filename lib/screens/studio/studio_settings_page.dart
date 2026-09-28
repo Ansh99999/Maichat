@@ -171,11 +171,12 @@ class _StudioSettingsPageState extends State<StudioSettingsPage> {
           Text('Agent', style: theme.textTheme.titleSmall),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Helpers'),
+            title: const Text('Sub-agents'),
             subtitle: const Text(
-              'Let the Studio hand parts of a build to a writer, a lore writer '
-              'and a critic that work side by side. Faster on big builds; '
-              'each helper is its own set of requests.',
+              'Let the Studio split a build across sub-agents that work side '
+              'by side on the same draft — as many as you ask it for. Faster on '
+              'big builds; each sub-agent is its own set of requests, and its '
+              'conversation can be opened from the button at the top right.',
             ),
             value: config.subAgents,
             onChanged: (v) => _update(config.copyWith(subAgents: v)),

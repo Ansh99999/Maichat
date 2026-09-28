@@ -10,10 +10,17 @@ import '../../widgets/character_avatar.dart';
 import 'studio_screen.dart';
 import 'studio_settings_page.dart';
 
+/// The route name the session list is opened under, so a session's drawer
+/// can find its way back to it.
+const String kStudioSessionsRoute = '/studio';
+
 /// Opens the Character Studio on its list of sessions.
 Future<void> openCharacterStudio(BuildContext context) =>
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const StudioHomeScreen()),
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: kStudioSessionsRoute),
+        builder: (_) => const StudioHomeScreen(),
+      ),
     );
 
 /// Opens a new Studio session that edits [character] from the library.
@@ -32,6 +39,7 @@ Future<void> openCharacterInStudio(
   await store.save(session);
   if (!context.mounted) return;
   await Navigator.of(context).push(MaterialPageRoute<void>(
+    settings: const RouteSettings(name: kStudioSessionRoute),
     builder: (_) => StudioScreen(store: store, session: session),
   ));
 }
@@ -87,6 +95,7 @@ class _StudioHomeScreenState extends State<StudioHomeScreen> {
     final store = _store;
     if (store == null) return;
     await Navigator.of(context).push(MaterialPageRoute<void>(
+      settings: const RouteSettings(name: kStudioSessionRoute),
       builder: (_) => StudioScreen(store: store, session: session),
     ));
     await _load();

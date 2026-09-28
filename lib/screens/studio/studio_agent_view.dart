@@ -4,18 +4,36 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../../models/agent_message.dart';
+import '../../models/studio.dart';
 import '../../services/studio/studio_controller.dart';
 import '../../state/app_state.dart';
+import '../../widgets/avatar_image.dart';
 import '../../widgets/message_markdown.dart';
+import '../../widgets/smooth_image.dart';
 import '../../widgets/thinking_block.dart';
+import 'shell/shell_format.dart';
 
-/// The conversation with the Studio: what the user asked, what the agent said,
-/// and every tool it called, as a chip that opens onto what went in and what
-/// came back.
+/// One agent's conversation: what it was asked, what it said, and every tool it
+/// called, as a chip that opens onto what went in and what came back. The main
+/// agent's by default; with [agentId] a sub-agent's, read-only.
+///
+/// A `task` chip — the main agent spawning a sub-agent — shows that sub-agent's
+/// live status and opens its conversation through [onOpenAgent].
 class StudioAgentView extends StatefulWidget {
-  const StudioAgentView({super.key, required this.controller});
+  const StudioAgentView({
+    super.key,
+    required this.controller,
+    this.agentId = kMainAgent,
+    this.onOpenAgent,
+    this.onPickExample,
+  });
 
   final StudioController controller;
+  final String agentId;
+  final ValueChanged<String>? onOpenAgent;
+
+  /// An opening picked from the empty state, for the composer to take.
+  final ValueChanged<String>? onPickExample;
 
   @override
   State<StudioAgentView> createState() => _StudioAgentViewState();
@@ -23,25 +41,10 @@ class StudioAgentView extends StatefulWidget {
 
 class _StudioAgentViewState extends State<StudioAgentView>
     with AutomaticKeepAliveClientMixin {
-  final TextEditingController _input = TextEditingController();
-
   StudioController get _c => widget.controller;
 
   @override
   bool get wantKeepAlive => true;
-
-  @override
-  void dispose() {
-    _input.dispose();
-    super.dispose();
-  }
-
-  void _send() {
-    final text = _input.text.trim();
-    if (text.isEmpty || _c.running) return;
-    _input.clear();
-    _c.send(text);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,73 +53,82 @@ class _StudioAgentViewState extends State<StudioAgentView>
       listenable: _c,
       builder: (context, _) {
         final items = _items(context);
-        return Column(
-          children: [
-            Expanded(
-              child: items.isEmpty
-                  ? _Intro(onPick: (text) => _input.text = text)
-                  // Bottom-anchored like a chat: the newest turn sits above the
-                  // composer and a growing reply pushes older ones up.
-                  : ListView.builder(
-                      reverse: true,
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                      itemCount: items.length,
-                      itemBuilder: (context, i) => items[items.length - 1 - i],
-                    ),
-            ),
-            if (_c.notice != null) _Notice(controller: _c),
-            _Composer(
-              controller: _input,
-              running: _c.running,
-              onSend: _send,
-              onStop: _c.stop,
-            ),
-          ],
+        if (items.isEmpty && widget.agentId == kMainAgent) {
+          return _Intro(onPick: (text) => widget.onPickExample?.call(text));
+        }
+        // Bottom-anchored like a chat: the newest turn sits above the composer
+        // and a growing reply pushes older ones up.
+        return ListView.builder(
+          key: PageStorageKey<String>('studio-transcript-${widget.agentId}'),
+          reverse: true,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          itemCount: items.length,
+          itemBuilder: (context, i) => items[items.length - 1 - i],
         );
       },
     );
   }
 
   List<Widget> _items(BuildContext context) {
-    final transcript = _c.session.transcript;
+    final id = widget.agentId;
+    final transcript = _c.transcriptFor(id);
+    final live = _c.liveFor(id);
+    final subagent = id == kMainAgent ? null : _c.subagent(id);
     final results = <String, AgentMessage>{
       for (final m in transcript)
         if (m.role == AgentRole.tool && m.toolCallId != null) m.toolCallId!: m,
     };
+    final byCall = <String, StudioSubagent>{
+      for (final a in _c.subagents) a.callId: a,
+    };
+    final running = subagent?.running ?? _c.running;
     final out = <Widget>[];
+    var first = true;
     for (final m in transcript) {
       switch (m.role) {
         case AgentRole.user:
-          out.add(m.text.startsWith('[Studio note]')
-              ? _Note(text: m.text.substring('[Studio note]'.length).trim())
-              : _UserBubble(text: m.text));
+          if (subagent != null && first) {
+            out.add(_TaskBrief(subagent: subagent));
+          } else if (m.text.startsWith('[Studio note]')) {
+            out.add(_Note(text: m.text.substring('[Studio note]'.length).trim()));
+          } else {
+            out.add(_UserBubble(message: m));
+          }
         case AgentRole.assistant:
           if (m.reasoning.isNotEmpty) {
             out.add(ThinkingBlock(reasoning: m.reasoning));
           }
           if (m.text.isNotEmpty) out.add(_AgentText(text: m.text));
           for (final call in m.toolCalls) {
+            final spawned = byCall[call.id];
             out.add(_ToolChip(
+              key: ValueKey<String>('chip-${call.id}'),
               call: call,
               result: results[call.id],
-              running: _c.activeCalls.containsKey(call.id),
-              helper: _c.helpers[call.id],
+              running: live.activeCalls.containsKey(call.id) ||
+                  (spawned?.running ?? false),
+              subagent: spawned,
+              onOpenAgent: widget.onOpenAgent,
             ));
           }
         case AgentRole.tool:
         case AgentRole.system:
           break;
       }
+      first = false;
     }
-    if (_c.running) {
-      if (_c.liveReasoning.isNotEmpty) {
-        out.add(ThinkingBlock(reasoning: _c.liveReasoning, inProgress: true));
+    if (running) {
+      if (live.reasoning.isNotEmpty) {
+        out.add(ThinkingBlock(reasoning: live.reasoning, inProgress: true));
       }
-      if (_c.liveText.isNotEmpty) {
-        out.add(_AgentText(text: _c.liveText));
-      } else if (_c.activeCalls.isEmpty) {
+      if (live.text.isNotEmpty) {
+        out.add(_AgentText(text: live.text));
+      } else if (live.activeCalls.isEmpty) {
         out.add(const _Working());
       }
+    }
+    if (subagent != null && !subagent.running) {
+      out.add(_Outcome(subagent: subagent));
     }
     return out;
   }
@@ -152,13 +164,14 @@ class _AgentText extends StatelessWidget {
 }
 
 class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.text});
+  const _UserBubble({required this.message});
 
-  final String text;
+  final AgentMessage message;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
     return Align(
       alignment: Alignment.centerRight,
       child: Container(
@@ -166,15 +179,118 @@ class _UserBubble extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: scheme.primaryContainer,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
         ),
-        child: SelectableText(
-          text,
-          style: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(color: scheme.onPrimaryContainer),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (message.images.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(bottom: message.text.isEmpty ? 0 : 8),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    for (final image in message.images)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SizedBox.square(
+                          dimension: 96,
+                          child: switch (avatarImage(
+                            image.ref,
+                            displaySize: 96,
+                            devicePixelRatio: dpr,
+                          )) {
+                            final ImageProvider p =>
+                              SmoothImage(image: p, fit: BoxFit.cover),
+                            null => ColoredBox(
+                                color: scheme.surfaceContainerHighest,
+                                child: Icon(Icons.broken_image_outlined,
+                                    color: scheme.onSurfaceVariant),
+                              ),
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            if (message.text.isNotEmpty)
+              SelectableText(
+                message.text,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.copyWith(color: scheme.onPrimaryContainer),
+              ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+/// A sub-agent's first message: the task the main agent gave it.
+class _TaskBrief extends StatelessWidget {
+  const _TaskBrief({required this.subagent});
+
+  final StudioSubagent subagent;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Task from Main · ${_roleLabel(subagent.role)}',
+            style: theme.textTheme.labelMedium
+                ?.copyWith(color: scheme.onTertiaryContainer),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            subagent.prompt,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: scheme.onTertiaryContainer),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// How a finished sub-agent ended, and its report.
+class _Outcome extends StatelessWidget {
+  const _Outcome({required this.subagent});
+
+  final StudioSubagent subagent;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final how = switch (subagent.status) {
+      StudioAgentStatus.done => 'Finished',
+      StudioAgentStatus.failed => 'Failed',
+      StudioAgentStatus.cancelled => 'Stopped',
+      StudioAgentStatus.running => 'Running',
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+      child: Text(
+        '$how after ${formatElapsed(subagent.elapsed())} · '
+        '${formatTokens(subagent.tokens)} tokens — its report went back to Main.',
+        style: muted,
       ),
     );
   }
@@ -232,8 +348,14 @@ class _Working extends StatelessWidget {
   }
 }
 
+String _roleLabel(String role) {
+  final r = role.trim().replaceAll('_', ' ');
+  return r.isEmpty ? 'general' : r;
+}
+
 IconData _toolIcon(String name) => switch (name) {
-      'get_draft' || 'read_document' || 'read_library_item' => Icons.visibility_outlined,
+      'get_draft' || 'read_document' || 'read_library_item' =>
+        Icons.visibility_outlined,
       'set_fields' || 'edit_field' => Icons.edit_note,
       'add_greeting' || 'remove_greeting' => Icons.waving_hand_outlined,
       'upsert_scenario' || 'delete_scenario' => Icons.theaters_outlined,
@@ -248,25 +370,29 @@ IconData _toolIcon(String name) => switch (name) {
       'generate_avatar' => Icons.palette_outlined,
       'playtest' => Icons.forum_outlined,
       'list_library' => Icons.local_library_outlined,
-      'delegate' => Icons.groups_outlined,
+      'task' || 'delegate' => Icons.smart_toy_outlined,
+      'todo_write' => Icons.checklist,
       _ => Icons.build_outlined,
     };
 
 /// One tool call: a line saying what it did, and — opened — what the agent
-/// sent and what came back. A `delegate` call shows its helper's steps while
-/// the helper works.
+/// sent and what came back. A `task` call carries its sub-agent's live status
+/// and a way into its conversation.
 class _ToolChip extends StatefulWidget {
   const _ToolChip({
+    super.key,
     required this.call,
     required this.result,
     required this.running,
-    this.helper,
+    this.subagent,
+    this.onOpenAgent,
   });
 
   final ToolCall call;
   final AgentMessage? result;
   final bool running;
-  final HelperRun? helper;
+  final StudioSubagent? subagent;
+  final ValueChanged<String>? onOpenAgent;
 
   @override
   State<_ToolChip> createState() => _ToolChipState();
@@ -275,14 +401,32 @@ class _ToolChip extends StatefulWidget {
 class _ToolChipState extends State<_ToolChip> {
   bool _open = false;
 
+  String _title() {
+    final call = widget.call;
+    if (call.name == 'task') {
+      final type = (call.arguments['agent_type'] ?? widget.subagent?.role ?? '')
+          .toString();
+      final description = (call.arguments['description'] ??
+              widget.subagent?.description ??
+              '')
+          .toString()
+          .trim();
+      final who = widget.subagent?.label ?? 'Sub-agent';
+      return '$who · ${_roleLabel(type)}'
+          '${description.isEmpty ? '' : ' — $description'}';
+    }
+    return describeCall(call);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final result = widget.result;
     final failed = result?.isError ?? false;
-    final helper = widget.helper;
-    final small = theme.textTheme.bodySmall;
+    final subagent = widget.subagent;
+    final muted = theme.textTheme.bodySmall
+        ?.copyWith(color: scheme.onSurfaceVariant);
     Widget status;
     if (widget.running) {
       status = const SizedBox(
@@ -297,13 +441,15 @@ class _ToolChipState extends State<_ToolChip> {
     } else {
       status = Icon(Icons.check, size: 16, color: scheme.primary);
     }
+    final isTask = widget.call.name == 'task';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Material(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(12),
+        color: isTask ? scheme.secondaryContainer.withValues(alpha: 0.55)
+            : scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           onTap: () => setState(() => _open = !_open),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -317,7 +463,7 @@ class _ToolChipState extends State<_ToolChip> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        describeCall(widget.call),
+                        _title(),
                         maxLines: _open ? 3 : 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium,
@@ -327,19 +473,31 @@ class _ToolChipState extends State<_ToolChip> {
                     status,
                   ],
                 ),
-                if (helper != null && (widget.running || _open) && helper.steps.isNotEmpty)
+                if (subagent != null)
                   Padding(
-                    padding: const EdgeInsets.only(left: 28, top: 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    padding: const EdgeInsets.only(left: 28, top: 2),
+                    child: Row(
                       children: [
-                        for (final step in _open
-                            ? helper.steps
-                            : helper.steps.skip(
-                                (helper.steps.length - 3).clamp(0, 1 << 30)))
-                          Text('· $step',
-                              style: small?.copyWith(
-                                  color: scheme.onSurfaceVariant)),
+                        Expanded(
+                          child: Ticking(
+                            active: subagent.running,
+                            builder: (_) => Text(
+                              '${formatElapsed(subagent.elapsed())} • '
+                              '${formatTokens(subagent.tokens)} tokens',
+                              style: muted,
+                            ),
+                          ),
+                        ),
+                        if (widget.onOpenAgent != null)
+                          TextButton.icon(
+                            key: Key('open-agent-${subagent.id}'),
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: () => widget.onOpenAgent!(subagent.id),
+                            icon: const Icon(Icons.open_in_new, size: 16),
+                            label: const Text('Open chat'),
+                          ),
                       ],
                     ),
                   ),
@@ -410,109 +568,6 @@ class _Detail extends StatelessWidget {
   }
 }
 
-class _Notice extends StatelessWidget {
-  const _Notice({required this.controller});
-
-  final StudioController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final error = controller.noticeIsError;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-      decoration: BoxDecoration(
-        color: error ? scheme.errorContainer : scheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              controller.notice ?? '',
-              style: TextStyle(
-                color: error
-                    ? scheme.onErrorContainer
-                    : scheme.onSecondaryContainer,
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: 'Dismiss',
-            icon: const Icon(Icons.close, size: 18),
-            onPressed: controller.dismissNotice,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Composer extends StatelessWidget {
-  const _Composer({
-    required this.controller,
-    required this.running,
-    required this.onSend,
-    required this.onStop,
-  });
-
-  final TextEditingController controller;
-  final bool running;
-  final VoidCallback onSend;
-  final VoidCallback onStop;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: controller,
-                minLines: 1,
-                maxLines: 5,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  hintText: running
-                      ? 'Working — you can type the next message'
-                      : 'Describe the vibe, or ask for a change',
-                  filled: true,
-                  fillColor: scheme.surfaceContainerHigh,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            running
-                ? IconButton.filledTonal(
-                    tooltip: 'Stop',
-                    icon: const Icon(Icons.stop),
-                    onPressed: onStop,
-                  )
-                : IconButton.filled(
-                    tooltip: 'Send',
-                    icon: const Icon(Icons.arrow_upward),
-                    onPressed: onSend,
-                  ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// What an empty session says: what the Studio does, and a few openings to
 /// start from.
 class _Intro extends StatelessWidget {
@@ -524,7 +579,7 @@ class _Intro extends StatelessWidget {
     'A retired sea witch who runs a lighthouse on a haunted coast. Slow-burn, '
         'melancholy, a little funny.',
     'A cyberpunk fixer who owes me a favour and hates that she does. Give her '
-        'a city lorebook.',
+        'a city lorebook — use 4 sub-agents.',
     'Cozy fantasy: the grumpy dwarf baker in a mountain village, with three '
         'different openings.',
   ];
@@ -543,8 +598,9 @@ class _Intro extends StatelessWidget {
         Text(
           'Describe the character — a whole brief or just the vibe. The Studio '
           'writes the card, greetings, a lorebook and anything else it needs, '
-          'then playtests it with your chat setup. Watch the Draft tab fill in; '
-          'nothing reaches your library until you apply it.',
+          'then playtests it with your chat setup. Ask for as many sub-agents '
+          'as you like to split the work. Nothing reaches your library until '
+          'you apply it.',
           style: theme.textTheme.bodyMedium
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
