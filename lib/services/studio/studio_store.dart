@@ -19,6 +19,9 @@ class StudioStore {
 
   static StudioStore? _shared;
 
+  /// The store [open] handed out, if it has been opened.
+  static StudioStore? get shared => _shared;
+
   /// The app's store, opened (and the folder created) on first use. Null when
   /// the platform will not name a folder, in which case the Studio says so.
   static Future<StudioStore?> open() async {
@@ -77,6 +80,27 @@ class StudioStore {
     final temp = File('${file.path}.tmp');
     await temp.writeAsString(jsonEncode(session.toJson()), flush: true);
     await temp.rename(file.path);
+  }
+
+  /// Every picture ref a stored session names: the draft's portrait and its
+  /// pool, its lorebooks' thumbnails, and every picture sent to the Studio or
+  /// to one of its sub-agents. What the picture sweep must keep.
+  Future<List<String>> pictureRefs() async {
+    final refs = <String>[];
+    for (final session in await list()) {
+      final c = session.workspace.character;
+      refs
+        ..add(c.avatar)
+        ..addAll(c.avatars)
+        ..addAll(session.workspace.lorebooks.map((b) => b.thumbnail));
+      for (final m in [
+        ...session.transcript,
+        for (final a in session.subagents) ...a.transcript,
+      ]) {
+        refs.addAll(m.images.map((i) => i.ref));
+      }
+    }
+    return refs;
   }
 
   Future<void> delete(String id) async {

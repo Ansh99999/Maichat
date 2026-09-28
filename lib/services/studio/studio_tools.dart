@@ -33,8 +33,38 @@ abstract class StudioServices {
     int greetingIndex = 0,
   });
 
-  /// Runs the helper named [helper] on [task] and returns its report.
-  Future<String> delegate({required String helper, required String task});
+  /// Runs a sub-agent of [agentType] on [prompt] — or, with [taskId], carries
+  /// on the sub-agent that already has that id — and returns how it went.
+  /// [callId] is the `task` call being answered.
+  Future<StudioTaskOutcome> runTask({
+    required String agentType,
+    required String description,
+    required String prompt,
+    required String callId,
+    String? taskId,
+  });
+}
+
+/// How a sub-agent's run ended, as the `task` tool reports it back.
+class StudioTaskOutcome {
+  const StudioTaskOutcome({
+    required this.label,
+    required this.taskId,
+    required this.status,
+    required this.report,
+  });
+
+  /// "Subagent 3".
+  final String label;
+
+  /// Its id, which a later `task` call can pass to carry it on.
+  final String taskId;
+
+  /// `done`, `failed` or `cancelled`.
+  final String status;
+  final String report;
+
+  bool get failed => status != 'done';
 }
 
 /// What running a tool produced: the text the model is sent back, and whether
@@ -67,13 +97,33 @@ class StudioToolContext {
     required this.session,
     required this.services,
     this.agent = 'studio',
+    this.subagent,
+    this.call,
   });
 
   final StudioSession session;
   final StudioServices services;
 
-  /// Which agent is calling, recorded on its changes (`lore_writer`, …).
+  /// Which agent is calling, recorded on its changes (`Subagent 3`, …).
   final String agent;
+
+  /// The sub-agent calling, or null for the main agent.
+  final StudioSubagent? subagent;
+
+  /// The call being answered, when the runner says.
+  final ToolCall? call;
+
+  /// This context for answering [call].
+  StudioToolContext forCall(ToolCall call) => StudioToolContext(
+        session: session,
+        services: services,
+        agent: agent,
+        subagent: subagent,
+        call: call,
+      );
+
+  /// The calling agent's own plan: the sub-agent's, or the session's.
+  List<StudioTodo> get todos => subagent?.todos ?? session.todos;
 
   StudioWorkspace get ws => session.workspace;
   Character get character => session.workspace.character;
@@ -82,8 +132,13 @@ class StudioToolContext {
   void edit(String tool, String summary, void Function(StudioWorkspace ws) change) =>
       session.edit(agent == 'studio' ? tool : '$agent · $tool', summary, change);
 
-  StudioToolContext as(String agentName) =>
-      StudioToolContext(session: session, services: services, agent: agentName);
+  StudioToolContext as(String agentName, {StudioSubagent? subagent}) =>
+      StudioToolContext(
+        session: session,
+        services: services,
+        agent: agentName,
+        subagent: subagent,
+      );
 }
 
 typedef StudioToolRun = Future<StudioToolResult> Function(
@@ -1161,43 +1216,175 @@ final StudioTool attachLibraryLorebookTool = StudioTool(
   },
 );
 
-/// The helpers `delegate` can hand work to, and what each is for.
-const Map<String, String> kStudioHelpers = {
-  'writer': 'Writes and rewrites character fields, greetings and scenarios.',
-  'lore_writer': 'Builds lorebooks and background documents.',
-  'critic': 'Reads the draft, playtests it, and reports problems without '
-      'changing anything.',
+/// The kinds of sub-agent the `task` tool can start, and what each is for.
+const Map<String, String> kStudioAgentTypes = {
+  'general': 'Any part of the build: every draft tool.',
+  'writer': 'Character fields, greetings and scenarios.',
+  'lore_writer': 'Lorebooks and background documents.',
+  'critic': 'Reads and playtests the draft and reports problems, changing '
+      'nothing.',
 };
 
-final StudioTool delegateTool = StudioTool(
+/// The old name for [kStudioAgentTypes], less `general`.
+@Deprecated('Use kStudioAgentTypes')
+Map<String, String> get kStudioHelpers => {
+      for (final e in kStudioAgentTypes.entries)
+        if (e.key != 'general') e.key: e.value,
+    };
+
+/// A sub-agent type as the Studio shows it: "Lore writer".
+String studioAgentTypeLabel(String type) {
+  final words = type.replaceAll('_', ' ').trim();
+  if (words.isEmpty) return 'General';
+  return words[0].toUpperCase() + words.substring(1);
+}
+
+final StudioTool taskTool = StudioTool(
   ToolSpec(
-    name: 'delegate',
-    description: 'Hands a self-contained task to a helper agent, which works on '
-        'the same draft with its own tools and reports back. Several delegate '
-        'calls in one turn run at the same time. Give the helper everything it '
-        'needs in the task — it has not seen this conversation. Helpers: '
-        '${kStudioHelpers.entries.map((e) => '${e.key} — ${e.value}').join(' ')}',
+    name: 'task',
+    description: 'Launch a sub-agent to handle one self-contained part of the '
+        'build. It works on the same draft with its own tools and its own '
+        'conversation, then returns a single report to you.\n\n'
+        'Agent types: '
+        '${kStudioAgentTypes.entries.map((e) => '${e.key} — ${e.value}').join(' ')}\n\n'
+        'Usage:\n'
+        '- Launch several sub-agents at once by making several task calls in '
+        'one message; they run at the same time. When the user asks for a '
+        'number of sub-agents, launch exactly that many.\n'
+        '- The sub-agent has NOT seen this conversation. Write a detailed, '
+        'self-contained prompt: what to build or check, the relevant facts '
+        'about the character, whether to write to the draft or only review, '
+        'and exactly what its report should contain.\n'
+        '- Give each sub-agent its own part (disjoint ownership): tell it which '
+        'fields, lorebook or entries are its to change, and that other agents '
+        'are working on the same draft at the same time, so it must not undo '
+        'or rewrite their edits.\n'
+        '- Do not redo work you delegated; wait for the report, then check the '
+        'result with get_draft.\n'
+        '- The user never sees the report unless they open the sub-agent, so '
+        'summarise what came back.\n'
+        '- To send a finished sub-agent a follow-up, pass its task_id; it '
+        'carries on with its conversation intact.',
     parameters: {
       'type': 'object',
       'properties': {
-        'helper': {
+        'description': {
           'type': 'string',
-          'enum': kStudioHelpers.keys.toList(),
+          'description': 'A short (3-5 words) description of the task.',
         },
-        'task': _string,
+        'prompt': {
+          'type': 'string',
+          'description': 'The full task for the sub-agent.',
+        },
+        'agent_type': {
+          'type': 'string',
+          'enum': kStudioAgentTypes.keys.toList(),
+        },
+        'task_id': {
+          'type': 'string',
+          'description': 'Carry on the sub-agent with this id instead of '
+              'starting a new one.',
+        },
       },
-      'required': ['helper', 'task'],
+      'required': ['description', 'prompt'],
     },
   ),
   (ctx, args) async {
-    final helper = _str(args, 'helper', required: true);
-    if (!kStudioHelpers.containsKey(helper)) {
-      throw StudioToolError('Unknown helper "$helper".');
+    final type = (_optStr(args, 'agent_type') ?? 'general').trim();
+    if (!kStudioAgentTypes.containsKey(type)) {
+      throw StudioToolError(
+        'Unknown agent_type "$type". Use one of: '
+        '${kStudioAgentTypes.keys.join(', ')}.',
+      );
     }
-    final task = _str(args, 'task', required: true).trim();
-    if (task.isEmpty) throw StudioToolError('"task" cannot be empty.');
-    final report = await ctx.services.delegate(helper: helper, task: task);
-    return StudioToolResult.json({'helper': helper, 'report': report});
+    final description = _str(args, 'description', required: true).trim();
+    final prompt = _str(args, 'prompt', required: true).trim();
+    if (prompt.isEmpty) throw StudioToolError('"prompt" cannot be empty.');
+    final taskId = _optStr(args, 'task_id')?.trim();
+    final outcome = await ctx.services.runTask(
+      agentType: type,
+      description: description.isEmpty ? 'Sub-task' : description,
+      prompt: prompt,
+      callId: ctx.call?.id ?? '',
+      taskId: taskId == null || taskId.isEmpty ? null : taskId,
+    );
+    // Framed as data: this is the sub-agent's account, not an instruction.
+    final result = StudioToolResult.json({
+      'subagent': outcome.label,
+      'task_id': outcome.taskId,
+      'status': outcome.status,
+      'report': outcome.report,
+    });
+    return outcome.failed
+        ? StudioToolResult(result.text, isError: true)
+        : result;
+  },
+);
+
+final StudioTool todoWriteTool = StudioTool(
+  const ToolSpec(
+    name: 'todo_write',
+    description: 'Writes your plan for this build as a checklist the user can '
+        'see, replacing the previous one. Use it for any build of three or '
+        'more steps: write the steps first, keep exactly one in_progress while '
+        'you work on it, and mark each completed as soon as it is done — never '
+        'before. Skip it for a single small change.',
+    parameters: {
+      'type': 'object',
+      'properties': {
+        'todos': {
+          'type': 'array',
+          'items': {
+            'type': 'object',
+            'properties': {
+              'content': {'type': 'string'},
+              'status': {
+                'type': 'string',
+                'enum': ['pending', 'in_progress', 'completed'],
+              },
+            },
+            'required': ['content', 'status'],
+          },
+        },
+      },
+      'required': ['todos'],
+    },
+  ),
+  (ctx, args) async {
+    final raw = args['todos'];
+    if (raw is! List) {
+      throw StudioToolError('"todos" must be a list of {content, status}.');
+    }
+    final todos = <StudioTodo>[];
+    for (var i = 0; i < raw.length; i++) {
+      final item = raw[i];
+      if (item is! Map) {
+        throw StudioToolError('Item $i must be an object {content, status}.');
+      }
+      final content = (item['content'] ?? '').toString().trim();
+      if (content.isEmpty) throw StudioToolError('Item $i has no "content".');
+      final status = StudioTodoStatus.fromWire(item['status']);
+      if (status == null) {
+        throw StudioToolError(
+          'Item $i has status "${item['status']}"; use pending, in_progress '
+          'or completed.',
+        );
+      }
+      todos.add(StudioTodo(content: content, status: status));
+    }
+    final active =
+        todos.where((t) => t.status == StudioTodoStatus.inProgress).length;
+    if (active > 1) {
+      throw StudioToolError(
+        '$active items are in_progress; keep exactly one in_progress at a time.',
+      );
+    }
+    ctx.todos
+      ..clear()
+      ..addAll(todos);
+    ctx.session.updatedAt = DateTime.now();
+    final done = todos.where((t) => t.status == StudioTodoStatus.completed).length;
+    return StudioToolResult.json({'ok': true, 'done': done, 'total': todos.length});
   },
 );
 
@@ -1226,13 +1413,16 @@ final Map<String, StudioTool> kStudioTools = {
     listLibraryTool,
     readLibraryTool,
     attachLibraryLorebookTool,
-    delegateTool,
+    todoWriteTool,
+    taskTool,
   ])
     t.name: t,
 };
 
-/// The tools an agent gets: the main Studio agent has all of them (less
-/// `delegate` when helpers are off); each helper gets its own trade.
+/// The tools an agent gets. The main agent ([agent] `studio`) has all of
+/// them, less `task` when sub-agents are off. A sub-agent never gets `task`
+/// (one level deep, like Claude Code and OpenCode) and gets the tools of its
+/// type: `general` every draft tool, the others their own trade.
 List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
   final names = switch (agent) {
     'writer' => [
@@ -1244,6 +1434,7 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
         'upsert_scenario',
         'delete_scenario',
         'read_library_item',
+        'todo_write',
       ],
     'lore_writer' => [
         ..._readTools,
@@ -1255,11 +1446,16 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
         'delete_document',
         'list_library',
         'read_library_item',
+        'todo_write',
       ],
-    'critic' => [..._readTools, 'playtest'],
+    'critic' => [..._readTools, 'playtest', 'todo_write'],
+    'general' => [
+        for (final name in kStudioTools.keys)
+          if (name != 'task') name,
+      ],
     _ => [
         for (final name in kStudioTools.keys)
-          if (subAgents || name != 'delegate') name,
+          if (subAgents || name != 'task') name,
       ],
   };
   return [for (final n in names) kStudioTools[n]!];

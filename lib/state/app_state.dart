@@ -57,6 +57,7 @@ import '../services/reasoning.dart';
 import '../services/regex_engine.dart';
 import '../services/storage.dart';
 import '../services/storage_report.dart';
+import '../services/studio/studio_store.dart';
 import '../services/summarizer.dart';
 import '../services/tokenizer.dart';
 import '../services/update_service.dart';
@@ -75,6 +76,7 @@ class AppState extends ChangeNotifier {
     BackupStore? backups,
     DriveClient? drive,
     Summarizer? summarizer,
+    StudioStore? studio,
     this.loadTimeout = const Duration(seconds: 30),
   }) : _storage = storage ?? Storage(),
        _client = client ?? ChatClient(),
@@ -85,7 +87,13 @@ class AppState extends ChangeNotifier {
     _avatars = avatars;
     _vectors = embeddings;
     _backups = backups;
+    _studio = studio;
   }
+
+  /// Where Character Studio sessions live, when the platform named a folder.
+  /// Read by the picture sweep: a picture a draft or a Studio message refers to
+  /// is kept even when nothing in the library points at it yet.
+  StudioStore? _studio;
 
   final Storage _storage;
   final ChatClient _client;
@@ -1692,6 +1700,12 @@ class AppState extends ChangeNotifier {
   Future<void> _sweepAvatars() async {
     final store = _avatars;
     if (store == null || !_writable) return;
+    // Awaited only when there is a Studio folder to read: an extra hop on
+    // every sweep would let two sweeps interleave (a reopened app's startup
+    // sweep beside the last one's) where they otherwise run one after another.
+    final studio = _studio;
+    final studioRefs =
+        studio == null ? const <String>[] : await studio.pictureRefs();
     await store.sweep([
       ..._characters.map((c) => c.avatar),
       ..._characters.expand((c) => c.avatars),
@@ -1716,6 +1730,9 @@ class AppState extends ChangeNotifier {
         // outlive the gallery record it may have been picked from.
         ...c.messages.expand((m) => m.images.map((i) => i.ref)),
       ],
+      // A Studio draft's portrait and the pictures sent to the Studio live only
+      // in its session files until the draft is applied.
+      ...studioRefs,
     ]);
   }
 
@@ -5230,7 +5247,7 @@ class AppState extends ChangeNotifier {
     try {
       await for (final delta in client.stream(
         provider: provider,
-        messages: messages,
+        messages: withWireImages(messages),
         tools: tools,
         params: AgentParams(
           temperature: _studioConfig.temperature,
@@ -6718,6 +6735,46 @@ class AppState extends ChangeNotifier {
         budget--;
       }
       out[i] = message.copyWith(images: kept);
+    }
+    return out;
+  }
+
+  /// [images] as they go on the wire: an online picture as it is, a stored one
+  /// with its base64 read in, one whose file has gone dropped. At most [budget]
+  /// are kept, the newest (last) first.
+  List<MessageImage> wireImagesFor(
+    List<MessageImage> images, {
+    int budget = kMaxWireImages,
+  }) {
+    final kept = <MessageImage>[];
+    for (final image in images.reversed) {
+      if (kept.length >= budget) break;
+      if (image.isUrl) {
+        kept.insert(0, image);
+        continue;
+      }
+      final data = _imagePayload(image.ref);
+      if (data != null) kept.insert(0, image.withData(data));
+    }
+    return kept;
+  }
+
+  /// The wire copy of an agent's [messages]: every turn's pictures resolved by
+  /// [wireImagesFor], with [kMaxWireImages] shared across the whole request,
+  /// newest first. The messages themselves (and so the saved session) keep
+  /// their refs — base64 only ever exists on this copy.
+  List<AgentMessage> withWireImages(List<AgentMessage> messages) {
+    if (!messages.any((m) => m.images.isNotEmpty)) return messages;
+    var budget = kMaxWireImages;
+    final out = List<AgentMessage>.of(messages);
+    for (var i = out.length - 1; i >= 0; i--) {
+      final m = out[i];
+      if (m.images.isEmpty) continue;
+      final kept = budget <= 0
+          ? const <MessageImage>[]
+          : wireImagesFor(m.images, budget: budget);
+      budget -= kept.length;
+      out[i] = m.withImages(kept);
     }
     return out;
   }

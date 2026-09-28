@@ -136,7 +136,7 @@ void main() {
       final tools = [
         for (final t in r['tools'] as List) (t as Map)['function']['name'],
       ];
-      expect(tools, containsAll(['get_draft', 'set_fields', 'delegate']));
+      expect(tools, containsAll(['get_draft', 'set_fields', 'task', 'todo_write']));
     }
     // The third request carries both rounds of results.
     final third = (requests[2]['messages'] as List).cast<Map>();
