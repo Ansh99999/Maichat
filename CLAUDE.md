@@ -422,6 +422,35 @@ bar or the overflow menu.
   `AppState.generateImages`; "Send to chat" goes through `postImageToChat`. Reached
   from the drawer footer, the composer's operations strip, and
   `MessageAction.imagine`.
+- **Character Studio (beta):** an agent that builds a character from a
+  described "vibe" through tool calls. Reached from Characters (app-bar
+  sparkle, the Add sheet, and a character's ⋮ → "Open in Studio"). Layers:
+  `models/agent_message.dart` (`AgentMessage`/`ToolSpec`/`ToolCall` — *not*
+  `ChatMessage`, which is saved in every chat) and `services/agent_client.dart`
+  (tool calling for all four wire formats; kept apart from `streamChat` so the
+  roleplay wire and its one-system-message rule are untouched; a call is
+  yielded only once its arguments are whole; Gemini's `thoughtSignature` is
+  echoed and a made-up id is never sent back; `test/agent_client_test.dart`
+  pins every dialect's bytes). `models/studio.dart` — a `StudioSession` is a
+  **draft** (`StudioWorkspace`: character, lorebooks by id, documents) plus
+  transcript, `StudioOp`s (each a whole-workspace snapshot taken in the same
+  synchronous step as the change, via `StudioSession.edit`, capped at
+  `kStudioSnapshotLimit`; rewinding is *to a point*), and spend.
+  `services/studio/`: `studio_tools.dart` (21 tools over the workspace behind a
+  `StudioServices` interface; helpers get subsets via `studioToolsFor`),
+  `agent_runner.dart` (the loop — answers **every** call even when stopped, runs
+  one turn's calls with `Future.wait` so `delegate` helpers work in parallel,
+  shortens stale tool output on the wire only), `studio_prompt.dart`,
+  `studio_store.dart` (one JSON **file** per session under `studio/`, never
+  prefs; not yet included in backups), `studio_controller.dart` (runs a session,
+  kept alive by `StudioHub` while its agent works; apply = upsert by id).
+  AppState owns only `studioConfig` (its own provider/model, like the image
+  studio), `streamAgentTurn` (budget + key rotation + ledger, own client, never
+  touches `_streaming`) and `playtestCharacter`, which sends a draft through the
+  real `_assemble` as per-chat character/lorebook overrides on a throwaway,
+  never-stored `Conversation`. Tests: `studio_test.dart`,
+  `studio_controller_test.dart` (end to end against a loopback model),
+  `studio_ui_test.dart`.
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by
   `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over

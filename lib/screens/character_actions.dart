@@ -15,6 +15,7 @@ import 'character_sheet_screen.dart';
 import 'character_editor.dart';
 import 'chat_screen.dart';
 import 'gallery/gallery_screen.dart';
+import 'studio/studio_home_screen.dart';
 
 /// The per-character actions, shared by the roster's 3-dot menu (both the
 /// avatar card and the list row) and the detail screen, so every entry point
@@ -23,6 +24,7 @@ enum CharacterAction {
   newChat('New chat', Icons.chat_bubble_outline),
   download('Download', Icons.download_outlined),
   edit('Edit', Icons.edit_outlined),
+  studio('Open in Studio', Icons.auto_awesome_outlined),
   chatList('Chat list', Icons.forum_outlined),
   gallery('Gallery', Icons.photo_library_outlined),
   duplicate('Duplicate', Icons.copy_all_outlined),
@@ -64,6 +66,8 @@ Future<void> runCharacterAction(
           books: state.lorebooksOf(character));
     case CharacterAction.edit:
       await openCharacterEditor(context, character: character);
+    case CharacterAction.studio:
+      await openCharacterInStudio(context, character);
     case CharacterAction.chatList:
       Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => ChatsScreen(

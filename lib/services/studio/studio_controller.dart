@@ -88,6 +88,10 @@ class StudioController extends ChangeNotifier {
   String? notice;
   bool noticeIsError = false;
 
+  /// Hand edits made since the agent last ran, told to it with the next
+  /// message so it does not write over them from an old read of the draft.
+  final List<String> _handEdits = <String>[];
+
   Timer? _paint;
   Future<void> _saving = Future<void>.value();
   bool _disposed = false;
@@ -99,6 +103,13 @@ class StudioController extends ChangeNotifier {
     final message = text.trim();
     if (message.isEmpty || running) return;
     notice = null;
+    if (_handEdits.isNotEmpty) {
+      session.transcript.add(AgentMessage.user(
+        '[Studio note] The user edited the draft by hand: '
+        '${_handEdits.join('; ')}. Call get_draft before changing those parts.',
+      ));
+      _handEdits.clear();
+    }
     session.transcript.add(AgentMessage.user(message));
     if (session.title.trim().isEmpty && session.workspace.character.name.isEmpty) {
       session.title = _titleFrom(message);
@@ -110,6 +121,11 @@ class StudioController extends ChangeNotifier {
 
   /// Stops the agent and every helper it started.
   void stop() => _lead?.cancel();
+
+  void dismissNotice() {
+    notice = null;
+    notifyListeners();
+  }
 
   Future<void> _runLead() async {
     final config = state.studioConfig;
@@ -277,6 +293,7 @@ class StudioController extends ChangeNotifier {
   /// A change the user makes by hand, recorded like any other.
   void editByHand(String summary, void Function(StudioWorkspace ws) change) {
     session.edit('manual', summary, change);
+    _handEdits.add(summary.replaceFirst(RegExp(r' by hand$'), ''));
     _save();
     notifyListeners();
   }

@@ -25,6 +25,7 @@ import 'character_actions.dart';
 import 'character_editor.dart';
 import 'folders/folder_edit_screen.dart';
 import 'folders/folder_window.dart';
+import 'studio/studio_home_screen.dart';
 
 /// How the roster is ordered.
 enum CharacterSort {
@@ -201,6 +202,17 @@ class _CharactersScreenState extends State<CharactersScreen> {
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 _createNew();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_awesome),
+              title: const Text('Character Studio'),
+              subtitle: const Text(
+                'Describe the vibe; an agent builds the card, lore and more.',
+              ),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                openCharacterStudio(context);
               },
             ),
             const Divider(height: 1),
@@ -508,6 +520,11 @@ class _CharactersScreenState extends State<CharactersScreen> {
   AppBar _mainAppBar() => AppBar(
     title: const Text('Characters'),
     actions: [
+      IconButton(
+        tooltip: 'Character Studio',
+        icon: const Icon(Icons.auto_awesome_outlined),
+        onPressed: () => openCharacterStudio(context),
+      ),
       IconButton(
         tooltip: 'Import',
         icon: const Icon(Icons.download_outlined),
