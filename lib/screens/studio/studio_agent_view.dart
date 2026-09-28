@@ -6,6 +6,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../../models/agent_message.dart';
 import '../../models/studio.dart';
 import '../../services/studio/studio_controller.dart';
+import '../../services/studio/studio_tools.dart';
 import '../../state/app_state.dart';
 import '../../widgets/avatar_image.dart';
 import '../../widgets/message_markdown.dart';
@@ -78,9 +79,6 @@ class _StudioAgentViewState extends State<StudioAgentView>
       for (final m in transcript)
         if (m.role == AgentRole.tool && m.toolCallId != null) m.toolCallId!: m,
     };
-    final byCall = <String, StudioSubagent>{
-      for (final a in _c.subagents) a.callId: a,
-    };
     final running = subagent?.running ?? _c.running;
     final out = <Widget>[];
     var first = true;
@@ -100,7 +98,8 @@ class _StudioAgentViewState extends State<StudioAgentView>
           }
           if (m.text.isNotEmpty) out.add(_AgentText(text: m.text));
           for (final call in m.toolCalls) {
-            final spawned = byCall[call.id];
+            final spawned =
+                call.name == 'task' ? _c.subagentForCall(call.id) : null;
             out.add(_ToolChip(
               key: ValueKey<String>('chip-${call.id}'),
               call: call,
@@ -130,6 +129,8 @@ class _StudioAgentViewState extends State<StudioAgentView>
     if (subagent != null && !subagent.running) {
       out.add(_Outcome(subagent: subagent));
     }
+    final todos = _c.todosFor(id);
+    if (todos.isNotEmpty) out.add(_Plan(todos: todos));
     return out;
   }
 }
@@ -296,6 +297,76 @@ class _Outcome extends StatelessWidget {
   }
 }
 
+/// The agent's plan from its last `todo_write`: a compact checklist at the foot
+/// of its conversation, the step in progress picked out.
+class _Plan extends StatelessWidget {
+  const _Plan({required this.todos});
+
+  final List<StudioTodo> todos;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final done = todos.where((t) => t.status == StudioTodoStatus.completed).length;
+    return Container(
+      key: const Key('studio-plan'),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Plan · $done of ${todos.length} done',
+              style: theme.textTheme.labelMedium
+                  ?.copyWith(color: scheme.primary)),
+          const SizedBox(height: 6),
+          for (final t in todos)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    switch (t.status) {
+                      StudioTodoStatus.completed => Icons.check_circle,
+                      StudioTodoStatus.inProgress => Icons.radio_button_checked,
+                      StudioTodoStatus.pending => Icons.radio_button_unchecked,
+                    },
+                    size: 16,
+                    color: t.status == StudioTodoStatus.pending
+                        ? scheme.outline
+                        : scheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      t.content,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: t.status == StudioTodoStatus.completed
+                            ? scheme.onSurfaceVariant
+                            : scheme.onSurface,
+                        fontWeight: t.status == StudioTodoStatus.inProgress
+                            ? FontWeight.w600
+                            : null,
+                        decoration: t.status == StudioTodoStatus.completed
+                            ? TextDecoration.lineThrough
+                            : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Note extends StatelessWidget {
   const _Note({required this.text});
 
@@ -348,10 +419,7 @@ class _Working extends StatelessWidget {
   }
 }
 
-String _roleLabel(String role) {
-  final r = role.trim().replaceAll('_', ' ');
-  return r.isEmpty ? 'general' : r;
-}
+String _roleLabel(String role) => studioAgentTypeLabel(role);
 
 IconData _toolIcon(String name) => switch (name) {
       'get_draft' || 'read_document' || 'read_library_item' =>
@@ -412,8 +480,11 @@ class _ToolChipState extends State<_ToolChip> {
           .toString()
           .trim();
       final who = widget.subagent?.label ?? 'Sub-agent';
+      final resumed = widget.subagent != null &&
+          widget.subagent!.callId != call.id;
       return '$who · ${_roleLabel(type)}'
-          '${description.isEmpty ? '' : ' — $description'}';
+          '${description.isEmpty ? '' : ' — $description'}'
+          '${resumed ? ' (continued)' : ''}';
     }
     return describeCall(call);
   }
@@ -483,7 +554,8 @@ class _ToolChipState extends State<_ToolChip> {
                             active: subagent.running,
                             builder: (_) => Text(
                               '${formatElapsed(subagent.elapsed())} • '
-                              '${formatTokens(subagent.tokens)} tokens',
+                              '${formatTokens(subagent.tokens)} tokens'
+                              '${subagent.toolCallCount > 0 ? ' • ${subagent.toolCallCount} tool calls' : ''}',
                               style: muted,
                             ),
                           ),

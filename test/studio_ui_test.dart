@@ -353,11 +353,25 @@ void main() {
       (tester) async {
     final state = await boot();
     await open(tester, state, seeded(withSubagents: true));
-    expect(find.text('Subagent 1 · writer — Greetings'), findsOneWidget);
+    expect(find.text('Subagent 1 · Writer — Greetings'), findsOneWidget);
     expect(find.text('4m 20s • 20k tokens'), findsOneWidget);
     await tester.tap(find.byKey(const Key('open-agent-sa1')));
     await tester.pumpAndSettle();
     expect(find.text('Wrote three greetings in her voice.'), findsOneWidget);
+  });
+
+  testWidgets("the agent's plan shows at the foot of its chat", (tester) async {
+    final state = await boot();
+    final session = seeded();
+    session.todos.addAll(const [
+      StudioTodo(content: 'Write the card', status: StudioTodoStatus.completed),
+      StudioTodo(content: 'Build the lore', status: StudioTodoStatus.inProgress),
+      StudioTodo(content: 'Playtest'),
+    ]);
+    await open(tester, state, session);
+    expect(find.byKey(const Key('studio-plan')), findsOneWidget);
+    expect(find.text('Plan · 1 of 3 done'), findsOneWidget);
+    expect(find.text('Build the lore'), findsOneWidget);
   });
 
   testWidgets('a running sub-agent ticks without the frame ever settling',
