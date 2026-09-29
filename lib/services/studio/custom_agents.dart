@@ -123,10 +123,24 @@ List<StudioTool> studioToolsForType(
   return tools;
 }
 
-/// The main agent's instructions: the user's own (or the built-in ones), then
-/// what it is told about the web, the memory and the user's own sub-agent
-/// types — each only when it is on.
-String studioSystemPrompt(StudioConfig config, [StudioMemory? memory]) {
+/// Which part of an agent's instructions a piece of text is — how the context
+/// inspector says where the tokens of a system prompt go.
+enum StudioPromptPart {
+  instructions,
+  web,
+  agentTypes,
+  memory,
+}
+
+/// The main agent's instructions, as the parts they are made of: the user's
+/// own (or the built-in ones), then what it is told about the web, the user's
+/// own sub-agent types and its memory — each only when it is on.
+/// [studioSystemPrompt] is these joined; the context inspector reads them
+/// apart.
+List<(StudioPromptPart, String)> studioSystemPromptParts(
+  StudioConfig config, [
+  StudioMemory? memory,
+]) {
   final base = config.systemPrompt.trim().isEmpty
       ? defaultStudioPrompt()
       : config.systemPrompt.trim();
@@ -135,21 +149,28 @@ String studioSystemPrompt(StudioConfig config, [StudioMemory? memory]) {
       if (!t.builtIn) '- ${t.id}: ${t.description}',
   ];
   return [
-    base,
-    if (config.webTools) kStudioWebPrompt.trim(),
+    (StudioPromptPart.instructions, base),
+    if (config.webTools) (StudioPromptPart.web, kStudioWebPrompt.trim()),
     if (config.subAgents && custom.isNotEmpty)
-      'Sub-agent types the user defined (pass as agent_type)\n'
-          '${custom.join('\n')}',
+      (
+        StudioPromptPart.agentTypes,
+        'Sub-agent types the user defined (pass as agent_type)\n'
+            '${custom.join('\n')}',
+      ),
     if (config.memoryEnabled && memory != null)
-      studioMemoryPrompt(memory.notes),
-  ].join('\n\n');
+      (StudioPromptPart.memory, studioMemoryPrompt(memory.notes)),
+  ];
 }
 
-/// A sub-agent's instructions for [type]: a built-in's own, or the user's
-/// prompt for a type they defined, ahead of the rules every sub-agent shares —
-/// then research guidance when it has the web, and the user's remembered
-/// preferences (read-only).
-String studioAgentSystemPrompt(
+/// The main agent's instructions — [studioSystemPromptParts], joined.
+String studioSystemPrompt(StudioConfig config, [StudioMemory? memory]) =>
+    joinPromptParts(studioSystemPromptParts(config, memory));
+
+/// A sub-agent's instructions for [type], as parts: a built-in's own, or the
+/// user's prompt for a type they defined, ahead of the rules every sub-agent
+/// shares — then research guidance when it has the web, and the user's
+/// remembered preferences (read-only).
+List<(StudioPromptPart, String)> studioAgentSystemPromptParts(
   String type,
   StudioConfig config, [
   StudioMemory? memory,
@@ -173,11 +194,23 @@ String studioAgentSystemPrompt(
       ? studioMemoryNotesPrompt(memory.notes)
       : '';
   return [
-    base,
-    if (hasWeb) kStudioWebPrompt.trim(),
-    if (notes.isNotEmpty) notes,
-  ].join('\n\n');
+    (StudioPromptPart.instructions, base),
+    if (hasWeb) (StudioPromptPart.web, kStudioWebPrompt.trim()),
+    if (notes.isNotEmpty) (StudioPromptPart.memory, notes),
+  ];
 }
+
+/// A sub-agent's instructions — [studioAgentSystemPromptParts], joined.
+String studioAgentSystemPrompt(
+  String type,
+  StudioConfig config, [
+  StudioMemory? memory,
+]) =>
+    joinPromptParts(studioAgentSystemPromptParts(type, config, memory));
+
+/// How the parts of a system prompt are put together into one.
+String joinPromptParts(List<(StudioPromptPart, String)> parts) =>
+    [for (final p in parts) p.$2].join('\n\n');
 
 /// The model a sub-agent of [type] runs on, when its type names one of its
 /// own; null means the Studio's model.

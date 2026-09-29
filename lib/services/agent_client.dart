@@ -62,6 +62,54 @@ class AgentDelta {
       text.isEmpty && reasoning.isEmpty && toolCalls.isEmpty && usage == null;
 }
 
+/// One agent request, fully assembled but not sent: what [AgentClient.stream]
+/// would POST for it. The Studio's context inspector reads it, and the run
+/// builds its request through the same object, so the two cannot disagree.
+class AgentWireRequest {
+  const AgentWireRequest({
+    required this.provider,
+    required this.messages,
+    required this.tools,
+    required this.params,
+  });
+
+  /// The provider, its model already chosen (the key is not: rotation happens
+  /// when a request is actually made).
+  final Provider provider;
+
+  /// The messages as they go out — pictures resolved to base64.
+  final List<AgentMessage> messages;
+  final List<ToolSpec> tools;
+  final AgentParams params;
+
+  Uri get uri => ChatClient.requestUri(provider, stream: params.stream);
+
+  /// The exact request body.
+  Map<String, dynamic> get body =>
+      AgentClient.body(provider, messages, tools, params);
+
+  /// The request as text, for reading and copying: the URL, the headers with
+  /// every credential redacted, and the body with picture data elided — the
+  /// same rules as the chat's "copy raw request".
+  String preview() {
+    final headers = ChatClient.requestHeaders(provider, stream: params.stream)
+      ..updateAll(
+        (key, value) => ChatClient.isSecretHeader(key) ? '<redacted>' : value,
+      );
+    final shown = [
+      for (final m in messages)
+        m.images.isEmpty
+            ? m
+            : m.withImages([for (final i in m.images) i.elided()]),
+    ];
+    final text = const JsonEncoder.withIndent('  ')
+        .convert(AgentClient.body(provider, shown, tools, params));
+    return 'POST $uri\n'
+        '${headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
+        '$text';
+  }
+}
+
 /// Talks tool-calling to a provider, in whichever of the four dialects it
 /// speaks.
 ///

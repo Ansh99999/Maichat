@@ -13,7 +13,12 @@ class StudioDrawer extends StatelessWidget {
     this.sessionTitle,
     this.sessionDetail,
     this.onRename,
+    this.onContext,
   });
+
+  /// Opens the context inspector for the agent on screen, when a session is
+  /// open.
+  final VoidCallback? onContext;
 
   /// The open session's name and a line about it (its spend), when a session
   /// is open.
@@ -36,11 +41,12 @@ class StudioDrawer extends StatelessWidget {
     return NavigationDrawer(
       key: const Key('studio-drawer'),
       selectedIndex: null,
-      onDestinationSelected: (i) => switch (i) {
-        0 => go(onHome),
-        1 => go(onSettings),
-        _ => go(onSessions),
-      },
+      onDestinationSelected: (i) => go([
+        onHome,
+        onSettings,
+        ?onContext,
+        onSessions,
+      ][i]),
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(28, 20, 16, 12),
@@ -122,6 +128,13 @@ class StudioDrawer extends StatelessWidget {
           selectedIcon: Icon(Icons.tune),
           label: Text('Settings'),
         ),
+        if (onContext != null)
+          const NavigationDrawerDestination(
+            key: Key('studio-drawer-context'),
+            icon: Icon(Icons.donut_large_outlined),
+            selectedIcon: Icon(Icons.donut_large),
+            label: Text('Context'),
+          ),
         const NavigationDrawerDestination(
           icon: Icon(Icons.view_list_outlined),
           selectedIcon: Icon(Icons.view_list),

@@ -10,6 +10,8 @@ import 'shell/actions_capsule.dart';
 import 'shell/area_pages.dart';
 import 'shell/area_capsule.dart';
 import 'shell/bottom_fade.dart';
+import 'shell/context_meter.dart';
+import 'shell/context_sheet.dart';
 import 'shell/floating_button.dart';
 import 'shell/liquid_panel.dart';
 import 'shell/shell_format.dart';
@@ -275,6 +277,11 @@ class _StudioScreenState extends State<StudioScreen> {
           sessionTitle: _controller.session.displayTitle,
           sessionDetail: formatSpend(_controller.session),
           onRename: _rename,
+          onContext: () => showStudioContextSheet(
+            context,
+            _controller,
+            agentId: _viewing,
+          ),
         ),
       ),
       body: LayoutBuilder(
@@ -693,6 +700,9 @@ class _ViewingBar extends StatelessWidget {
                     ?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ),
+            // How full this sub-agent's own context is; tap for the detail.
+            StudioContextMeter(controller: controller, agentId: agentId),
+            const SizedBox(width: 4),
             FilledButton.tonalIcon(
               key: const Key('studio-back-to-main'),
               onPressed: onBack,

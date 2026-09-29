@@ -122,6 +122,14 @@ class AgentCompactor {
 
   int costOf(Iterable<AgentMessage> messages) =>
       messages.fold(0, (n, m) => n + cost(m));
+
+  /// How big a request is, as the compactor measures it before each call —
+  /// the one measure both the run and the context inspector use.
+  int sizeOf(List<AgentMessage> request, String systemPrompt) =>
+      costOf(request) + estimate(systemPrompt);
+
+  /// Whether a request of [size] would be summarised before it is sent.
+  bool wouldCompact(int size) => size > budget * threshold;
 }
 
 /// Past this share of the budget a request is compacted.
@@ -347,8 +355,17 @@ class AgentRunner {
   /// The request for the next model call: the system prompt, the newest
   /// summary (when the conversation has been compacted) in place of what it
   /// covers, then the rest of the transcript as [wireView] sends it.
-  List<AgentMessage> request(List<AgentMessage> transcript) {
-    final latest = compactor?.latest;
+  List<AgentMessage> request(List<AgentMessage> transcript) =>
+      buildRequest(systemPrompt, transcript, compactor?.latest);
+
+  /// The request an agent with [systemPrompt] sends for [transcript], its
+  /// newest summary being [latest] — the one assembly the run and the context
+  /// inspector share, so what the inspector shows is what goes out.
+  static List<AgentMessage> buildRequest(
+    String systemPrompt,
+    List<AgentMessage> transcript,
+    StudioCompaction? latest,
+  ) {
     final from = latest == null
         ? 0
         : latest.upTo.clamp(0, transcript.length);
@@ -364,9 +381,8 @@ class AgentRunner {
   Future<void> _compactIfNeeded(List<AgentMessage> transcript) async {
     final compactor = this.compactor;
     if (compactor == null || _compactGaveUpAt == transcript.length) return;
-    final size = compactor.costOf(request(transcript)) +
-        compactor.estimate(systemPrompt);
-    if (size <= compactor.budget * compactor.threshold) return;
+    final size = compactor.sizeOf(request(transcript), systemPrompt);
+    if (!compactor.wouldCompact(size)) return;
     final from = compactor.latest?.upTo ?? 0;
     final upTo = compactionBoundary(
       transcript,

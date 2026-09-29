@@ -464,7 +464,11 @@ class ChatClient {
   /// whose name reads like a secret is redacted, because a user can now add
   /// arbitrary custom headers and a gateway's bespoke auth header should not be
   /// the one thing that leaks.
-  static bool _isSecretHeader(String name) {
+  static bool _isSecretHeader(String name) => isSecretHeader(name);
+
+  /// [_isSecretHeader], for the Studio's request preview, so both previews
+  /// redact exactly the same headers.
+  static bool isSecretHeader(String name) {
     final lower = name.toLowerCase();
     return lower == 'authorization' ||
         lower == 'x-api-key' ||
