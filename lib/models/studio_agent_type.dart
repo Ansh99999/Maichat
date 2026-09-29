@@ -96,6 +96,11 @@ String studioAgentId(String label) => label
 
 /// Where the Studio's web search goes.
 enum StudioSearchProvider {
+  /// DuckDuckGo's plain-HTML results page — the whole web, no key needed. Not
+  /// an official API: DuckDuckGo can ask for a check (then the search falls
+  /// back to Wikipedia and says so) or change the page. The default.
+  duckduckgo('DuckDuckGo'),
+
   /// Wikipedia, and a Fandom wiki when the agent names one — no key needed.
   wiki('Wikipedia & Fandom'),
 
@@ -108,10 +113,14 @@ enum StudioSearchProvider {
   const StudioSearchProvider(this.label);
   final String label;
 
+  /// The provider stored as [name]. Settings leave the default out, so a
+  /// missing name is DuckDuckGo — which moves everyone who was on the old
+  /// default (Wikipedia, never written down) onto it, while a Wikipedia chosen
+  /// since is stored and kept.
   static StudioSearchProvider byName(Object? name) {
     for (final p in values) {
       if (p.name == name) return p;
     }
-    return StudioSearchProvider.wiki;
+    return StudioSearchProvider.duckduckgo;
   }
 }

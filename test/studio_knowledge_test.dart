@@ -308,11 +308,15 @@ void main() {
       },
     };
 
+    // DuckDuckGo is the default search; test/studio_ddg_test.dart covers it.
+    // These pin the other providers, chosen explicitly.
+    const wikiOnly = StudioConfig(searchProvider: StudioSearchProvider.wiki);
+
     test('searches Wikipedia with no key, through its /w/api.php', () async {
       json('/en.wikipedia.org/w/api.php', wikiHits(['Lighthouse keeper']));
       final results = await web().search(
         'lighthouse keeper',
-        config: const StudioConfig(),
+        config: wikiOnly,
       );
       final q = seen.single.uri.queryParameters;
       expect(q['action'], 'query');
@@ -355,7 +359,7 @@ void main() {
 
     test('other sites need a search provider', () async {
       await expectLater(
-        web().search('x', site: 'example.com', config: const StudioConfig()),
+        web().search('x', site: 'example.com', config: wikiOnly),
         throwsA(
           isA<WebError>().having(
             (e) => e.message,
@@ -537,9 +541,36 @@ void main() {
       );
     });
 
+    test('a DuckDuckGo fallback reaches the agent as a note', () async {
+      json('/en.wikipedia.org/w/api.php', wikiHits(['Keeper']));
+      routes['/html.duckduckgo.com/html/'] = (r) {
+        r.response.statusCode = 202;
+        r.response.write('<div class="anomaly-modal">bots use DuckDuckGo too.</div>');
+      };
+      StudioWeb.resetDuckDuckGoPacing();
+      final ctx = StudioToolContext(
+        session: session,
+        services: _Services(),
+        knowledge: StudioKnowledge(
+          config: () => const StudioConfig(),
+          web: StudioWeb(
+            baseFor: (host) => 'http://127.0.0.1:${server.port}/$host',
+            allowPrivate: true,
+            duckDuckGoGap: Duration.zero,
+          ),
+        ),
+      );
+      final found = await run(ctx, 'web_search', {'query': 'keeper'});
+      expect(found.isError, isFalse);
+      final body = _json(found);
+      expect(body['source'], 'en.wikipedia.org');
+      expect(body['note'], contains('asked for a check'));
+      expect((body['results'] as List).single['title'], 'Keeper');
+    });
+
     test('the tools answer through the context, and obey the switch', () async {
       json('/en.wikipedia.org/w/api.php', wikiHits(['Keeper']));
-      var config = const StudioConfig();
+      var config = wikiOnly;
       final ctx = StudioToolContext(
         session: session,
         services: _Services(),

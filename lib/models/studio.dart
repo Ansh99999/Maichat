@@ -835,7 +835,7 @@ class StudioConfig {
     this.areasCapsule = false,
     // Knowledge: the web, memory, and the user's own sub-agent types.
     this.webTools = true,
-    this.searchProvider = StudioSearchProvider.wiki,
+    this.searchProvider = StudioSearchProvider.duckduckgo,
     this.searchUrl = '',
     this.searchKey = '',
     this.memoryEnabled = true,
@@ -951,7 +951,7 @@ class StudioConfig {
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
         if (areasCapsule) 'areasCapsule': true,
         if (!webTools) 'webTools': false,
-        if (searchProvider != StudioSearchProvider.wiki)
+        if (searchProvider != StudioSearchProvider.duckduckgo)
           'searchProvider': searchProvider.name,
         if (searchUrl.isNotEmpty) 'searchUrl': searchUrl,
         if (searchKey.isNotEmpty) 'apiKey': searchKey,
