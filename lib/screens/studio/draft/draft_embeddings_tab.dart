@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../../models/studio.dart';
 import '../../../services/studio/studio_controller.dart';
 import '../../library/embeddings_config_screen.dart';
-import 'draft_header.dart';
 import 'draft_widgets.dart';
 
 /// What applying the draft will put into the embeddings library, and whether it
@@ -23,93 +22,108 @@ class DraftEmbeddingsTab extends StatelessWidget {
     final ready = state.embeddingReady;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final muted =
-        theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+    );
     return ListView(
       key: const PageStorageKey('draft-embeddings'),
-      padding: EdgeInsets.only(bottom: 24 + MediaQuery.paddingOf(context).bottom),
+      padding: draftListPadding(context, top: 20),
       children: [
-        DraftHeader(character: ws.character),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          padding: const EdgeInsets.symmetric(horizontal: kDraftCardInset),
           child: Material(
-            color: ready ? scheme.primaryContainer : scheme.errorContainer,
-            borderRadius: BorderRadius.circular(28),
+            color: ready
+                ? scheme.primaryContainer
+                : scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(kDraftOuterRadius),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
                     ready ? Icons.hub : Icons.hub_outlined,
-                    color: ready ? scheme.onPrimaryContainer : scheme.onErrorContainer,
+                    size: 28,
+                    color: ready
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          ready ? 'Embeddings are on' : 'Embeddings are off',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: ready
-                                ? scheme.onPrimaryContainer
-                                : scheme.onErrorContainer,
-                          ),
+                  const SizedBox(height: 16),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ready ? 'Embeddings are on' : 'Embeddings are off',
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          color: ready
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurface,
                         ),
-                        Text(
-                          ready
-                              ? 'Documents are indexed with '
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        ready
+                            ? 'Documents are indexed with '
                                   '${config.model.trim().isEmpty ? 'the chosen model' : config.model} '
                                   'when you apply, and recalled by meaning in chats.'
-                              : 'Documents stay in the draft but are left out '
+                            : 'Documents stay in the draft but are left out '
                                   'when you apply. Turn embeddings on to index them.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: ready
-                                ? scheme.onPrimaryContainer
-                                : scheme.onErrorContainer,
-                          ),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          height: 1.45,
+                          color: ready
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurfaceVariant,
                         ),
-                      ],
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const EmbeddingsConfigScreen(),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.tonal(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const EmbeddingsConfigScreen(),
+                        ),
+                      ),
+                      child: const Text('Set up'),
                     ),
-                    child: const Text('Set up'),
                   ),
                 ],
               ),
             ),
           ),
         ),
-        DraftSectionLabel('To index · ${ws.documents.length}'),
+        DraftSectionLabel('To index', count: ws.documents.length),
         if (ws.documents.isEmpty)
           const DraftEmpty(
             icon: Icons.hub_outlined,
-            text: 'Nothing to index yet. Documents the Studio or you write '
+            text:
+                'Nothing to index yet. Documents the Studio or you write '
                 'appear here.',
           )
         else
-          DraftCard(children: [
-            for (final doc in ws.documents)
-              _IndexRow(
-                key: ValueKey('draft-index-${doc.id}'),
-                doc: doc,
-                tokens: state.estimateTokens(doc.text),
-                chunkSize: config.docChunkSize,
-                status: _statusOf(controller, doc),
-                muted: muted,
-              ),
-          ]),
+          DraftCard(
+            children: [
+              for (final doc in ws.documents)
+                _IndexRow(
+                  key: ValueKey('draft-index-${doc.id}'),
+                  doc: doc,
+                  tokens: state.estimateTokens(doc.text),
+                  chunkSize: config.docChunkSize,
+                  status: _statusOf(controller, doc),
+                  muted: muted,
+                ),
+            ],
+          ),
       ],
     );
   }
 
-  static _IndexStatus _statusOf(StudioController controller, StudioDocument doc) {
+  static _IndexStatus _statusOf(
+    StudioController controller,
+    StudioDocument doc,
+  ) {
     final state = controller.state;
     if (doc.libraryId != null && state.documentById(doc.libraryId) != null) {
       return _IndexStatus.indexed;
@@ -147,38 +161,51 @@ class _IndexRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final chunks = chunkSize <= 0 ? 1 : (tokens / chunkSize).ceil().clamp(1, 1 << 20);
-    final (bg, fg) = switch (status) {
-      _IndexStatus.indexed => (scheme.primaryContainer, scheme.onPrimaryContainer),
-      _IndexStatus.onApply => (scheme.secondaryContainer, scheme.onSecondaryContainer),
-      _IndexStatus.leftOut => (scheme.errorContainer, scheme.onErrorContainer),
+    final chunks = chunkSize <= 0
+        ? 1
+        : (tokens / chunkSize).ceil().clamp(1, 1 << 20);
+    final dot = switch (status) {
+      _IndexStatus.indexed => scheme.primary,
+      _IndexStatus.onApply => scheme.tertiary,
+      _IndexStatus.leftOut => scheme.outline,
     };
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
       child: Row(
         children: [
           Icon(Icons.description_outlined, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 14),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(doc.name.trim().isEmpty ? 'Untitled document' : doc.name,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600)),
-                Text('$tokens tok · about $chunks chunk${chunks == 1 ? '' : 's'}',
-                    style: muted),
+                Text(
+                  doc.name.trim().isEmpty ? 'Untitled document' : doc.name,
+                  style: theme.textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: dot,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        '${status.label} · about $chunks '
+                        'chunk${chunks == 1 ? '' : 's'}',
+                        style: muted,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(status.label,
-                style: theme.textTheme.labelSmall?.copyWith(color: fg)),
           ),
         ],
       ),

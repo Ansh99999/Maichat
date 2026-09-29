@@ -4,7 +4,6 @@ import '../../../services/studio/studio_controller.dart';
 import '../../../widgets/avatar_image.dart';
 import '../../../widgets/smooth_image.dart';
 import '../../gallery/gallery_picker_sheet.dart';
-import 'draft_header.dart';
 import 'draft_widgets.dart';
 
 /// The character's pictures: the one they wear and the pool they can swipe to
@@ -91,24 +90,26 @@ class DraftImagesTab extends StatelessWidget {
     ];
     return ListView(
       key: const PageStorageKey('draft-images'),
-      padding: EdgeInsets.only(bottom: 24 + MediaQuery.paddingOf(context).bottom),
+      padding: draftListPadding(context),
       children: [
-        DraftHeader(character: c),
         if (locked) const DraftLockedNote(),
-        DraftSectionLabel('Pictures · ${pictures.length}'),
+        DraftSectionLabel('Pictures', count: pictures.length, first: true),
         if (pictures.isEmpty)
           const DraftEmpty(
             icon: Icons.image_outlined,
-            text: 'No pictures yet. Ask the Studio to paint a portrait, or add '
+            text:
+                'No pictures yet. Ask the Studio to paint a portrait, or add '
                 'one from your gallery.',
           )
         else
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: kDraftCardInset),
             child: GridView.count(
-              crossAxisCount: 3,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
+              // Two across: a picture is looked at, not scanned.
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.8,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               children: [
@@ -119,7 +120,11 @@ class DraftImagesTab extends StatelessWidget {
                     main: i == 0 && c.hasAvatar,
                     onTap: locked
                         ? null
-                        : () => _actions(context, pictures[i], i == 0 && c.hasAvatar),
+                        : () => _actions(
+                            context,
+                            pictures[i],
+                            i == 0 && c.hasAvatar,
+                          ),
                   ),
               ],
             ),
@@ -150,10 +155,14 @@ class _PictureTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    final image = avatarImage(imageRef, displaySize: 140, devicePixelRatio: dpr);
+    final image = avatarImage(
+      imageRef,
+      displaySize: 220,
+      devicePixelRatio: dpr,
+    );
     return Material(
       color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(main ? 28 : 18),
+      borderRadius: BorderRadius.circular(main ? 32 : 20),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
@@ -161,16 +170,22 @@ class _PictureTile extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (image != null)
-              SmoothImage(image: image, fit: BoxFit.cover, gaplessPlayback: true)
+              SmoothImage(
+                image: image,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              )
             else
               Icon(Icons.broken_image_outlined, color: scheme.outline),
             if (main)
               Positioned(
-                left: 8,
-                bottom: 8,
+                left: 12,
+                bottom: 12,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: scheme.primaryContainer,
                     borderRadius: BorderRadius.circular(999),
@@ -178,9 +193,9 @@ class _PictureTile extends StatelessWidget {
                   child: Text(
                     'Main',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: scheme.onPrimaryContainer,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),

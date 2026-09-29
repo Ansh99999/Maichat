@@ -3,9 +3,15 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
+import '../shell/studio_chrome.dart';
+
 /// One tab of a [ChromeTabbedPages].
 class ChromeTab {
-  const ChromeTab({required this.label, required this.icon, required this.page});
+  const ChromeTab({
+    required this.label,
+    required this.icon,
+    required this.page,
+  });
 
   final String label;
   final IconData icon;
@@ -38,8 +44,9 @@ class ChromeTabbedPages extends StatefulWidget {
 }
 
 class ChromeTabbedPagesState extends State<ChromeTabbedPages> {
-  late final PageController _pages =
-      PageController(initialPage: widget.initialIndex);
+  late final PageController _pages = PageController(
+    initialPage: widget.initialIndex,
+  );
   final ScrollController _strip = ScrollController();
   late int _index = widget.initialIndex;
 
@@ -74,8 +81,10 @@ class ChromeTabbedPagesState extends State<ChromeTabbedPages> {
     if (!_strip.hasClients) return;
     final left = _ChromeTabMetrics.leftOf(widths, i);
     final viewport = _strip.position.viewportDimension;
-    final target = (left + widths[i] / 2 - viewport / 2)
-        .clamp(0.0, _strip.position.maxScrollExtent);
+    final target = (left + widths[i] / 2 - viewport / 2).clamp(
+      0.0,
+      _strip.position.maxScrollExtent,
+    );
     _strip.animateTo(
       target,
       duration: const Duration(milliseconds: 420),
@@ -87,26 +96,50 @@ class ChromeTabbedPagesState extends State<ChromeTabbedPages> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final style = (theme.textTheme.labelLarge ?? const TextStyle())
-        .copyWith(fontWeight: FontWeight.w600);
+    final style = (theme.textTheme.labelLarge ?? const TextStyle()).copyWith(
+      fontWeight: FontWeight.w600,
+    );
     final scaler = MediaQuery.textScalerOf(context);
     final widths = [
       for (final t in widget.tabs)
-        _ChromeTabMetrics.widthOf(t.label, style, scaler, Directionality.of(context)),
+        _ChromeTabMetrics.widthOf(
+          t.label,
+          style,
+          scaler,
+          Directionality.of(context),
+        ),
     ];
     final surface = scheme.surfaceContainerLow;
+    // Inside the Studio shell there is no app bar: the strip sits just under
+    // the status bar, in the row the floating menu square shares, and is kept
+    // clear of that square (and of the sub-agents square on the right, when
+    // there is one) — so the page's top is tabs, not chrome.
+    final chrome = context.dependOnInheritedWidgetOfExactType<StudioChrome>();
+    final top = chrome == null
+        ? 0.0
+        : chrome.statusBar +
+              StudioChrome.buttonTop +
+              (StudioChrome.buttonSize - _ChromeTabMetrics.stripHeight);
+    final left = chrome == null ? 0.0 : StudioChrome.side - 8;
+    final right = chrome == null || !chrome.rightButton
+        ? 0.0
+        : StudioChrome.side - 8;
     return Column(
       children: [
-        SizedBox(
-          height: _ChromeTabMetrics.stripHeight,
+        Container(
+          height: _ChromeTabMetrics.stripHeight + top,
+          padding: EdgeInsets.only(top: top, left: left, right: right),
           child: SingleChildScrollView(
             controller: _strip,
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: _ChromeTabMetrics.flare),
+            padding: const EdgeInsets.symmetric(
+              horizontal: _ChromeTabMetrics.flare,
+            ),
             child: AnimatedBuilder(
               animation: _pages,
               builder: (context, _) {
-                final position = _pages.hasClients && _pages.position.hasContentDimensions
+                final position =
+                    _pages.hasClients && _pages.position.hasContentDimensions
                     ? (_pages.page ?? _index.toDouble())
                     : _index.toDouble();
                 return CustomPaint(
@@ -125,7 +158,10 @@ class ChromeTabbedPagesState extends State<ChromeTabbedPages> {
                           style: style,
                           // How selected this tab is right now, 0–1, from the
                           // page's position — so its colour follows a swipe.
-                          selectedness: (1 - (position - i).abs()).clamp(0.0, 1.0),
+                          selectedness: (1 - (position - i).abs()).clamp(
+                            0.0,
+                            1.0,
+                          ),
                           onTap: () => select(i),
                         ),
                     ],
@@ -168,8 +204,11 @@ class _TabLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color =
-        Color.lerp(scheme.onSurfaceVariant, scheme.primary, selectedness)!;
+    final color = Color.lerp(
+      scheme.onSurfaceVariant,
+      scheme.primary,
+      selectedness,
+    )!;
     return Semantics(
       selected: selectedness > 0.5,
       button: true,
@@ -190,7 +229,11 @@ class _TabLabel extends StatelessWidget {
               children: [
                 Icon(tab.icon, size: _ChromeTabMetrics.iconSize, color: color),
                 const SizedBox(width: _ChromeTabMetrics.gap),
-                Text(tab.label, style: style.copyWith(color: color), maxLines: 1),
+                Text(
+                  tab.label,
+                  style: style.copyWith(color: color),
+                  maxLines: 1,
+                ),
               ],
             ),
           ),
@@ -326,17 +369,16 @@ Path chromeTabPath({
   required double bottom,
   double radius = _ChromeTabMetrics.radius,
   double flare = _ChromeTabMetrics.flare,
-}) =>
-    Path()
-      ..moveTo(left - flare, bottom)
-      ..quadraticBezierTo(left, bottom, left, bottom - flare)
-      ..lineTo(left, top + radius)
-      ..quadraticBezierTo(left, top, left + radius, top)
-      ..lineTo(right - radius, top)
-      ..quadraticBezierTo(right, top, right, top + radius)
-      ..lineTo(right, bottom - flare)
-      ..quadraticBezierTo(right, bottom, right + flare, bottom)
-      ..close();
+}) => Path()
+  ..moveTo(left - flare, bottom)
+  ..quadraticBezierTo(left, bottom, left, bottom - flare)
+  ..lineTo(left, top + radius)
+  ..quadraticBezierTo(left, top, left + radius, top)
+  ..lineTo(right - radius, top)
+  ..quadraticBezierTo(right, top, right, top + radius)
+  ..lineTo(right, bottom - flare)
+  ..quadraticBezierTo(right, bottom, right + flare, bottom)
+  ..close();
 
 /// A critically-damped-to-lightly-bouncy spring as a [Curve], for motion the
 /// Material 3 Expressive way: fast off the mark, settling with a hint of give

@@ -5,21 +5,25 @@ import '../../../models/chat_interface.dart';
 import '../../../widgets/avatar_image.dart';
 import '../../../widgets/character_avatar.dart';
 import '../../../widgets/natural_image.dart';
+import 'draft_widgets.dart';
 
 /// Wider than this (width ÷ height) and a picture counts as landscape.
 const double kDraftLandscapeRatio = 1.15;
 
 /// How wide the picture is drawn when it sits beside the name.
-const double kDraftSideAvatarWidth = 132;
+const double kDraftSideAvatarWidth = 120;
 
-/// The top of every Draft tab: the character's picture and who they are,
-/// arranged by the picture's own shape.
+/// The top of the Draft's Character tab: the character's picture and who they
+/// are, arranged by the picture's own shape. (Only that tab: the others are
+/// about their own part of the draft, and repeating the face on each was the
+/// same block of information six times over.)
 ///
-/// A square or portrait picture sits at the top right with the name, title and
-/// tags beside it on the left; a landscape one takes the whole width with them
+/// A square or portrait picture sits at the top left with the name, title and
+/// tags beside it on the right; a landscape one takes the whole width with them
 /// underneath. The shape is read from the app-wide ratio cache first, so a
 /// picture measured anywhere else opens in the right arrangement; one seen for
 /// the first time starts beside the name and moves once it has been measured.
+/// That move is a height change on an [AnimatedSize], never a fade.
 class DraftHeader extends StatefulWidget {
   const DraftHeader({super.key, required this.character});
 
@@ -63,60 +67,68 @@ class _DraftHeaderState extends State<DraftHeader> {
   Widget build(BuildContext context) {
     final c = widget.character;
     final info = _Identity(character: c);
+    const padding = EdgeInsets.fromLTRB(kDraftGutter, 8, kDraftGutter, 8);
+    Widget child;
     if (_avatar.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: info),
-            const SizedBox(width: 16),
-            CharacterAvatar(
-              character: c,
-              size: 96,
-              shape: AvatarShape.rounded,
-              corner: CornerRounding.xl,
-            ),
-          ],
+      child = Row(
+        key: const ValueKey('draft-header-empty'),
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          CharacterAvatar(
+            character: c,
+            size: 88,
+            shape: AvatarShape.rounded,
+            corner: CornerRounding.xl,
+          ),
+          const SizedBox(width: 20),
+          Expanded(child: info),
+        ],
+      );
+    } else {
+      final picture = ClipRRect(
+        key: const ValueKey('draft-header-picture'),
+        borderRadius: BorderRadius.circular(kDraftOuterRadius),
+        child: NaturalImage(
+          imageRef: _avatar,
+          placeholderRatio: _ratio ?? 1,
+          maxHeightFactor: _landscape ? 0.36 : 0.3,
+          displayWidth: _landscape ? null : kDraftSideAvatarWidth,
+          onRatioResolved: _resolved,
+          fallback: CharacterAvatar(
+            character: c,
+            size: kDraftSideAvatarWidth,
+            shape: AvatarShape.square,
+          ),
         ),
       );
-    }
-    final picture = ClipRRect(
-      key: const ValueKey('draft-header-picture'),
-      borderRadius: BorderRadius.circular(24),
-      child: NaturalImage(
-        imageRef: _avatar,
-        placeholderRatio: _ratio ?? 1,
-        maxHeightFactor: _landscape ? 0.4 : 0.32,
-        displayWidth: _landscape ? null : kDraftSideAvatarWidth,
-        onRatioResolved: _resolved,
-        fallback: CharacterAvatar(
-          character: c,
-          size: kDraftSideAvatarWidth,
-          shape: AvatarShape.square,
-        ),
-      ),
-    );
-    if (_landscape) {
-      return Padding(
-        key: const ValueKey('draft-header-landscape'),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [picture, const SizedBox(height: 14), info],
-        ),
-      );
+      child = _landscape
+          ? Column(
+              key: const ValueKey('draft-header-landscape'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [picture, const SizedBox(height: 20), info],
+            )
+          : Row(
+              key: const ValueKey('draft-header-side'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(width: kDraftSideAvatarWidth, child: picture),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: info,
+                  ),
+                ),
+              ],
+            );
     }
     return Padding(
-      key: const ValueKey('draft-header-side'),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: info),
-          const SizedBox(width: 16),
-          SizedBox(width: kDraftSideAvatarWidth, child: picture),
-        ],
+      padding: padding,
+      child: AnimatedSize(
+        duration: kDraftFoldDuration,
+        curve: kDraftFoldCurve,
+        alignment: Alignment.topLeft,
+        child: child,
       ),
     );
   }
@@ -137,21 +149,24 @@ class _Identity extends StatelessWidget {
       children: [
         Text(
           named ? c.name.trim() : 'Not named yet',
-          style: theme.textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.w700,
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.w600,
             color: named ? null : theme.colorScheme.onSurfaceVariant,
           ),
         ),
         if (c.title.trim().isNotEmpty) ...[
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Text(
             c.title.trim(),
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyLarge?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
         if (c.tags.isNotEmpty) ...[
-          const SizedBox(height: 10),
+          const SizedBox(height: 14),
           DraftTagStrip(tags: c.tags),
         ],
       ],
@@ -162,7 +177,11 @@ class _Identity extends StatelessWidget {
 /// The tags as one sideways-scrolling line of chips — the same band the
 /// character sheet draws, sized for a column rather than the whole page.
 class DraftTagStrip extends StatelessWidget {
-  const DraftTagStrip({super.key, required this.tags, this.padding = EdgeInsets.zero});
+  const DraftTagStrip({
+    super.key,
+    required this.tags,
+    this.padding = EdgeInsets.zero,
+  });
 
   final List<String> tags;
   final EdgeInsetsGeometry padding;
@@ -177,10 +196,17 @@ class DraftTagStrip extends StatelessWidget {
         children: [
           for (final tag in tags)
             Padding(
-              padding: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.only(right: 8),
               child: Chip(
                 label: Text(tag),
-                visualDensity: VisualDensity.compact,
+                shape: const StadiumBorder(),
+                side: BorderSide.none,
+                backgroundColor: Theme.of(
+                  context,
+                ).colorScheme.secondaryContainer,
+                labelStyle: TextStyle(
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),

@@ -26,19 +26,30 @@ final List<_Field> _fields = [
 final List<_Field> _laterFields = [
   _Field('Example dialogue', (c) => c.mesExample, (c, v) => c.mesExample = v),
   _Field('System prompt', (c) => c.systemPrompt, (c, v) => c.systemPrompt = v),
-  _Field('Post-history instructions', (c) => c.postHistoryInstructions,
-      (c, v) => c.postHistoryInstructions = v),
+  _Field(
+    'Post-history instructions',
+    (c) => c.postHistoryInstructions,
+    (c, v) => c.postHistoryInstructions = v,
+  ),
   _Field('Creator notes', (c) => c.creatorNotes, (c, v) => c.creatorNotes = v),
-  _Field('Creator', (c) => c.creator, (c, v) => c.creator = v.trim(),
-      long: false),
-  _Field('Version', (c) => c.characterVersion,
-      (c, v) => c.characterVersion = v.trim(), long: false),
+  _Field(
+    'Creator',
+    (c) => c.creator,
+    (c, v) => c.creator = v.trim(),
+    long: false,
+  ),
+  _Field(
+    'Version',
+    (c) => c.characterVersion,
+    (c, v) => c.characterVersion = v.trim(),
+    long: false,
+  ),
 ];
 
-/// The card itself: the picture and identity at the top, then Title, Tags,
-/// Name, Personality and every other field of the card, each folded to a line
-/// with a chevron to open it and a pencil to edit it. Lorebooks, scenarios and
-/// documents have tabs of their own.
+/// The card itself: the picture and identity at the top — the only tab that
+/// shows them — then the card's fields in a few calm groups. Each long field is
+/// folded to a line, with a chevron to open it and a pencil to edit it.
+/// Lorebooks, scenarios and documents have tabs of their own.
 class DraftCharacterTab extends StatelessWidget {
   const DraftCharacterTab({super.key, required this.controller});
 
@@ -49,6 +60,7 @@ class DraftCharacterTab extends StatelessWidget {
     final c = controller.session.workspace.character;
     final state = controller.state;
     final locked = controller.running;
+    final theme = Theme.of(context);
     int? tokens(String text) =>
         text.trim().isEmpty ? null : state.estimateTokens(text);
 
@@ -69,84 +81,103 @@ class DraftCharacterTab extends StatelessWidget {
           };
 
     Widget row(_Field f) => DraftFieldRow(
-          key: ValueKey('draft-field-${f.label}'),
-          label: f.label,
-          value: f.read(c),
-          tokens: f.long ? tokens(f.read(c)) : null,
-          foldable: f.long,
-          onEdit: edit(f),
-        );
+      key: ValueKey('draft-field-${f.label}'),
+      label: f.label,
+      value: f.read(c),
+      tokens: f.long ? tokens(f.read(c)) : null,
+      foldable: f.long,
+      onEdit: edit(f),
+    );
 
     final title = _Field('Title', (c) => c.title, (c, v) {
       c.title = v.trim();
       c.titleShown = c.title.isNotEmpty;
     }, long: false);
-    final name = _Field('Name', (c) => c.name, (c, v) => c.name = v.trim(),
-        long: false);
+    final name = _Field(
+      'Name',
+      (c) => c.name,
+      (c, v) => c.name = v.trim(),
+      long: false,
+    );
 
-    final permanent = state.estimateTokens([
-      c.description,
-      c.personality,
-      c.scenario,
-      c.mesExample,
-      c.systemPrompt,
-      c.postHistoryInstructions,
-    ].join('\n'));
+    final permanent = state.estimateTokens(
+      [
+        c.description,
+        c.personality,
+        c.scenario,
+        c.mesExample,
+        c.systemPrompt,
+        c.postHistoryInstructions,
+      ].join('\n'),
+    );
 
     return ListView(
       key: const PageStorageKey('draft-character'),
-      padding: EdgeInsets.only(bottom: 24 + MediaQuery.paddingOf(context).bottom),
+      padding: draftListPadding(context, top: 20),
       children: [
         DraftHeader(character: c),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
-          child: Text(
-            '$permanent permanent tokens · sent with every message',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
-        ),
         if (locked) const DraftLockedNote(),
-        const SizedBox(height: 8),
-        DraftCard(children: [
-          row(title),
-          _TagsRow(controller: controller, locked: locked),
-          row(name),
-        ]),
-        const SizedBox(height: 8),
+        const DraftSectionLabel('Identity'),
+        DraftCard(
+          children: [
+            row(title),
+            _TagsRow(controller: controller, locked: locked),
+            row(name),
+          ],
+        ),
+        const DraftSectionLabel('Who they are'),
         DraftCard(children: [for (final f in _fields) row(f)]),
         if (c.alternateGreetings.isNotEmpty) ...[
-          const DraftSectionLabel('Alternate greetings'),
-          DraftCard(children: [
-            for (var i = 0; i < c.alternateGreetings.length; i++)
-              DraftFieldRow(
-                key: ValueKey('draft-greeting-$i'),
-                label: 'Alternate greeting ${i + 1}',
-                value: c.alternateGreetings[i],
-                tokens: tokens(c.alternateGreetings[i]),
-                onEdit: locked
-                    ? null
-                    : () async {
-                        final next = await editDraftText(
-                          context,
-                          label: 'Alternate greeting ${i + 1}',
-                          value: c.alternateGreetings[i],
-                        );
-                        if (next == null) return;
-                        controller.editByHand(
-                          'Edited alternate greeting ${i + 1} by hand',
-                          (ws) {
-                            final list = ws.character.alternateGreetings;
-                            if (i < list.length) list[i] = next;
-                          },
-                        );
-                      },
-              ),
-          ]),
+          DraftSectionLabel(
+            'Alternate greetings',
+            count: c.alternateGreetings.length,
+          ),
+          DraftCard(
+            children: [
+              for (var i = 0; i < c.alternateGreetings.length; i++)
+                DraftFieldRow(
+                  key: ValueKey('draft-greeting-$i'),
+                  label: 'Greeting ${i + 2}',
+                  value: c.alternateGreetings[i],
+                  tokens: tokens(c.alternateGreetings[i]),
+                  onEdit: locked
+                      ? null
+                      : () async {
+                          final next = await editDraftText(
+                            context,
+                            label: 'Greeting ${i + 2}',
+                            value: c.alternateGreetings[i],
+                          );
+                          if (next == null) return;
+                          controller.editByHand(
+                            'Edited greeting ${i + 2} by hand',
+                            (ws) {
+                              final list = ws.character.alternateGreetings;
+                              if (i < list.length) list[i] = next;
+                            },
+                          );
+                        },
+                ),
+            ],
+          ),
         ],
-        const SizedBox(height: 8),
+        const DraftSectionLabel('Instructions & notes'),
         DraftCard(children: [for (final f in _laterFields) row(f)]),
+        // What the card costs, said once at the foot rather than on every row.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kDraftGutter + 4,
+            24,
+            kDraftGutter,
+            0,
+          ),
+          child: Text(
+            'About $permanent tokens of this card go with every message.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -165,19 +196,13 @@ class _TagsRow extends StatelessWidget {
     final theme = Theme.of(context);
     final tags = controller.session.workspace.character.tags;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
+      padding: const EdgeInsets.fromLTRB(20, 14, 8, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Expanded(
-                child: Text(
-                  'Tags',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
+              Expanded(child: Text('Tags', style: theme.textTheme.titleMedium)),
               IconButton(
                 tooltip: 'Edit tags',
                 onPressed: locked
@@ -208,8 +233,8 @@ class _TagsRow extends StatelessWidget {
           if (tags.isEmpty)
             Text(
               'Empty',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.outline,
                 fontStyle: FontStyle.italic,
               ),
             )
