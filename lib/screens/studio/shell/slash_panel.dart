@@ -275,6 +275,9 @@ class StudioSlashState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The commands changed (a skill switched on, a command saved): redraw.
+  void refresh() => notifyListeners();
+
   void move(int delta) {
     final n = matches.length;
     if (n == 0) return;

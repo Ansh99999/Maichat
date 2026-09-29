@@ -539,8 +539,9 @@ Future<void> showSkillImportSheet(
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (sheet) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,

@@ -6,7 +6,9 @@ import '../../services/studio/studio_prompt.dart';
 import '../../state/app_state.dart';
 import 'settings/settings_parts.dart';
 import 'settings/studio_agents_page.dart';
+import 'settings/studio_commands_page.dart';
 import 'settings/studio_memory_page.dart';
+import 'settings/studio_skills_page.dart';
 import 'settings/studio_web_page.dart';
 
 /// How the Studio talks to its model: which provider and model build the
@@ -285,6 +287,20 @@ class _StudioSettingsPageState extends State<StudioSettingsPage> {
                   ? 'What the Studio remembers about you'
                   : 'Off',
               onTap: () => openStudioMemory(context),
+            ),
+            SettingsLink(
+              key: const Key('studio-settings-skills'),
+              icon: Icons.auto_stories_outlined,
+              title: 'Skills',
+              subtitle: 'Instructions the Studio loads when the work fits',
+              onTap: () => openStudioSkills(context),
+            ),
+            SettingsLink(
+              key: const Key('studio-settings-commands'),
+              icon: Icons.keyboard_command_key,
+              title: 'Commands',
+              subtitle: 'Your own / commands',
+              onTap: () => openStudioCommands(context),
             ),
           ]),
           const Divider(height: 40),

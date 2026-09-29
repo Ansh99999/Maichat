@@ -334,8 +334,16 @@ void main() {
     test('sub-agents get only their trade, and never task', () {
       List<String> names(String agent, {bool subAgents = true}) =>
           [for (final t in studioToolsFor(agent, subAgents: subAgents)) t.name];
-      expect(names('critic'),
-          ['get_draft', 'read_document', 'playtest', 'todo_write']);
+      // Its trade, plus the skill tools every typed sub-agent gets (dropped
+      // again by studioToolsForType while no skill is on).
+      expect(names('critic'), [
+        'get_draft',
+        'read_document',
+        'playtest',
+        'todo_write',
+        'use_skill',
+        'read_skill_file',
+      ]);
       expect(names('lore_writer'), isNot(contains('set_fields')));
       expect(names('writer'), isNot(contains('upsert_lore_entry')));
       expect(names('general'), containsAll(['set_fields', 'upsert_lore_entry']));

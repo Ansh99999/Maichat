@@ -15,6 +15,7 @@ import 'shell/context_sheet.dart';
 import 'shell/floating_button.dart';
 import 'shell/liquid_panel.dart';
 import 'shell/shell_format.dart';
+import 'shell/slash_host.dart';
 import 'shell/studio_chrome.dart';
 import 'shell/studio_composer.dart';
 import 'shell/studio_drawer.dart';
@@ -96,6 +97,21 @@ class _StudioScreenState extends State<StudioScreen> {
   late final Widget _changesPage = StudioChangesView(controller: _controller);
   late Widget _interfacePage = _buildInterface();
 
+  /// `/` commands: their panel above the composer, and the hook the
+  /// controller offers every slash line to.
+  late final StudioSlashHost _slash;
+
+  /// `/new`: a fresh session, in this one's place.
+  Future<void> _newSession() async {
+    final session = newStudioSession();
+    await widget.store.save(session);
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
+      settings: const RouteSettings(name: kStudioSessionRoute),
+      builder: (_) => StudioScreen(store: widget.store, session: session),
+    ));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -106,6 +122,21 @@ class _StudioScreenState extends State<StudioScreen> {
     );
     _hasSubagents = _controller.hasSubagents;
     _controller.addListener(_onController);
+    _slash = StudioSlashHost(
+      controller: _controller,
+      input: _input,
+      attachments: _attachments,
+      context: () => context,
+      onContext: () => showStudioContextSheet(
+        context,
+        _controller,
+        agentId: _viewing,
+      ),
+      onAgents: () => setState(() => _panelOpen = true),
+      onNewSession: _newSession,
+      toastInset: () =>
+          _dockHeight + MediaQuery.viewInsetsOf(context).bottom,
+    );
     // The first measure; later ones follow the dock's own size changes.
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureDock());
   }
@@ -113,6 +144,7 @@ class _StudioScreenState extends State<StudioScreen> {
   @override
   void dispose() {
     _controller.removeListener(_onController);
+    _slash.dispose();
     _input.dispose();
     _attachments.dispose();
     StudioHub.instance.release(widget.session.id);
@@ -507,19 +539,28 @@ class _StudioScreenState extends State<StudioScreen> {
                 ),
                 // The composer belongs to the conversation; on the draft and
                 // its changes it sinks away and the capsule rides alone.
+                // `/` commands, while one is being typed.
+                ListenableBuilder(
+                  listenable: _slash.state,
+                  builder: (context, _) => _Reveal(
+                    show: showComposer && viewingMain && _slash.state.visible,
+                    alignment: Alignment.bottomCenter,
+                    child: _slash.panel(),
+                  ),
+                ),
                 _Reveal(
                   show: showComposer,
                   alignment: Alignment.topCenter,
                   scale: false,
                   child: viewingMain
-                      ? StudioComposer(
+                      ? _slash.keys(StudioComposer(
                           controller: _controller,
                           input: _input,
                           attachments: _attachments,
                           actionsOpen: _actionsOpen,
                           onToggleActions: () =>
                               setState(() => _actionsOpen = !_actionsOpen),
-                        )
+                        ))
                       : _ViewingBar(
                           controller: _controller,
                           agentId: _viewing,
