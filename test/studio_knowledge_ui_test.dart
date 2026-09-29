@@ -104,6 +104,31 @@ void main() {
       }
     });
 
+    testWidgets('DuckDuckGo is offered first, chosen by default, and honest',
+        (tester) async {
+      await pump(tester, const StudioWebPage());
+      final ddg = find.byKey(const Key('studio-search-duckduckgo'));
+      expect(ddg, findsOneWidget);
+      expect(find.text('DuckDuckGo'), findsOneWidget);
+      expect(find.textContaining('Unofficial'), findsOneWidget);
+      expect(find.textContaining('falls back to Wikipedia'), findsOneWidget);
+      // First in the list, and the one selected on a fresh install.
+      expect(
+        tester.getTopLeft(ddg).dy,
+        lessThan(tester
+            .getTopLeft(find.byKey(const Key('studio-search-wiki')))
+            .dy),
+      );
+      expect(state.studioConfig.searchProvider, StudioSearchProvider.duckduckgo);
+      final tile = tester.widget<RadioListTile<StudioSearchProvider>>(ddg);
+      expect(tile.value, StudioSearchProvider.duckduckgo);
+
+      // Choosing Wikipedia sticks.
+      await tester.tap(find.byKey(const Key('studio-search-wiki')));
+      await tester.pumpAndSettle();
+      expect(state.studioConfig.searchProvider, StudioSearchProvider.wiki);
+    });
+
     testWidgets('web research can be switched off and pointed at Brave', (
       tester,
     ) async {

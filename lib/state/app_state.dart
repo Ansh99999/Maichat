@@ -5237,13 +5237,16 @@ class AppState extends ChangeNotifier {
     // A sub-agent type the user gave a model of its own runs on that model.
     String? model,
   }) async* {
-    final studio = studioProvider();
-    final base = studio == null || model == null || model.trim().isEmpty
-        ? studio
-        : studio.copyWith(model: model.trim());
-    if (base == null) {
+    final wire = studioWireRequest(
+      messages: messages,
+      tools: tools,
+      toolsOff: toolsOff,
+      model: model,
+    );
+    if (wire == null) {
       throw ChatApiException('Set up a provider in Settings first.');
     }
+    final base = wire.provider;
     final blocked = blockingBudget(base, base.model);
     if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
     final provider = _applyKey(base);
@@ -5253,14 +5256,9 @@ class AppState extends ChangeNotifier {
     try {
       await for (final delta in client.stream(
         provider: provider,
-        messages: withWireImages(messages),
-        tools: tools,
-        params: AgentParams(
-          temperature: _studioConfig.temperature,
-          maxTokens: _studioConfig.maxTokens,
-          stream: _studioConfig.stream,
-          toolsOff: toolsOff,
-        ),
+        messages: wire.messages,
+        tools: wire.tools,
+        params: wire.params,
       )) {
         if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);
         written.write(delta.text);
@@ -5291,6 +5289,35 @@ class AppState extends ChangeNotifier {
       await _persistUsage();
       notifyListeners();
     }
+  }
+
+  /// The Studio request for [messages] and [tools], assembled exactly as
+  /// [streamAgentTurn] sends it — provider and model (a sub-agent type's own
+  /// [model] when it has one), pictures resolved, sampling — or null when no
+  /// provider is set up. The context inspector shows this; the run sends it.
+  /// It picks no key: rotating keys is a side effect of sending.
+  AgentWireRequest? studioWireRequest({
+    required List<AgentMessage> messages,
+    required List<ToolSpec> tools,
+    bool toolsOff = false,
+    String? model,
+  }) {
+    final studio = studioProvider();
+    final base = studio == null || model == null || model.trim().isEmpty
+        ? studio
+        : studio.copyWith(model: model.trim());
+    if (base == null) return null;
+    return AgentWireRequest(
+      provider: base,
+      messages: withWireImages(messages),
+      tools: tools,
+      params: AgentParams(
+        temperature: _studioConfig.temperature,
+        maxTokens: _studioConfig.maxTokens,
+        stream: _studioConfig.stream,
+        toolsOff: toolsOff,
+      ),
+    );
   }
 
   /// Folds a newly reported usage into what a turn has reported so far.

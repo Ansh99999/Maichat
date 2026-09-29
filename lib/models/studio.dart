@@ -293,6 +293,11 @@ class StudioSubagent {
   /// and `task` with its id carries it on.
   bool interrupted;
 
+  /// Its last request, as the host counted it beside the Studio's estimate —
+  /// what the context inspector compares. Null until a host reports real
+  /// usage.
+  StudioRequestSize? lastRequest;
+
   String get label => 'Subagent $number';
 
   /// How many tools it has called so far.
@@ -327,6 +332,7 @@ class StudioSubagent {
           'compactions': [for (final c in compactions) c.toJson()],
         if (background) 'background': true,
         if (interrupted) 'interrupted': true,
+        if (lastRequest != null) 'lastRequest': lastRequest!.toJson(),
       };
 
   factory StudioSubagent.fromJson(Map<String, dynamic> json) {
@@ -367,6 +373,38 @@ class StudioSubagent {
       compactions: StudioCompaction.listFrom(json['compactions']),
       background: json['background'] as bool? ?? false,
       interrupted: interrupted,
+    )..lastRequest = StudioRequestSize.fromJson(json['lastRequest']);
+  }
+}
+
+/// How big an agent's request was: [reported] input tokens as the host
+/// counted them, beside the Studio's own [estimated] count of the same
+/// request — so the context inspector can say how far its estimates are off.
+class StudioRequestSize {
+  const StudioRequestSize({
+    required this.reported,
+    required this.estimated,
+    required this.at,
+  });
+
+  final int reported;
+  final int estimated;
+  final DateTime at;
+
+  Map<String, dynamic> toJson() => {
+        'reported': reported,
+        'estimated': estimated,
+        'at': at.toIso8601String(),
+      };
+
+  static StudioRequestSize? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final reported = (json['reported'] as num?)?.toInt();
+    if (reported == null) return null;
+    return StudioRequestSize(
+      reported: reported,
+      estimated: (json['estimated'] as num?)?.toInt() ?? 0,
+      at: DateTime.tryParse(json['at'] as String? ?? '') ?? DateTime.now(),
     );
   }
 }
@@ -611,6 +649,10 @@ class StudioSession {
   /// been repaired (see [repairUnansweredCalls]); the user can resume.
   bool interrupted;
 
+  /// The main agent's last request, as the host counted it beside the
+  /// Studio's estimate. Null until a host reports real usage.
+  StudioRequestSize? lastRequest;
+
   /// The sub-agents the app closing cut off, for the resume note.
   List<StudioSubagent> get interruptedSubagents =>
       [for (final a in subagents) if (a.interrupted) a];
@@ -720,6 +762,7 @@ class StudioSession {
         if (queued.isNotEmpty) 'queued': [for (final q in queued) q.toJson()],
         if (active) 'active': true,
         if (interrupted) 'interrupted': true,
+        if (lastRequest != null) 'lastRequest': lastRequest!.toJson(),
       };
 
   /// Reads a saved session. One saved while an agent worked ([active]) was cut
@@ -727,7 +770,8 @@ class StudioSession {
   /// working is marked so, and each unanswered tool call is answered, so the
   /// transcript is one every dialect accepts again.
   factory StudioSession.fromJson(Map<String, dynamic> json) {
-    final session = StudioSession._fromJson(json);
+    final session = StudioSession._fromJson(json)
+      ..lastRequest = StudioRequestSize.fromJson(json['lastRequest']);
     if (session.active) {
       session
         ..active = false
@@ -835,7 +879,7 @@ class StudioConfig {
     this.areasCapsule = false,
     // Knowledge: the web, memory, and the user's own sub-agent types.
     this.webTools = true,
-    this.searchProvider = StudioSearchProvider.wiki,
+    this.searchProvider = StudioSearchProvider.duckduckgo,
     this.searchUrl = '',
     this.searchKey = '',
     this.memoryEnabled = true,
@@ -951,7 +995,7 @@ class StudioConfig {
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
         if (areasCapsule) 'areasCapsule': true,
         if (!webTools) 'webTools': false,
-        if (searchProvider != StudioSearchProvider.wiki)
+        if (searchProvider != StudioSearchProvider.duckduckgo)
           'searchProvider': searchProvider.name,
         if (searchUrl.isNotEmpty) 'searchUrl': searchUrl,
         if (searchKey.isNotEmpty) 'apiKey': searchKey,

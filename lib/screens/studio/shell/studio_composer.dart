@@ -7,6 +7,7 @@ import '../../../services/studio/studio_controller.dart';
 import '../../../state/app_state.dart';
 import '../../../widgets/avatar_image.dart';
 import '../../../widgets/smooth_image.dart';
+import 'context_meter.dart';
 
 /// The Studio's composer: the same one the user picked for their chats —
 /// Legacy's flat send bar or the Expressive rounded box — without what only a
@@ -257,6 +258,7 @@ class _StudioComposerState extends State<StudioComposer> {
                 ),
               ),
               const SizedBox(width: 8),
+              StudioContextMeter(controller: _c, agentId: kMainAgent),
               _menu(),
               _sendButton(),
             ],
@@ -330,6 +332,7 @@ class _StudioComposerState extends State<StudioComposer> {
                 padding: const EdgeInsets.fromLTRB(10, 0, 8, 8),
                 child: Row(
                   children: [
+                    StudioContextMeter(controller: _c, agentId: kMainAgent),
                     const Spacer(),
                     _menu(),
                     _sendButton(),

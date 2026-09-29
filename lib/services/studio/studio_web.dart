@@ -33,6 +33,22 @@ class WebResult {
       };
 }
 
+/// What a search found, and — when it had to search somewhere other than asked
+/// (DuckDuckGo asked for a check, say) — a note saying so, for the agent.
+class WebSearchOutcome {
+  const WebSearchOutcome(this.results, {this.note, this.source = ''});
+
+  final List<WebResult> results;
+  final String? note;
+
+  /// Where the results came from: `duckduckgo`, `wikipedia`, a wiki's host…
+  final String source;
+}
+
+/// The minimum gap between two DuckDuckGo searches, app-wide. Its results page
+/// is not an API; asking it quickly and repeatedly is what earns a check.
+const Duration kDuckDuckGoGap = Duration(milliseconds: 1500);
+
 /// A fetched page, as readable text.
 class WebPage {
   const WebPage({
@@ -60,8 +76,9 @@ class WebError implements Exception {
   String toString() => message;
 }
 
-/// The Studio's window on the web: searching (Wikipedia and Fandom with no key,
-/// or Brave / SearXNG when the user set one up) and reading one page as text.
+/// The Studio's window on the web: searching (DuckDuckGo or Wikipedia and
+/// Fandom with no key, or Brave / SearXNG when the user set one up) and reading
+/// one page as text.
 ///
 /// Reading refuses anything that is not http(s) or that resolves to a private,
 /// loopback or link-local address — at every redirect, not only the first
@@ -72,8 +89,33 @@ class StudioWeb {
     String Function(String host)? baseFor,
     this.allowPrivate = false,
     this.timeout = const Duration(seconds: 20),
+    this.duckDuckGoGap = kDuckDuckGoGap,
   })  : _client = client ?? http.Client.new,
         _baseFor = baseFor ?? ((host) => 'https://$host');
+
+  /// The gap kept between DuckDuckGo searches; shorter in tests.
+  final Duration duckDuckGoGap;
+
+  /// DuckDuckGo searches are taken one at a time across the whole app — every
+  /// [StudioWeb] shares this queue — with [duckDuckGoGap] between them.
+  static Future<void> _ddgQueue = Future<void>.value();
+  static DateTime? _ddgLast;
+
+  /// Forgets when DuckDuckGo was last asked; for tests.
+  static void resetDuckDuckGoPacing() {
+    _ddgQueue = Future<void>.value();
+    _ddgLast = null;
+  }
+
+  /// What the DuckDuckGo page is asked with: a browser's words, since the
+  /// page is written for browsers and answers them. The rest of the Studio
+  /// says who it is ([_headers]).
+  static const Map<String, String> _ddgHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.8',
+  };
 
   final http.Client Function() _client;
 
@@ -93,11 +135,20 @@ class StudioWeb {
 
   // --- search ------------------------------------------------------------------
 
-  /// Searches for [query]. [site] narrows it: a Fandom wiki
-  /// (`harrypotter.fandom.com`, or just `harrypotter` with `fandom:` in front),
-  /// a Wikipedia (`fr.wikipedia.org`), or — with Brave or SearXNG set up — any
-  /// site at all.
+  /// Searches for [query]; the results only — see [searchWithNote].
   Future<List<WebResult>> search(
+    String query, {
+    String? site,
+    required StudioConfig config,
+  }) async =>
+      (await searchWithNote(query, site: site, config: config)).results;
+
+  /// Searches for [query]. [site] narrows it: a Fandom wiki
+  /// (`harrypotter.fandom.com`, or just `harrypotter` with `fandom:` in front)
+  /// or a Wikipedia (`fr.wikipedia.org`) is searched through that wiki's own
+  /// search, whatever the provider — it is exact and never asks for a check;
+  /// any other site is searched with `site:` by DuckDuckGo, Brave or SearXNG.
+  Future<WebSearchOutcome> searchWithNote(
     String query, {
     String? site,
     required StudioConfig config,
@@ -106,8 +157,17 @@ class StudioWeb {
     if (q.isEmpty) throw WebError('The query is empty.');
     final target = site?.trim().toLowerCase() ?? '';
     final wiki = _wikiHost(target);
-    if (wiki != null) return _mediaWiki(wiki, q);
+    if (wiki != null) {
+      return WebSearchOutcome(await _mediaWiki(wiki, q), source: wiki);
+    }
+    final domain = target
+        .replaceFirst(RegExp(r'^https?://'), '')
+        .split('/')
+        .first;
+    final scoped = domain.isEmpty ? q : '$q site:$domain';
     switch (config.searchProvider) {
+      case StudioSearchProvider.duckduckgo:
+        return _duckDuckGo(scoped, fallback: q);
       case StudioSearchProvider.brave:
         if (config.searchKey.trim().isEmpty) {
           throw WebError(
@@ -116,7 +176,10 @@ class StudioWeb {
             'site instead.',
           );
         }
-        return _brave(target.isEmpty ? q : '$q site:$target', config.searchKey);
+        return WebSearchOutcome(
+          await _brave(scoped, config.searchKey),
+          source: 'brave',
+        );
       case StudioSearchProvider.searxng:
         if (config.searchUrl.trim().isEmpty) {
           throw WebError(
@@ -124,9 +187,9 @@ class StudioWeb {
             'with site instead.',
           );
         }
-        return _searxng(
-          target.isEmpty ? q : '$q site:$target',
-          config.searchUrl.trim(),
+        return WebSearchOutcome(
+          await _searxng(scoped, config.searchUrl.trim()),
+          source: 'searxng',
         );
       case StudioSearchProvider.wiki:
         if (target.isNotEmpty) {
@@ -136,8 +199,100 @@ class StudioWeb {
             'other site, web_fetch a page you know the address of.',
           );
         }
-        return _mediaWiki('en.wikipedia.org', q);
+        return WebSearchOutcome(
+          await _mediaWiki('en.wikipedia.org', q),
+          source: 'en.wikipedia.org',
+        );
     }
+  }
+
+  // --- DuckDuckGo ----------------------------------------------------------------
+
+  /// DuckDuckGo's plain-HTML results for [query]. When DuckDuckGo will not
+  /// answer — it asked for a check, it could not be reached, or its page no
+  /// longer looks like a results page — the search is made on Wikipedia with
+  /// [fallback] instead, and the outcome says so: never an empty list that
+  /// reads as "nothing exists".
+  Future<WebSearchOutcome> _duckDuckGo(
+    String query, {
+    required String fallback,
+  }) async {
+    final page = await _paced(() => _ddgPage(query));
+    if (page.results != null) {
+      return WebSearchOutcome(page.results!, source: 'duckduckgo');
+    }
+    final why = page.problem!;
+    try {
+      final wiki = await _mediaWiki('en.wikipedia.org', fallback);
+      return WebSearchOutcome(
+        wiki,
+        source: 'en.wikipedia.org',
+        note: '$why, so these are Wikipedia results instead.',
+      );
+    } on WebError catch (e) {
+      throw WebError('$why, and Wikipedia failed too: ${e.message}');
+    }
+  }
+
+  /// Runs [request] after every DuckDuckGo request before it, and no sooner
+  /// than [duckDuckGoGap] after the last one began.
+  Future<T> _paced<T>(Future<T> Function() request) {
+    final done = Completer<T>();
+    _ddgQueue = _ddgQueue.then((_) async {
+      final last = _ddgLast;
+      if (last != null) {
+        final wait = duckDuckGoGap - DateTime.now().difference(last);
+        if (wait > Duration.zero) await Future<void>.delayed(wait);
+      }
+      _ddgLast = DateTime.now();
+      try {
+        done.complete(await request());
+      } catch (e, st) {
+        done.completeError(e, st);
+      }
+    });
+    return done.future;
+  }
+
+  /// One request to DuckDuckGo's HTML page: its results, or why there are
+  /// none to give ([problem] set, [results] null). A page that really found
+  /// nothing gives an empty list and no problem.
+  Future<({List<WebResult>? results, String? problem})> _ddgPage(
+    String query,
+  ) async {
+    final uri = Uri.parse('${_baseFor('html.duckduckgo.com')}/html/')
+        .replace(queryParameters: {'q': query, 'kl': 'wt-wt'});
+    final client = _client();
+    http.Response response;
+    try {
+      response = await client
+          .get(uri, headers: _ddgHeaders)
+          .timeout(timeout);
+    } on TimeoutException {
+      return (results: null, problem: 'DuckDuckGo did not answer in time');
+    } catch (_) {
+      return (results: null, problem: 'DuckDuckGo could not be reached');
+    } finally {
+      client.close();
+    }
+    final body = utf8.decode(response.bodyBytes, allowMalformed: true);
+    if (response.statusCode == 202 || isDuckDuckGoChallenge(body)) {
+      return (results: null, problem: 'DuckDuckGo asked for a check');
+    }
+    if (response.statusCode != 200) {
+      return (
+        results: null,
+        problem: 'DuckDuckGo answered HTTP ${response.statusCode}',
+      );
+    }
+    final parsed = parseDuckDuckGo(body);
+    if (parsed == null) {
+      return (
+        results: null,
+        problem: 'DuckDuckGo\'s results page has changed and could not be read',
+      );
+    }
+    return (results: parsed, problem: null);
   }
 
   /// The MediaWiki host [site] names, or null when it names none.
@@ -516,4 +671,75 @@ final RegExp _noise = RegExp(
       .replaceAll(RegExp(r'\n{3,}'), '\n\n')
       .trim();
   return (title: title, text: text);
+}
+
+// --- reading DuckDuckGo -----------------------------------------------------
+
+/// Whether [html] is DuckDuckGo's bot check ("bots use DuckDuckGo too") rather
+/// than a results page.
+bool isDuckDuckGoChallenge(String html) =>
+    html.contains('anomaly-modal') ||
+    html.contains('id="challenge-form"') ||
+    html.contains('bots use DuckDuckGo too');
+
+/// The results on a DuckDuckGo HTML results page, ads left out and at most
+/// [kWebSearchResults] of them — an empty list when the page says it found
+/// nothing, and null when it does not look like a results page at all (its
+/// layout has changed), so that is never mistaken for "no results".
+List<WebResult>? parseDuckDuckGo(String html) {
+  final doc = html_parser.parse(html);
+  final container =
+      doc.querySelector('#links') ?? doc.querySelector('.results');
+  if (container == null) return null;
+  final out = <WebResult>[];
+  for (final result in container.querySelectorAll('.result')) {
+    final classes = result.classes;
+    if (classes.contains('result--ad') ||
+        classes.contains('result--no-result') ||
+        result.querySelector('.badge--ad') != null) {
+      continue;
+    }
+    final link = result.querySelector('a.result__a');
+    if (link == null) continue;
+    final url = unwrapDuckDuckGoLink(link.attributes['href'] ?? '');
+    if (url == null) continue;
+    final title = link.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final snippet = (result.querySelector('.result__snippet')?.text ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    out.add(WebResult(
+      title: title.isEmpty ? url : title,
+      url: url,
+      snippet: snippet,
+    ));
+    if (out.length >= kWebSearchResults) break;
+  }
+  if (out.isEmpty &&
+      container.querySelector('.no-results, .result--no-result') == null &&
+      container.querySelector('.result') == null) {
+    // A container with neither results nor the page's own "no results" line
+    // is not a page this parser knows.
+    return null;
+  }
+  return out;
+}
+
+/// The address a DuckDuckGo result points at. Its links go through a redirect
+/// (`//duckduckgo.com/l/?uddg=<the address>&rut=…`); this unwraps it. A plain
+/// http(s) address is kept; anything else (an ad's tracking link, a relative
+/// path) is null.
+String? unwrapDuckDuckGoLink(String href) {
+  final raw = href.trim();
+  if (raw.isEmpty) return null;
+  final uri = Uri.tryParse(raw.startsWith('//') ? 'https:$raw' : raw);
+  if (uri == null) return null;
+  final wrapped = uri.queryParameters['uddg'];
+  if (wrapped != null && wrapped.isNotEmpty) {
+    final target = Uri.tryParse(wrapped);
+    return target != null && (target.isScheme('http') || target.isScheme('https'))
+        ? wrapped
+        : null;
+  }
+  if (uri.host.endsWith('duckduckgo.com')) return null;
+  return uri.isScheme('http') || uri.isScheme('https') ? raw : null;
 }
