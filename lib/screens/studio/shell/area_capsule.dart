@@ -70,11 +70,20 @@ class _AreaCapsuleState extends State<AreaCapsule>
     const count = 3;
     return Container(
       key: const Key('studio-area-capsule'),
-      height: 44,
+      height: 52,
       padding: const EdgeInsets.all(4),
+      // It floats over the page, so it carries its own lift — the page's text
+      // runs on behind it and fades under the frost.
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(26),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -107,7 +116,7 @@ class _AreaCapsuleState extends State<AreaCapsule>
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: scheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(18),
+                        borderRadius: BorderRadius.circular(22),
                       ),
                     ),
                   );
@@ -119,7 +128,7 @@ class _AreaCapsuleState extends State<AreaCapsule>
                     Expanded(
                       child: InkWell(
                         key: Key('studio-area-${area.name}'),
-                        borderRadius: BorderRadius.circular(18),
+                        borderRadius: BorderRadius.circular(22),
                         onTap: () => widget.onChanged(area),
                         child: Center(
                           child: Row(

@@ -1,14 +1,25 @@
 import 'package:flutter/material.dart';
 
 /// The Studio's drawer: back to MaiChat's home, the Studio's settings, and the
-/// list of sessions.
+/// list of sessions — and, at its head, which session this is and what it has
+/// cost, since there is no bar across the page to say so. Tapping the name
+/// renames the session.
 class StudioDrawer extends StatelessWidget {
   const StudioDrawer({
     super.key,
     required this.onHome,
     required this.onSettings,
     required this.onSessions,
+    this.sessionTitle,
+    this.sessionDetail,
+    this.onRename,
   });
+
+  /// The open session's name and a line about it (its spend), when a session
+  /// is open.
+  final String? sessionTitle;
+  final String? sessionDetail;
+  final VoidCallback? onRename;
 
   final VoidCallback onHome;
   final VoidCallback onSettings;
@@ -48,6 +59,59 @@ class StudioDrawer extends StatelessWidget {
             ],
           ),
         ),
+        if (sessionTitle != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Material(
+              color: theme.colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(24),
+              child: InkWell(
+                key: const Key('studio-drawer-session'),
+                borderRadius: BorderRadius.circular(24),
+                onTap: onRename == null
+                    ? null
+                    : () {
+                        Navigator.of(context).pop();
+                        onRename!();
+                      },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              sessionTitle!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleMedium,
+                            ),
+                            if (sessionDetail != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                sessionDetail!,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (onRename != null)
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 20,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         const NavigationDrawerDestination(
           icon: Icon(Icons.home_outlined),
           selectedIcon: Icon(Icons.home),

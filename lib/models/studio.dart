@@ -531,6 +531,7 @@ class StudioConfig {
     this.subAgents = true,
     this.maxParallelSubagents = kStudioDefaultParallelSubagents,
     this.systemPrompt = '',
+    this.areasCapsule = false,
   });
 
   /// The provider to use, or null for whichever one chats use.
@@ -553,6 +554,11 @@ class StudioConfig {
   /// wait for a place rather than failing.
   final int maxParallelSubagents;
 
+  /// Whether the Interface | Draft | Changes capsule is shown. It stays on —
+  /// across sessions and restarts — until it is switched off again from the
+  /// composer's actions, which is the only place it is switched.
+  final bool areasCapsule;
+
   /// The builder's instructions, or empty for the built-in ones.
   final String systemPrompt;
 
@@ -566,6 +572,7 @@ class StudioConfig {
     bool? subAgents,
     int? maxParallelSubagents,
     String? systemPrompt,
+    bool? areasCapsule,
   }) =>
       StudioConfig(
         providerId: providerId == null ? this.providerId : providerId(),
@@ -577,6 +584,7 @@ class StudioConfig {
         subAgents: subAgents ?? this.subAgents,
         maxParallelSubagents: maxParallelSubagents ?? this.maxParallelSubagents,
         systemPrompt: systemPrompt ?? this.systemPrompt,
+        areasCapsule: areasCapsule ?? this.areasCapsule,
       );
 
   Map<String, dynamic> toJson() => {
@@ -590,6 +598,7 @@ class StudioConfig {
         if (maxParallelSubagents != kStudioDefaultParallelSubagents)
           'maxParallelSubagents': maxParallelSubagents,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
+        if (areasCapsule) 'areasCapsule': true,
       };
 
   factory StudioConfig.fromJson(Map<String, dynamic> json) => StudioConfig(
@@ -605,6 +614,7 @@ class StudioConfig {
                 kStudioDefaultParallelSubagents)
             .clamp(1, 50),
         systemPrompt: json['systemPrompt'] as String? ?? '',
+        areasCapsule: json['areasCapsule'] as bool? ?? false,
       );
 }
 

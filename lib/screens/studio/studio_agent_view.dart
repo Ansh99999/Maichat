@@ -13,6 +13,7 @@ import '../../widgets/message_markdown.dart';
 import '../../widgets/smooth_image.dart';
 import '../../widgets/thinking_block.dart';
 import 'shell/shell_format.dart';
+import 'shell/studio_chrome.dart';
 
 /// One agent's conversation: what it was asked, what it said, and every tool it
 /// called, as a chip that opens onto what went in and what came back. The main
@@ -59,10 +60,15 @@ class _StudioAgentViewState extends State<StudioAgentView>
         }
         // Bottom-anchored like a chat: the newest turn sits above the composer
         // and a growing reply pushes older ones up.
+        // The shell's chrome floats over the list: the menu squares at the top,
+        // the composer at the bottom. The list runs underneath both, and its
+        // padding lets the newest turn rest above the composer and the oldest
+        // scroll clear of the squares.
+        final chrome = StudioChrome.of(context);
         return ListView.builder(
           key: PageStorageKey<String>('studio-transcript-${widget.agentId}'),
           reverse: true,
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          padding: EdgeInsets.fromLTRB(12, chrome.top, 12, chrome.bottom + 12),
           itemCount: items.length,
           itemBuilder: (context, i) => items[items.length - 1 - i],
         );
@@ -660,8 +666,9 @@ class _Intro extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final ready = context.watch<AppState>().studioProvider() != null;
+    final chrome = StudioChrome.of(context);
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.fromLTRB(24, chrome.top + 8, 24, chrome.bottom + 24),
       children: [
         Icon(Icons.auto_awesome, size: 40, color: theme.colorScheme.primary),
         const SizedBox(height: 12),

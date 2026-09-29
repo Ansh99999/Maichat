@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../models/studio.dart';
+
 /// "4m 20s", "35s", "1h 4m" — how long an agent has run.
 String formatElapsed(Duration d) {
   final s = d.inSeconds.clamp(0, 1 << 30);
@@ -21,6 +23,17 @@ String formatTokens(int n) {
   if (n < 1000) return '$n';
   if (n < 1000000) return '${trim(n / 1000)}k';
   return '${trim(n / 1000000)}M';
+}
+
+/// What a session has cost so far — "12k in · 3.4k out · \$0.021" — or that it
+/// has cost nothing yet.
+String formatSpend(StudioSession s) {
+  if (s.inputTokens + s.outputTokens == 0) return 'Nothing spent yet';
+  final cost = s.cost > 0
+      ? ' · \$${s.cost.toStringAsFixed(s.cost < 1 ? 3 : 2)}'
+      : '';
+  return '${formatTokens(s.inputTokens)} in · '
+      '${formatTokens(s.outputTokens)} out$cost';
 }
 
 /// Rebuilds [builder] once a second while [active] — the elapsed time of a

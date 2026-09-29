@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
@@ -8,23 +7,23 @@ import '../../../services/studio/studio_controller.dart';
 import '../../../state/app_state.dart';
 import '../../../widgets/avatar_image.dart';
 import '../../../widgets/smooth_image.dart';
-import '../../gallery/gallery_picker_sheet.dart';
 
 /// The Studio's composer: the same one the user picked for their chats —
 /// Legacy's flat send bar or the Expressive rounded box — without what only a
-/// chat has (the persona avatar and name, the operations strip). Its ⋯ opens a
-/// menu: Add image (gallery or device), and More actions → Show other areas.
+/// chat has (the persona avatar and name, the operations strip). Its ⋯ raises
+/// the actions capsule above it ([onToggleActions]); the pictures that capsule
+/// adds are held by the shell in [attachments] and previewed here.
 ///
-/// Pictures are files like every other picture in the app: the gallery hands a
-/// `local:` ref over as it is, and a picture off the device is written into the
-/// pictures directory first, so the turn holds refs and never a blob.
+/// The Expressive box floats: nothing is drawn around it, so the page shows
+/// through on every side, as it does in a chat.
 class StudioComposer extends StatefulWidget {
   const StudioComposer({
     super.key,
     required this.controller,
     required this.input,
-    required this.areasShown,
-    required this.onToggleAreas,
+    required this.attachments,
+    required this.actionsOpen,
+    required this.onToggleActions,
   });
 
   final StudioController controller;
@@ -33,8 +32,11 @@ class StudioComposer extends StatefulWidget {
   /// example openings can drop text into it.
   final TextEditingController input;
 
-  final bool areasShown;
-  final VoidCallback onToggleAreas;
+  /// Pictures waiting to go with the next message, as `local:`/URL refs.
+  final ValueNotifier<List<MessageImage>> attachments;
+
+  final bool actionsOpen;
+  final VoidCallback onToggleActions;
 
   @override
   State<StudioComposer> createState() => _StudioComposerState();
@@ -42,18 +44,29 @@ class StudioComposer extends StatefulWidget {
 
 class _StudioComposerState extends State<StudioComposer> {
   final FocusNode _focus = FocusNode();
-  final List<MessageImage> _attachments = <MessageImage>[];
 
   StudioController get _c => widget.controller;
+  List<MessageImage> get _attachments => widget.attachments.value;
 
   @override
   void initState() {
     super.initState();
     _focus.addListener(_onFocus);
+    widget.attachments.addListener(_onAttachments);
+  }
+
+  @override
+  void didUpdateWidget(StudioComposer old) {
+    super.didUpdateWidget(old);
+    if (old.attachments != widget.attachments) {
+      old.attachments.removeListener(_onAttachments);
+      widget.attachments.addListener(_onAttachments);
+    }
   }
 
   @override
   void dispose() {
+    widget.attachments.removeListener(_onAttachments);
     _focus
       ..removeListener(_onFocus)
       ..dispose();
@@ -61,103 +74,31 @@ class _StudioComposerState extends State<StudioComposer> {
   }
 
   void _onFocus() => setState(() {});
+  void _onAttachments() => setState(() {});
 
   void _send() {
     final text = widget.input.text.trim();
     if ((text.isEmpty && _attachments.isEmpty) || _c.running) return;
     final images = List<MessageImage>.of(_attachments);
     widget.input.clear();
-    setState(_attachments.clear);
+    widget.attachments.value = const <MessageImage>[];
     _c.send(text, images: images);
   }
 
-  Future<void> _fromGallery() async {
-    final ref = await showGalleryPickerSheet(
-      context,
-      title: 'Add a picture',
-      characterId: _c.session.workspace.character.id,
-    );
-    if (ref == null || !mounted) return;
-    setState(() => _attachments.add(MessageImage(ref: ref, mime: mimeForRef(ref))));
-  }
+  void _remove(int i) =>
+      widget.attachments.value = List<MessageImage>.of(_attachments)..removeAt(i);
 
-  Future<void> _fromDevice() async {
-    final state = context.read<AppState>();
-    FilePickerResult? result;
-    try {
-      result = await FilePicker.pickFiles(
-        type: FileType.image,
-        allowMultiple: true,
-        withData: true,
-      );
-    } catch (_) {
-      result = null;
-    }
-    if (result == null || result.files.isEmpty || !mounted) return;
-    final chosen = <MessageImage>[];
-    for (final file in result.files) {
-      final bytes = file.bytes;
-      if (bytes == null || bytes.isEmpty) continue;
-      final image = await state.storeAttachment(bytes);
-      if (image != null) chosen.add(image);
-    }
-    if (!mounted) return;
-    if (chosen.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Those pictures could not be read.'),
-      ));
-      return;
-    }
-    setState(() => _attachments.addAll(chosen));
-  }
-
-  Widget _menu() => MenuAnchor(
-        alignmentOffset: const Offset(-160, 0),
-        menuChildren: [
-          SubmenuButton(
-            key: const Key('studio-composer-add-image'),
-            leadingIcon: const Icon(Icons.image_outlined),
-            menuChildren: [
-              MenuItemButton(
-                key: const Key('studio-attach-gallery'),
-                leadingIcon: const Icon(Icons.photo_library_outlined),
-                onPressed: _fromGallery,
-                child: const Text('From gallery'),
-              ),
-              MenuItemButton(
-                key: const Key('studio-attach-device'),
-                leadingIcon: const Icon(Icons.add_photo_alternate_outlined),
-                onPressed: _fromDevice,
-                child: const Text('From device'),
-              ),
-            ],
-            child: const Text('Add image'),
-          ),
-          SubmenuButton(
-            key: const Key('studio-composer-more-actions'),
-            leadingIcon: const Icon(Icons.more_horiz),
-            menuChildren: [
-              MenuItemButton(
-                key: const Key('studio-toggle-areas'),
-                leadingIcon: Icon(widget.areasShown
-                    ? Icons.visibility_off_outlined
-                    : Icons.view_carousel_outlined),
-                onPressed: widget.onToggleAreas,
-                child: Text(widget.areasShown
-                    ? 'Hide other areas'
-                    : 'Show other areas'),
-              ),
-            ],
-            child: const Text('More actions'),
-          ),
-        ],
-        builder: (context, menu, _) => IconButton(
-          key: const Key('studio-composer-ops'),
-          tooltip: 'More',
-          visualDensity: VisualDensity.compact,
-          isSelected: menu.isOpen,
-          onPressed: () => menu.isOpen ? menu.close() : menu.open(),
-          icon: const Icon(Icons.more_horiz),
+  Widget _menu() => IconButton(
+        key: const Key('studio-composer-ops'),
+        tooltip: widget.actionsOpen ? 'Close actions' : 'Actions',
+        visualDensity: VisualDensity.compact,
+        isSelected: widget.actionsOpen,
+        onPressed: widget.onToggleActions,
+        icon: AnimatedRotation(
+          turns: widget.actionsOpen ? 0.25 : 0,
+          duration: const Duration(milliseconds: 260),
+          curve: Easing.emphasizedDecelerate,
+          child: const Icon(Icons.more_horiz),
         ),
       );
 
@@ -231,7 +172,7 @@ class _StudioComposerState extends State<StudioComposer> {
                   shape: const CircleBorder(),
                   child: InkWell(
                     customBorder: const CircleBorder(),
-                    onTap: () => setState(() => _attachments.removeAt(i)),
+                    onTap: () => _remove(i),
                     child: Padding(
                       padding: const EdgeInsets.all(3),
                       child: Icon(Icons.close,

@@ -12,6 +12,7 @@ import 'package:maichat/screens/studio/shell/shell_format.dart';
 import 'package:maichat/screens/studio/studio_changes_view.dart';
 import 'package:maichat/screens/studio/studio_draft_view.dart';
 import 'package:maichat/screens/studio/studio_home_screen.dart';
+import 'package:maichat/screens/studio/shell/bottom_fade.dart';
 import 'package:maichat/screens/studio/studio_screen.dart';
 import 'package:maichat/services/studio/studio_store.dart';
 import 'package:maichat/state/app_state.dart';
@@ -145,13 +146,11 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// ⋯ → More actions → Show (or Hide) other areas.
-  Future<void> toggleAreas(WidgetTester tester, String label) async {
+  /// ⋯ → the actions capsule → the other-areas symbol.
+  Future<void> toggleAreas(WidgetTester tester) async {
     await tester.tap(find.byKey(const Key('studio-composer-ops')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('More actions'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text(label));
+    await tester.tap(find.byKey(const Key('studio-toggle-areas')));
     await tester.pumpAndSettle();
   }
 
@@ -170,8 +169,12 @@ void main() {
     final state = await boot();
     await open(tester, state, seeded());
 
-    // A chat, not tabs.
+    // A chat, not tabs — and nothing across the top: no app bar, only the
+    // floating menu square.
     expect(find.byType(TabBar), findsNothing);
+    expect(find.byType(AppBar), findsNothing);
+    expect(find.text('Keeper'), findsNothing);
+    expect(find.byKey(const Key('studio-menu')), findsOneWidget);
     expect(find.text('A lighthouse keeper on a haunted coast.'), findsOneWidget);
     expect(find.textContaining('Building her now.'), findsOneWidget);
     // Markdown is rendered, not shown raw.
@@ -221,9 +224,36 @@ void main() {
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('Sessions'), findsOneWidget);
 
+    // The session's name lives here now, not across the page; tapping it
+    // renames the session.
+    expect(find.byKey(const Key('studio-drawer-session')), findsOneWidget);
+    expect(find.text('Keeper'), findsOneWidget);
+
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Studio settings'), findsOneWidget);
+  });
+
+  testWidgets('the conversation runs on behind the floating composer',
+      (tester) async {
+    final state = await boot();
+    await open(tester, state, seeded());
+    final screen = tester.getSize(find.byType(StudioScreen));
+    final list = find.byType(ListView).first;
+    // The transcript fills the page to its bottom edge; the composer floats
+    // over it instead of pushing it up, and the list's own padding is what
+    // keeps the newest turn clear of it.
+    expect(tester.getBottomLeft(list).dy, screen.height);
+    final field = tester.getTopLeft(find.byKey(const Key('studio-composer-field')));
+    final padding = tester.widget<ListView>(list).padding!.resolve(TextDirection.ltr);
+    expect(screen.height - padding.bottom, lessThanOrEqualTo(field.dy));
+    // And what scrolls down under it fades into a frosted band, which starts
+    // above the composer and runs to the screen's bottom edge.
+    final fade = find.byType(StudioBottomFade);
+    expect(fade, findsOneWidget);
+    expect(tester.getTopLeft(fade).dy, lessThan(field.dy));
+    expect(tester.getBottomLeft(fade).dy, screen.height);
+    expect(tester.getSize(fade).width, screen.width);
   });
 
   testWidgets('the composer follows the chat composer style', (tester) async {
@@ -244,28 +274,50 @@ void main() {
     expect(find.byKey(const Key('studio-composer-ops')), findsOneWidget);
   });
 
-  testWidgets('⋯ offers Add image, from the gallery or the device',
+  testWidgets('⋯ raises the actions capsule above the composer',
       (tester) async {
     final state = await boot();
     await open(tester, state, seeded());
+    expect(find.byKey(const Key('studio-actions-capsule')), findsNothing);
     await tester.tap(find.byKey(const Key('studio-composer-ops')));
     await tester.pumpAndSettle();
-    expect(find.text('Add image'), findsOneWidget);
-    expect(find.text('More actions'), findsOneWidget);
-    await tester.tap(find.text('Add image'));
+    final capsule = find.byKey(const Key('studio-actions-capsule'));
+    expect(capsule, findsOneWidget);
+    // Above the composer, not a menu over it.
+    expect(
+      tester.getBottomLeft(capsule).dy,
+      lessThanOrEqualTo(
+          tester.getTopLeft(find.byKey(const Key('studio-composer-field'))).dy),
+    );
+    expect(find.byType(MenuAnchor), findsNothing);
+    expect(find.text('Image'), findsOneWidget);
+    expect(find.byKey(const Key('studio-toggle-areas')), findsOneWidget);
+
+    // Image slides over to where the picture comes from, and back.
+    await tester.tap(find.byKey(const Key('studio-action-image')));
     await tester.pumpAndSettle();
-    expect(find.text('From gallery'), findsOneWidget);
-    expect(find.text('From device'), findsOneWidget);
+    expect(find.text('Gallery'), findsOneWidget);
+    expect(find.text('Device'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('studio-action-back')));
+    await tester.pumpAndSettle();
+    expect(find.text('Image'), findsOneWidget);
+
+    // ⋯ again puts it away.
+    await tester.tap(find.byKey(const Key('studio-composer-ops')));
+    await tester.pumpAndSettle();
+    expect(capsule, findsNothing);
   });
 
-  testWidgets('Show other areas raises the capsule, which switches pages',
-      (tester) async {
+  testWidgets('the other-areas capsule switches pages; the composer stays '
+      'with the conversation', (tester) async {
     final state = await boot();
     await open(tester, state, seeded());
     expect(find.byKey(const Key('studio-area-capsule')), findsNothing);
 
-    await toggleAreas(tester, 'Show other areas');
+    await toggleAreas(tester);
     expect(find.byKey(const Key('studio-area-capsule')), findsOneWidget);
+    // The actions capsule has done its job and gone.
+    expect(find.byKey(const Key('studio-actions-capsule')), findsNothing);
     expect(find.text('Interface'), findsOneWidget);
     expect(find.text('Draft'), findsOneWidget);
     expect(find.text('Changes 2'), findsOneWidget);
@@ -274,19 +326,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(StudioDraftView), findsOneWidget);
     expect(tester.getTopLeft(find.byType(StudioDraftView)).dx, 0);
+    // On the draft the capsule rides alone: no composer, no app bar.
+    expect(find.byKey(const Key('studio-composer-field')), findsNothing);
+    expect(find.byKey(const Key('studio-area-capsule')), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
 
     await tester.tap(find.byKey(const Key('studio-area-changes')));
     await tester.pumpAndSettle();
     expect(find.byType(StudioChangesView), findsOneWidget);
     expect(tester.getTopLeft(find.byType(StudioChangesView)).dx, 0);
+    expect(find.byKey(const Key('studio-composer-field')), findsNothing);
 
     await tester.tap(find.byKey(const Key('studio-area-interface')));
     await tester.pumpAndSettle();
     expect(find.text('A lighthouse keeper on a haunted coast.'), findsOneWidget);
+    expect(find.byKey(const Key('studio-composer-field')), findsOneWidget);
+  });
 
-    // The same menu hides it again.
-    await toggleAreas(tester, 'Hide other areas');
+  testWidgets('the capsule stays on until switched off from the actions',
+      (tester) async {
+    final state = await boot();
+    await open(tester, state, seeded());
+    await toggleAreas(tester);
+    expect(state.studioConfig.areasCapsule, isTrue);
+
+    // Leaving and coming back — another session, even — it is still there.
+    await tester.pumpWidget(const SizedBox());
+    await open(tester, state, seeded());
+    expect(find.byKey(const Key('studio-area-capsule')), findsOneWidget);
+
+    // The only way off is the same symbol.
+    await toggleAreas(tester);
     expect(find.byKey(const Key('studio-area-capsule')), findsNothing);
+    expect(state.studioConfig.areasCapsule, isFalse);
   });
 
   testWidgets('the sub-agents panel lists Main and every sub-agent',
@@ -404,22 +476,6 @@ void main() {
       findsWidgets,
     );
     await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('apply asks first, then saves the draft to the library',
-      (tester) async {
-    final state = await boot();
-    await open(tester, state, seeded());
-    await tester.tap(find.byTooltip('Apply to library'));
-    await tester.pumpAndSettle();
-    expect(find.text('Apply to library'), findsOneWidget);
-    expect(find.textContaining('Adds Maren'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
-    await tester.pumpAndSettle();
-    expect(state.characters.single.name, 'Maren');
-    expect(state.lorebooks.single.name, 'Saltmarsh');
-    expect(find.textContaining('Saved Maren'), findsOneWidget);
-    expect(find.byTooltip('Applied — nothing new to save'), findsOneWidget);
   });
 
   testWidgets('the session list starts empty and offers a first session',

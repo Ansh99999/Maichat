@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
+import '../../models/message_image.dart';
 import '../../models/studio.dart';
 import '../../services/studio/studio_controller.dart';
 import '../../services/studio/studio_store.dart';
-import '../../services/studio/studio_tools.dart';
 import '../../state/app_state.dart';
+import 'shell/actions_capsule.dart';
 import 'shell/area_capsule.dart';
+import 'shell/bottom_fade.dart';
+import 'shell/floating_button.dart';
 import 'shell/liquid_panel.dart';
-import 'shell/studio_apply.dart';
+import 'shell/shell_format.dart';
+import 'shell/studio_chrome.dart';
 import 'shell/studio_composer.dart';
 import 'shell/studio_drawer.dart';
+import 'shell/studio_pictures.dart';
 import 'shell/subagent_list.dart';
 import 'studio_agent_view.dart';
 import 'studio_changes_view.dart';
@@ -22,12 +27,18 @@ import 'studio_text_dialog.dart';
 /// The route name a session is opened under.
 const String kStudioSessionRoute = '/studio/session';
 
-/// One Studio session: a large chat with the agent, and — from the composer's
-/// ⋯ → More actions → Show other areas — a capsule over the composer that
-/// switches the page to the draft or its changes. When the agent spawns
-/// sub-agents, a button appears at the top right; it pours out a panel listing
-/// Main and every sub-agent, and tapping one teleports the chat into that
-/// agent's own conversation.
+/// One Studio session: a large chat with the agent, with nothing across the top
+/// of it — a soft menu square floats at the top left, and once the agent has
+/// spawned sub-agents another at the top right, which pours out a panel
+/// listing Main and every sub-agent (tapping one teleports the chat into that
+/// agent's own conversation).
+///
+/// Everything at the bottom floats over the page, as a chat's Expressive
+/// composer does: the composer, the actions capsule its ⋯ raises, and — once
+/// switched on there, and until it is switched off there again — the
+/// Interface | Draft | Changes capsule. The page runs on underneath and fades
+/// out behind a band of frost ([StudioBottomFade]). The Draft and Changes pages
+/// show the capsule alone; the composer belongs to the conversation.
 ///
 /// It all runs over one [StudioController], which outlives this screen while
 /// the agent works.
@@ -44,13 +55,13 @@ class StudioScreen extends StatefulWidget {
 class _StudioScreenState extends State<StudioScreen> {
   late final StudioController _controller;
   final TextEditingController _input = TextEditingController();
+  final ValueNotifier<List<MessageImage>> _attachments =
+      ValueNotifier<List<MessageImage>>(const <MessageImage>[]);
   final PageController _pages = PageController();
-  final GlobalKey _stackKey = GlobalKey();
-  final GlobalKey _barKey = GlobalKey();
-  final GlobalKey _agentsButtonKey = GlobalKey();
+  final GlobalKey _dockKey = GlobalKey();
 
   StudioArea _area = StudioArea.interface;
-  bool _areasShown = false;
+  bool _actionsOpen = false;
 
   /// Whose conversation the Interface page shows.
   String _viewing = kMainAgent;
@@ -59,8 +70,14 @@ class _StudioScreenState extends State<StudioScreen> {
   double _teleportDirection = 1;
 
   bool _panelOpen = false;
-  Offset _anchor = Offset.zero;
-  Rect _panel = Rect.zero;
+  bool _hasSubagents = false;
+
+  /// The floating dock's resting height, which the pages keep clear of. Only a
+  /// height that has held for a frame is taken — see [_measureDock] — so a
+  /// capsule springing open relays the page out once, when it lands, rather
+  /// than on every frame of the spring.
+  double _dockHeight = 0;
+  double? _pendingDock;
 
   @override
   void initState() {
@@ -70,14 +87,50 @@ class _StudioScreenState extends State<StudioScreen> {
       store: widget.store,
       session: widget.session,
     );
+    _hasSubagents = _controller.hasSubagents;
+    _controller.addListener(_onController);
+    // The first measure; later ones follow the dock's own size changes.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureDock());
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onController);
     _input.dispose();
+    _attachments.dispose();
     _pages.dispose();
     StudioHub.instance.release(widget.session.id);
     super.dispose();
+  }
+
+  /// Rebuilds the screen only for what the screen itself draws from the
+  /// controller — whether the sub-agents button exists. Everything else listens
+  /// for itself, so a streaming reply never rebuilds the page around it.
+  void _onController() {
+    final has = _controller.hasSubagents;
+    if (has != _hasSubagents && mounted) setState(() => _hasSubagents = has);
+  }
+
+  void _measureDock() {
+    if (!mounted) return;
+    final box = _dockKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final height = box.size.height;
+    if ((height - _dockHeight).abs() <= 0.5) {
+      _pendingDock = null;
+      return;
+    }
+    if (_pendingDock != null && (height - _pendingDock!).abs() <= 0.5) {
+      _pendingDock = null;
+      setState(() => _dockHeight = height);
+      return;
+    }
+    // Still moving (or just moved): look again next frame, and take it once it
+    // has stopped.
+    _pendingDock = height;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) => _measureDock())
+      ..scheduleFrame();
   }
 
   // --- navigation -------------------------------------------------------------
@@ -111,7 +164,10 @@ class _StudioScreenState extends State<StudioScreen> {
 
   void _setArea(StudioArea area) {
     if (area == _area) return;
-    setState(() => _area = area);
+    setState(() {
+      _area = area;
+      _actionsOpen = false;
+    });
     _pages.animateToPage(
       area.index,
       duration: const Duration(milliseconds: 450),
@@ -119,10 +175,32 @@ class _StudioScreenState extends State<StudioScreen> {
     );
   }
 
+  /// Switches the areas capsule on or off. It is remembered app-wide, so it is
+  /// still there after leaving the session or restarting — this is the only
+  /// place that turns it off.
   void _toggleAreas() {
-    setState(() => _areasShown = !_areasShown);
-    // Hiding the capsule goes back to the conversation, where the composer is.
-    if (!_areasShown) _setArea(StudioArea.interface);
+    final state = context.read<AppState>();
+    final shown = !state.studioConfig.areasCapsule;
+    state.updateStudioConfig(state.studioConfig.copyWith(areasCapsule: shown));
+    setState(() => _actionsOpen = false);
+    if (!shown) _setArea(StudioArea.interface);
+  }
+
+  Future<void> _addFromGallery() async {
+    final image = await pickStudioGalleryPicture(
+      context,
+      characterId: _controller.session.workspace.character.id,
+    );
+    if (image == null || !mounted) return;
+    setState(() => _actionsOpen = false);
+    _attachments.value = [..._attachments.value, image];
+  }
+
+  Future<void> _addFromDevice() async {
+    final images = await pickStudioDevicePictures(context);
+    if (images.isEmpty || !mounted) return;
+    setState(() => _actionsOpen = false);
+    _attachments.value = [..._attachments.value, ...images];
   }
 
   /// Shows [agentId]'s conversation (Main or a sub-agent's) on the Interface
@@ -134,32 +212,9 @@ class _StudioScreenState extends State<StudioScreen> {
         _viewing = agentId;
       }
       _panelOpen = false;
+      _actionsOpen = false;
     });
     _setArea(StudioArea.interface);
-  }
-
-  void _togglePanel() {
-    if (_panelOpen) {
-      setState(() => _panelOpen = false);
-      return;
-    }
-    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
-    final button =
-        _agentsButtonKey.currentContext?.findRenderObject() as RenderBox?;
-    final bar = _barKey.currentContext?.findRenderObject() as RenderBox?;
-    if (stack == null || button == null || bar == null) return;
-    final anchor = stack.globalToLocal(
-      button.localToGlobal(button.size.center(Offset.zero)),
-    );
-    final barBottom =
-        stack.globalToLocal(bar.localToGlobal(Offset(0, bar.size.height))).dy;
-    final rows = 1 + _controller.subagents.length;
-    final height = (rows * SubagentList.rowHeight + 12).clamp(76.0, 272.0);
-    setState(() {
-      _anchor = anchor;
-      _panel = Rect.fromLTWH(8, barBottom + 6, stack.size.width - 16, height);
-      _panelOpen = true;
-    });
   }
 
   Future<void> _rename() async {
@@ -174,107 +229,252 @@ class _StudioScreenState extends State<StudioScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final view = MediaQuery.viewPaddingOf(context);
     final scheme = Theme.of(context).colorScheme;
+    final areasShown =
+        context.select<AppState, bool>((s) => s.studioConfig.areasCapsule);
+    // A capsule switched off elsewhere (another session's screen) takes this
+    // one back to the conversation, where the composer is.
+    if (!areasShown && _area != StudioArea.interface) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _setArea(StudioArea.interface));
+    }
+    // What this build changes about the dock (a page switch, the capsule) is
+    // measured once it has landed.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureDock());
+    final onConversation = _area == StudioArea.interface;
+    final viewingMain = _viewing == kMainAgent;
+    const buttonTop = StudioChrome.buttonTop;
+    const margin = StudioChrome.buttonMargin;
+    const size = StudioChrome.buttonSize;
+
     return Scaffold(
-      drawer: StudioDrawer(
-        onHome: _goHome,
-        onSettings: _openSettings,
-        onSessions: _openSessions,
+      // The keyboard lifts the floating dock (see [_KeyboardLift]); it never
+      // resizes the page, so a conversation is not laid out again on every
+      // frame of the keyboard's rise.
+      resizeToAvoidBottomInset: false,
+      onDrawerChanged: (opened) {
+        if (opened) FocusManager.instance.primaryFocus?.unfocus();
+      },
+      drawer: ListenableBuilder(
+        listenable: _controller,
+        builder: (context, _) => StudioDrawer(
+          onHome: _goHome,
+          onSettings: _openSettings,
+          onSessions: _openSessions,
+          sessionTitle: _controller.session.displayTitle,
+          sessionDetail: formatSpend(_controller.session),
+          onRename: _rename,
+        ),
       ),
-      body: Stack(
-        key: _stackKey,
-        children: [
-          Column(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          final anchor = Offset(
+            width - view.right - margin - size / 2,
+            view.top + buttonTop + size / 2,
+          );
+          final rows = 1 + _controller.subagents.length;
+          final panel = Rect.fromLTWH(
+            view.left + 8,
+            view.top + buttonTop + size + 8,
+            width - view.horizontal - 16,
+            (rows * SubagentList.rowHeight + 12).clamp(76.0, 272.0),
+          );
+          return Stack(
             children: [
-              ListenableBuilder(
-                listenable: _controller,
-                builder: (context, _) => _appBar(context),
-              ),
-              Expanded(
-                child: PageView(
-                  controller: _pages,
-                  // Pages change from the capsule; a sideways swipe belongs to
-                  // what is on them.
-                  physics: const NeverScrollableScrollPhysics(),
-                  children: [
-                    _interface(),
-                    StudioDraftView(controller: _controller),
-                    StudioChangesView(controller: _controller),
-                  ],
-                ),
-              ),
-              ListenableBuilder(
-                listenable: _controller,
-                builder: (context, _) => _controller.notice == null
-                    ? const SizedBox.shrink()
-                    : _Notice(controller: _controller),
-              ),
-              // The capsule grows up out of the composer and sinks back into
-              // it: a size-and-scale spring from its bottom edge, no fade.
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 420),
-                reverseDuration: const Duration(milliseconds: 260),
-                switchInCurve: Curves.easeOutBack,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (child, animation) => SizeTransition(
-                  sizeFactor: animation,
-                  alignment: Alignment.bottomCenter,
-                  child: ScaleTransition(
-                    scale: animation,
-                    alignment: Alignment.bottomRight,
-                    child: child,
+              Positioned.fill(
+                child: StudioChrome(
+                  statusBar: view.top,
+                  bottom: _dockHeight + view.bottom,
+                  rightButton: _hasSubagents,
+                  child: PageView(
+                    controller: _pages,
+                    // Pages change from the capsule; a sideways swipe belongs
+                    // to what is on them.
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: [
+                      _interface(),
+                      StudioDraftView(controller: _controller),
+                      StudioChangesView(controller: _controller),
+                    ],
                   ),
                 ),
-                child: !_areasShown
-                    ? const SizedBox(key: ValueKey('no-capsule'), width: double.infinity)
-                    : Padding(
-                        key: const ValueKey('capsule'),
-                        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-                        child: ListenableBuilder(
-                          listenable: _controller,
-                          builder: (context, _) => AreaCapsule(
-                            area: _area,
-                            changes: _controller.session.ops
-                                .where((o) => !o.reverted)
-                                .length,
-                            onChanged: _setArea,
-                          ),
-                        ),
-                      ),
               ),
-              _viewing == kMainAgent || _area != StudioArea.interface
-                  ? StudioComposer(
-                      controller: _controller,
-                      input: _input,
-                      areasShown: _areasShown,
-                      onToggleAreas: _toggleAreas,
-                    )
-                  : _ViewingBar(
-                      controller: _controller,
-                      agentId: _viewing,
-                      onBack: () => _teleport(kMainAgent),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _KeyboardLift(
+                  child: NotificationListener<SizeChangedLayoutNotification>(
+                    onNotification: (_) {
+                      WidgetsBinding.instance
+                          .addPostFrameCallback((_) => _measureDock());
+                      return true;
+                    },
+                    child: SizeChangedLayoutNotifier(
+                      child: _dock(
+                        view: view,
+                        onConversation: onConversation,
+                        viewingMain: viewingMain,
+                        areasShown: areasShown,
+                      ),
                     ),
-            ],
-          ),
-          Positioned.fill(
-            child: ListenableBuilder(
-              listenable: _controller,
-              builder: (context, _) => LiquidPanel(
-                open: _panelOpen && _controller.hasSubagents,
-                anchor: _anchor,
-                panel: _panel,
-                color: scheme.surfaceContainerHigh,
-                onDismiss: () => setState(() => _panelOpen = false),
-                child: SubagentList(
-                  controller: _controller,
-                  viewing: _viewing,
-                  onSelect: _teleport,
+                  ),
                 ),
               ),
+              Positioned(
+                top: view.top + buttonTop,
+                left: view.left + margin,
+                child: Builder(
+                  builder: (context) => StudioFloatingButton(
+                    key: const Key('studio-menu'),
+                    tooltip: 'Menu',
+                    icon: const Icon(Icons.menu),
+                    onPressed: () => Scaffold.of(context).openDrawer(),
+                  ),
+                ),
+              ),
+              if (_hasSubagents)
+                Positioned(
+                  top: view.top + buttonTop,
+                  right: view.right + margin,
+                  child: ListenableBuilder(
+                    listenable: _controller,
+                    builder: (context, _) {
+                      final running =
+                          _controller.subagents.where((a) => a.running).length;
+                      return _AgentsButton(
+                        running: running,
+                        open: _panelOpen,
+                        onPressed: () =>
+                            setState(() => _panelOpen = !_panelOpen),
+                      );
+                    },
+                  ),
+                ),
+              Positioned.fill(
+                child: LiquidPanel(
+                  open: _panelOpen && _hasSubagents,
+                  anchor: anchor,
+                  panel: panel,
+                  color: scheme.surfaceContainerHigh,
+                  onDismiss: () => setState(() => _panelOpen = false),
+                  child: SubagentList(
+                    controller: _controller,
+                    viewing: _viewing,
+                    onSelect: _teleport,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// Everything that floats over the bottom of the page, over its fade.
+  Widget _dock({
+    required EdgeInsets view,
+    required bool onConversation,
+    required bool viewingMain,
+    required bool areasShown,
+  }) {
+    final showComposer = onConversation;
+    final showActions = onConversation && viewingMain && _actionsOpen;
+    final empty = !showComposer && !areasShown;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        if (!empty)
+          const Positioned(
+            left: 0,
+            right: 0,
+            top: -36,
+            bottom: 0,
+            child: StudioBottomFade(fade: 36),
+          ),
+        Padding(
+          padding: EdgeInsets.only(
+            left: view.left,
+            right: view.right,
+            bottom: view.bottom,
+          ),
+          child: RepaintBoundary(
+            child: Column(
+              key: _dockKey,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListenableBuilder(
+                  listenable: _controller,
+                  builder: (context, _) => _controller.notice == null
+                      ? const SizedBox(width: double.infinity)
+                      : _Notice(controller: _controller),
+                ),
+                // Out of the composer's ⋯, from its right-hand end.
+                _Reveal(
+                  show: showActions,
+                  alignment: Alignment.bottomRight,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+                    child: ActionsCapsule(
+                      areasShown: areasShown,
+                      onToggleAreas: _toggleAreas,
+                      onGallery: _addFromGallery,
+                      onDevice: _addFromDevice,
+                    ),
+                  ),
+                ),
+                _Reveal(
+                  show: areasShown,
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      6,
+                      16,
+                      // Alone on Draft and Changes, it keeps off the edge.
+                      showComposer ? 0 : 14,
+                    ),
+                    child: ListenableBuilder(
+                      listenable: _controller,
+                      builder: (context, _) => AreaCapsule(
+                        area: _area,
+                        changes: _controller.session.ops
+                            .where((o) => !o.reverted)
+                            .length,
+                        onChanged: _setArea,
+                      ),
+                    ),
+                  ),
+                ),
+                // The composer belongs to the conversation; on the draft and
+                // its changes it sinks away and the capsule rides alone.
+                _Reveal(
+                  show: showComposer,
+                  alignment: Alignment.topCenter,
+                  scale: false,
+                  child: viewingMain
+                      ? StudioComposer(
+                          controller: _controller,
+                          input: _input,
+                          attachments: _attachments,
+                          actionsOpen: _actionsOpen,
+                          onToggleActions: () =>
+                              setState(() => _actionsOpen = !_actionsOpen),
+                        )
+                      : _ViewingBar(
+                          controller: _controller,
+                          agentId: _viewing,
+                          onBack: () => _teleport(kMainAgent),
+                        ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -307,81 +507,65 @@ class _StudioScreenState extends State<StudioScreen> {
           ),
         ),
       );
+}
 
-  Widget _appBar(BuildContext context) {
-    final session = _controller.session;
-    final theme = Theme.of(context);
-    final viewed =
-        _viewing == kMainAgent ? null : _controller.subagent(_viewing);
-    final running = _controller.anySubagentRunning
-        ? _controller.subagents.where((a) => a.running).length
-        : 0;
-    return AppBar(
-      key: _barKey,
-      leading: Builder(
-        builder: (context) => IconButton(
-          key: const Key('studio-menu'),
-          tooltip: 'Menu',
-          icon: const Icon(Icons.menu),
-          onPressed: () => Scaffold.of(context).openDrawer(),
-        ),
-      ),
-      title: GestureDetector(
-        onTap: viewed == null ? _rename : null,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              viewed == null
-                  ? session.displayTitle
-                  : '${viewed.label} — ${viewed.description}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            Text(
-              viewed == null
-                  ? _spend(session)
-                  : '${studioAgentTypeLabel(viewed.role)} · read-only',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        if (_controller.hasSubagents)
-          _AgentsButton(
-            key: _agentsButtonKey,
-            running: running,
-            open: _panelOpen,
-            onPressed: _togglePanel,
-          ),
-        IconButton(
-          tooltip: session.appliedSinceChange
-              ? 'Applied — nothing new to save'
-              : 'Apply to library',
-          icon: Icon(
-            session.appliedSinceChange
-                ? Icons.check_circle
-                : Icons.check_circle_outline,
-          ),
-          onPressed: _controller.running
-              ? null
-              : () => showStudioApplyFlow(context, _controller),
-        ),
-      ],
-    );
+/// Lifts what floats at the bottom clear of the keyboard: a transform, so the
+/// page underneath is neither resized nor laid out again while it rises — the
+/// same lift the chat gives its Expressive composer.
+class _KeyboardLift extends StatelessWidget {
+  const _KeyboardLift({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final view = MediaQuery.viewPaddingOf(context);
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final lift = (keyboard - view.bottom).clamp(0.0, double.infinity);
+    return Transform.translate(offset: Offset(0, -lift), child: child);
   }
+}
 
-  static String _spend(StudioSession s) {
-    final tokens = s.inputTokens + s.outputTokens;
-    if (tokens == 0) return 'Nothing spent yet';
-    String k(int n) => n >= 1000 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
-    final cost = s.cost > 0
-        ? ' · \$${s.cost.toStringAsFixed(s.cost < 1 ? 3 : 2)}'
-        : '';
-    return '${k(s.inputTokens)} in · ${k(s.outputTokens)} out$cost';
+/// Shows or hides [child] by growing it out of (and sinking it back into)
+/// [alignment]: a size-and-scale spring, never a fade.
+class _Reveal extends StatelessWidget {
+  const _Reveal({
+    required this.show,
+    required this.alignment,
+    required this.child,
+    this.scale = true,
+  });
+
+  final bool show;
+  final Alignment alignment;
+  final Widget child;
+  final bool scale;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 420),
+      reverseDuration: const Duration(milliseconds: 280),
+      switchInCurve: Curves.easeOutBack,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        final sized = SizeTransition(
+          sizeFactor: animation,
+          alignment: alignment,
+          child: child,
+        );
+        return scale
+            ? ScaleTransition(
+                scale: animation,
+                alignment: alignment,
+                child: sized,
+              )
+            : sized;
+      },
+      child: show
+          ? KeyedSubtree(key: const ValueKey('shown'), child: child)
+          : const SizedBox(key: ValueKey('hidden'), width: double.infinity),
+    );
   }
 }
 
@@ -389,7 +573,6 @@ class _StudioScreenState extends State<StudioScreen> {
 /// carries a count of the ones still running.
 class _AgentsButton extends StatelessWidget {
   const _AgentsButton({
-    super.key,
     required this.running,
     required this.open,
     required this.onPressed,
@@ -407,20 +590,13 @@ class _AgentsButton extends StatelessWidget {
       curve: Curves.elasticOut,
       builder: (context, scale, child) =>
           Transform.scale(scale: scale, child: child),
-      child: IconButton(
+      child: StudioFloatingButton(
+        key: const Key('studio-agents-button'),
         tooltip: 'Sub-agents',
-        isSelected: open,
+        selected: open,
         onPressed: onPressed,
-        icon: Badge(
-          isLabelVisible: running > 0,
-          label: Text('$running'),
-          child: const Icon(Icons.account_tree_outlined),
-        ),
-        selectedIcon: Badge(
-          isLabelVisible: running > 0,
-          label: Text('$running'),
-          child: const Icon(Icons.account_tree),
-        ),
+        badge: running > 0 ? '$running' : null,
+        icon: Icon(open ? Icons.account_tree : Icons.account_tree_outlined),
       ),
     );
   }
@@ -446,6 +622,7 @@ class _ViewingBar extends StatelessWidget {
     final agent = controller.subagent(agentId);
     return SafeArea(
       top: false,
+      bottom: false,
       child: Container(
         key: const Key('studio-viewing-bar'),
         margin: const EdgeInsets.fromLTRB(12, 6, 12, 10),
