@@ -361,17 +361,36 @@ class AgentRunner {
 
   /// Summarises the older part of [transcript] when the next request would
   /// pass the compactor's threshold.
-  Future<void> _compactIfNeeded(List<AgentMessage> transcript) async {
+  Future<void> _compactIfNeeded(List<AgentMessage> transcript) =>
+      _compact(transcript);
+
+  /// Summarises the older part of [transcript] now, whatever its size — the
+  /// `/compact` command — keeping only the newest quarter of it verbatim.
+  /// Returns whether anything was summarised (a short conversation has
+  /// nothing worth it).
+  Future<bool> compactNow(List<AgentMessage> transcript) async {
+    final before = compactor?.compactions.length ?? 0;
+    await _compact(transcript, force: true);
+    return (compactor?.compactions.length ?? 0) > before;
+  }
+
+  Future<void> _compact(
+    List<AgentMessage> transcript, {
+    bool force = false,
+  }) async {
     final compactor = this.compactor;
-    if (compactor == null || _compactGaveUpAt == transcript.length) return;
+    if (compactor == null) return;
+    if (!force && _compactGaveUpAt == transcript.length) return;
     final size = compactor.costOf(request(transcript)) +
         compactor.estimate(systemPrompt);
-    if (size <= compactor.budget * compactor.threshold) return;
+    if (!force && size <= compactor.budget * compactor.threshold) return;
     final from = compactor.latest?.upTo ?? 0;
     final upTo = compactionBoundary(
       transcript,
       from: from,
-      keepTokens: (compactor.budget * compactor.keep).floor(),
+      keepTokens: force
+          ? (size * 0.25).floor()
+          : (compactor.budget * compactor.keep).floor(),
       cost: compactor.cost,
     );
     if (upTo == null) {

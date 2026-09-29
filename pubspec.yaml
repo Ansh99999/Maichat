@@ -51,6 +51,9 @@ dependencies:
   # Reading CharX (.charx) character cards — a ZIP archive, standalone or
   # appended after a JPEG/PNG. Pure Dart, so no native-plugin build concerns.
   archive: 4.0.7
+  # Agent Skills: a SKILL.md opens with YAML frontmatter. Already a
+  # transitive dependency; pinned here because the Studio reads it directly.
+  yaml: 3.1.3
   # SHA-256, for the PKCE challenge the Google Drive sign-in sends and for the
   # stable ids a re-import derives. Pure Dart, so no AGP-9 native-plugin concern.
   crypto: 3.0.7
@@ -113,6 +116,17 @@ flutter:
   #   - images/a_dot_ham.jpeg
   assets:
     - assets/brand/
+    # The Character Studio's starter skills (Agent Skills format), copied into
+    # the Studio folder on first run. Flutter does not recurse into asset
+    # folders, so each skill's folder is listed.
+    - assets/studio_skills/lorebook-hygiene/
+    - assets/studio_skills/lorebook-hygiene/references/
+    - assets/studio_skills/greeting-variety/
+    - assets/studio_skills/chub-ready-card/
+    - assets/studio_skills/distinct-voices/
+    - assets/studio_skills/avoid-purple-prose/
+    - assets/studio_skills/avoid-purple-prose/references/
+    - assets/studio_skills/playtest-checklist/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

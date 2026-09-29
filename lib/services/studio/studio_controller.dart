@@ -18,6 +18,7 @@ import 'agent_runner.dart';
 import 'custom_agents.dart';
 import 'runtime_tools.dart';
 import 'studio_knowledge.dart';
+import 'studio_skills.dart';
 import 'studio_memory.dart';
 import 'studio_store.dart';
 import 'studio_tools.dart';
@@ -208,9 +209,17 @@ class StudioController extends ChangeNotifier {
   Future<void> send(
     String text, {
     List<MessageImage> images = const <MessageImage>[],
+    bool asText = false,
   }) async {
     final message = text.trim();
     if (message.isEmpty && images.isEmpty) return;
+    // A `/command` is the screen's to act on first; one it handles never
+    // reaches the model. [asText] sends a slash line as it is.
+    final commands = onSlashCommand;
+    if (!asText && commands != null && message.startsWith('/') &&
+        await commands(message, images)) {
+      return;
+    }
     if (running) {
       session.queued.add(StudioQueuedMessage(
         id: '${DateTime.now().microsecondsSinceEpoch}-${session.queued.length}',
@@ -232,7 +241,12 @@ class StudioController extends ChangeNotifier {
     session.transcript.addAll(_takeLeadInbox(always: true));
     session.transcript.add(AgentMessage.user(message, images: images));
     if (session.title.trim().isEmpty && session.workspace.character.name.isEmpty) {
-      session.title = _titleFrom(message);
+      // A skill's instructions are not a title; what the user wrote is.
+      final invoked = parseSkillInvocation(message);
+      final words = invoked == null
+          ? message
+          : (invoked.userText.isEmpty ? invoked.skill : invoked.userText);
+      session.title = _titleFrom(words);
     }
     session.updatedAt = DateTime.now();
     _save();
@@ -275,6 +289,36 @@ class StudioController extends ChangeNotifier {
     return '[Studio note] The app was closed while you were working, so your '
         'last run was cut off before it finished.$agents Check the draft with '
         'get_draft and pick up where you left off.';
+  }
+
+  /// Set by the screen: offered every message that starts with `/` before it
+  /// is sent, and returns whether it was a command it handled (see
+  /// `studio_commands.dart`). Null sends slash lines as they are.
+  Future<bool> Function(String text, List<MessageImage> images)? onSlashCommand;
+
+  /// Summarises the main agent's older conversation now — the `/compact`
+  /// command. Returns false when the Studio is working (it compacts on its own
+  /// between steps) or there is too little to be worth it.
+  Future<bool> compactNow() async {
+    if (running) return false;
+    final runner = AgentRunner(
+      name: 'studio',
+      systemPrompt: '',
+      tools: const [],
+      context: StudioToolContext(
+        session: session,
+        services: _AppStudioServices(this),
+      ),
+      turn: _turn,
+      compactor: _compactorFor(session.compactions),
+    );
+    final done = await runner.compactNow(session.transcript);
+    if (done) {
+      session.updatedAt = DateTime.now();
+      _save();
+      notifyListeners();
+    }
+    return done;
   }
 
   /// Stops the agent and every sub-agent — foreground or background — and

@@ -12,6 +12,7 @@ import '../../widgets/avatar_image.dart';
 import '../../widgets/message_markdown.dart';
 import '../../widgets/smooth_image.dart';
 import '../../widgets/thinking_block.dart';
+import '../../services/studio/studio_skills.dart';
 import 'shell/shell_format.dart';
 import 'shell/studio_chrome.dart';
 
@@ -100,7 +101,14 @@ class _StudioAgentViewState extends State<StudioAgentView>
       switch (m.role) {
         case AgentRole.user:
           final background = _backgroundReport.firstMatch(m.text);
-          if (subagent != null && first) {
+          final invoked = parseSkillInvocation(m.text);
+          if (invoked != null) {
+            // A `/skill` turn: the skill as a chip, not its whole text.
+            out.add(_SkillChip(name: invoked.skill));
+            if (invoked.userText.isNotEmpty || m.images.isNotEmpty) {
+              out.add(_UserBubble(message: m.withText(invoked.userText)));
+            }
+          } else if (subagent != null && first) {
             out.add(_TaskBrief(subagent: subagent));
           } else if (background != null) {
             out.add(_BackgroundReport(
@@ -160,7 +168,12 @@ class _StudioAgentViewState extends State<StudioAgentView>
       for (final q in _c.queued) {
         out.add(_QueuedBubble(
           key: ValueKey<String>('queued-${q.id}'),
-          text: q.text,
+          text: switch (parseSkillInvocation(q.text)) {
+            final invoked? => invoked.userText.isEmpty
+                ? 'Using skill: ${invoked.skill}'
+                : '/${invoked.skill} ${invoked.userText}',
+            null => q.text,
+          },
           pictures: q.images.length,
           onCancel: () => _c.cancelQueued(q.id),
         ));
@@ -757,6 +770,47 @@ class _Intro extends StatelessWidget {
 
 /// A message sent while the agent was working, waiting for its next step:
 /// the user's own bubble, quieter, with a way to take it back.
+/// A turn where the user invoked a skill with `/name`: the skill's
+/// instructions went to the model, and the chat shows only which skill.
+class _SkillChip extends StatelessWidget {
+  const _SkillChip({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 2),
+        child: Container(
+          key: Key('studio-skill-chip-$name'),
+          padding: const EdgeInsets.fromLTRB(12, 6, 14, 6),
+          decoration: BoxDecoration(
+            color: scheme.tertiaryContainer,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.auto_stories_outlined,
+                  size: 16, color: scheme.onTertiaryContainer),
+              const SizedBox(width: 8),
+              Text(
+                'Using skill: $name',
+                style: theme.textTheme.labelLarge
+                    ?.copyWith(color: scheme.onTertiaryContainer),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _QueuedBubble extends StatelessWidget {
   const _QueuedBubble({
     super.key,

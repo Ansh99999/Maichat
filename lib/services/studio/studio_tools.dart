@@ -9,6 +9,7 @@ import '../../models/studio_revisions.dart';
 import 'custom_agents.dart';
 import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
+import 'skill_tools.dart';
 import 'studio_knowledge.dart';
 
 /// What a Studio tool can reach beyond the workspace: the library to read from,
@@ -1529,6 +1530,7 @@ final Map<String, StudioTool> kStudioTools = {
     taskTool,
     ...kRuntimeTools,
     ...kKnowledgeTools,
+    ...kSkillTools,
   ])
     t.name: t,
 };
@@ -1578,7 +1580,13 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
   // sub-agent) has all of them; a typed sub-agent those its type is given.
   final extra = switch (agent) {
     'studio' || 'general' => const <String>[],
-    _ => [...?kRuntimeToolsFor[agent], ...?kKnowledgeToolsFor[agent]],
+    // Skills are advice for any kind of work, so every typed sub-agent can
+    // load them.
+    _ => [
+        ...?kRuntimeToolsFor[agent],
+        ...?kKnowledgeToolsFor[agent],
+        ...kSkillToolNames,
+      ],
   };
   return [
     for (final n in names) kStudioTools[n]!,

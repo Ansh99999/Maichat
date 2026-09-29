@@ -1,8 +1,10 @@
 import '../../models/studio.dart';
 import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
+import 'skill_tools.dart';
 import 'studio_memory.dart';
 import 'studio_prompt.dart';
+import 'studio_skills.dart';
 import 'studio_tools.dart';
 
 /// The groups a custom sub-agent's tools are picked from, in the order the
@@ -106,6 +108,9 @@ List<StudioTool> studioToolsForType(
     final names = <String>{
       for (final g in custom.toolGroups) ...?kStudioToolGroups[g]?.$2,
       'todo_write',
+      // Like the plan, skills are given to every type: they are advice, and
+      // cost nothing until one is loaded.
+      ...kSkillToolNames,
       ...?kRuntimeToolsFor['custom'],
     };
     tools = [
@@ -113,7 +118,7 @@ List<StudioTool> studioToolsForType(
         if (kStudioTools[name] != null) kStudioTools[name]!,
     ];
   }
-  tools = withoutDisabledKnowledge(tools, config);
+  tools = withoutIdleSkillTools(withoutDisabledKnowledge(tools, config));
   if (type != 'studio') {
     tools = [
       for (final t in tools)
@@ -142,6 +147,7 @@ String studioSystemPrompt(StudioConfig config, [StudioMemory? memory]) {
           '${custom.join('\n')}',
     if (config.memoryEnabled && memory != null)
       studioMemoryPrompt(memory.notes),
+    ?_skillsCatalog(),
   ].join('\n\n');
 }
 
@@ -176,7 +182,17 @@ String studioAgentSystemPrompt(
     base,
     if (hasWeb) kStudioWebPrompt.trim(),
     if (notes.isNotEmpty) notes,
+    ?_skillsCatalog(),
   ].join('\n\n');
+}
+
+/// The skills switched on, as every agent is told about them, or null when
+/// there are none.
+String? _skillsCatalog() {
+  final text = studioSkillsPrompt(
+    StudioSkillLibrary.active?.enabled ?? const [],
+  );
+  return text.isEmpty ? null : text;
 }
 
 /// The model a sub-agent of [type] runs on, when its type names one of its

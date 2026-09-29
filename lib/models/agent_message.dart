@@ -177,6 +177,18 @@ class AgentMessage {
   /// exists on the copy handed to the wire.
   final List<MessageImage> images;
 
+  /// This turn with its [text] replaced — how the chat shows part of a turn.
+  AgentMessage withText(String text) => AgentMessage(
+        role: role,
+        text: text,
+        reasoning: reasoning,
+        toolCalls: toolCalls,
+        toolCallId: toolCallId,
+        toolName: toolName,
+        isError: isError,
+        images: images,
+      );
+
   /// This turn with [images] replaced — how the wire copy gets its data.
   AgentMessage withImages(List<MessageImage> images) => AgentMessage(
         role: role,
