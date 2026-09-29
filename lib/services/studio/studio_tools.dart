@@ -1266,7 +1266,11 @@ final StudioTool taskTool = StudioTool(
         '- The user never sees the report unless they open the sub-agent, so '
         'summarise what came back.\n'
         '- To send a finished sub-agent a follow-up, pass its task_id; it '
-        'carries on with its conversation intact.',
+        'carries on with its conversation intact.\n'
+        '- With background: true the call returns at once with the task_id and '
+        'the sub-agent keeps working while you do other things; its report '
+        'reaches you later as a note. Use wait_agents to wait for it and '
+        'send_message to redirect it.',
     parameters: {
       'type': 'object',
       'properties': {
@@ -1287,6 +1291,11 @@ final StudioTool taskTool = StudioTool(
           'description': 'Carry on the sub-agent with this id instead of '
               'starting a new one.',
         },
+        'background': {
+          'type': 'boolean',
+          'description': 'Return at once and let it work while you carry on; '
+              'its report arrives later as a note.',
+        },
       },
       'required': ['description', 'prompt'],
     },
@@ -1303,13 +1312,26 @@ final StudioTool taskTool = StudioTool(
     final prompt = _str(args, 'prompt', required: true).trim();
     if (prompt.isEmpty) throw StudioToolError('"prompt" cannot be empty.');
     final taskId = _optStr(args, 'task_id')?.trim();
-    final outcome = await ctx.services.runTask(
-      agentType: type,
-      description: description.isEmpty ? 'Sub-task' : description,
-      prompt: prompt,
-      callId: ctx.call?.id ?? '',
-      taskId: taskId == null || taskId.isEmpty ? null : taskId,
-    );
+    final background = _optBool(args, 'background') ?? false;
+    final services = ctx.services;
+    if (background && services is! StudioRuntime) {
+      throw StudioToolError('Background sub-agents are not available here.');
+    }
+    final outcome = background
+        ? await (services as StudioRuntime).startBackgroundTask(
+            agentType: type,
+            description: description.isEmpty ? 'Sub-task' : description,
+            prompt: prompt,
+            callId: ctx.call?.id ?? '',
+            taskId: taskId == null || taskId.isEmpty ? null : taskId,
+          )
+        : await services.runTask(
+            agentType: type,
+            description: description.isEmpty ? 'Sub-task' : description,
+            prompt: prompt,
+            callId: ctx.call?.id ?? '',
+            taskId: taskId == null || taskId.isEmpty ? null : taskId,
+          );
     // Framed as data: this is the sub-agent's account, not an instruction.
     final result = StudioToolResult.json({
       'subagent': outcome.label,
@@ -1317,7 +1339,8 @@ final StudioTool taskTool = StudioTool(
       'status': outcome.status,
       'report': outcome.report,
     });
-    return outcome.failed
+    // A background start is not a failure: it is still running.
+    return outcome.failed && outcome.status != 'running'
         ? StudioToolResult(result.text, isError: true)
         : result;
   },

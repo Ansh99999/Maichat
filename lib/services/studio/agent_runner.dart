@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../../models/agent_message.dart';
+import '../../models/studio.dart';
 import '../agent_client.dart';
 import '../chat_client.dart';
 import 'studio_tools.dart';
@@ -24,6 +26,7 @@ class AgentObserver {
     this.onToolStart,
     this.onToolEnd,
     this.onMessage,
+    this.onCompacted,
   });
 
   final void Function(String agent, String delta)? onText;
@@ -33,6 +36,9 @@ class AgentObserver {
 
   /// A finished turn or tool result was added to the transcript.
   final void Function(String agent, AgentMessage message)? onMessage;
+
+  /// The agent's earlier conversation was just summarised.
+  final void Function(String agent, StudioCompaction compaction)? onCompacted;
 }
 
 /// How a run ended.
@@ -69,6 +75,81 @@ const String kStepLimitNote =
     'are switched off. Reply in words only: summarise what was done, what '
     'remains, and what the user should do next (for example, reply "continue").';
 
+/// How an agent keeps its requests inside its model's context: Claude Code's
+/// auto-compact. Before each model call the request is measured; once it
+/// passes [threshold] of [budget], the older part of the conversation is
+/// summarised by the model itself and only the summary is sent in its place.
+class AgentCompactor {
+  const AgentCompactor({
+    required this.budget,
+    required this.compactions,
+    this.estimate = roughTokens,
+    this.threshold = kCompactThreshold,
+    this.keep = kCompactKeep,
+  });
+
+  /// The request size, in tokens, the model can take.
+  final int budget;
+
+  /// Where this agent's summaries are kept (the session's, or its
+  /// sub-agent's), newest last. The runner appends to it.
+  final List<StudioCompaction> compactions;
+
+  /// How many tokens a piece of text is.
+  final int Function(String text) estimate;
+
+  /// The share of [budget] a request may reach before it is compacted.
+  final double threshold;
+
+  /// The share of [budget] the newest turns may keep, verbatim, after it.
+  final double keep;
+
+  StudioCompaction? get latest => compactions.isEmpty ? null : compactions.last;
+
+  /// Four characters to a token: the fallback when no tokenizer is handed in.
+  static int roughTokens(String text) => (text.length / 4).ceil();
+
+  /// How many tokens [message] costs on the wire, near enough.
+  int cost(AgentMessage message) {
+    var n = estimate(message.text) + 4;
+    for (final call in message.toolCalls) {
+      n += estimate(call.name) + estimate(jsonEncode(call.arguments)) + 4;
+    }
+    // A picture is priced like a modest block of text; its bytes are not.
+    return n + message.images.length * 800;
+  }
+
+  int costOf(Iterable<AgentMessage> messages) =>
+      messages.fold(0, (n, m) => n + cost(m));
+}
+
+/// Past this share of the budget a request is compacted.
+const double kCompactThreshold = 0.75;
+
+/// The share of the budget the newest turns keep, verbatim, after a
+/// compaction.
+const double kCompactKeep = 0.3;
+
+/// The note a compaction's summary is sent as, in place of what it covers.
+String compactionNote(String summary) =>
+    '[Studio note] Summary of earlier conversation (older turns were '
+    'summarised to save space; call get_draft for the draft as it is now):\n'
+    '$summary';
+
+/// What the model is told when asked to summarise its own conversation.
+const String kCompactionPrompt =
+    'You are summarising your own working session so that you can carry on '
+    'after the older part of it is dropped. Write the summary for yourself, not '
+    'for the user. Cover, in short plain sections:\n'
+    '- Goals: what the user wants, in their own terms, and any preferences or '
+    'rules they have stated.\n'
+    '- Decisions: what has been settled and why.\n'
+    '- The draft: its key facts as they stand (the draft can be re-read with '
+    'get_draft, so do not copy fields out in full).\n'
+    '- Sub-agents: which were started, their task_ids and where they stand.\n'
+    '- Open work: unfinished todos and what you were about to do next.\n'
+    'Be specific and brief. Reply with the summary only.';
+
 /// Runs one agent: ask the model, run the tools it calls, hand back the
 /// results, and repeat until it answers in words, runs out of steps, or is
 /// stopped.
@@ -85,6 +166,9 @@ class AgentRunner {
     required this.turn,
     this.maxSteps = 40,
     this.observer = const AgentObserver(),
+    this.takeInbox,
+    this.inboxWaiting,
+    this.compactor,
   });
 
   final String name;
@@ -95,14 +179,38 @@ class AgentRunner {
   final int maxSteps;
   final AgentObserver observer;
 
+  /// Messages that arrived while the agent worked — the user steering it, a
+  /// background sub-agent's report — taken in at each step boundary: after
+  /// the current turn's tool results, before the next model call. Also asked
+  /// when the agent answers in words, so a message that arrives at the very
+  /// end is still answered in this run.
+  final List<AgentMessage> Function()? takeInbox;
+
+  /// Whether anything is waiting to be taken in by [takeInbox], without taking
+  /// it.
+  final bool Function()? inboxWaiting;
+
+  /// Keeps the requests inside the model's context, when given.
+  final AgentCompactor? compactor;
+
   final Set<AgentClient> _clients = <AgentClient>{};
   final Set<AgentRunner> _children = <AgentRunner>{};
   bool _cancelled = false;
+  final Completer<void> _cancelledSignal = Completer<void>();
+
+  /// The transcript length at which compaction last found nothing it could
+  /// summarise, so it is not asked again every step until the conversation
+  /// has grown.
+  int _compactGaveUpAt = -1;
 
   bool get cancelled => _cancelled;
 
+  /// Completes when the run is stopped — for waits that must end with it.
+  Future<void> get whenCancelled => _cancelledSignal.future;
+
   /// Stops the run and every helper it started. Safe to call at any time.
   void cancel() {
+    if (!_cancelledSignal.isCompleted) _cancelledSignal.complete();
     _cancelled = true;
     for (final client in _clients.toList()) {
       client.cancel();
@@ -132,6 +240,7 @@ class AgentRunner {
     var lastText = '';
     for (var step = 0; step < maxSteps; step++) {
       if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
+      _takeInbox(transcript);
       // The last allowed step (after at least one working one) goes out with
       // no tools and a note asking for a summary, so a run that hits the
       // ceiling still ends with an account of where it got to.
@@ -141,6 +250,8 @@ class AgentRunner {
         transcript.add(note);
         observer.onMessage?.call(name, note);
       }
+      await _compactIfNeeded(transcript);
+      if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
       final client = AgentClient();
       _clients.add(client);
       final text = StringBuffer();
@@ -149,7 +260,7 @@ class AgentRunner {
       try {
         await for (final delta in turn(
           client,
-          [AgentMessage.system(systemPrompt), ...wireView(transcript)],
+          request(transcript),
           last ? const <ToolSpec>[] : specs,
         )) {
           if (delta.text.isNotEmpty) {
@@ -179,6 +290,8 @@ class AgentRunner {
       if (said.isEmpty && calls.isEmpty) {
         if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
         if (last) return AgentRunOutcome(AgentRunEnd.stepLimit, lastText);
+        // A message that arrived while it answered is answered now.
+        if (_hasInbox()) continue;
         // A turn with no words and no calls (thinking alone, or nothing) is an
         // answer too, but it is not recorded: resending an empty assistant
         // turn is something several hosts reject outright.
@@ -194,7 +307,12 @@ class AgentRunner {
       observer.onMessage?.call(name, assistant);
       if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
       if (last) return AgentRunOutcome(AgentRunEnd.stepLimit, lastText);
-      if (calls.isEmpty) return AgentRunOutcome(AgentRunEnd.finished, lastText);
+      if (calls.isEmpty) {
+        // Answered in words — unless something arrived meanwhile, which the
+        // next step takes in and answers.
+        if (_hasInbox()) continue;
+        return AgentRunOutcome(AgentRunEnd.finished, lastText);
+      }
 
       // All of a turn's calls run together: helpers asked for side by side
       // really do work side by side, and every edit is atomic on its own.
@@ -207,6 +325,157 @@ class AgentRunner {
       }
     }
     return AgentRunOutcome(AgentRunEnd.stepLimit, lastText);
+  }
+
+  bool _hasInbox() => inboxWaiting?.call() ?? false;
+
+  void _takeInbox(List<AgentMessage> transcript) {
+    final arrived = takeInbox?.call();
+    if (arrived == null || arrived.isEmpty) return;
+    for (final message in arrived) {
+      transcript.add(message);
+      observer.onMessage?.call(name, message);
+    }
+  }
+
+  /// The request for the next model call: the system prompt, the newest
+  /// summary (when the conversation has been compacted) in place of what it
+  /// covers, then the rest of the transcript as [wireView] sends it.
+  List<AgentMessage> request(List<AgentMessage> transcript) {
+    final latest = compactor?.latest;
+    final from = latest == null
+        ? 0
+        : latest.upTo.clamp(0, transcript.length);
+    return [
+      AgentMessage.system(systemPrompt),
+      if (latest != null) AgentMessage.user(compactionNote(latest.summary)),
+      ...wireView(from == 0 ? transcript : transcript.sublist(from)),
+    ];
+  }
+
+  /// Summarises the older part of [transcript] when the next request would
+  /// pass the compactor's threshold.
+  Future<void> _compactIfNeeded(List<AgentMessage> transcript) async {
+    final compactor = this.compactor;
+    if (compactor == null || _compactGaveUpAt == transcript.length) return;
+    final size = compactor.costOf(request(transcript)) +
+        compactor.estimate(systemPrompt);
+    if (size <= compactor.budget * compactor.threshold) return;
+    final from = compactor.latest?.upTo ?? 0;
+    final upTo = compactionBoundary(
+      transcript,
+      from: from,
+      keepTokens: (compactor.budget * compactor.keep).floor(),
+      cost: compactor.cost,
+    );
+    if (upTo == null) {
+      _compactGaveUpAt = transcript.length;
+      return;
+    }
+    final client = AgentClient();
+    _clients.add(client);
+    final summary = StringBuffer();
+    try {
+      await for (final delta in turn(
+        client,
+        [
+          AgentMessage.system(kCompactionPrompt),
+          AgentMessage.user(renderForSummary(
+            transcript.sublist(from, upTo),
+            previous: compactor.latest?.summary,
+          )),
+        ],
+        const <ToolSpec>[],
+      )) {
+        summary.write(delta.text);
+      }
+    } on ChatApiException {
+      // A failed summary is not a failed run: the request goes out whole and
+      // the host says whether it fits.
+      if (!_cancelled) _compactGaveUpAt = transcript.length;
+      return;
+    } finally {
+      _clients.remove(client);
+    }
+    final text = summary.toString().trim();
+    if (_cancelled || text.isEmpty) {
+      _compactGaveUpAt = transcript.length;
+      return;
+    }
+    final record = StudioCompaction(summary: text, upTo: upTo, tokensBefore: size);
+    compactor.compactions.add(record);
+    observer.onCompacted?.call(name, record);
+  }
+
+  /// Where a compaction of `transcript[from..]` should end: the newest turns
+  /// worth [keepTokens] stay verbatim, and the boundary is always the start of
+  /// a turn — never between a tool call and its result, which would leave a
+  /// result with no call on the wire. Null when there is nothing worth
+  /// summarising.
+  static int? compactionBoundary(
+    List<AgentMessage> transcript, {
+    required int from,
+    required int keepTokens,
+    required int Function(AgentMessage) cost,
+  }) {
+    if (transcript.length - from < 3) return null;
+    var kept = 0;
+    var boundary = transcript.length;
+    while (boundary > from + 1) {
+      final next = kept + cost(transcript[boundary - 1]);
+      if (next > keepTokens) break;
+      kept = next;
+      boundary--;
+    }
+    // Keep at least the newest turn: the model has to see what it is
+    // answering.
+    if (boundary >= transcript.length) boundary = transcript.length - 1;
+    // A tool result belongs with the call before it: step back to that call.
+    while (boundary > from && transcript[boundary].role == AgentRole.tool) {
+      boundary--;
+    }
+    if (boundary - from < 2) return null;
+    return boundary;
+  }
+
+  /// [messages] as one plain-text log for the summariser: tool traffic is
+  /// written out in words (so the request carries no tool blocks, which some
+  /// dialects refuse without tools on offer), and long tool output is cut.
+  static String renderForSummary(
+    List<AgentMessage> messages, {
+    String? previous,
+  }) {
+    final out = StringBuffer();
+    if (previous != null && previous.trim().isNotEmpty) {
+      out
+        ..writeln('Your summary of the conversation before this part:')
+        ..writeln(previous.trim())
+        ..writeln();
+    }
+    out.writeln('The conversation to summarise:');
+    for (final m in messages) {
+      switch (m.role) {
+        case AgentRole.user:
+          out.writeln('USER: ${m.text}');
+          if (m.images.isNotEmpty) {
+            out.writeln('  (${m.images.length} picture(s) attached)');
+          }
+        case AgentRole.assistant:
+          if (m.text.isNotEmpty) out.writeln('YOU: ${m.text}');
+          for (final c in m.toolCalls) {
+            out.writeln('YOU CALLED ${c.name} ${shortenMiddle(jsonEncode(c.arguments))}');
+          }
+        case AgentRole.tool:
+          out.writeln('${m.isError ? 'ERROR' : 'RESULT'} (${m.toolName}): '
+              '${shortenMiddle(m.text)}');
+        case AgentRole.system:
+          break;
+      }
+    }
+    out
+      ..writeln()
+      ..writeln('Summarise it as instructed.');
+    return out.toString();
   }
 
   Future<AgentMessage> _runCall(ToolCall call, StudioTool? tool) async {
