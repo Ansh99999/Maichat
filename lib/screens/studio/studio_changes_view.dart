@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/studio.dart';
 import '../../services/studio/studio_controller.dart';
 import 'draft/draft_widgets.dart';
+import 'shell/area_pages.dart';
 import 'shell/studio_apply.dart';
 import 'shell/studio_chrome.dart';
 
@@ -56,9 +57,9 @@ class StudioChangesView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
+    return ActiveListenableBuilder(
       listenable: controller,
-      builder: (context, _) {
+      builder: (context) {
         final ops = controller.session.ops;
         final theme = Theme.of(context);
         // Inside the shell the page starts under the status bar and the
