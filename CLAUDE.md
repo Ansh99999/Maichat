@@ -502,6 +502,23 @@ bar or the overflow menu.
     refresh at most every 500 ms. The bar colours by six groups
     (`StudioContextGroup`), chosen with the dataviz validator to stay apart
     for colour-blind readers in every combination, light and dark.
+  - **Web search** defaults to DuckDuckGo's HTML page (`studio_web.dart`:
+    unofficial, one request at a time ≥1.5 s apart; a 202/"anomaly" challenge,
+    a failure or an unrecognised page falls back to Wikipedia **with a note to
+    the agent**, never a silent empty result; an absent stored provider means
+    DuckDuckGo, an explicit `wiki` is kept). **Pictures from the web**
+    (`studio_images.dart` + `image_tools.dart`): Openverse/Commons search, any
+    page's `og:image` (Pinterest → `/originals/`), downloads guarded (public
+    http(s) only at every redirect, 15 MB, magic-byte check) and filed as gallery
+    files with `source`/`credit`. **Skills** (`studio_skills.dart`): the open
+    Agent Skills format as files under `studio/skills/<name>/SKILL.md`; agents see
+    name + description only (`StudioPromptPart.skills`) and load a body with
+    `use_skill`/`read_skill_file` (confined to the skill folder); `scripts/` are
+    kept, never run; six starter skills ship as assets. **`/` commands**
+    (`studio_commands.dart`, `StudioSlashHost` in the dock): built-ins, one per
+    enabled skill, and the user's `$ARGUMENTS` templates in `studio/commands/`;
+    parsed in one place and hooked through `StudioController.onSlashCommand`;
+    UI-only commands never reach the model.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
