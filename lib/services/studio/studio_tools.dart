@@ -6,6 +6,7 @@ import '../../models/character_scenario.dart';
 import '../../models/lorebook.dart';
 import '../../models/studio.dart';
 import '../../models/studio_revisions.dart';
+import 'custom_agents.dart';
 import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
 import 'studio_knowledge.dart';
@@ -1333,7 +1334,8 @@ final StudioTool taskTool = StudioTool(
         'build. It works on the same draft with its own tools and its own '
         'conversation, then returns a single report to you.\n\n'
         'Agent types: '
-        '${kStudioAgentTypes.entries.map((e) => '${e.key} — ${e.value}').join(' ')}\n\n'
+        '${kStudioAgentTypes.entries.map((e) => '${e.key} — ${e.value}').join(' ')} '
+        'Plus any types the user defined, listed in your instructions.\n\n'
         'Usage:\n'
         '- Launch several sub-agents at once by making several task calls in '
         'one message; they run at the same time. When the user asks for a '
@@ -1367,9 +1369,13 @@ final StudioTool taskTool = StudioTool(
           'type': 'string',
           'description': 'The full task for the sub-agent.',
         },
+        // Not an enum: the user can define types of their own, and the
+        // schema is fixed when the app starts. The types in force are listed
+        // in the agent's instructions and checked when the call is answered.
         'agent_type': {
           'type': 'string',
-          'enum': kStudioAgentTypes.keys.toList(),
+          'description': 'general (the default), writer, lore_writer, critic, '
+              'or a type the user defined.',
         },
         'task_id': {
           'type': 'string',
@@ -1387,12 +1393,8 @@ final StudioTool taskTool = StudioTool(
   ),
   (ctx, args) async {
     final type = (_optStr(args, 'agent_type') ?? 'general').trim();
-    if (!kStudioAgentTypes.containsKey(type)) {
-      throw StudioToolError(
-        'Unknown agent_type "$type". Use one of: '
-        '${kStudioAgentTypes.keys.join(', ')}.',
-      );
-    }
+    final problem = studioAgentTypeProblem(ctx.knowledge.config(), type);
+    if (problem != null) throw StudioToolError(problem);
     final description = _str(args, 'description', required: true).trim();
     final prompt = _str(args, 'prompt', required: true).trim();
     if (prompt.isEmpty) throw StudioToolError('"prompt" cannot be empty.');

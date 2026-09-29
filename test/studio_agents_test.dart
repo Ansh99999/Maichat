@@ -10,6 +10,7 @@ import 'package:maichat/models/studio.dart';
 import 'package:maichat/services/avatar_store.dart';
 import 'package:maichat/services/studio/agent_runner.dart';
 import 'package:maichat/services/studio/studio_controller.dart';
+import 'package:maichat/services/studio/studio_memory.dart';
 import 'package:maichat/services/studio/studio_store.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -132,6 +133,99 @@ void main() {
     addTearDown(controller.flush);
     return controller;
   }
+
+  test('a type the user defined runs with its own prompt, tools and model; '
+      'memory reaches every agent', () async {
+    StudioMemory.resetShared();
+    answer = (body) {
+      if (fromSubagent(body)) {
+        return [words('Tuned the greeting.'), usage(50, 5)];
+      }
+      final hasResults = messagesOf(body).any((m) => m['role'] == 'tool');
+      if (!hasResults) {
+        return [
+          calls([
+            (
+              'v1',
+              'task',
+              {
+                'description': 'Voice pass',
+                'prompt': 'Tune the first message.',
+                'agent_type': 'voice_coach',
+              },
+            ),
+          ]),
+        ];
+      }
+      return [words('Done.')];
+    };
+    final state = await boot();
+    await state.updateStudioConfig(state.studioConfig.copyWith(
+      customAgents: const [
+        StudioAgentType(
+          id: 'voice_coach',
+          label: 'Voice coach',
+          description: 'Tunes how the character talks.',
+          prompt: 'VOICE_COACH_RULES',
+          toolGroups: {'read', 'character'},
+          model: 'coach-model',
+        ),
+      ],
+    ));
+    final memory = await StudioMemory.forDirectory(dir);
+    expect(memory.add('Prefers third-person present tense.'), isNull);
+
+    final controller = controllerFor(state);
+    await controller.send('Make her voice drier.');
+
+    final lead = requests.first;
+    final sub = requests.firstWhere(fromSubagent);
+    // The main agent is told about the type and what the user prefers.
+    expect(systemOf(lead), contains('voice_coach'));
+    expect(systemOf(lead), contains('Prefers third-person present tense.'));
+    // The sub-agent runs on its type's model, prompt and tools only.
+    expect(sub['model'], 'coach-model');
+    expect(lead['model'], 'builder');
+    expect(systemOf(sub), contains('VOICE_COACH_RULES'));
+    expect(systemOf(sub), contains('Prefers third-person present tense.'));
+    final subTools = {
+      for (final t in sub['tools'] as List) (t as Map)['function']['name'],
+    };
+    expect(subTools, containsAll(['get_draft', 'set_fields', 'edit_field']));
+    expect(subTools, isNot(contains('upsert_lore_entry')));
+    expect(subTools, isNot(contains('task')));
+    expect(subTools, isNot(contains('remember')));
+    expect(controller.subagents.single.status, StudioAgentStatus.done);
+    expect(controller.subagents.single.role, 'voice_coach');
+  });
+
+  test('an unknown agent type is refused in words the model can fix', () async {
+    answer = (body) {
+      final hasResults = messagesOf(body).any((m) => m['role'] == 'tool');
+      if (!hasResults) {
+        return [
+          calls([
+            (
+              'x1',
+              'task',
+              {'description': 'Nope', 'prompt': 'Do it.', 'agent_type': 'wizard'},
+            ),
+          ]),
+        ];
+      }
+      return [words('Understood.')];
+    };
+    final state = await boot();
+    final controller = controllerFor(state);
+    await controller.send('go');
+    final result = controller.session.transcript
+        .firstWhere((m) => m.role == AgentRole.tool);
+    expect(result.isError, isTrue);
+    final error = (jsonDecode(result.text) as Map)['error'] as String;
+    expect(error, contains('Unknown agent_type "wizard"'));
+    expect(error, contains('critic'));
+    expect(controller.subagents, isEmpty);
+  });
 
   test('asking for five sub-agents runs five, side by side, and reports back',
       () async {

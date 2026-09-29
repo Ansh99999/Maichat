@@ -15,8 +15,10 @@ import '../chat_client.dart';
 import '../document_sources.dart';
 import '../model_context.dart';
 import 'agent_runner.dart';
+import 'custom_agents.dart';
 import 'runtime_tools.dart';
-import 'studio_prompt.dart';
+import 'studio_knowledge.dart';
+import 'studio_memory.dart';
 import 'studio_store.dart';
 import 'studio_tools.dart';
 
@@ -324,17 +326,33 @@ class StudioController extends ChangeNotifier {
 
   bool _leadInboxWaiting() => session.queued.isNotEmpty || _notes.isNotEmpty;
 
+  /// The Studio's memory across sessions, read once from its file and handed
+  /// to the knowledge tools (and every agent's instructions) from then on.
+  Future<StudioMemory> _loadMemory() async {
+    // Read once per folder and shared after that (the settings page holds the
+    // same one), so this is cheap on every run.
+    final memory = await StudioMemory.forDirectory(store.directory);
+    StudioKnowledge.configure(config: () => state.studioConfig, memory: memory);
+    return memory;
+  }
+
   Future<void> _runLead() async {
     final config = state.studioConfig;
+    final memory = await _loadMemory();
     final services = _AppStudioServices(this);
     final runtimeNames = kRuntimeToolNames;
     final lead = AgentRunner(
       name: 'studio',
-      systemPrompt: config.systemPrompt.trim().isEmpty
-          ? defaultStudioPrompt()
-          : config.systemPrompt,
+      systemPrompt: studioSystemPrompt(
+        config,
+        config.memoryEnabled ? memory : null,
+      ),
       tools: [
-        for (final t in studioToolsFor('studio', subAgents: config.subAgents))
+        for (final t in studioToolsForType(
+          'studio',
+          config,
+          subAgents: config.subAgents,
+        ))
           if (config.subAgents || !runtimeNames.contains(t.name)) t,
       ],
       context: StudioToolContext(session: session, services: services),
@@ -696,10 +714,14 @@ class StudioController extends ChangeNotifier {
     final runtimeNames = kRuntimeToolNames;
     final child = AgentRunner(
       name: sub.id,
-      systemPrompt: studioAgentPrompt(sub.role),
+      systemPrompt: studioAgentSystemPrompt(
+        sub.role,
+        state.studioConfig,
+        StudioKnowledge.shared.activeMemory,
+      ),
       tools: [
         // One level deep: a sub-agent neither spawns nor manages others.
-        for (final t in studioToolsFor(sub.role))
+        for (final t in studioToolsForType(sub.role, state.studioConfig))
           if (!runtimeNames.contains(t.name)) t,
       ],
       context: StudioToolContext(
@@ -714,6 +736,7 @@ class StudioController extends ChangeNotifier {
             messages: messages,
             tools: tools,
             toolsOff: toolsOff,
+            model: studioAgentModel(sub.role, state.studioConfig),
             onSpend: (usage, cost) {
           sub
             ..inputTokens += usage.inputTokens
