@@ -5,6 +5,8 @@ import '../../models/character.dart';
 import '../../models/character_scenario.dart';
 import '../../models/lorebook.dart';
 import '../../models/studio.dart';
+import 'knowledge_tools.dart';
+import 'runtime_tools.dart';
 
 /// What a Studio tool can reach beyond the workspace: the library to read from,
 /// and the three things that need the rest of the app — a picture, a playtest,
@@ -1415,6 +1417,8 @@ final Map<String, StudioTool> kStudioTools = {
     attachLibraryLorebookTool,
     todoWriteTool,
     taskTool,
+    ...kRuntimeTools,
+    ...kKnowledgeTools,
   ])
     t.name: t,
 };
@@ -1458,5 +1462,15 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
           if (subAgents || name != 'task') name,
       ],
   };
-  return [for (final n in names) kStudioTools[n]!];
+  // The runtime and knowledge tools: the main agent (and a general
+  // sub-agent) has all of them; a typed sub-agent those its type is given.
+  final extra = switch (agent) {
+    'studio' || 'general' => const <String>[],
+    _ => [...?kRuntimeToolsFor[agent], ...?kKnowledgeToolsFor[agent]],
+  };
+  return [
+    for (final n in names) kStudioTools[n]!,
+    for (final n in extra)
+      if (!names.contains(n) && kStudioTools[n] != null) kStudioTools[n]!,
+  ];
 }
