@@ -6,6 +6,7 @@ import 'package:maichat/models/character.dart';
 import 'package:maichat/models/character_scenario.dart';
 import 'package:maichat/models/lorebook.dart';
 import 'package:maichat/models/studio.dart';
+import 'package:maichat/screens/studio/shell/studio_chrome.dart';
 import 'package:maichat/screens/studio/studio_changes_view.dart';
 import 'package:maichat/screens/studio/studio_draft_view.dart';
 import 'package:maichat/services/studio/studio_controller.dart';
@@ -78,6 +79,15 @@ void main() {
         child: MaterialApp(home: Scaffold(body: body)),
       );
 
+  /// Scrolls the Character tab until [finder] is on screen — the page has
+  /// room in it now, so a later field starts below a small test window.
+  Future<void> scrollCharacterTo(WidgetTester tester, Finder finder) =>
+      tester.scrollUntilVisible(finder, 200,
+          scrollable: find.descendant(
+            of: find.byKey(const PageStorageKey('draft-character')),
+            matching: find.byType(Scrollable),
+          ).first);
+
   /// Taps a tab, scrolling the strip to it first — at a phone's width the
   /// later tabs start off the edge, as they do in a browser.
   Future<void> openTab(WidgetTester tester, String label) async {
@@ -104,6 +114,8 @@ void main() {
       expect(find.bySemanticsLabel(label), findsOneWidget, reason: label);
     }
     // Character is open: its rows are there, the lorebook is not.
+    await scrollCharacterTo(
+        tester, find.byKey(const ValueKey('draft-field-Personality')));
     expect(find.byKey(const ValueKey('draft-field-Personality')), findsOneWidget);
     expect(find.byKey(const ValueKey('draft-book-b')), findsNothing);
 
@@ -115,6 +127,36 @@ void main() {
     await tester.fling(find.byType(PageView), const Offset(-500, 0), 1500);
     await tester.pumpAndSettle();
     expect(find.text('Embeddings are off'), findsOneWidget);
+  });
+
+  testWidgets('inside the shell: tabs clear the floating squares',
+      (tester) async {
+    final (state, controller) = await boot(seeded());
+    await tester.pumpWidget(host(
+      state,
+      StudioChrome(
+        statusBar: 24,
+        bottom: 120,
+        rightButton: true,
+        child: StudioDraftView(controller: controller),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    final first = tester.getRect(find.bySemanticsLabel('Character'));
+    // Beside the menu square, not under it, and below the status bar.
+    expect(first.left, greaterThanOrEqualTo(StudioChrome.side - 8));
+    expect(first.top, greaterThanOrEqualTo(24));
+    // The strip stops short of the sub-agents square on the right.
+    final strip = tester.getRect(find.ancestor(
+      of: find.bySemanticsLabel('Character'),
+      matching: find.byType(SingleChildScrollView),
+    ).first);
+    final width = tester.getSize(find.byType(Scaffold)).width;
+    expect(strip.right, lessThanOrEqualTo(width - (StudioChrome.side - 8) + 0.5));
+    // The page scrolls its last row clear of the capsule.
+    final list = tester.widget<ListView>(find.byWidgetPredicate(
+        (w) => w is ListView && w.key == const PageStorageKey('draft-character')));
+    expect((list.padding as EdgeInsets).bottom, greaterThanOrEqualTo(120));
   });
 
   group('the avatar goes where its shape says', () {
@@ -139,31 +181,58 @@ void main() {
         final title = tester.getRect(find.text('Maren').first);
         final width = tester.getSize(find.byType(PageView)).width;
         if (side) {
-          expect(find.byKey(const ValueKey('draft-header-side')), findsWidgets);
-          // Top right, with the name on its left.
-          expect(picture.left, greaterThan(title.right));
-          expect(picture.right, closeTo(width - 16, 1));
-          expect(picture.width, closeTo(132, 1));
-          expect(picture.height, closeTo(132 / ratio, 1.5));
+          expect(find.byKey(const ValueKey('draft-header-side')), findsOneWidget);
+          // Top left, with the name on its right.
+          expect(picture.left, closeTo(24, 1));
+          expect(title.left, greaterThan(picture.right));
+          expect(title.top, lessThan(picture.bottom));
+          expect(picture.width, closeTo(120, 1));
+          expect(picture.height, closeTo(120 / ratio, 1.5));
         } else {
           expect(
-              find.byKey(const ValueKey('draft-header-landscape')), findsWidgets);
-          // The whole width, with the name underneath.
-          expect(picture.width, closeTo(width - 32, 1));
+              find.byKey(const ValueKey('draft-header-landscape')), findsOneWidget);
+          // The whole width inside the gutters, with the name underneath.
+          expect(picture.left, closeTo(24, 1));
+          expect(picture.width, closeTo(width - 48, 1));
           expect(title.top, greaterThan(picture.bottom));
         }
       });
     }
 
-    testWidgets('no picture: a monogram at the top right', (tester) async {
+    testWidgets('no picture: a monogram at the top left', (tester) async {
       final (state, controller) = await boot(seeded());
       await tester
           .pumpWidget(host(state, StudioDraftView(controller: controller)));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('draft-header-picture')), findsNothing);
+      expect(find.byKey(const ValueKey('draft-header-empty')), findsOneWidget);
       final name = tester.getRect(find.text('Maren').first);
-      expect(name.left, lessThan(40));
+      // Beside the 88-dp monogram in the left gutter.
+      expect(name.left, greaterThan(24 + 88));
     });
+  });
+
+  testWidgets('the picture and name head the Character tab only',
+      (tester) async {
+    const ref = 'local:portrait.png';
+    noteAvatarRatio(ref, 0.75);
+    final (state, controller) = await boot(seeded(avatar: ref));
+    await tester.pumpWidget(host(state, StudioDraftView(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('draft-header-picture')), findsOneWidget);
+    for (final label in [
+      'Images',
+      'Lorebook',
+      'Embeddings',
+      'Documents',
+      'Scenarios',
+    ]) {
+      await openTab(tester, label);
+      expect(find.byKey(const ValueKey('draft-header-picture')), findsNothing,
+          reason: label);
+      expect(find.byKey(const ValueKey('draft-header-side')), findsNothing,
+          reason: label);
+    }
   });
 
   testWidgets('a field folds open, and an edit is recorded as the user\'s',
@@ -172,14 +241,23 @@ void main() {
     await tester.pumpWidget(host(state, StudioDraftView(controller: controller)));
     await tester.pumpAndSettle();
 
+    await scrollCharacterTo(
+        tester, find.byKey(const ValueKey('draft-field-Personality')));
     Text body() => tester.widget<Text>(find.descendant(
           of: find.byKey(const ValueKey('draft-field-Personality')),
           matching: find.text(personality),
         ));
     expect(body().maxLines, 1);
+    // What only matters while reading waits until the field is opened.
+    final cost = find.descendant(
+      of: find.byKey(const ValueKey('draft-field-Personality')),
+      matching: find.textContaining('tokens'),
+    );
+    expect(cost, findsNothing);
     await tester.tap(find.byTooltip('Show personality'));
     await tester.pumpAndSettle();
     expect(body().maxLines, isNull);
+    expect(cost, findsOneWidget);
     expect(find.byTooltip('Fold personality'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Edit personality'));
@@ -267,7 +345,8 @@ void main() {
     expect(c.avatars, ['local:one.png']);
   });
 
-  testWidgets('scenarios: greetings are picked as chips', (tester) async {
+  testWidgets('scenarios: greetings are picked in a sheet, not a wall of chips',
+      (tester) async {
     final session = seeded();
     session.workspace.character.scenarios
         .add(CharacterScenario(id: 's', name: 'Storm', text: 'The causeway is out.'));
@@ -276,17 +355,24 @@ void main() {
     await tester.pumpAndSettle();
     await openTab(tester, 'Scenarios');
 
-    final chip = find.widgetWithText(FilterChip, 'Greeting 2');
-    await tester.scrollUntilVisible(chip, 200,
+    expect(find.byType(FilterChip), findsNothing);
+    final covers = find.byKey(const ValueKey('draft-scenario-covers-s'));
+    await tester.scrollUntilVisible(covers, 200,
         scrollable: find.descendant(
           of: find.byKey(const PageStorageKey('draft-scenarios')),
           matching: find.byType(Scrollable),
         ).first);
     expect(find.text('Storm'), findsOneWidget);
-    await tester.tap(chip);
+    expect(find.text('Covers every greeting'), findsOneWidget);
+    await tester.tap(covers);
+    await tester.pumpAndSettle();
+    expect(find.text('Greetings it covers'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('draft-scenario-greeting-1')));
     await tester.pumpAndSettle();
     expect(controller.session.workspace.character.scenarios.single.greetings, [1]);
-    expect(find.text('Covers the greetings picked below.'), findsOneWidget);
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    expect(find.text('Covers greeting 2'), findsOneWidget);
   });
 
   testWidgets('changes: newest first, rewound to a point after asking',
@@ -296,12 +382,12 @@ void main() {
         .pumpWidget(host(state, StudioChangesView(controller: controller)));
     await tester.pumpAndSettle();
 
-    expect(find.text('2 changes in the draft'), findsOneWidget);
     final newest = tester.getRect(find.text('Created lorebook "Saltmarsh"'));
     final oldest = tester.getRect(find.text('Set name, personality'));
     expect(newest.top, lessThan(oldest.top));
+    expect(find.text('Today'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Rewind').first);
+    await tester.tap(find.byTooltip('Rewind to before this').first);
     await tester.pumpAndSettle();
     expect(find.text('Rewind the draft?'), findsOneWidget);
     await tester.tap(find.descendant(
@@ -312,7 +398,61 @@ void main() {
 
     expect(controller.session.workspace.lorebooks, isEmpty);
     expect(controller.session.workspace.character.name, 'Maren');
-    expect(find.text('1 change in the draft'), findsOneWidget);
     expect(find.textContaining('undone'), findsWidgets);
+  });
+
+  group('the save card heads the changes', () {
+    testWidgets('never saved: asks, opens the apply dialog, and saves',
+        (tester) async {
+      final (state, controller) = await boot(seeded());
+      await tester
+          .pumpWidget(host(state, StudioChangesView(controller: controller)));
+      await tester.pumpAndSettle();
+
+      final card = tester.getRect(find.byKey(const ValueKey('studio-save-card')));
+      final firstChange =
+          tester.getRect(find.text('Created lorebook "Saltmarsh"'));
+      expect(card.bottom, lessThan(firstChange.top));
+      expect(find.text('Save this character?'), findsOneWidget);
+      expect(find.textContaining('Adds Maren'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('studio-save-button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Apply to library'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
+      await tester.pumpAndSettle();
+
+      expect(state.characters.single.name, 'Maren');
+      expect(state.lorebooks.single.name, 'Saltmarsh');
+      expect(find.text('Saved to your library'), findsOneWidget);
+      // Saved as it is: nothing to press.
+      expect(find.byKey(const ValueKey('studio-save-button')), findsNothing);
+    });
+
+    testWidgets('changed since saved: asks to save the latest', (tester) async {
+      final session = seeded()
+        ..appliedAt = DateTime(2026, 9, 1)
+        ..appliedSinceChange = false;
+      final (state, controller) = await boot(session);
+      await tester
+          .pumpWidget(host(state, StudioChangesView(controller: controller)));
+      await tester.pumpAndSettle();
+      expect(find.text('Save the latest changes?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('studio-save-button')), findsOneWidget);
+    });
+
+    testWidgets('a blank new draft asks nothing', (tester) async {
+      final session = StudioSession(
+        id: 'draft-ui-blank-${serial++}',
+        title: '',
+        workspace: StudioWorkspace(character: Character(id: 'z', name: '')),
+      );
+      final (state, controller) = await boot(session);
+      await tester
+          .pumpWidget(host(state, StudioChangesView(controller: controller)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('studio-save-card')), findsNothing);
+      expect(find.textContaining('Nothing has changed yet'), findsOneWidget);
+    });
   });
 }

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../models/studio.dart';
 import '../../../services/studio/studio_controller.dart';
-import 'draft_header.dart';
 import 'draft_widgets.dart';
 
 /// The draft's background documents — the texts too long or loose for a
@@ -24,11 +23,13 @@ class DraftDocumentsTab extends StatelessWidget {
     final text = await editDraftText(context, label: name.trim(), value: '');
     if (text == null || text.trim().isEmpty) return;
     controller.editByHand('Wrote document "${name.trim()}" by hand', (ws) {
-      ws.documents.add(StudioDocument(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        name: name.trim(),
-        text: text.trim(),
-      ));
+      ws.documents.add(
+        StudioDocument(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          name: name.trim(),
+          text: text.trim(),
+        ),
+      );
     });
   }
 
@@ -63,11 +64,15 @@ class DraftDocumentsTab extends StatelessWidget {
         tall: false,
       );
       if (name == null || name.trim().isEmpty) return;
-      controller.editByHand('Renamed document "${doc.name}" by hand',
-          (ws) => ws.document(doc.id)?.name = name.trim());
+      controller.editByHand(
+        'Renamed document "${doc.name}" by hand',
+        (ws) => ws.document(doc.id)?.name = name.trim(),
+      );
     } else if (action == 'remove') {
-      controller.editByHand('Removed document "${doc.name}"',
-          (ws) => ws.documents.removeWhere((d) => d.id == doc.id));
+      controller.editByHand(
+        'Removed document "${doc.name}"',
+        (ws) => ws.documents.removeWhere((d) => d.id == doc.id),
+      );
     }
   }
 
@@ -78,46 +83,50 @@ class DraftDocumentsTab extends StatelessWidget {
     final locked = controller.running;
     return ListView(
       key: const PageStorageKey('draft-documents'),
-      padding: EdgeInsets.only(bottom: 24 + MediaQuery.paddingOf(context).bottom),
+      padding: draftListPadding(context),
       children: [
-        DraftHeader(character: ws.character),
         if (locked) const DraftLockedNote(),
-        DraftSectionLabel('Documents · ${ws.documents.length}'),
+        DraftSectionLabel('Documents', count: ws.documents.length, first: true),
         if (ws.documents.isEmpty)
           const DraftEmpty(
             icon: Icons.description_outlined,
-            text: 'No documents yet. They hold background — a history, a '
+            text:
+                'No documents yet. They hold background — a history, a '
                 'setting guide — recalled by meaning when embeddings are on.',
           )
         else
-          DraftCard(children: [
-            for (final doc in ws.documents)
-              DraftFieldRow(
-                key: ValueKey('draft-doc-${doc.id}'),
-                label: doc.name.trim().isEmpty ? 'Untitled document' : doc.name,
-                value: doc.text,
-                tokens: state.estimateTokens(doc.text),
-                onEdit: locked
-                    ? null
-                    : () async {
-                        final next = await editDraftText(
-                          context,
-                          label: doc.name,
-                          value: doc.text,
-                        );
-                        if (next == null) return;
-                        controller.editByHand(
-                          'Edited document "${doc.name}" by hand',
-                          (ws) => ws.document(doc.id)?.text = next,
-                        );
-                      },
-                trailing: IconButton(
-                  tooltip: 'More for ${doc.name}',
-                  onPressed: locked ? null : () => _menu(context, doc),
-                  icon: const Icon(Icons.more_vert, size: 20),
+          DraftCard(
+            children: [
+              for (final doc in ws.documents)
+                DraftFieldRow(
+                  key: ValueKey('draft-doc-${doc.id}'),
+                  label: doc.name.trim().isEmpty
+                      ? 'Untitled document'
+                      : doc.name,
+                  value: doc.text,
+                  tokens: state.estimateTokens(doc.text),
+                  onEdit: locked
+                      ? null
+                      : () async {
+                          final next = await editDraftText(
+                            context,
+                            label: doc.name,
+                            value: doc.text,
+                          );
+                          if (next == null) return;
+                          controller.editByHand(
+                            'Edited document "${doc.name}" by hand',
+                            (ws) => ws.document(doc.id)?.text = next,
+                          );
+                        },
+                  trailing: IconButton(
+                    tooltip: 'More for ${doc.name}',
+                    onPressed: locked ? null : () => _menu(context, doc),
+                    icon: const Icon(Icons.more_vert, size: 20),
+                  ),
                 ),
-              ),
-          ]),
+            ],
+          ),
         DraftAddButton(
           label: 'New document',
           onPressed: locked ? null : () => _add(context),
