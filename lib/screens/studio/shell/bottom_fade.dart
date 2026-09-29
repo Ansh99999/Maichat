@@ -9,8 +9,8 @@ import 'package:flutter/material.dart';
 /// Two layers, both painted once per frame and no more. A blur over the lower
 /// part of the band only — the part the capsule and composer cover — and over
 /// the whole band a gradient from clear to the page colour. The gradient starts
-/// [fade] above the blur, so the blur's top edge is already half hidden by the
-/// time it begins and there is no seam to see.
+/// [fade] above the blur and is already well on its way by the blur's top
+/// edge, so that edge is veiled rather than drawn as a seam.
 ///
 /// The blur is the one per-frame cost here, and it is kept small on purpose:
 /// it covers the bottom band alone, never the page, and it sits on its own
@@ -44,7 +44,7 @@ class StudioBottomFade extends StatelessWidget {
                 Positioned(
                   left: 0,
                   right: 0,
-                  top: fade * 0.6,
+                  top: fade,
                   bottom: 0,
                   child: ClipRect(
                     child: BackdropFilter(
@@ -60,8 +60,8 @@ class StudioBottomFade extends StatelessWidget {
                       end: Alignment.bottomCenter,
                       colors: [
                         surface.withValues(alpha: 0),
-                        surface.withValues(alpha: 0.55),
-                        surface.withValues(alpha: 0.82),
+                        surface.withValues(alpha: 0.62),
+                        surface.withValues(alpha: 0.86),
                       ],
                       stops: [0, start, 1],
                     ),

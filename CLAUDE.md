@@ -460,17 +460,28 @@ bar or the overflow menu.
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
     (the draft through the real `_assemble` as per-chat overrides on a
     throwaway, never-stored `Conversation`).
-  - UI: `screens/studio/` — `studio_screen.dart` is a chat-first shell
-    (hamburger drawer: Home / Settings / Sessions; the composer copies both chat
-    styles, legacy and expressive, without persona — `chat_screen.dart` is
-    untouched; ⋮ → Add image / More actions → Show other areas, which raises the
-    Interface | Draft | Changes capsule). The top-right sub-agent button opens
+  - UI: `screens/studio/` — `studio_screen.dart` is a chat-first shell with
+    **no app bar on any page**: floating soft squares (`shell/floating_button.dart`)
+    for the menu (drawer: session name + spend, Home / Settings / Sessions) and
+    sub-agents; everything at the bottom floats over the page — notice, the
+    actions capsule the composer's ⋯ raises (Image → Gallery/Device, the
+    other-areas symbol), the Interface | Draft | Changes capsule (persisted as
+    `StudioConfig.areasCapsule`; only that symbol turns it off), and the composer
+    (conversation only). Pages lay out under it and keep clear through
+    `shell/studio_chrome.dart` (`StudioChrome.of`: top/side/bottom insets); the
+    dock's height is taken only once it has held for a frame, so a spring does
+    not relayout the page every frame. `shell/bottom_fade.dart` is the frosted
+    fade behind the dock — its blur is the one per-frame cost, kept to that
+    band. The composer copies both chat styles without persona —
+    `chat_screen.dart` is untouched. Save/apply is the card at the top of
+    Changes (`shell/studio_apply.dart`). The top-right sub-agent button opens
     `shell/liquid_panel.dart` (a spring-driven metaball clip; content laid out
     once, only the clip/paint animate) listing Main + sub-agents with ticking
     time • tokens; a row teleports the chat into that agent's transcript.
     `studio_draft_view.dart` + `draft/` is the Draft page (Chrome-style tabs:
     Character, Images, Lorebook, Embeddings, Documents, Scenarios; a
-    ratio-aware header — square/portrait top-right, landscape full width). The
+    ratio-aware header on the Character tab only — square/portrait top-left,
+    landscape full width). The
     Lorebook tab reuses `LorebookEditScreen` through its optional `onSave`
     (draft mode — never writes the library). Every hand edit goes through
     `controller.editByHand`.

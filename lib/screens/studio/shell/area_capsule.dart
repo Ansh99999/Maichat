@@ -72,18 +72,11 @@ class _AreaCapsuleState extends State<AreaCapsule>
       key: const Key('studio-area-capsule'),
       height: 52,
       padding: const EdgeInsets.all(4),
-      // It floats over the page, so it carries its own lift — the page's text
-      // runs on behind it and fades under the frost.
+      // It floats over the page on the frost behind it; a shadow would be cut
+      // off by the reveal's clip, and the tonal fill is lift enough.
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 12,
-            offset: const Offset(0, 3),
-          ),
-        ],
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {

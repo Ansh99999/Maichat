@@ -301,6 +301,32 @@ class _StudioScreenState extends State<StudioScreen> {
                   ),
                 ),
               ),
+              // What scrolls up under the status bar fades out there, rather
+              // than running under the clock. A plain gradient: no blur.
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: view.top + 14,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          scheme.surface.withValues(alpha: 0.92),
+                          scheme.surface.withValues(alpha: 0),
+                        ],
+                        stops: [
+                          view.top / (view.top + 14),
+                          1,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               Positioned(
                 left: 0,
                 right: 0,
