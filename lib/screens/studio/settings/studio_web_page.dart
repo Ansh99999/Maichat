@@ -106,8 +106,13 @@ class _StudioWebPageState extends State<StudioWebPage> {
                                     value: p,
                                     title: Text(p.label),
                                     subtitle: Text(switch (p) {
+                                      StudioSearchProvider.duckduckgo =>
+                                        'The whole web, no key needed. '
+                                            'Unofficial, so now and then it '
+                                            'falls back to Wikipedia.',
                                       StudioSearchProvider.wiki =>
-                                        'No key needed.',
+                                        'Encyclopedia and fandom wikis only. '
+                                            'No key needed.',
                                       StudioSearchProvider.brave =>
                                         'The whole web, with your API key.',
                                       StudioSearchProvider.searxng =>

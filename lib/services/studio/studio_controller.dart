@@ -10,6 +10,7 @@ import '../../models/gallery_image.dart';
 import '../../models/lorebook.dart';
 import '../../models/message_image.dart';
 import '../../models/studio.dart';
+import '../../models/usage.dart';
 import '../../state/app_state.dart';
 import '../agent_client.dart';
 import '../chat_client.dart';
@@ -20,6 +21,7 @@ import 'image_tools.dart';
 import 'studio_images.dart';
 import 'custom_agents.dart';
 import 'runtime_tools.dart';
+import 'studio_context.dart';
 import 'studio_knowledge.dart';
 import 'studio_memory.dart';
 import 'studio_store.dart';
@@ -88,7 +90,13 @@ class StudioController extends ChangeNotifier {
     required this.state,
     required this.store,
     required this.session,
-  });
+  }) {
+    // Read the memory now rather than at the first run, so the context
+    // inspector shows the instructions the first run will really carry.
+    unawaited(_loadMemory().then((_) {
+      if (!_disposed) notifyListeners();
+    }).catchError((Object _) {}));
+  }
 
   final AppState state;
   final StudioStore store;
@@ -304,28 +312,33 @@ class StudioController extends ChangeNotifier {
   /// Everything waiting for the main agent, as turns: the hand edits since it
   /// last looked, the user's queued messages, and background reports.
   List<AgentMessage> _takeLeadInbox({bool always = false}) {
-    final out = <AgentMessage>[];
-    if (_handEdits.isNotEmpty &&
-        (always || session.queued.isNotEmpty || _notes.isNotEmpty)) {
-      out.add(AgentMessage.user(
-        '[Studio note] The user edited the draft by hand: '
-        '${_handEdits.join('; ')}. Call get_draft before changing those parts.',
-      ));
-      _handEdits.clear();
-    }
-    for (final note in _notes) {
-      out.add(note.message);
-    }
+    final out = _leadInbox(always: always);
+    if (_handEditsDue(always)) _handEdits.clear();
     _notes.clear();
-    for (final q in session.queued) {
-      out.add(AgentMessage.user(q.text, images: q.images));
-    }
     if (session.queued.isNotEmpty) {
       session.queued.clear();
       notifyListeners();
     }
     return out;
   }
+
+  bool _handEditsDue(bool always) =>
+      _handEdits.isNotEmpty &&
+      (always || session.queued.isNotEmpty || _notes.isNotEmpty);
+
+  /// What [_takeLeadInbox] would hand the main agent, without taking it — the
+  /// same turns, for the context inspector.
+  List<AgentMessage> _leadInbox({bool always = false}) => [
+        if (_handEditsDue(always))
+          AgentMessage.user(
+            '[Studio note] The user edited the draft by hand: '
+            '${_handEdits.join('; ')}. Call get_draft before changing those '
+            'parts.',
+          ),
+        for (final note in _notes) note.message,
+        for (final q in session.queued)
+          AgentMessage.user(q.text, images: q.images),
+      ];
 
   bool _leadInboxWaiting() => session.queued.isNotEmpty || _notes.isNotEmpty;
 
@@ -336,28 +349,124 @@ class StudioController extends ChangeNotifier {
     // same one), so this is cheap on every run.
     final memory = await StudioMemory.forDirectory(store.directory);
     StudioKnowledge.configure(config: () => state.studioConfig, memory: memory);
-    return memory;
+    return _memory = memory;
+  }
+
+  StudioMemory? _memory;
+
+  // --- what each agent is given ------------------------------------------------
+
+  /// The instructions, tools and model an agent runs with — built here, once,
+  /// for the run and for the context inspector alike, so the inspector can
+  /// never show a request the run would not send.
+  _AgentSetup _setupFor(String agentId) {
+    final config = state.studioConfig;
+    final memory = config.memoryEnabled
+        ? (_memory ?? StudioKnowledge.shared.memory)
+        : null;
+    final runtimeNames = kRuntimeToolNames;
+    if (agentId == kMainAgent) {
+      return _AgentSetup(
+        promptParts: studioSystemPromptParts(config, memory),
+        tools: [
+          for (final t in studioToolsForType(
+            'studio',
+            config,
+            subAgents: config.subAgents,
+          ))
+            if (config.subAgents || !runtimeNames.contains(t.name)) t,
+        ],
+      );
+    }
+    final role = subagent(agentId)?.role ?? 'general';
+    return _AgentSetup(
+      promptParts: studioAgentSystemPromptParts(role, config, memory),
+      tools: [
+        // One level deep: a sub-agent neither spawns nor manages others.
+        for (final t in studioToolsForType(role, config))
+          if (!runtimeNames.contains(t.name)) t,
+      ],
+      model: studioAgentModel(role, config),
+    );
+  }
+
+  /// The setups of the runs in progress, by agent. A run's instructions are
+  /// fixed when it starts, so while it works the inspector reads these rather
+  /// than building new ones.
+  final Map<String, _AgentSetup> _runSetups = <String, _AgentSetup>{};
+
+  /// Counts tokens for the context inspector, remembering each turn.
+  late final StudioContextCounter _counter =
+      StudioContextCounter(state.estimateTokens);
+
+  /// Exactly the next request the agent named [agentId] ([kMainAgent] or a
+  /// sub-agent's id) would send: its instructions and tools, its conversation
+  /// with what is waiting to be read taken in, the summary in place of what it
+  /// covers, and the assembled body. Null for an agent that does not exist.
+  StudioAgentRequest? nextRequestFor(String agentId) {
+    final sub = agentId == kMainAgent ? null : subagent(agentId);
+    if (agentId != kMainAgent && sub == null) return null;
+    final setup = _runSetups[agentId] ?? _setupFor(agentId);
+    final inbox = sub == null
+        ? _leadInbox()
+        : List<AgentMessage>.of(_subInbox[sub.id] ?? const <AgentMessage>[]);
+    final transcript = [...(sub?.transcript ?? session.transcript), ...inbox];
+    final compactions = sub?.compactions ?? session.compactions;
+    final latest = compactions.isEmpty ? null : compactions.last;
+    final messages =
+        AgentRunner.buildRequest(setup.systemPrompt, transcript, latest);
+    return StudioAgentRequest(
+      agentId: agentId,
+      promptParts: setup.promptParts,
+      systemPrompt: setup.systemPrompt,
+      tools: setup.tools,
+      transcript: transcript,
+      waiting: inbox.length,
+      latest: latest,
+      messages: messages,
+      budget: _compactorFor(compactions).budget,
+      wire: state.studioWireRequest(
+        messages: messages,
+        tools: [for (final t in setup.tools) t.spec],
+        model: setup.model,
+      ),
+      lastRequest: sub?.lastRequest ?? session.lastRequest,
+    );
+  }
+
+  /// Where the tokens of [agentId]'s next request go.
+  StudioContextReport? contextFor(String agentId) {
+    final request = nextRequestFor(agentId);
+    return request == null ? null : buildContextReport(request, _counter);
+  }
+
+  /// The host's own count of a request, kept beside the Studio's estimate of
+  /// it. A summarising turn is not the agent's context and is not kept.
+  StudioRequestSize? _measured(
+    TokenUsage usage,
+    List<AgentMessage> messages,
+    List<ToolSpec> tools,
+  ) {
+    if (usage.estimated || usage.inputTokens <= 0) return null;
+    if (messages.isNotEmpty && messages.first.text == kCompactionPrompt) {
+      return null;
+    }
+    return StudioRequestSize(
+      reported: usage.inputTokens,
+      estimated: _counter.request(messages, tools),
+      at: DateTime.now(),
+    );
   }
 
   Future<void> _runLead() async {
     final config = state.studioConfig;
-    final memory = await _loadMemory();
+    await _loadMemory();
     final services = _AppStudioServices(this);
-    final runtimeNames = kRuntimeToolNames;
+    final setup = _runSetups[kMainAgent] = _setupFor(kMainAgent);
     final lead = AgentRunner(
       name: 'studio',
-      systemPrompt: studioSystemPrompt(
-        config,
-        config.memoryEnabled ? memory : null,
-      ),
-      tools: [
-        for (final t in studioToolsForType(
-          'studio',
-          config,
-          subAgents: config.subAgents,
-        ))
-          if (config.subAgents || !runtimeNames.contains(t.name)) t,
-      ],
+      systemPrompt: setup.systemPrompt,
+      tools: setup.tools,
       context: StudioToolContext(session: session, services: services),
       turn: _turn,
       maxSteps: config.maxSteps,
@@ -389,6 +498,7 @@ class StudioController extends ChangeNotifier {
       noticeIsError = true;
     } finally {
       _lead = null;
+      _runSetups.remove(kMainAgent);
       // A foreground sub-agent ends with the turn that started it; one still
       // marked running here was cut off by a stop. Background ones go on.
       for (final a in session.subagents) {
@@ -443,7 +553,11 @@ class StudioController extends ChangeNotifier {
         messages: messages,
         tools: tools,
         toolsOff: toolsOff,
-        onSpend: (usage, cost) => session.addUsage(usage, cost),
+        onSpend: (usage, cost) {
+          session.addUsage(usage, cost);
+          session.lastRequest =
+              _measured(usage, messages, tools) ?? session.lastRequest;
+        },
       );
 
   AgentObserver get _observer => AgentObserver(
@@ -714,19 +828,11 @@ class StudioController extends ChangeNotifier {
   }) async {
     final services = _AppStudioServices(this)..lead = parent ?? _lead;
     final live = liveFor(sub.id)..clearWords();
-    final runtimeNames = kRuntimeToolNames;
+    final setup = _runSetups[sub.id] = _setupFor(sub.id);
     final child = AgentRunner(
       name: sub.id,
-      systemPrompt: studioAgentSystemPrompt(
-        sub.role,
-        state.studioConfig,
-        StudioKnowledge.shared.activeMemory,
-      ),
-      tools: [
-        // One level deep: a sub-agent neither spawns nor manages others.
-        for (final t in studioToolsForType(sub.role, state.studioConfig))
-          if (!runtimeNames.contains(t.name)) t,
-      ],
+      systemPrompt: setup.systemPrompt,
+      tools: setup.tools,
       context: StudioToolContext(
         session: session,
         services: services,
@@ -739,11 +845,12 @@ class StudioController extends ChangeNotifier {
             messages: messages,
             tools: tools,
             toolsOff: toolsOff,
-            model: studioAgentModel(sub.role, state.studioConfig),
+            model: setup.model,
             onSpend: (usage, cost) {
           sub
             ..inputTokens += usage.inputTokens
-            ..outputTokens += usage.outputTokens;
+            ..outputTokens += usage.outputTokens
+            ..lastRequest = _measured(usage, messages, tools) ?? sub.lastRequest;
           session.addUsage(usage, cost);
           _paintSoon();
         },
@@ -813,6 +920,7 @@ class StudioController extends ChangeNotifier {
       report = 'It failed: $e';
     } finally {
       _subRunners.remove(sub.id);
+      _runSetups.remove(sub.id);
     }
     // A message that reached it too late to be read is not lost silently.
     final unread = _subInbox.remove(sub.id);
@@ -1365,4 +1473,16 @@ String changeAuthor(StudioOp op) {
   if (op.tool == 'manual') return 'You';
   final at = op.tool.indexOf(' · ');
   return at == -1 ? 'Studio' : op.tool.substring(0, at).replaceAll('_', ' ');
+}
+
+/// What an agent runs with: its instructions (in parts, for the inspector),
+/// its tools, and a model of its own when its type names one.
+class _AgentSetup {
+  _AgentSetup({required this.promptParts, required this.tools, this.model})
+      : systemPrompt = joinPromptParts(promptParts);
+
+  final List<(StudioPromptPart, String)> promptParts;
+  final String systemPrompt;
+  final List<StudioTool> tools;
+  final String? model;
 }

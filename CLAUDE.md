@@ -488,6 +488,20 @@ bar or the overflow menu.
     instructions). The step-limit summary turn keeps tools declared and sends
     `tool_choice: none` (Gemini `mode: NONE`) — `AgentParams.toolsOff` — since
     a history with tool calls and no declared tools is not accepted everywhere.
+  - **Context inspector:** the composer's ring (and a sub-agent's viewing
+    bar, and the drawer's Context) opens `shell/context_sheet.dart` — where
+    the next request's tokens go, per category, down to single turns, plus the
+    raw request (keys redacted, picture data elided). It is built from the
+    **real request**: `StudioController.nextRequestFor` uses the same
+    `_setupFor` (instructions in parts via `studioSystemPromptParts`, tools,
+    model), `AgentRunner.buildRequest` and `AppState.studioWireRequest` the run
+    sends through, and `test/studio_context_test.dart` checks its body against
+    the bytes a loopback model receives — lead, sub-agent, after compaction.
+    `StudioContextCounter` caches token counts per turn (AgentMessage is
+    immutable) so a live view never re-tokenizes a long session; views
+    refresh at most every 500 ms. The bar colours by six groups
+    (`StudioContextGroup`), chosen with the dataviz validator to stay apart
+    for colour-blind readers in every combination, light and dark.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
