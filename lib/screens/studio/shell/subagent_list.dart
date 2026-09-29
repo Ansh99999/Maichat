@@ -58,7 +58,12 @@ class SubagentList extends StatelessWidget {
                 for (final a in agents)
                   _Row(
                     key: Key('studio-agent-row-${a.id}'),
-                    icon: Icons.smart_toy_outlined,
+                    // A background agent works while Main carries on.
+                    icon: a.background
+                        ? Icons.alt_route_rounded
+                        : Icons.smart_toy_outlined,
+                    queued: controller.queuedForAgent(a.id).length,
+                    interrupted: a.interrupted && !a.running,
                     title: a.description.trim().isEmpty
                         ? a.label
                         : '${a.label} — ${a.description.trim()}',
@@ -87,7 +92,15 @@ class _Row extends StatelessWidget {
     required this.onTap,
     this.detail,
     this.showStatus = true,
+    this.queued = 0,
+    this.interrupted = false,
   });
+
+  /// Messages waiting for it (a count on its icon).
+  final int queued;
+
+  /// Cut off by the app closing.
+  final bool interrupted;
 
   final IconData icon;
   final String title;
@@ -113,8 +126,9 @@ class _Row extends StatelessWidget {
           Icon(Icons.check_circle, size: 16, color: scheme.primary),
         StudioAgentStatus.failed =>
           Icon(Icons.error, size: 16, color: scheme.error),
-        StudioAgentStatus.cancelled =>
-          Icon(Icons.stop_circle_outlined, size: 16, color: scheme.outline),
+        StudioAgentStatus.cancelled => interrupted
+            ? Icon(Icons.pause_circle_outline, size: 16, color: scheme.tertiary)
+            : Icon(Icons.stop_circle_outlined, size: 16, color: scheme.outline),
       };
     }
     return Padding(
@@ -131,7 +145,11 @@ class _Row extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
-                  Icon(icon, size: 20, color: fg),
+                  Badge(
+                    isLabelVisible: queued > 0,
+                    label: Text('$queued'),
+                    child: Icon(icon, size: 20, color: fg),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(

@@ -227,7 +227,7 @@ class StudioController extends ChangeNotifier {
       session.interrupted = false;
     }
     // Anything queued before a stop goes first, in the order it was sent.
-    session.transcript.addAll(_takeLeadInbox());
+    session.transcript.addAll(_takeLeadInbox(always: true));
     session.transcript.add(AgentMessage.user(message, images: images));
     if (session.title.trim().isEmpty && session.workspace.character.name.isEmpty) {
       session.title = _titleFrom(message);
@@ -247,7 +247,7 @@ class StudioController extends ChangeNotifier {
     session
       ..interrupted = false
       ..transcript.add(AgentMessage.user(_interruptionNote()));
-    session.transcript.addAll(_takeLeadInbox());
+    session.transcript.addAll(_takeLeadInbox(always: true));
     session.updatedAt = DateTime.now();
     _save();
     await _runLead();
@@ -298,10 +298,10 @@ class StudioController extends ChangeNotifier {
 
   /// Everything waiting for the main agent, as turns: the hand edits since it
   /// last looked, the user's queued messages, and background reports.
-  List<AgentMessage> _takeLeadInbox() {
+  List<AgentMessage> _takeLeadInbox({bool always = false}) {
     final out = <AgentMessage>[];
     if (_handEdits.isNotEmpty &&
-        (session.queued.isNotEmpty || _notes.isNotEmpty)) {
+        (always || session.queued.isNotEmpty || _notes.isNotEmpty)) {
       out.add(AgentMessage.user(
         '[Studio note] The user edited the draft by hand: '
         '${_handEdits.join('; ')}. Call get_draft before changing those parts.',

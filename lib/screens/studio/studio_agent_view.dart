@@ -86,15 +86,35 @@ class _StudioAgentViewState extends State<StudioAgentView>
         if (m.role == AgentRole.tool && m.toolCallId != null) m.toolCallId!: m,
     };
     final running = subagent?.running ?? _c.running;
+    final compactions = {
+      for (final c in (subagent?.compactions ?? _c.session.compactions))
+        c.upTo: c,
+    };
     final out = <Widget>[];
     var first = true;
-    for (final m in transcript) {
+    for (var i = 0; i < transcript.length; i++) {
+      final m = transcript[i];
+      // Where the agent stopped seeing its older turns verbatim.
+      final compaction = compactions[i];
+      if (compaction != null) out.add(_CompactionDivider(compaction: compaction));
       switch (m.role) {
         case AgentRole.user:
+          final background = _backgroundReport.firstMatch(m.text);
           if (subagent != null && first) {
             out.add(_TaskBrief(subagent: subagent));
+          } else if (background != null) {
+            out.add(_BackgroundReport(
+              label: background.group(1)!,
+              taskId: background.group(2)!,
+              onOpen: widget.onOpenAgent,
+            ));
           } else if (m.text.startsWith('[Studio note]')) {
             out.add(_Note(text: m.text.substring('[Studio note]'.length).trim()));
+          } else if (m.text.startsWith(_fromMain)) {
+            out.add(_Note(
+              text: 'From Main: ${m.text.substring(_fromMain.length).trim()}',
+              icon: Icons.forward_to_inbox_outlined,
+            ));
           } else {
             out.add(_UserBubble(message: m));
           }
@@ -134,6 +154,25 @@ class _StudioAgentViewState extends State<StudioAgentView>
     }
     if (subagent != null && !subagent.running) {
       out.add(_Outcome(subagent: subagent));
+    }
+    // Messages that have not been read yet, below what the agent is doing.
+    if (subagent == null) {
+      for (final q in _c.queued) {
+        out.add(_QueuedBubble(
+          key: ValueKey<String>('queued-${q.id}'),
+          text: q.text,
+          pictures: q.images.length,
+          onCancel: () => _c.cancelQueued(q.id),
+        ));
+      }
+    } else {
+      for (final m in _c.queuedForAgent(subagent.id)) {
+        out.add(_Note(
+          text: 'Waiting for its next step — from Main: '
+              '${m.text.replaceFirst(_fromMain, '').trim()}',
+          icon: Icons.schedule_send_outlined,
+        ));
+      }
     }
     final todos = _c.todosFor(id);
     if (todos.isNotEmpty) out.add(_Plan(todos: todos));
@@ -373,10 +412,20 @@ class _Plan extends StatelessWidget {
   }
 }
 
+/// The note a background sub-agent's report arrives as (see the controller's
+/// `_deliver`): its label and task id.
+final RegExp _backgroundReport = RegExp(
+  r'^\[Studio note\] (Subagent \d+) \(task_id "([^"]+)"\) finished in the background',
+);
+
+/// How a `send_message` from the main agent reads in a sub-agent's chat.
+const String _fromMain = '[Message from the main agent]';
+
 class _Note extends StatelessWidget {
-  const _Note({required this.text});
+  const _Note({required this.text, this.icon = Icons.history});
 
   final String text;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
@@ -385,7 +434,7 @@ class _Note extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
       child: Row(
         children: [
-          Icon(Icons.history, size: 16, color: theme.colorScheme.outline),
+          Icon(icon, size: 16, color: theme.colorScheme.outline),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -702,6 +751,171 @@ class _Intro extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// A message sent while the agent was working, waiting for its next step:
+/// the user's own bubble, quieter, with a way to take it back.
+class _QueuedBubble extends StatelessWidget {
+  const _QueuedBubble({
+    super.key,
+    required this.text,
+    required this.pictures,
+    required this.onCancel,
+  });
+
+  final String text;
+  final int pictures;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(48, 8, 0, 8),
+        padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.schedule_send_outlined,
+                          size: 14, color: scheme.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Queued — it reads this next',
+                        style: theme.textTheme.labelMedium
+                            ?.copyWith(color: scheme.primary),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    text.isEmpty
+                        ? '$pictures picture${pictures == 1 ? '' : 's'}'
+                        : text,
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              key: const Key('studio-queued-cancel'),
+              tooltip: 'Take back',
+              visualDensity: VisualDensity.compact,
+              onPressed: onCancel,
+              icon: const Icon(Icons.close, size: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Where the agent's older turns were summarised: they are still here to read,
+/// but the agent now sees them as its own summary.
+class _CompactionDivider extends StatelessWidget {
+  const _CompactionDivider({required this.compaction});
+
+  final StudioCompaction compaction;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Padding(
+      key: const Key('studio-compaction-divider'),
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+      child: Row(
+        children: [
+          Expanded(child: Divider(color: scheme.outlineVariant)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.compress_rounded, size: 16, color: scheme.outline),
+                const SizedBox(width: 6),
+                Text(
+                  'Earlier conversation summarised',
+                  style: theme.textTheme.labelMedium
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: Divider(color: scheme.outlineVariant)),
+        ],
+      ),
+    );
+  }
+}
+
+/// A background sub-agent's report arriving: one quiet line that opens its
+/// chat, rather than the whole report pasted into this one.
+class _BackgroundReport extends StatelessWidget {
+  const _BackgroundReport({
+    required this.label,
+    required this.taskId,
+    required this.onOpen,
+  });
+
+  final String label;
+  final String taskId;
+  final ValueChanged<String>? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      child: Material(
+        color: scheme.secondaryContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          key: Key('studio-background-report-$taskId'),
+          borderRadius: BorderRadius.circular(20),
+          onTap: onOpen == null ? null : () => onOpen!(taskId),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+            child: Row(
+              children: [
+                Icon(Icons.mark_email_read_outlined,
+                    size: 18, color: scheme.onSecondaryContainer),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '$label finished in the background',
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: scheme.onSecondaryContainer),
+                  ),
+                ),
+                if (onOpen != null)
+                  Icon(Icons.chevron_right, color: scheme.onSecondaryContainer),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

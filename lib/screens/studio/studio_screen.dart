@@ -451,6 +451,16 @@ class _StudioScreenState extends State<StudioScreen> {
                       ? const SizedBox(width: double.infinity)
                       : _Notice(controller: _controller),
                 ),
+                // A run the app closing cut off waits for a tap: resuming
+                // spends, so it never starts on its own.
+                ListenableBuilder(
+                  listenable: _controller,
+                  builder: (context, _) => _Reveal(
+                    show: _controller.interrupted && !_controller.running,
+                    alignment: Alignment.bottomCenter,
+                    child: _InterruptedNotice(controller: _controller),
+                  ),
+                ),
                 // Out of the composer's ⋯, from its right-hand end.
                 _Reveal(
                   show: showActions,
@@ -729,6 +739,70 @@ class _Notice extends StatelessWidget {
             tooltip: 'Dismiss',
             icon: const Icon(Icons.close, size: 18),
             onPressed: controller.dismissNotice,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What a session the app closing cut off shows over the composer: what
+/// happened, and the one tap that carries on.
+class _InterruptedNotice extends StatelessWidget {
+  const _InterruptedNotice({required this.controller});
+
+  final StudioController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final cut = controller.session.interruptedSubagents.length;
+    return Container(
+      key: const Key('studio-interrupted'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(28),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'The Studio was interrupted',
+            style: theme.textTheme.titleMedium
+                ?.copyWith(color: scheme.onTertiaryContainer),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            cut == 0
+                ? 'The app closed while it was working. Everything up to then '
+                    'is saved.'
+                : 'The app closed while it was working, with $cut '
+                    'sub-agent${cut == 1 ? '' : 's'}. Everything up to then is '
+                    'saved.',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: scheme.onTertiaryContainer),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                key: const Key('studio-interrupted-dismiss'),
+                onPressed: controller.dismissInterrupted,
+                child: const Text('Not now'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                key: const Key('studio-resume'),
+                onPressed: controller.resume,
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Resume'),
+              ),
+            ],
           ),
         ],
       ),
