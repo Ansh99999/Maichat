@@ -102,6 +102,11 @@ unaffected. Two related traps in the same tests: a progress spinner means
 `pumpAndSettle` never settles, and a drag started at the left edge of the chat is
 eaten by the drawer's edge-swipe region.
 
+A third, found writing the Studio's web tools: **any `testWidgets` in a test
+file makes every real HTTP request in that file answer 400** (the widget-test
+binding installs its own `HttpOverrides`), so a loopback-server test of a
+network client must live in a file of plain `test()`s.
+
 Two more traps found writing the response-hint and delete tests. **Never
 `await state.send(...)` inside a `testWidgets` body before pumping** — a reply's
 paint-cadence timer only fires when the fake clock is advanced by a `pump`, so the
@@ -455,6 +460,34 @@ bar or the overflow menu.
     backups), `studio_controller.dart` (runs a session, live state per agent via
     `liveFor(kMainAgent | subagentId)`, kept alive by `StudioHub` while working;
     apply = upsert by id).
+  - Long-session machinery (the Claude Code / OpenCode / Codex parts):
+    **compaction** (`AgentCompactor` in `agent_runner.dart`: past ~75% of
+    `StudioConfig.contextBudget` the older part is summarised into a
+    `StudioCompaction` and the wire sends the summary in its place — never
+    splitting a call from its result; the transcript stays whole for display);
+    **steering** (a message sent while running is a `StudioQueuedMessage`,
+    taken at the next step boundary); **process-death recovery** (a session
+    saved `active` loads `interrupted`, `repairUnansweredCalls` answers every
+    orphaned call, the dock offers Resume — nothing keeps a run alive in the
+    background, which would need a native foreground service);
+    **background sub-agents** (`task` with `background: true`, plus
+    `send_message` / `wait_agents` / `list_agents` in `runtime_tools.dart`,
+    never given to sub-agents); **stale-edit protection**
+    (`models/studio_revisions.dart`: every field, greeting, scenario, entry and
+    document has a revision, each agent's reads are tracked in
+    `StudioSession.seen`, and a write over something changed since that agent
+    read it fails with a fixable error — hand edits and rewinds count);
+    **web research** (`studio_web.dart`: `web_search` over Wikipedia/Fandom
+    with no key or a configured Brave/SearXNG, `web_fetch` refusing private
+    addresses and middle-truncating); **custom agent types**
+    (`models/studio_agent_type.dart` + `custom_agents.dart`:
+    `studioToolsForType`, `studioSystemPrompt`, `studioAgentSystemPrompt`,
+    `studioAgentModel`; the `task` schema takes any string and checks it when
+    answered); **memory** (`studio_memory.dart`: notes in `studio/memory.md`,
+    `remember`/`forget` for the main agent only, injected into every agent's
+    instructions). The step-limit summary turn keeps tools declared and sends
+    `tool_choice: none` (Gemini `mode: NONE`) — `AgentParams.toolsOff` — since
+    a history with tool calls and no declared tools is not accepted everywhere.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
@@ -487,7 +520,8 @@ bar or the overflow menu.
     `controller.editByHand`.
   - Tests: `studio_test.dart`, `studio_agents_test.dart`,
     `studio_controller_test.dart` (end to end against a loopback model),
-    `studio_ui_test.dart`, `studio_draft_ui_test.dart`.
+    `studio_runtime_test.dart`, `studio_knowledge_test.dart`,
+    `studio_area_pages_test.dart`, and the `*_ui_test.dart` files.
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by
   `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over
