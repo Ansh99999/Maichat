@@ -849,6 +849,66 @@ void main() {
     });
   });
 
+  group('a turn with tool calls switched off', () {
+    Future<Map<String, dynamic>> sentFor(ProviderKind kind) async {
+      await serve(kind == ProviderKind.anthropic
+          ? [
+              {'type': 'message_stop'},
+            ]
+          : kind == ProviderKind.openaiResponses
+              ? [
+                  {'type': 'response.completed', 'response': <String, dynamic>{}},
+                ]
+              : kind == ProviderKind.gemini
+                  ? const <Object>[]
+                  : ['[DONE]']);
+      await AgentClient()
+          .stream(
+            provider: provider(kind),
+            messages: history(),
+            tools: const [setField, getDraft],
+            params: const AgentParams(toolsOff: true),
+          )
+          .toList();
+      return captured!;
+    }
+
+    // The history holds a tool call and its result; every dialect keeps the
+    // tools declared (so that history stays valid) and forbids calling them.
+    test('OpenAI chat', () async {
+      final body = await sentFor(ProviderKind.openai);
+      expect(body['tools'], hasLength(2));
+      expect(body['tool_choice'], 'none');
+    });
+
+    test('OpenAI responses', () async {
+      final body = await sentFor(ProviderKind.openaiResponses);
+      expect(body['tools'], hasLength(2));
+      expect(body['tool_choice'], 'none');
+    });
+
+    test('Anthropic', () async {
+      final body = await sentFor(ProviderKind.anthropic);
+      expect(body['tools'], hasLength(2));
+      expect(body['tool_choice'], {'type': 'none'});
+    });
+
+    test('Gemini', () async {
+      final body = await sentFor(ProviderKind.gemini);
+      expect((body['tools'] as List).single['functionDeclarations'], hasLength(2));
+      expect(body['toolConfig'], {
+        'functionCallingConfig': {'mode': 'NONE'},
+      });
+    });
+
+    test('a normal turn sends no tool_choice at all', () async {
+      await serve(['[DONE]']);
+      await run(ProviderKind.openai);
+      expect(captured!.containsKey('tool_choice'), isFalse);
+      expect(captured!.containsKey('toolConfig'), isFalse);
+    });
+  });
+
   test('messages survive a save and load', () {
     final original = history(signature: 'S');
     final restored = [

@@ -5232,6 +5232,7 @@ class AppState extends ChangeNotifier {
     required AgentClient client,
     required List<AgentMessage> messages,
     required List<ToolSpec> tools,
+    bool toolsOff = false,
     void Function(TokenUsage usage, double cost)? onSpend,
   }) async* {
     final base = studioProvider();
@@ -5253,6 +5254,7 @@ class AppState extends ChangeNotifier {
           temperature: _studioConfig.temperature,
           maxTokens: _studioConfig.maxTokens,
           stream: _studioConfig.stream,
+          toolsOff: toolsOff,
         ),
       )) {
         if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);

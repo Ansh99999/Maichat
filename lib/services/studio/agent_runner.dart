@@ -13,8 +13,9 @@ import 'studio_tools.dart';
 typedef AgentTurn = Stream<AgentDelta> Function(
   AgentClient client,
   List<AgentMessage> messages,
-  List<ToolSpec> tools,
-);
+  List<ToolSpec> tools, {
+  bool toolsOff,
+});
 
 /// What an agent run tells whoever is watching it. Every callback names the
 /// [agent] — `studio` for the lead, a helper's name otherwise — because helpers
@@ -242,8 +243,8 @@ class AgentRunner {
       if (_cancelled) return AgentRunOutcome(AgentRunEnd.cancelled, lastText);
       _takeInbox(transcript);
       // The last allowed step (after at least one working one) goes out with
-      // no tools and a note asking for a summary, so a run that hits the
-      // ceiling still ends with an account of where it got to.
+      // tool calls switched off and a note asking for a summary, so a run
+      // that hits the ceiling still ends with an account of where it got to.
       final last = step == maxSteps - 1 && step > 0;
       if (last) {
         final note = AgentMessage.user(kStepLimitNote);
@@ -258,10 +259,15 @@ class AgentRunner {
       final reasoning = StringBuffer();
       final calls = <ToolCall>[];
       try {
+        // The summary step keeps the tools declared and forbids calling
+        // them: the history still holds tool calls, and a request that
+        // carries those without declaring any tools is not one every host
+        // accepts.
         await for (final delta in turn(
           client,
           request(transcript),
-          last ? const <ToolSpec>[] : specs,
+          specs,
+          toolsOff: last,
         )) {
           if (delta.text.isNotEmpty) {
             text.write(delta.text);
@@ -282,7 +288,7 @@ class AgentRunner {
       }
       // A cancelled stream may have yielded calls; a call with no result
       // would poison the transcript, so a stop mid-stream keeps words only.
-      // A model that calls a tool on the summary step (it was offered none)
+      // A model that calls a tool on the summary step (it was told not to)
       // is held to words the same way.
       if (_cancelled || last) calls.clear();
       final said = text.toString().trim();

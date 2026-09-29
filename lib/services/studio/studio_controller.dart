@@ -414,12 +414,14 @@ class StudioController extends ChangeNotifier {
   Stream<AgentDelta> _turn(
     AgentClient client,
     List<AgentMessage> messages,
-    List<ToolSpec> tools,
-  ) =>
+    List<ToolSpec> tools, {
+    bool toolsOff = false,
+  }) =>
       state.streamAgentTurn(
         client: client,
         messages: messages,
         tools: tools,
+        toolsOff: toolsOff,
         onSpend: (usage, cost) => session.addUsage(usage, cost),
       );
 
@@ -706,11 +708,13 @@ class StudioController extends ChangeNotifier {
         agent: sub.label,
         subagent: sub,
       ),
-      turn: (client, messages, tools) => state.streamAgentTurn(
-        client: client,
-        messages: messages,
-        tools: tools,
-        onSpend: (usage, cost) {
+      turn: (client, messages, tools, {toolsOff = false}) =>
+          state.streamAgentTurn(
+            client: client,
+            messages: messages,
+            tools: tools,
+            toolsOff: toolsOff,
+            onSpend: (usage, cost) {
           sub
             ..inputTokens += usage.inputTokens
             ..outputTokens += usage.outputTokens;

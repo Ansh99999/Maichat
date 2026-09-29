@@ -216,7 +216,7 @@ void main() {
           services: _NoServices(),
         ),
         compactor: AgentCompactor(budget: 6000, compactions: compactions),
-        turn: (client, messages, tools) async* {
+        turn: (client, messages, tools, {toolsOff = false}) async* {
           sent.add(List.of(messages));
           offered.add(tools.length);
           if (messages.first.text == kCompactionPrompt) {

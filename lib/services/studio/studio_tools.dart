@@ -1476,9 +1476,11 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
         'todo_write',
       ],
     'critic' => [..._readTools, 'playtest', 'todo_write'],
+    // Every draft tool, but none of the run's own: a sub-agent neither spawns
+    // nor messages other agents (one level deep).
     'general' => [
         for (final name in kStudioTools.keys)
-          if (name != 'task') name,
+          if (name != 'task' && !kRuntimeToolNames.contains(name)) name,
       ],
     _ => [
         for (final name in kStudioTools.keys)

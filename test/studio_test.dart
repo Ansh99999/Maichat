@@ -485,7 +485,7 @@ void main() {
       List<List<AgentMessage>> sent,
     ) {
       var i = 0;
-      return (client, messages, tools) async* {
+      return (client, messages, tools, {toolsOff = false}) async* {
         sent.add(List.of(messages));
         final turn = i < turns.length ? turns[i++] : const <AgentDelta>[];
         for (final d in turn) {
@@ -538,13 +538,13 @@ void main() {
       expect(sent[1].where((m) => m.role == AgentRole.tool), hasLength(3));
     });
 
-    test('the last step is a summary with no tools', () async {
+    test('the last step is a summary with tool calls switched off', () async {
       final loop = [
         for (var i = 0; i < 2; i++)
           [
             AgentDelta(toolCalls: [ToolCall(id: 'g$i', name: 'get_draft')]),
           ],
-        // Offered no tools, it calls one anyway — and is held to words.
+        // Told not to call tools, it calls one anyway — and is held to words.
         const [
           AgentDelta(text: 'Did two reads; the lore is left. Reply continue.'),
           AgentDelta(toolCalls: [ToolCall(id: 'late', name: 'get_draft')]),
@@ -552,15 +552,17 @@ void main() {
       ];
       final sent = <List<AgentMessage>>[];
       final offered = <int>[];
+      final off = <bool>[];
       var i = 0;
       final runner = AgentRunner(
         name: 'studio',
         systemPrompt: '',
         tools: studioToolsFor('studio'),
         context: ctx,
-        turn: (client, messages, tools) async* {
+        turn: (client, messages, tools, {toolsOff = false}) async* {
           sent.add(List.of(messages));
           offered.add(tools.length);
+          off.add(toolsOff);
           for (final d in loop[i++]) {
             yield d;
           }
@@ -573,7 +575,9 @@ void main() {
       expect(outcome.lastText, contains('the lore is left'));
       expect(offered[0], greaterThan(0));
       expect(offered[1], greaterThan(0));
-      expect(offered[2], 0);
+      // Still declared — the history holds tool calls — but not callable.
+      expect(offered[2], offered[0]);
+      expect(off, [false, false, true]);
       expect(sent[2].last.text, kStepLimitNote);
       // Every call that was made is answered, and the late one was dropped.
       expect(transcript.where((m) => m.role == AgentRole.tool), hasLength(2));
@@ -590,7 +594,7 @@ void main() {
         systemPrompt: '',
         tools: studioToolsFor('studio'),
         context: ctx,
-        turn: (client, messages, tools) async* {
+        turn: (client, messages, tools, {toolsOff = false}) async* {
           yield const AgentDelta(text: 'Half a thought');
           runner.cancel();
           await gate.future.timeout(const Duration(milliseconds: 10),
