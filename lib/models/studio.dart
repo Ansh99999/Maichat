@@ -14,6 +14,10 @@ import 'dart:convert';
 import 'agent_message.dart';
 import 'character.dart';
 import 'lorebook.dart';
+import 'studio_agent_type.dart';
+import 'studio_revisions.dart';
+
+export 'studio_agent_type.dart';
 import 'usage.dart';
 
 /// A text the agent wrote for the embeddings library — background too long or
@@ -361,10 +365,12 @@ class StudioSession {
     this.cost = 0,
     DateTime? createdAt,
     DateTime? updatedAt,
+    Map<String, StudioRevision>? revisions,
   })  : transcript = transcript ?? <AgentMessage>[],
         ops = ops ?? <StudioOp>[],
         subagents = subagents ?? <StudioSubagent>[],
         todos = todos ?? <StudioTodo>[],
+        revisions = revisions ?? <String, StudioRevision>{},
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -400,6 +406,35 @@ class StudioSession {
   final DateTime createdAt;
   DateTime updatedAt;
 
+  // --- stale-edit protection ------------------------------------------------
+
+  /// The latest version of each part of the draft, and who made it (see
+  /// `studio_revisions.dart`). Saved with the session, so a draft reopened
+  /// tomorrow still knows what was last touched by whom. Kept on the session,
+  /// not the workspace: a rewind swaps the workspace for an old snapshot, and
+  /// the version numbers must keep going up through that.
+  final Map<String, StudioRevision> revisions;
+
+  /// What each agent has seen of the draft, by the agent's name (`studio`, or
+  /// a sub-agent's label): part key → the revision it read or wrote last.
+  /// Not saved — after a restart every agent reads the draft again before
+  /// changing what somebody else changed, which is the safe side.
+  final Map<String, Map<String, int>> seen = <String, Map<String, int>>{};
+
+  /// What [agent] has seen, created on first use.
+  Map<String, int> seenBy(String agent) =>
+      seen.putIfAbsent(agent, () => <String, int>{});
+
+  /// Records that [parts] changed, by [by], bumping each one's revision.
+  Set<String> _bump(Iterable<String> parts, String by) {
+    final out = <String>{};
+    for (final key in parts) {
+      revisions[key] = StudioRevision((revisions[key]?.rev ?? 0) + 1, by);
+      out.add(key);
+    }
+    return out;
+  }
+
   String get displayTitle {
     final t = title.trim();
     if (t.isNotEmpty) return t;
@@ -417,9 +452,21 @@ class StudioSession {
   /// with the workspace as it stood — taken here, in the same synchronous step
   /// as the change itself, so two tools running side by side can never record
   /// a "before" that the other has already moved on from.
-  void edit(String tool, String summary, void Function(StudioWorkspace ws) change) {
+  ///
+  /// Returns the parts of the draft the change touched, whose revisions it
+  /// has bumped in the name of whoever [tool] says made it.
+  Set<String> edit(
+    String tool,
+    String summary,
+    void Function(StudioWorkspace ws) change,
+  ) {
     final before = jsonEncode(workspace.toJson());
+    final fingerprints = partFingerprints(workspace);
     change(workspace);
+    final touched = _bump(
+      changedParts(fingerprints, partFingerprints(workspace)),
+      editorOf(tool),
+    );
     ops.add(StudioOp(
       id: '${DateTime.now().microsecondsSinceEpoch}-${ops.length}',
       tool: tool,
@@ -434,6 +481,7 @@ class StudioSession {
       if (ops[i].before.isEmpty) break;
       if (++live > kStudioSnapshotLimit) ops[i].before = '';
     }
+    return touched;
   }
 
   /// Whether the change at [index] can still be rewound to.
@@ -448,9 +496,13 @@ class StudioSession {
   /// oldest first.
   List<String> rewindTo(int index) {
     if (!canRewindTo(index)) return const <String>[];
+    final fingerprints = partFingerprints(workspace);
     workspace = StudioWorkspace.fromJson(
       jsonDecode(ops[index].before) as Map<String, dynamic>,
     );
+    // A rewind is the user changing those parts back: an agent that read them
+    // before it has to read them again.
+    _bump(changedParts(fingerprints, partFingerprints(workspace)), kUserEditor);
     final undone = <String>[];
     for (var i = index; i < ops.length; i++) {
       if (ops[i].reverted) continue;
@@ -479,6 +531,10 @@ class StudioSession {
         'cost': cost,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
+        if (revisions.isNotEmpty)
+          'revisions': {
+            for (final e in revisions.entries) e.key: e.value.toJson(),
+          },
       };
 
   factory StudioSession.fromJson(Map<String, dynamic> json) => StudioSession(
@@ -514,6 +570,12 @@ class StudioSession {
         cost: (json['cost'] as num?)?.toDouble() ?? 0,
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
+        revisions: {
+          if (json['revisions'] is Map)
+            for (final e in (json['revisions'] as Map).entries)
+              if (StudioRevision.fromJson(e.value) != null)
+                e.key.toString(): StudioRevision.fromJson(e.value)!,
+        },
       );
 }
 
@@ -532,6 +594,13 @@ class StudioConfig {
     this.maxParallelSubagents = kStudioDefaultParallelSubagents,
     this.systemPrompt = '',
     this.areasCapsule = false,
+    // Knowledge: the web, memory, and the user's own sub-agent types.
+    this.webTools = true,
+    this.searchProvider = StudioSearchProvider.wiki,
+    this.searchUrl = '',
+    this.searchKey = '',
+    this.memoryEnabled = true,
+    this.customAgents = const <StudioAgentType>[],
   });
 
   /// The provider to use, or null for whichever one chats use.
@@ -562,6 +631,30 @@ class StudioConfig {
   /// The builder's instructions, or empty for the built-in ones.
   final String systemPrompt;
 
+  // --- knowledge ---------------------------------------------------------------
+
+  /// Whether the agents may search and read the web (`web_search`,
+  /// `web_fetch`).
+  final bool webTools;
+
+  /// Where `web_search` goes; Wikipedia and Fandom need no key.
+  final StudioSearchProvider searchProvider;
+
+  /// A SearXNG instance's address, for [StudioSearchProvider.searxng].
+  final String searchUrl;
+
+  /// The Brave Search key, for [StudioSearchProvider.brave]. A secret: saved
+  /// as `apiKey`, so a backup made without keys blanks it like every other
+  /// key (`kBackupSecretFields`).
+  final String searchKey;
+
+  /// Whether the Studio remembers the user's preferences across sessions
+  /// (`remember`/`forget`, and the notes in every agent's instructions).
+  final bool memoryEnabled;
+
+  /// The user's own sub-agent types, beside the built-in four.
+  final List<StudioAgentType> customAgents;
+
   StudioConfig copyWith({
     String? Function()? providerId,
     String? model,
@@ -573,6 +666,12 @@ class StudioConfig {
     int? maxParallelSubagents,
     String? systemPrompt,
     bool? areasCapsule,
+    bool? webTools,
+    StudioSearchProvider? searchProvider,
+    String? searchUrl,
+    String? searchKey,
+    bool? memoryEnabled,
+    List<StudioAgentType>? customAgents,
   }) =>
       StudioConfig(
         providerId: providerId == null ? this.providerId : providerId(),
@@ -585,6 +684,12 @@ class StudioConfig {
         maxParallelSubagents: maxParallelSubagents ?? this.maxParallelSubagents,
         systemPrompt: systemPrompt ?? this.systemPrompt,
         areasCapsule: areasCapsule ?? this.areasCapsule,
+        webTools: webTools ?? this.webTools,
+        searchProvider: searchProvider ?? this.searchProvider,
+        searchUrl: searchUrl ?? this.searchUrl,
+        searchKey: searchKey ?? this.searchKey,
+        memoryEnabled: memoryEnabled ?? this.memoryEnabled,
+        customAgents: customAgents ?? this.customAgents,
       );
 
   Map<String, dynamic> toJson() => {
@@ -599,6 +704,14 @@ class StudioConfig {
           'maxParallelSubagents': maxParallelSubagents,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
         if (areasCapsule) 'areasCapsule': true,
+        if (!webTools) 'webTools': false,
+        if (searchProvider != StudioSearchProvider.wiki)
+          'searchProvider': searchProvider.name,
+        if (searchUrl.isNotEmpty) 'searchUrl': searchUrl,
+        if (searchKey.isNotEmpty) 'apiKey': searchKey,
+        if (!memoryEnabled) 'memoryEnabled': false,
+        if (customAgents.isNotEmpty)
+          'customAgents': [for (final a in customAgents) a.toJson()],
       };
 
   factory StudioConfig.fromJson(Map<String, dynamic> json) => StudioConfig(
@@ -615,6 +728,12 @@ class StudioConfig {
             .clamp(1, 50),
         systemPrompt: json['systemPrompt'] as String? ?? '',
         areasCapsule: json['areasCapsule'] as bool? ?? false,
+        webTools: json['webTools'] as bool? ?? true,
+        searchProvider: StudioSearchProvider.byName(json['searchProvider']),
+        searchUrl: json['searchUrl'] as String? ?? '',
+        searchKey: json['apiKey'] as String? ?? '',
+        memoryEnabled: json['memoryEnabled'] as bool? ?? true,
+        customAgents: StudioAgentType.listFrom(json['customAgents']),
       );
 }
 

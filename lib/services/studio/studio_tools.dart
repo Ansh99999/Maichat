@@ -5,8 +5,10 @@ import '../../models/character.dart';
 import '../../models/character_scenario.dart';
 import '../../models/lorebook.dart';
 import '../../models/studio.dart';
+import '../../models/studio_revisions.dart';
 import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
+import 'studio_knowledge.dart';
 
 /// What a Studio tool can reach beyond the workspace: the library to read from,
 /// and the three things that need the rest of the app — a picture, a playtest,
@@ -101,10 +103,19 @@ class StudioToolContext {
     this.agent = 'studio',
     this.subagent,
     this.call,
-  });
+    StudioKnowledge? knowledge,
+    // A private field cannot be a named initializing formal.
+    // ignore: prefer_initializing_formals
+  }) : _knowledge = knowledge;
 
   final StudioSession session;
   final StudioServices services;
+
+  final StudioKnowledge? _knowledge;
+
+  /// The web, the memory and the settings behind them: the one handed in, or
+  /// the app's own ([StudioKnowledge.shared]).
+  StudioKnowledge get knowledge => _knowledge ?? StudioKnowledge.shared;
 
   /// Which agent is calling, recorded on its changes (`Subagent 3`, …).
   final String agent;
@@ -122,6 +133,7 @@ class StudioToolContext {
         agent: agent,
         subagent: subagent,
         call: call,
+        knowledge: _knowledge,
       );
 
   /// The calling agent's own plan: the sub-agent's, or the session's.
@@ -130,9 +142,14 @@ class StudioToolContext {
   StudioWorkspace get ws => session.workspace;
   Character get character => session.workspace.character;
 
-  /// Makes a change, recorded for the Changes tab and for rewinding.
-  void edit(String tool, String summary, void Function(StudioWorkspace ws) change) =>
-      session.edit(agent == 'studio' ? tool : '$agent · $tool', summary, change);
+  /// Makes a change, recorded for the Changes tab and for rewinding. What it
+  /// touched counts as seen by this agent at its new revision — an agent's own
+  /// writes never make its next write stale.
+  void edit(String tool, String summary, void Function(StudioWorkspace ws) change) {
+    final touched =
+        session.edit(agent == 'studio' ? tool : '$agent · $tool', summary, change);
+    markSeen(touched);
+  }
 
   StudioToolContext as(String agentName, {StudioSubagent? subagent}) =>
       StudioToolContext(
@@ -140,7 +157,37 @@ class StudioToolContext {
         services: services,
         agent: agentName,
         subagent: subagent,
+        knowledge: _knowledge,
       );
+
+  // --- stale-edit protection ------------------------------------------------
+
+  /// Records that this agent has now seen [parts] as they are.
+  void markSeen(Iterable<String> parts) {
+    final seen = session.seenBy(agent);
+    for (final key in parts) {
+      seen[key] = session.revisions[key]?.rev ?? 0;
+    }
+  }
+
+  /// Refuses a write to any of [parts] that somebody else changed after this
+  /// agent last read it — the draft's version of "file modified since read".
+  /// The message says who, and what to read again ([reread]).
+  void ensureFresh(Iterable<String> parts, {String reread = 'get_draft'}) {
+    final seen = session.seenBy(agent);
+    final me = editorForAgent(agent);
+    for (final key in parts) {
+      final latest = session.revisions[key];
+      if (latest == null || latest.by == me) continue;
+      if (latest.rev <= (seen[key] ?? 0)) continue;
+      final what = describePart(ws, key);
+      throw StudioToolError(
+        '${what[0].toUpperCase()}${what.substring(1)} was changed by '
+        '${latest.by} since you last read it. Call $reread and redo the '
+        'change on the current text.',
+      );
+    }
+  }
 }
 
 typedef StudioToolRun = Future<StudioToolResult> Function(
@@ -401,6 +448,22 @@ final StudioTool getDraftTool = StudioTool(
   (ctx, args) async {
     final section = _optStr(args, 'section') ?? 'all';
     final all = section == 'all';
+    // What is read here is what this agent may now change without refusal.
+    // Documents are listed only in preview, so they are not counted as read:
+    // read_document reads one whole.
+    if (all || section == 'character') {
+      ctx.markSeen([
+        ...partsWithPrefix(ctx.ws, 'field:'),
+        ...partsWithPrefix(ctx.ws, 'greeting:'),
+        ...partsWithPrefix(ctx.ws, 'scenario:'),
+      ]);
+    }
+    if (all || section == 'lorebooks') {
+      ctx.markSeen([
+        ...partsWithPrefix(ctx.ws, 'book:'),
+        ...partsWithPrefix(ctx.ws, 'entry:'),
+      ]);
+    }
     return StudioToolResult.json({
       if (all || section == 'character')
         'character': describeCharacter(ctx.character, ctx.services),
@@ -466,6 +529,13 @@ final StudioTool setFieldsTool = StudioTool(
           : 'Unknown field(s): ${unknown.join(', ')}. Fields are: '
               '${[..._textFields.map((f) => f.key), 'tags', 'alternate_greetings'].join(', ')}.');
     }
+    ctx.ensureFresh([
+      for (final k in changed)
+        if (k == 'alternate_greetings')
+          ...partsWithPrefix(ctx.ws, 'greeting:')
+        else
+          'field:$k',
+    ]);
     ctx.edit('set_fields', 'Set ${changed.map((k) => _field(k)?.label ?? k.replaceAll('_', ' ')).join(', ')}', (ws) {
       for (final change in changes) {
         change(ws.character);
@@ -526,12 +596,14 @@ final StudioTool editFieldTool = StudioTool(
           'Pass "index" 0–${greetings.length - 1} for an alternate greeting.',
         );
       }
+      ctx.ensureFresh(['greeting:$index']);
       current = greetings[index];
       write = (c, v) => c.alternateGreetings[index] = v;
       label = 'alternate greeting ${index + 1}';
     } else {
       final f = _field(key);
       if (f == null) throw StudioToolError('Unknown field "$key".');
+      ctx.ensureFresh(['field:$key']);
       current = f.read(ctx.character);
       write = f.write;
       label = f.label;
@@ -607,6 +679,7 @@ final StudioTool removeGreetingTool = StudioTool(
           ? 'There are no alternate greetings.'
           : 'Pass "index" 0–${greetings.length - 1}.');
     }
+    ctx.ensureFresh(['greeting:$index']);
     ctx.edit('remove_greeting', 'Removed alternate greeting ${index + 1}',
         (ws) => ws.character.alternateGreetings.removeAt(index));
     return StudioToolResult.json({'ok': true});
@@ -653,6 +726,7 @@ final StudioTool upsertScenarioTool = StudioTool(
     if (id != null && existing == null) {
       throw StudioToolError('No scenario "$id". Leave id out to add one.');
     }
+    if (id != null) ctx.ensureFresh(['scenario:$id']);
     final newId = id ?? _newId();
     ctx.edit(
       'upsert_scenario',
@@ -691,6 +765,7 @@ final StudioTool deleteScenarioTool = StudioTool(
     final id = _str(args, 'id', required: true);
     final scenario = ctx.character.scenarios.where((s) => s.id == id).firstOrNull;
     if (scenario == null) throw StudioToolError('No scenario "$id".');
+    ctx.ensureFresh(['scenario:$id']);
     ctx.edit('delete_scenario', 'Deleted scenario "${scenario.displayName}"',
         (ws) => ws.character.scenarios.removeWhere((s) => s.id == id));
     return StudioToolResult.json({'ok': true});
@@ -760,6 +835,7 @@ final StudioTool updateLorebookTool = StudioTool(
     final scanDepth = _optInt(args, 'scan_depth');
     final budget = _optInt(args, 'token_budget');
     final recursive = _optBool(args, 'recursive');
+    ctx.ensureFresh(['book:${book.id}']);
     ctx.edit('update_lorebook', 'Updated lorebook "${name ?? book.displayName}"',
         (ws) {
       final b = ws.lorebook(book.id)!;
@@ -786,6 +862,10 @@ final StudioTool deleteLorebookTool = StudioTool(
   ),
   (ctx, args) async {
     final book = _book(ctx, args);
+    ctx.ensureFresh([
+      'book:${book.id}',
+      ...partsWithPrefix(ctx.ws, 'entry:${book.id}:'),
+    ]);
     ctx.edit('delete_lorebook', 'Removed lorebook "${book.displayName}"', (ws) {
       ws.lorebooks.removeWhere((b) => b.id == book.id);
       ws.character.lorebookIds.remove(book.id);
@@ -855,6 +935,7 @@ final StudioTool upsertLoreEntryTool = StudioTool(
         'No entry $uid in "${book.displayName}". Leave uid out to add one.',
       );
     }
+    if (uid != null) ctx.ensureFresh(['entry:${book.id}:$uid']);
     final name = _optStr(args, 'name');
     final keys = _optList(args, 'keys');
     final secondary = _optList(args, 'secondary_keys');
@@ -935,6 +1016,7 @@ final StudioTool deleteLoreEntryTool = StudioTool(
     final uid = _optInt(args, 'uid');
     final entry = book.entries.where((e) => e.uid == uid).firstOrNull;
     if (entry == null) throw StudioToolError('No entry $uid in "${book.displayName}".');
+    ctx.ensureFresh(['entry:${book.id}:$uid']);
     ctx.edit('delete_lore_entry',
         'Deleted lore entry "${entry.displayName}" from "${book.displayName}"',
         (ws) => ws.lorebook(book.id)!.entries.removeWhere((e) => e.uid == uid));
@@ -967,6 +1049,7 @@ final StudioTool upsertDocumentTool = StudioTool(
     if (id != null && ctx.ws.document(id) == null) {
       throw StudioToolError('No document "$id". Leave id out to add one.');
     }
+    if (id != null) ctx.ensureFresh(['doc:$id'], reread: 'read_document');
     final newId = id ?? _newId();
     ctx.edit('upsert_document',
         '${id == null ? 'Wrote' : 'Rewrote'} document "$name"', (ws) {
@@ -1000,6 +1083,7 @@ final StudioTool readDocumentTool = StudioTool(
   (ctx, args) async {
     final doc = ctx.ws.document(_str(args, 'id', required: true));
     if (doc == null) throw StudioToolError('No such document.');
+    ctx.markSeen(['doc:${doc.id}']);
     return StudioToolResult.json({'id': doc.id, 'name': doc.name, 'text': doc.text});
   },
 );
@@ -1018,6 +1102,7 @@ final StudioTool deleteDocumentTool = StudioTool(
     final id = _str(args, 'id', required: true);
     final doc = ctx.ws.document(id);
     if (doc == null) throw StudioToolError('No such document.');
+    ctx.ensureFresh(['doc:$id'], reread: 'read_document');
     ctx.edit('delete_document', 'Removed document "${doc.name}"',
         (ws) => ws.documents.removeWhere((d) => d.id == id));
     return StudioToolResult.json({'ok': true});

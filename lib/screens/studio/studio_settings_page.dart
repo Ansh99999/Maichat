@@ -4,6 +4,10 @@ import 'package:provider/provider.dart' hide Provider;
 import '../../models/studio.dart';
 import '../../services/studio/studio_prompt.dart';
 import '../../state/app_state.dart';
+import 'settings/settings_parts.dart';
+import 'settings/studio_agents_page.dart';
+import 'settings/studio_memory_page.dart';
+import 'settings/studio_web_page.dart';
 
 /// How the Studio talks to its model: which provider and model build the
 /// characters, how far one message may run, whether helpers are allowed, and
@@ -201,6 +205,42 @@ class _StudioSettingsPageState extends State<StudioSettingsPage> {
             onChanged: (v) => _update(config.copyWith(maxSteps: v.round())),
           ),
           const Divider(height: 24),
+          Text('Knowledge', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 12),
+          SettingsGroup(children: [
+            SettingsLink(
+              key: const Key('studio-settings-agents'),
+              icon: Icons.groups_outlined,
+              title: 'Sub-agent types',
+              subtitle: config.customAgents.isEmpty
+                  ? 'Four built in; add your own'
+                  : '${config.customAgents.length} of your own, four built in',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const StudioAgentsPage(),
+              )),
+            ),
+            SettingsLink(
+              key: const Key('studio-settings-web'),
+              icon: Icons.travel_explore_outlined,
+              title: 'Web research',
+              subtitle: config.webTools
+                  ? config.searchProvider.label
+                  : 'Off',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const StudioWebPage(),
+              )),
+            ),
+            SettingsLink(
+              key: const Key('studio-settings-memory'),
+              icon: Icons.psychology_outlined,
+              title: 'Memory',
+              subtitle: config.memoryEnabled
+                  ? 'What the Studio remembers about you'
+                  : 'Off',
+              onTap: () => openStudioMemory(context),
+            ),
+          ]),
+          const Divider(height: 40),
           Row(
             children: [
               Expanded(

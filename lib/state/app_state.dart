@@ -5233,8 +5233,13 @@ class AppState extends ChangeNotifier {
     required List<AgentMessage> messages,
     required List<ToolSpec> tools,
     void Function(TokenUsage usage, double cost)? onSpend,
+    // A sub-agent type the user gave a model of its own runs on that model.
+    String? model,
   }) async* {
-    final base = studioProvider();
+    final studio = studioProvider();
+    final base = studio == null || model == null || model.trim().isEmpty
+        ? studio
+        : studio.copyWith(model: model.trim());
     if (base == null) {
       throw ChatApiException('Set up a provider in Settings first.');
     }

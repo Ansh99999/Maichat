@@ -55,6 +55,8 @@ const Map<String, List<String>> kBackupSecretFields = <String, List<String>>{
   'providers': <String>['apiKey', 'apiKeys'],
   'imageGen': <String>['apiKey'],
   'settings': <String>['apiKey'],
+  // The Character Studio's web-search key.
+  'studioConfig': <String>['apiKey'],
 };
 
 /// What went wrong reading an archive, in a sentence fit for a snackbar.
@@ -653,7 +655,7 @@ Map<String, StoreEntry> preserveSecrets({
     out['providers'] = StoreEntry('json', {...providerMap, 'providers': list});
   }
 
-  for (final key in const ['imageGen', 'settings']) {
+  for (final key in const ['imageGen', 'settings', 'studioConfig']) {
     final map = out[key]?.asMap;
     if (map == null) continue;
     final live = current[key]?.asMap;
