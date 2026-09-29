@@ -7,6 +7,7 @@ import '../../models/lorebook.dart';
 import '../../models/studio.dart';
 import '../../models/studio_revisions.dart';
 import 'custom_agents.dart';
+import 'image_tools.dart';
 import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
 import 'studio_knowledge.dart';
@@ -1529,6 +1530,7 @@ final Map<String, StudioTool> kStudioTools = {
     taskTool,
     ...kRuntimeTools,
     ...kKnowledgeTools,
+    ...kImageTools,
   ])
     t.name: t,
 };

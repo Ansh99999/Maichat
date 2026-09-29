@@ -6,6 +6,7 @@ import '../../models/agent_message.dart';
 import '../../models/character.dart';
 import '../../models/embedding.dart';
 import '../../models/folder.dart';
+import '../../models/gallery_image.dart';
 import '../../models/lorebook.dart';
 import '../../models/message_image.dart';
 import '../../models/studio.dart';
@@ -15,6 +16,8 @@ import '../chat_client.dart';
 import '../document_sources.dart';
 import '../model_context.dart';
 import 'agent_runner.dart';
+import 'image_tools.dart';
+import 'studio_images.dart';
 import 'custom_agents.dart';
 import 'runtime_tools.dart';
 import 'studio_knowledge.dart';
@@ -1121,6 +1124,12 @@ String describeCall(ToolCall call) {
     'read_document' => 'Read a document',
     'delete_document' => 'Removed a document',
     'generate_avatar' => 'Painting a portrait',
+    'search_images' => 'Looked for pictures: "${quoted(a['query'])}"',
+    'set_avatar_from_url' =>
+      a['as'] == 'pool' ? 'Added a picture from the web' : 'Set a picture from the web',
+    'list_gallery' => 'Looked through your gallery',
+    'use_gallery_picture' =>
+      a['as'] == 'pool' ? 'Added a gallery picture' : 'Set a gallery picture',
     'playtest' => 'Playtest',
     'list_library' => 'Looked through the library',
     'read_library_item' => 'Read a library ${quoted(a['kind'])}',
@@ -1145,7 +1154,8 @@ String _planLine(Object? todos) {
 }
 
 /// [StudioServices] over the real app.
-class _AppStudioServices implements StudioServices, StudioRuntime {
+class _AppStudioServices
+    implements StudioServices, StudioRuntime, StudioPictureServices {
   _AppStudioServices(this.controller);
 
   final StudioController controller;
@@ -1164,6 +1174,20 @@ class _AppStudioServices implements StudioServices, StudioRuntime {
 
   @override
   bool get canGenerateImages => _state.imageGenReady;
+
+  @override
+  StudioImages get images => StudioImages.shared;
+
+  @override
+  Future<GalleryImage?> fileWebPicture(
+    WebPicture picture, {
+    required String characterId,
+    String title = '',
+  }) =>
+      filePictureFromWeb(_state, picture, characterId: characterId, title: title);
+
+  @override
+  List<GalleryImage> get galleryPictures => _state.gallery;
 
   @override
   Future<String> generatePicture({

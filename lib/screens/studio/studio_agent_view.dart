@@ -491,6 +491,9 @@ IconData _toolIcon(String name) => switch (name) {
         Icons.menu_book_outlined,
       'upsert_document' || 'delete_document' => Icons.description_outlined,
       'generate_avatar' => Icons.palette_outlined,
+      'search_images' => Icons.image_search_outlined,
+      'set_avatar_from_url' => Icons.add_link,
+      'list_gallery' || 'use_gallery_picture' => Icons.photo_library_outlined,
       'playtest' => Icons.forum_outlined,
       'list_library' => Icons.local_library_outlined,
       'task' || 'delegate' => Icons.smart_toy_outlined,
@@ -628,6 +631,8 @@ class _ToolChipState extends State<_ToolChip> {
                       ],
                     ),
                   ),
+                if (result != null && !failed)
+                  ..._thumbnails(result.text),
                 if (_open) ...[
                   const SizedBox(height: 8),
                   _Detail(label: 'Sent', text: _pretty(widget.call.arguments)),
@@ -644,6 +649,41 @@ class _ToolChipState extends State<_ToolChip> {
       ),
     );
   }
+
+  /// The pictures a picture tool found or chose, as a strip of small
+  /// thumbnails under the chip — tap one to see it larger. Nothing for any
+  /// other tool.
+  List<Widget> _thumbnails(String resultText) {
+    if (!_pictureTools.contains(widget.call.name)) return const <Widget>[];
+    final pictures = pictureRefsOf(resultText);
+    if (pictures.isEmpty) return const <Widget>[];
+    return [
+      Padding(
+        padding: const EdgeInsets.only(left: 28, top: 8, bottom: 2),
+        child: SizedBox(
+          height: 64,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: pictures.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, i) => _Thumb(
+              key: ValueKey('tool-thumb-${widget.call.id}-$i'),
+              thumb: pictures[i].thumb,
+              full: pictures[i].full,
+              label: pictures[i].label,
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  static const Set<String> _pictureTools = {
+    'search_images',
+    'set_avatar_from_url',
+    'list_gallery',
+    'use_gallery_picture',
+  };
 
   static String _pretty(Object value) =>
       const JsonEncoder.withIndent('  ').convert(value);
@@ -914,6 +954,134 @@ class _BackgroundReport extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The pictures in a picture tool's result — search candidates, gallery
+/// pictures, or the one picture chosen — as thumbnail, full picture and a
+/// caption. At most eight: a chip is a glance, not a gallery.
+List<({String thumb, String full, String label})> pictureRefsOf(String text) {
+  Object? json;
+  try {
+    json = jsonDecode(text);
+  } catch (_) {
+    return const [];
+  }
+  if (json is! Map) return const [];
+  final out = <({String thumb, String full, String label})>[];
+  void add(Object? thumb, Object? full, Object? label) {
+    final t = (thumb is String ? thumb : '').trim();
+    final f = (full is String ? full : '').trim();
+    if (t.isEmpty && f.isEmpty) return;
+    out.add((
+      thumb: t.isEmpty ? f : t,
+      full: f.isEmpty ? t : f,
+      label: label is String ? label : '',
+    ));
+  }
+
+  final candidates = json['candidates'];
+  if (candidates is List) {
+    for (final c in candidates) {
+      if (c is Map) add(c['thumbnail'], c['url'], c['title']);
+    }
+  }
+  final pictures = json['pictures'];
+  if (pictures is List) {
+    for (final p in pictures) {
+      if (p is Map) add(p['picture'], p['picture'], p['title']);
+    }
+  }
+  if (json['picture'] is String) add(json['picture'], json['picture'], json['credit']);
+  return out.take(8).toList();
+}
+
+/// One thumbnail in a picture tool's chip; tapped, the picture larger in a
+/// dialog, with its caption.
+class _Thumb extends StatelessWidget {
+  const _Thumb({
+    super.key,
+    required this.thumb,
+    required this.full,
+    required this.label,
+  });
+
+  final String thumb;
+  final String full;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final image = avatarImage(thumb, displaySize: 64, devicePixelRatio: dpr);
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _open(context),
+        child: SizedBox.square(
+          dimension: 64,
+          child: image == null
+              ? Icon(Icons.image_outlined, color: scheme.outline)
+              : SmoothImage(
+                  image: image,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      Icon(Icons.broken_image_outlined, color: scheme.outline),
+                ),
+        ),
+      ),
+    );
+  }
+
+  void _open(BuildContext context) {
+    final theme = Theme.of(context);
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final image = avatarImage(full, displaySize: 480, devicePixelRatio: dpr) ??
+        avatarImage(thumb, displaySize: 480, devicePixelRatio: dpr);
+    showDialog<void>(
+      context: context,
+      builder: (dialog) => Dialog(
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (image != null)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(dialog).height * 0.6,
+                ),
+                child: SmoothImage(
+                  image: image,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Icon(Icons.broken_image_outlined, size: 48),
+                  ),
+                ),
+              ),
+            if (label.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(label, style: theme.textTheme.bodyMedium),
+              ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                child: TextButton(
+                  onPressed: () => Navigator.of(dialog).pop(),
+                  child: const Text('Close'),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

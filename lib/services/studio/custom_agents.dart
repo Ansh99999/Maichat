@@ -1,4 +1,5 @@
 import '../../models/studio.dart';
+import 'image_tools.dart';
 import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
 import 'studio_memory.dart';
@@ -31,7 +32,7 @@ const Map<String, (String, List<String>)> kStudioToolGroups = {
     ],
   ),
   'documents': ('Documents', ['upsert_document', 'delete_document']),
-  'pictures': ('Portraits', ['generate_avatar']),
+  'pictures': ('Portraits and pictures', ['generate_avatar', ...kImageToolNames]),
   'playtest': ('Playtest', ['playtest']),
   'web': ('Web research', kWebToolNames),
   'memory': ('Memory', kMemoryToolNames),
