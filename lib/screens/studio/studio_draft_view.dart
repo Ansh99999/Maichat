@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/studio/studio_controller.dart';
 import 'draft/chrome_tabs.dart';
+import 'shell/area_pages.dart';
 import 'shell/studio_chrome.dart';
 import 'draft/draft_character_tab.dart';
 import 'draft/draft_documents_tab.dart';
@@ -30,8 +31,10 @@ class StudioDraftView extends StatelessWidget {
   Widget build(BuildContext context) {
     // The tabs themselves are built once; each page listens for itself, so a
     // streaming agent repaints the page in view without rebuilding the strip.
-    Widget page(Widget Function() build) =>
-        ListenableBuilder(listenable: controller, builder: (_, _) => build());
+    Widget page(Widget Function() build) => ActiveListenableBuilder(
+          listenable: controller,
+          builder: (_) => build(),
+        );
     return ChromeTabbedPages(
       tabs: [
         ChromeTab(
