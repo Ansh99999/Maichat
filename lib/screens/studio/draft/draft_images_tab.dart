@@ -4,11 +4,13 @@ import '../../../services/studio/studio_controller.dart';
 import '../../../widgets/avatar_image.dart';
 import '../../../widgets/smooth_image.dart';
 import '../../gallery/gallery_picker_sheet.dart';
+import 'add_picture_sheet.dart';
 import 'draft_widgets.dart';
 
 /// The character's pictures: the one they wear and the pool they can swipe to
 /// in a chat ([Character.avatars]). A picture can be made the main one or taken
-/// out, and more can be added from the gallery.
+/// out, and more can be added — from the gallery, from a link to any page or
+/// picture on the web, or from a search ([showAddPictureSheet]).
 class DraftImagesTab extends StatelessWidget {
   const DraftImagesTab({super.key, required this.controller});
 
@@ -62,11 +64,18 @@ class DraftImagesTab extends StatelessWidget {
     }
   }
 
+  Future<void> _addPicture(BuildContext context) async {
+    final choice = await showAddPictureSheet(context, controller: controller);
+    if (choice == AddPictureChoice.gallery && context.mounted) {
+      await _add(context);
+    }
+  }
+
   Future<void> _add(BuildContext context) async {
     final c = controller.session.workspace.character;
     final ref = await showGalleryPickerSheet(
       context,
-      title: 'Add a picture',
+      title: 'Choose from your gallery',
       characterId: c.id,
     );
     if (ref == null || ref.trim().isEmpty) return;
@@ -98,8 +107,8 @@ class DraftImagesTab extends StatelessWidget {
           const DraftEmpty(
             icon: Icons.image_outlined,
             text:
-                'No pictures yet. Ask the Studio to paint a portrait, or add '
-                'one from your gallery.',
+                'No pictures yet. Add one from your gallery or the web, or '
+                'ask the Studio to find or paint one.',
           )
         else
           Padding(
@@ -130,9 +139,10 @@ class DraftImagesTab extends StatelessWidget {
             ),
           ),
         DraftAddButton(
-          label: 'Add from gallery',
+          key: const Key('draft-add-picture'),
+          label: 'Add picture',
           icon: Icons.add_photo_alternate_outlined,
-          onPressed: locked ? null : () => _add(context),
+          onPressed: locked ? null : () => _addPicture(context),
         ),
       ],
     );

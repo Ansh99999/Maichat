@@ -18,6 +18,8 @@ class GalleryImage {
     DateTime? createdAt,
     DateTime? updatedAt,
     this.lastViewed,
+    this.source = '',
+    this.credit = '',
   })  : tags = tags ?? <String>[],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
@@ -49,6 +51,15 @@ class GalleryImage {
   /// (Agnai calls this `lastInteracted`). Null until it has been opened once.
   DateTime? lastViewed;
 
+  /// Where the picture was found on the web — the page it was shown on, or its
+  /// own address — for a picture that came from a link or a search. Empty for
+  /// one made or picked on the device.
+  String source;
+
+  /// Who made it or where it is from ("by Jane Doe · DeviantArt", "CC BY-SA
+  /// 2.0"), kept so the artist can be credited. Empty when unknown.
+  String credit;
+
   factory GalleryImage.create({
     required String image,
     String title = '',
@@ -79,6 +90,8 @@ class GalleryImage {
     DateTime? createdAt,
     DateTime? updatedAt,
     Object? lastViewed = _unset,
+    String? source,
+    String? credit,
   }) =>
       GalleryImage(
         id: id ?? this.id,
@@ -95,6 +108,8 @@ class GalleryImage {
         updatedAt: updatedAt ?? DateTime.now(),
         lastViewed:
             lastViewed == _unset ? this.lastViewed : lastViewed as DateTime?,
+        source: source ?? this.source,
+        credit: credit ?? this.credit,
       );
 
   Map<String, dynamic> toJson() => {
@@ -107,6 +122,8 @@ class GalleryImage {
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         if (lastViewed != null) 'lastViewed': lastViewed!.toIso8601String(),
+        if (source.isNotEmpty) 'source': source,
+        if (credit.isNotEmpty) 'credit': credit,
       };
 
   factory GalleryImage.fromJson(Map<String, dynamic> json) => GalleryImage(
@@ -122,6 +139,8 @@ class GalleryImage {
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
         lastViewed: DateTime.tryParse(json['lastViewed'] as String? ?? ''),
+        source: (json['source'] as String? ?? '').trim(),
+        credit: (json['credit'] as String? ?? '').trim(),
       );
 
   /// Tolerates a comma-separated string as well as a list, the way
