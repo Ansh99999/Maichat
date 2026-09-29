@@ -14,11 +14,12 @@ import 'dart:convert';
 import 'agent_message.dart';
 import 'character.dart';
 import 'lorebook.dart';
+import 'message_image.dart';
 import 'studio_agent_type.dart';
 import 'studio_revisions.dart';
+import 'usage.dart';
 
 export 'studio_agent_type.dart';
-import 'usage.dart';
 
 /// A text the agent wrote for the embeddings library — background too long or
 /// too loose for a lorebook entry, recalled by meaning instead of keywords.
@@ -234,9 +235,14 @@ class StudioSubagent {
     this.report,
     List<StudioTodo>? todos,
     List<String>? resumeCallIds,
+    // Runtime: compaction, background runs, interruption.
+    List<StudioCompaction>? compactions,
+    this.background = false,
+    this.interrupted = false,
   })  : transcript = transcript ?? <AgentMessage>[],
         todos = todos ?? <StudioTodo>[],
         resumeCallIds = resumeCallIds ?? <String>[],
+        compactions = compactions ?? <StudioCompaction>[],
         startedAt = startedAt ?? DateTime.now();
 
   final String id;
@@ -274,6 +280,19 @@ class StudioSubagent {
   /// Its own plan, from its `todo_write` calls.
   final List<StudioTodo> todos;
 
+  // --- runtime ---------------------------------------------------------------
+
+  /// Its conversation's summaries, oldest first (see [StudioCompaction]).
+  final List<StudioCompaction> compactions;
+
+  /// Whether its current (or last) run was started in the background: the
+  /// main agent kept working, and the report came back as a note.
+  bool background;
+
+  /// Whether the app closed while it was working. Its conversation is kept,
+  /// and `task` with its id carries it on.
+  bool interrupted;
+
   String get label => 'Subagent $number';
 
   /// How many tools it has called so far.
@@ -304,6 +323,10 @@ class StudioSubagent {
         if (report != null) 'report': report,
         if (todos.isNotEmpty) 'todos': [for (final t in todos) t.toJson()],
         if (resumeCallIds.isNotEmpty) 'resumeCallIds': resumeCallIds,
+        if (compactions.isNotEmpty)
+          'compactions': [for (final c in compactions) c.toJson()],
+        if (background) 'background': true,
+        if (interrupted) 'interrupted': true,
       };
 
   factory StudioSubagent.fromJson(Map<String, dynamic> json) {
@@ -311,9 +334,13 @@ class StudioSubagent {
       (s) => s.name == json['status'],
       orElse: () => StudioAgentStatus.done,
     );
-    final ended = DateTime.tryParse(json['endedAt'] as String? ?? '');
+    var ended = DateTime.tryParse(json['endedAt'] as String? ?? '');
     // A run cannot survive the app closing; one saved mid-run was cut off.
-    if (status == StudioAgentStatus.running) status = StudioAgentStatus.cancelled;
+    var interrupted = json['interrupted'] as bool? ?? false;
+    if (status == StudioAgentStatus.running) {
+      status = StudioAgentStatus.cancelled;
+      interrupted = true;
+    }
     return StudioSubagent(
       id: json['id'] as String? ?? '',
       number: (json['number'] as num?)?.toInt() ?? 0,
@@ -337,9 +364,135 @@ class StudioSubagent {
         if (json['resumeCallIds'] is List)
           for (final c in json['resumeCallIds'] as List) '$c',
       ],
+      compactions: StudioCompaction.listFrom(json['compactions']),
+      background: json['background'] as bool? ?? false,
+      interrupted: interrupted,
     );
   }
 }
+
+/// An agent's earlier conversation, summarised so the next request fits its
+/// model's context — Claude Code's auto-compact, in the Studio.
+///
+/// The transcript itself is never cut: it is what the chat draws. A compaction
+/// only changes what is *sent*: the summary, as a note, then the transcript
+/// from [upTo] on. Each one covers everything before its [upTo], including the
+/// summaries before it, so only the newest is ever sent.
+class StudioCompaction {
+  StudioCompaction({
+    required this.summary,
+    required this.upTo,
+    DateTime? at,
+    this.tokensBefore = 0,
+  }) : at = at ?? DateTime.now();
+
+  /// What the agent wrote for itself about the part it no longer sees.
+  final String summary;
+
+  /// The transcript index the summary covers up to (exclusive): messages
+  /// `[0, upTo)` are behind it. Always the start of a turn, never between a
+  /// tool call and its result.
+  final int upTo;
+  final DateTime at;
+
+  /// How big the request had grown when it was taken, for the chat's divider.
+  final int tokensBefore;
+
+  Map<String, dynamic> toJson() => {
+        'summary': summary,
+        'upTo': upTo,
+        'at': at.toIso8601String(),
+        if (tokensBefore > 0) 'tokensBefore': tokensBefore,
+      };
+
+  factory StudioCompaction.fromJson(Map<String, dynamic> json) =>
+      StudioCompaction(
+        summary: json['summary'] as String? ?? '',
+        upTo: (json['upTo'] as num?)?.toInt() ?? 0,
+        at: DateTime.tryParse(json['at'] as String? ?? ''),
+        tokensBefore: (json['tokensBefore'] as num?)?.toInt() ?? 0,
+      );
+
+  static List<StudioCompaction> listFrom(Object? raw) => [
+        if (raw is List)
+          for (final c in raw)
+            if (c is Map) StudioCompaction.fromJson(Map<String, dynamic>.from(c)),
+      ];
+}
+
+/// A message the user sent while the agent was working: it waits here, shown
+/// in the chat as queued, until the agent reaches the end of its current step
+/// and takes it in — Claude Code's queued messages.
+class StudioQueuedMessage {
+  StudioQueuedMessage({
+    required this.id,
+    required this.text,
+    List<MessageImage>? images,
+  }) : images = images ?? const <MessageImage>[];
+
+  final String id;
+  final String text;
+  final List<MessageImage> images;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'text': text,
+        if (images.isNotEmpty) 'images': [for (final i in images) i.toJson()],
+      };
+
+  factory StudioQueuedMessage.fromJson(Map<String, dynamic> json) =>
+      StudioQueuedMessage(
+        id: json['id'] as String? ?? '',
+        text: json['text'] as String? ?? '',
+        images: [
+          if (json['images'] is List)
+            for (final i in json['images'] as List)
+              if (i is Map) MessageImage.fromJson(Map<String, dynamic>.from(i)),
+        ],
+      );
+}
+
+/// Answers every tool call in [transcript] that has no result — what a run cut
+/// off by the app closing leaves behind. A call with no result is one no
+/// dialect accepts again (OpenAI and Anthropic reject the request outright,
+/// Gemini loses the thread), so a session saved mid-run is repaired on load.
+///
+/// The missing results go right after the results that did arrive, before the
+/// next turn. [resultFor] says what each one reads; it is an error either way.
+/// Returns how many were added.
+int repairUnansweredCalls(
+  List<AgentMessage> transcript,
+  String Function(ToolCall call) resultFor,
+) {
+  var added = 0;
+  var i = 0;
+  while (i < transcript.length) {
+    final m = transcript[i];
+    i++;
+    if (m.role != AgentRole.assistant || m.toolCalls.isEmpty) continue;
+    final answered = <String>{};
+    var end = i;
+    while (end < transcript.length && transcript[end].role == AgentRole.tool) {
+      final id = transcript[end].toolCallId;
+      if (id != null) answered.add(id);
+      end++;
+    }
+    final missing = [
+      for (final call in m.toolCalls)
+        if (!answered.contains(call.id))
+          AgentMessage.toolResult(call, resultFor(call), isError: true),
+    ];
+    transcript.insertAll(end, missing);
+    added += missing.length;
+    i = end + missing.length;
+  }
+  return added;
+}
+
+/// What a call cut off by the app closing is answered with.
+const String kInterruptedCallResult =
+    'Interrupted before it finished — the app was closed. Call it again if it '
+    'is still needed.';
 
 /// How many snapshots a session keeps. Older changes stay listed but can no
 /// longer be rewound to; without a cap a long session's file would carry a
@@ -366,11 +519,18 @@ class StudioSession {
     DateTime? createdAt,
     DateTime? updatedAt,
     Map<String, StudioRevision>? revisions,
+    // Runtime: compaction, queued messages, run state.
+    List<StudioCompaction>? compactions,
+    List<StudioQueuedMessage>? queued,
+    this.active = false,
+    this.interrupted = false,
   })  : transcript = transcript ?? <AgentMessage>[],
         ops = ops ?? <StudioOp>[],
         subagents = subagents ?? <StudioSubagent>[],
         todos = todos ?? <StudioTodo>[],
         revisions = revisions ?? <String, StudioRevision>{},
+        compactions = compactions ?? <StudioCompaction>[],
+        queued = queued ?? <StudioQueuedMessage>[],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -434,6 +594,26 @@ class StudioSession {
     }
     return out;
   }
+  // --- runtime ---------------------------------------------------------------
+
+  /// The main agent's conversation summaries, oldest first.
+  final List<StudioCompaction> compactions;
+
+  /// Messages the user sent while the agent was working, not yet taken in.
+  final List<StudioQueuedMessage> queued;
+
+  /// Whether an agent (the main one, or a sub-agent in the background) was
+  /// working when this was saved. A session loaded with this set was cut off
+  /// by the app closing, and loads [interrupted].
+  bool active;
+
+  /// Whether the last run was cut off by the app closing. The transcript has
+  /// been repaired (see [repairUnansweredCalls]); the user can resume.
+  bool interrupted;
+
+  /// The sub-agents the app closing cut off, for the resume note.
+  List<StudioSubagent> get interruptedSubagents =>
+      [for (final a in subagents) if (a.interrupted) a];
 
   String get displayTitle {
     final t = title.trim();
@@ -535,9 +715,59 @@ class StudioSession {
           'revisions': {
             for (final e in revisions.entries) e.key: e.value.toJson(),
           },
+        if (compactions.isNotEmpty)
+          'compactions': [for (final c in compactions) c.toJson()],
+        if (queued.isNotEmpty) 'queued': [for (final q in queued) q.toJson()],
+        if (active) 'active': true,
+        if (interrupted) 'interrupted': true,
       };
 
-  factory StudioSession.fromJson(Map<String, dynamic> json) => StudioSession(
+  /// Reads a saved session. One saved while an agent worked ([active]) was cut
+  /// off by the app closing: it loads [interrupted], every agent that was
+  /// working is marked so, and each unanswered tool call is answered, so the
+  /// transcript is one every dialect accepts again.
+  factory StudioSession.fromJson(Map<String, dynamic> json) {
+    final session = StudioSession._fromJson(json);
+    if (session.active) {
+      session
+        ..active = false
+        ..interrupted = true;
+    }
+    if (session.interrupted) session.repairInterrupted();
+    return session;
+  }
+
+  /// Answers every call the app closing left open, in the main transcript and
+  /// every sub-agent's. A `task` call names the sub-agent it started and how
+  /// to carry it on.
+  void repairInterrupted() {
+    String resultFor(ToolCall call) {
+      if (call.name == 'task') {
+        for (final a in subagents) {
+          if (a.callId == call.id || a.resumeCallIds.contains(call.id)) {
+            return jsonEncode({
+              'subagent': a.label,
+              'task_id': a.id,
+              'status': 'interrupted',
+              'report': 'The app was closed while ${a.label} was working. Its '
+                  'conversation is kept: call task with task_id "${a.id}" to '
+                  'carry it on, if it is still needed.',
+            });
+          }
+        }
+      }
+      return kInterruptedCallResult;
+    }
+
+    repairUnansweredCalls(transcript, resultFor);
+    for (final a in subagents) {
+      repairUnansweredCalls(a.transcript, (_) => kInterruptedCallResult);
+      // Its clock stops where the app did, not at whenever it is next looked at.
+      if (a.interrupted) a.endedAt ??= updatedAt;
+    }
+  }
+
+  factory StudioSession._fromJson(Map<String, dynamic> json) => StudioSession(
         id: json['id'] as String? ?? '',
         title: json['title'] as String? ?? '',
         workspace: json['workspace'] is Map
@@ -576,6 +806,15 @@ class StudioSession {
               if (StudioRevision.fromJson(e.value) != null)
                 e.key.toString(): StudioRevision.fromJson(e.value)!,
         },
+        compactions: StudioCompaction.listFrom(json['compactions']),
+        queued: [
+          if (json['queued'] is List)
+            for (final q in json['queued'] as List)
+              if (q is Map)
+                StudioQueuedMessage.fromJson(Map<String, dynamic>.from(q)),
+        ],
+        active: json['active'] as bool? ?? false,
+        interrupted: json['interrupted'] as bool? ?? false,
       );
 }
 
@@ -601,6 +840,7 @@ class StudioConfig {
     this.searchKey = '',
     this.memoryEnabled = true,
     this.customAgents = const <StudioAgentType>[],
+    this.contextBudget = kStudioDefaultContextBudget,
   });
 
   /// The provider to use, or null for whichever one chats use.
@@ -654,6 +894,10 @@ class StudioConfig {
 
   /// The user's own sub-agent types, beside the built-in four.
   final List<StudioAgentType> customAgents;
+  /// How many tokens a request may reach before the agent's earlier
+  /// conversation is summarised, when the model's own window is not known
+  /// (and never more than that window when it is).
+  final int contextBudget;
 
   StudioConfig copyWith({
     String? Function()? providerId,
@@ -672,6 +916,7 @@ class StudioConfig {
     String? searchKey,
     bool? memoryEnabled,
     List<StudioAgentType>? customAgents,
+    int? contextBudget,
   }) =>
       StudioConfig(
         providerId: providerId == null ? this.providerId : providerId(),
@@ -690,6 +935,7 @@ class StudioConfig {
         searchKey: searchKey ?? this.searchKey,
         memoryEnabled: memoryEnabled ?? this.memoryEnabled,
         customAgents: customAgents ?? this.customAgents,
+        contextBudget: contextBudget ?? this.contextBudget,
       );
 
   Map<String, dynamic> toJson() => {
@@ -712,6 +958,8 @@ class StudioConfig {
         if (!memoryEnabled) 'memoryEnabled': false,
         if (customAgents.isNotEmpty)
           'customAgents': [for (final a in customAgents) a.toJson()],
+        if (contextBudget != kStudioDefaultContextBudget)
+          'contextBudget': contextBudget,
       };
 
   factory StudioConfig.fromJson(Map<String, dynamic> json) => StudioConfig(
@@ -734,6 +982,9 @@ class StudioConfig {
         searchKey: json['apiKey'] as String? ?? '',
         memoryEnabled: json['memoryEnabled'] as bool? ?? true,
         customAgents: StudioAgentType.listFrom(json['customAgents']),
+        contextBudget: ((json['contextBudget'] as num?)?.toInt() ??
+                kStudioDefaultContextBudget)
+            .clamp(kStudioMinContextBudget, kStudioMaxContextBudget),
       );
 }
 
@@ -741,3 +992,9 @@ const int kStudioDefaultMaxSteps = 40;
 
 /// How many sub-agents work at once unless the user says otherwise.
 const int kStudioDefaultParallelSubagents = 20;
+
+/// The request size, in tokens, past which an agent's earlier conversation is
+/// summarised when the model's window is not known.
+const int kStudioDefaultContextBudget = 120000;
+const int kStudioMinContextBudget = 8000;
+const int kStudioMaxContextBudget = 2000000;

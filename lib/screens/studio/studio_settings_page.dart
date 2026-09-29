@@ -71,6 +71,28 @@ class _StudioSettingsPageState extends State<StudioSettingsPage> {
 
   void _update(StudioConfig next) => _state.updateStudioConfig(next);
 
+  /// The budgets the slider stops at: roughly doubling, so both a small local
+  /// model's window and a million-token one are a short drag away.
+  static const List<int> kBudgetSteps = [
+    16000, 32000, 64000, 96000, 120000, 160000, 200000, 300000, 500000,
+    1000000,
+  ];
+
+  static int _budgetStep(int budget) {
+    var best = 0;
+    for (var i = 0; i < kBudgetSteps.length; i++) {
+      if ((kBudgetSteps[i] - budget).abs() <
+          (kBudgetSteps[best] - budget).abs()) {
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  static String _budgetLabel(int tokens) => tokens >= 1000000
+      ? '${(tokens / 1000000).toStringAsFixed(tokens % 1000000 == 0 ? 0 : 1)}M'
+      : '${(tokens / 1000).round()}k';
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -203,6 +225,31 @@ class _StudioSettingsPageState extends State<StudioSettingsPage> {
             divisions: 19,
             label: '${config.maxSteps}',
             onChanged: (v) => _update(config.copyWith(maxSteps: v.round())),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Context budget'),
+            subtitle: Text(
+              'When a conversation with the Studio grows past this many '
+              'tokens, its older part is summarised so the agent can keep '
+              'working. Never more than the model\'s own window.',
+              style: muted,
+            ),
+            trailing: Text(
+              _budgetLabel(config.contextBudget),
+              style: theme.textTheme.titleMedium,
+            ),
+          ),
+          Slider(
+            key: const Key('studio-context-budget'),
+            value: _budgetStep(config.contextBudget).toDouble(),
+            min: 0,
+            max: (kBudgetSteps.length - 1).toDouble(),
+            divisions: kBudgetSteps.length - 1,
+            label: _budgetLabel(config.contextBudget),
+            onChanged: (v) => _update(
+              config.copyWith(contextBudget: kBudgetSteps[v.round()]),
+            ),
           ),
           const Divider(height: 24),
           Text('Knowledge', style: theme.textTheme.titleSmall),

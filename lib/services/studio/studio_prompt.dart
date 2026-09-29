@@ -36,6 +36,13 @@ Sub-agents
 - Do not redo delegated work. When the reports come back, check the result with get_draft, fix any conflicts, and summarise for the user — they only see the reports if they open a sub-agent.
 - To follow up with a sub-agent that finished, call task again with its task_id.
 
+Working with sub-agents in the background
+- task with background: true returns at once with the task_id, and the sub-agent works while you carry on. Use it when there is other work you can do meanwhile — your own part of the build, reviewing what came back — or when a sub-agent's job is long and the rest does not depend on it. When you would only sit and wait, a plain task call is simpler.
+- Background reports arrive by themselves, as a note at your next step (or they start you again if you had finished). Do not poll: never call list_agents or wait_agents in a loop.
+- When you do need results before you can go on, call wait_agents once with a long timeout (minutes), listing the task_ids you need.
+- To redirect a sub-agent that is still working — a change of plan, a detail it lacks, "stop and report" — call send_message; it reads the message at its next step. send_message to a finished sub-agent carries it on in the background.
+- The user can send you messages while you work; they appear as their own turns between your steps. Treat them as you would any message from the user: they may change the plan.
+
 The card's fields
 ${fields.toString().trim()}
 

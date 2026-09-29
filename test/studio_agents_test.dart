@@ -381,9 +381,10 @@ void main() {
     expect(answered, containsAll(asked));
   });
 
-  test('the step limit ends with a summary turn sent without tools', () async {
+  test('the step limit ends with a summary turn that may not call tools',
+      () async {
     answer = (body) {
-      if (!body.containsKey('tools')) {
+      if (body['tool_choice'] == 'none') {
         return [words('Read the draft twice; nothing is built yet.')];
       }
       return [
@@ -396,7 +397,11 @@ void main() {
     await controller.send('go');
     expect(requests, hasLength(3));
     expect(requests[0].containsKey('tools'), isTrue);
-    expect(requests[2].containsKey('tools'), isFalse);
+    // The tools stay declared, so the tool calls in the history are valid on
+    // every host; calling one is what is switched off.
+    expect(requests[2].containsKey('tools'), isTrue);
+    expect(requests[2]['tool_choice'], 'none');
+    expect(requests[0].containsKey('tool_choice'), isFalse);
     expect(jsonEncode(requests[2]['messages']), contains('step limit'));
     expect(controller.session.transcript.last.text,
         'Read the draft twice; nothing is built yet.');

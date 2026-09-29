@@ -7,6 +7,7 @@ import '../../services/studio/studio_controller.dart';
 import '../../services/studio/studio_store.dart';
 import '../../state/app_state.dart';
 import 'shell/actions_capsule.dart';
+import 'shell/area_pages.dart';
 import 'shell/area_capsule.dart';
 import 'shell/bottom_fade.dart';
 import 'shell/floating_button.dart';
@@ -57,7 +58,6 @@ class _StudioScreenState extends State<StudioScreen> {
   final TextEditingController _input = TextEditingController();
   final ValueNotifier<List<MessageImage>> _attachments =
       ValueNotifier<List<MessageImage>>(const <MessageImage>[]);
-  final PageController _pages = PageController();
   final GlobalKey _dockKey = GlobalKey();
 
   StudioArea _area = StudioArea.interface;
@@ -72,12 +72,27 @@ class _StudioScreenState extends State<StudioScreen> {
   bool _panelOpen = false;
   bool _hasSubagents = false;
 
-  /// The floating dock's resting height, which the pages keep clear of. Only a
-  /// height that has held for a frame is taken — see [_measureDock] — so a
-  /// capsule springing open relays the page out once, when it lands, rather
-  /// than on every frame of the spring.
+  /// The floating dock's resting height over the conversation, which the
+  /// transcript keeps clear of. Only a height that has held for a frame is
+  /// taken — see [_measureDock] — so a capsule springing open relays the
+  /// transcript out once, when it lands, rather than on every frame of the
+  /// spring. Measured on the conversation only: what floats over the draft and
+  /// its changes is fixed ([_areasDock]), so switching pages never changes an
+  /// inset and never lays a page out again mid-slide.
   double _dockHeight = 0;
   double? _pendingDock;
+
+  /// What floats over the draft and its changes: the areas capsule alone —
+  /// 52 tall, 6 above it and 14 below.
+  static const double _areasDock = 6 + 52 + 14;
+
+  /// The three pages, built once and handed back as the same instances on
+  /// every rebuild of the shell, so switching areas (a setState here) does not
+  /// rebuild a page. The conversation's is remade only when whose conversation
+  /// it shows changes.
+  late final Widget _draftPage = StudioDraftView(controller: _controller);
+  late final Widget _changesPage = StudioChangesView(controller: _controller);
+  late Widget _interfacePage = _buildInterface();
 
   @override
   void initState() {
@@ -98,7 +113,6 @@ class _StudioScreenState extends State<StudioScreen> {
     _controller.removeListener(_onController);
     _input.dispose();
     _attachments.dispose();
-    _pages.dispose();
     StudioHub.instance.release(widget.session.id);
     super.dispose();
   }
@@ -112,7 +126,7 @@ class _StudioScreenState extends State<StudioScreen> {
   }
 
   void _measureDock() {
-    if (!mounted) return;
+    if (!mounted || _area != StudioArea.interface) return;
     final box = _dockKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
     final height = box.size.height;
@@ -168,11 +182,6 @@ class _StudioScreenState extends State<StudioScreen> {
       _area = area;
       _actionsOpen = false;
     });
-    _pages.animateToPage(
-      area.index,
-      duration: const Duration(milliseconds: 450),
-      curve: Easing.emphasizedDecelerate,
-    );
   }
 
   /// Switches the areas capsule on or off. It is remembered app-wide, so it is
@@ -210,6 +219,7 @@ class _StudioScreenState extends State<StudioScreen> {
       if (agentId != _viewing) {
         _teleportDirection = agentId == kMainAgent ? -1 : 1;
         _viewing = agentId;
+        _interfacePage = _buildInterface();
       }
       _panelOpen = false;
       _actionsOpen = false;
@@ -284,21 +294,24 @@ class _StudioScreenState extends State<StudioScreen> {
           return Stack(
             children: [
               Positioned.fill(
-                child: StudioChrome(
-                  statusBar: view.top,
-                  bottom: _dockHeight + view.bottom,
-                  rightButton: _hasSubagents,
-                  child: PageView(
-                    controller: _pages,
-                    // Pages change from the capsule; a sideways swipe belongs
-                    // to what is on them.
-                    physics: const NeverScrollableScrollPhysics(),
-                    children: [
-                      _interface(),
-                      StudioDraftView(controller: _controller),
-                      StudioChangesView(controller: _controller),
-                    ],
-                  ),
+                child: StudioAreaPages(
+                  index: _area.index,
+                  pages: [
+                    for (final area in StudioArea.values)
+                      StudioChrome(
+                        statusBar: view.top,
+                        bottom: view.bottom +
+                            (area == StudioArea.interface
+                                ? _dockHeight
+                                : (areasShown ? _areasDock : 0)),
+                        rightButton: _hasSubagents,
+                        child: switch (area) {
+                          StudioArea.interface => _interfacePage,
+                          StudioArea.draft => _draftPage,
+                          StudioArea.changes => _changesPage,
+                        },
+                      ),
+                  ],
                 ),
               ),
               // What scrolls up under the status bar fades out there, rather
@@ -438,6 +451,16 @@ class _StudioScreenState extends State<StudioScreen> {
                       ? const SizedBox(width: double.infinity)
                       : _Notice(controller: _controller),
                 ),
+                // A run the app closing cut off waits for a tap: resuming
+                // spends, so it never starts on its own.
+                ListenableBuilder(
+                  listenable: _controller,
+                  builder: (context, _) => _Reveal(
+                    show: _controller.interrupted && !_controller.running,
+                    alignment: Alignment.bottomCenter,
+                    child: _InterruptedNotice(controller: _controller),
+                  ),
+                ),
                 // Out of the composer's ⋯, from its right-hand end.
                 _Reveal(
                   show: showActions,
@@ -507,7 +530,7 @@ class _StudioScreenState extends State<StudioScreen> {
   /// The conversation on screen: Main's, or a sub-agent's. Changing whose
   /// slides one chat out and the next in — toward a sub-agent to the left, back
   /// to Main to the right — with no fade.
-  Widget _interface() => ClipRect(
+  Widget _buildInterface() => ClipRect(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 380),
           switchInCurve: Easing.emphasizedDecelerate,
@@ -716,6 +739,70 @@ class _Notice extends StatelessWidget {
             tooltip: 'Dismiss',
             icon: const Icon(Icons.close, size: 18),
             onPressed: controller.dismissNotice,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What a session the app closing cut off shows over the composer: what
+/// happened, and the one tap that carries on.
+class _InterruptedNotice extends StatelessWidget {
+  const _InterruptedNotice({required this.controller});
+
+  final StudioController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final cut = controller.session.interruptedSubagents.length;
+    return Container(
+      key: const Key('studio-interrupted'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(28),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'The Studio was interrupted',
+            style: theme.textTheme.titleMedium
+                ?.copyWith(color: scheme.onTertiaryContainer),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            cut == 0
+                ? 'The app closed while it was working. Everything up to then '
+                    'is saved.'
+                : 'The app closed while it was working, with $cut '
+                    'sub-agent${cut == 1 ? '' : 's'}. Everything up to then is '
+                    'saved.',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: scheme.onTertiaryContainer),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                key: const Key('studio-interrupted-dismiss'),
+                onPressed: controller.dismissInterrupted,
+                child: const Text('Not now'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                key: const Key('studio-resume'),
+                onPressed: controller.resume,
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Resume'),
+              ),
+            ],
           ),
         ],
       ),

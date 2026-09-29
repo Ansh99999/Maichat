@@ -14,9 +14,21 @@ import 'chat_client.dart';
 /// knobs a roleplay preset carries (penalties, stop strings, thinking budgets)
 /// are exactly the ones that break tool calling on one host or another.
 class AgentParams {
-  const AgentParams({this.temperature, this.maxTokens, this.stream = true});
+  const AgentParams({
+    this.temperature,
+    this.maxTokens,
+    this.stream = true,
+    this.toolsOff = false,
+  });
 
   final double? temperature;
+
+  /// The tools are declared but may not be called this turn (`tool_choice`
+  /// "none", or Gemini's function-calling mode `NONE`). How a turn asks for
+  /// words only while the history still holds tool calls: declaring the
+  /// tools keeps that history valid on every dialect, which leaving them out
+  /// does not promise.
+  final bool toolsOff;
 
   /// The reply's ceiling. Anthropic requires one, so it falls back to
   /// [kAgentDefaultMaxTokens] there when unset.
@@ -171,6 +183,7 @@ class AgentClient {
                   },
                 },
             ],
+          if (tools.isNotEmpty && params.toolsOff) 'tool_choice': 'none',
           if (params.temperature != null) 'temperature': params.temperature,
           if ((params.maxTokens ?? 0) > 0) 'max_tokens': params.maxTokens,
         };
@@ -190,6 +203,7 @@ class AgentClient {
                   'parameters': t.parameters,
                 },
             ],
+          if (tools.isNotEmpty && params.toolsOff) 'tool_choice': 'none',
           if (params.temperature != null) 'temperature': params.temperature,
           if ((params.maxTokens ?? 0) > 0) 'max_output_tokens': params.maxTokens,
         };
@@ -211,6 +225,8 @@ class AgentClient {
                   'input_schema': t.parameters,
                 },
             ],
+          if (tools.isNotEmpty && params.toolsOff)
+            'tool_choice': <String, dynamic>{'type': 'none'},
           if (params.temperature != null)
             'temperature': params.temperature!.clamp(0.0, 1.0),
         };
@@ -240,6 +256,10 @@ class AgentClient {
                 ],
               },
             ],
+          if (tools.isNotEmpty && params.toolsOff)
+            'toolConfig': {
+              'functionCallingConfig': {'mode': 'NONE'},
+            },
           if (gen.isNotEmpty) 'generationConfig': gen,
         };
     }

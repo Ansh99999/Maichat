@@ -5232,6 +5232,7 @@ class AppState extends ChangeNotifier {
     required AgentClient client,
     required List<AgentMessage> messages,
     required List<ToolSpec> tools,
+    bool toolsOff = false,
     void Function(TokenUsage usage, double cost)? onSpend,
     // A sub-agent type the user gave a model of its own runs on that model.
     String? model,
@@ -5258,6 +5259,7 @@ class AppState extends ChangeNotifier {
           temperature: _studioConfig.temperature,
           maxTokens: _studioConfig.maxTokens,
           stream: _studioConfig.stream,
+          toolsOff: toolsOff,
         ),
       )) {
         if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);

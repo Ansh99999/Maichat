@@ -78,7 +78,9 @@ class _StudioComposerState extends State<StudioComposer> {
 
   void _send() {
     final text = widget.input.text.trim();
-    if ((text.isEmpty && _attachments.isEmpty) || _c.running) return;
+    // While the agent works the message is queued, not refused: it reads it at
+    // its next step.
+    if (text.isEmpty && _attachments.isEmpty) return;
     final images = List<MessageImage>.of(_attachments);
     widget.input.clear();
     widget.attachments.value = const <MessageImage>[];
@@ -102,30 +104,45 @@ class _StudioComposerState extends State<StudioComposer> {
         ),
       );
 
+  /// Send — and, while anything works, Stop beside it: a message sent then is
+  /// queued for the agent's next step, so both stay in reach.
   Widget _sendButton() {
     final scheme = Theme.of(context).colorScheme;
-    if (_c.running) {
-      return IconButton.filled(
-        key: const Key('studio-stop'),
-        tooltip: 'Stop',
-        onPressed: _c.stop,
-        style: IconButton.styleFrom(
-          backgroundColor: scheme.error,
-          foregroundColor: scheme.onError,
-        ),
-        icon: const Icon(Icons.stop),
-      );
-    }
-    return ValueListenableBuilder<TextEditingValue>(
+    final send = ValueListenableBuilder<TextEditingValue>(
       valueListenable: widget.input,
       builder: (context, value, _) => IconButton.filled(
         key: const Key('studio-send'),
-        tooltip: 'Send',
+        tooltip: _c.running ? 'Queue for the agent' : 'Send',
         onPressed: value.text.trim().isEmpty && _attachments.isEmpty
             ? null
             : _send,
         icon: const Icon(Icons.arrow_upward),
       ),
+    );
+    final stop = IconButton.filledTonal(
+      key: const Key('studio-stop'),
+      tooltip: 'Stop',
+      onPressed: _c.stop,
+      style: IconButton.styleFrom(
+        backgroundColor: scheme.errorContainer,
+        foregroundColor: scheme.onErrorContainer,
+      ),
+      icon: const Icon(Icons.stop_rounded),
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Stop grows in beside Send rather than replacing it.
+        AnimatedSize(
+          duration: const Duration(milliseconds: 260),
+          curve: Easing.emphasizedDecelerate,
+          alignment: Alignment.centerRight,
+          child: _c.busy
+              ? Padding(padding: const EdgeInsets.only(right: 4), child: stop)
+              : const SizedBox.shrink(),
+        ),
+        send,
+      ],
     );
   }
 
@@ -327,6 +344,6 @@ class _StudioComposerState extends State<StudioComposer> {
   }
 
   String _hint() => _c.running
-      ? 'Working — type the next message'
+      ? 'Working — add something and it reads it next'
       : 'Describe the vibe, or ask for a change';
 }
