@@ -35,6 +35,7 @@ import '../models/summary.dart';
 import '../models/usage.dart';
 import '../models/view_prefs.dart';
 import '../services/agent_client.dart';
+import '../services/btw.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
 import '../services/avatar_store.dart';
@@ -5095,6 +5096,108 @@ class AppState extends ChangeNotifier {
         await _persistUsage();
       }
       notifyListeners();
+    }
+  }
+
+  /// `/btw`: answers a side [question] about [conversation] (the active chat
+  /// when null) and returns the answer — **without** it ever becoming part of
+  /// the chat. Nothing is added to the thread, nothing is written to the store
+  /// but the usage ledger, and the next send knows nothing of it.
+  ///
+  /// The request is the chat's own: [_assemble] builds it exactly as a reply's
+  /// (preset, character, lore, summary, hint, regex — and so its single leading
+  /// `system` message), and the question goes on the end as one more `user`
+  /// turn, the way [writeForUser]'s instruction does. A reply being written
+  /// right now is left out of that context — it is not finished yet.
+  ///
+  /// It has a client of its own ([client], or a fresh one) and never touches
+  /// [streaming], so a reply in flight carries on undisturbed and the chat's
+  /// Stop still stops only that. [run] is how the sheet asking cancels it; a
+  /// cancelled question returns what had arrived. [onProgress] gets the answer
+  /// so far on the reply's paint cadence, thinking taken out.
+  ///
+  /// Throws [ChatApiException] when the request failed.
+  Future<String> askAside(
+    String question, {
+    Conversation? conversation,
+    ChatClient? client,
+    BtwRun? run,
+    void Function(String text)? onProgress,
+  }) async {
+    final chat = conversation ?? active;
+    final preset = presetFor(chat);
+    final base = _resolveProvider(preset, conversation: chat);
+    if (base == null) {
+      throw ChatApiException('Set up a provider in Settings first.');
+    }
+    final blocked = blockingBudget(base, base.model);
+    if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
+
+    // The turn a reply is streaming into is the last one, and only half there.
+    final generating = _streaming &&
+        !_writingForUser &&
+        identical(chat, active) &&
+        chat.messages.isNotEmpty &&
+        !chat.messages.last.isUser;
+    final assembled = _assemble(
+      chat,
+      historyEnd: generating ? chat.messages.length - 1 : null,
+    );
+    final history = _wirePayload(
+      assembled.messages,
+      instruction: chatBtwInstruction(question),
+    );
+    final tags = ReasoningTags(
+      start: preset?.thinkStartTag.trim() ?? '',
+      end: preset?.thinkEndTag.trim() ?? '',
+    );
+    final http = client ?? ChatClient();
+    run?.onCancel(http.cancel);
+    final provider = _applyKey(base);
+    final raw = StringBuffer();
+    TokenUsage? reported;
+    var sent = false;
+    String answer() => splitReasoning(raw.toString(), tags).text.trim();
+    try {
+      if (run?.cancelled ?? false) return '';
+      sent = true;
+      final clock = Stopwatch()..start();
+      var painted = -_streamPaintMs;
+      await for (final delta in http.streamChat(
+        provider: provider,
+        history: history,
+        params: assembled.params,
+      )) {
+        if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);
+        if (delta.text.isEmpty) continue;
+        raw.write(delta.text);
+        final now = clock.elapsedMilliseconds;
+        if (now - painted < _streamPaintMs) continue;
+        painted = now;
+        onProgress?.call(answer());
+      }
+      final text = answer();
+      onProgress?.call(text);
+      return text;
+    } on ChatApiException {
+      // Put away mid-answer: the closed connection is not a failure.
+      if (run?.cancelled ?? false) return answer();
+      _advanceKeyOnError(base);
+      rethrow;
+    } finally {
+      if (sent) {
+        recordUsage(
+          base,
+          base.model,
+          reported ??
+              TokenUsage(
+                inputTokens: assembled.totalTokens,
+                outputTokens: _tokenizer.estimate(raw.toString()),
+                estimated: true,
+              ),
+        );
+        await _persistUsage();
+      }
     }
   }
 

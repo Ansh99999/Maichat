@@ -13,6 +13,7 @@ import '../../models/studio.dart';
 import '../../models/usage.dart';
 import '../../state/app_state.dart';
 import '../agent_client.dart';
+import '../btw.dart';
 import '../chat_client.dart';
 import '../document_sources.dart';
 import '../model_context.dart';
@@ -330,6 +331,52 @@ class StudioController extends ChangeNotifier {
       notifyListeners();
     }
     return done;
+  }
+
+  /// `/btw`: answers a side [question] with the main agent's conversation as
+  /// context, and returns the answer — which, like the question, is never
+  /// added to the session: not to the transcript, the queue, the summaries or
+  /// the session's spend (the app's usage ledger still counts it).
+  ///
+  /// The request is the main agent's own next one ([nextRequestFor] — its
+  /// instructions, summary, conversation and waiting messages), with the
+  /// question as the last `user` turn and tool calls switched off the way the
+  /// step-limit summary turn does it (tools declared, `tool_choice: none`).
+  /// It runs on a client of its own beside a run in progress, which it does
+  /// not touch; a call that run is still waiting on is answered in the copy
+  /// only, so the request is one every host accepts.
+  ///
+  /// [run] is how the sheet asking cancels it; a cancelled question returns
+  /// what had arrived. Throws [ChatApiException] when the request failed.
+  Future<String> askAside(
+    String question, {
+    List<MessageImage> images = const <MessageImage>[],
+    BtwRun? run,
+    void Function(String text)? onProgress,
+  }) async {
+    final request = nextRequestFor(kMainAgent)!;
+    final messages = List<AgentMessage>.of(request.messages);
+    repairUnansweredCalls(messages, (_) => kBtwOpenCallResult);
+    messages.add(AgentMessage.user(studioBtwInstruction(question), images: images));
+    final client = AgentClient();
+    run?.onCancel(client.cancel);
+    final text = StringBuffer();
+    try {
+      if (run?.cancelled ?? false) return '';
+      await for (final delta in state.streamAgentTurn(
+        client: client,
+        messages: messages,
+        tools: request.specs,
+        toolsOff: true,
+      )) {
+        if (delta.text.isEmpty) continue;
+        text.write(delta.text);
+        onProgress?.call(text.toString().trim());
+      }
+    } on ChatApiException {
+      if (!(run?.cancelled ?? false)) rethrow;
+    }
+    return text.toString().trim();
   }
 
   /// Stops the agent and every sub-agent — foreground or background — and

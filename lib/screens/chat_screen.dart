@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
@@ -13,12 +14,14 @@ import '../models/chat_interface.dart';
 import '../models/message.dart';
 import '../models/message_image.dart';
 import '../models/provider.dart';
+import '../services/btw.dart';
 import '../services/chat_client.dart';
 import '../services/chat_graph.dart';
 import '../services/jank_logger.dart';
 import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/avatar_swipe_sheet.dart';
+import '../widgets/btw_sheet.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/floating_images_layer.dart';
 import '../widgets/interface_preset_sheet.dart';
@@ -313,6 +316,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send(AppState state) async {
     final text = _input.text;
+    // `/btw <question>` is a side question, not a turn — and it may be asked
+    // while a reply is still being written.
+    final aside = btwQuestion(text);
+    if (aside != null) {
+      _askAside(state, aside);
+      return;
+    }
     final images = List<MessageImage>.of(_attachments);
     if ((text.trim().isEmpty && images.isEmpty) || state.streaming) return;
     if (!state.isConfigured) {
@@ -330,6 +340,33 @@ class _ChatScreenState extends State<ChatScreen> {
     _stickToLatest();
     await state.send(text, images: images);
     _stickToLatest();
+  }
+
+  /// `/btw`: answers [question] in a sheet over the chat, with the chat as
+  /// context, and keeps none of it ([AppState.askAside]). The thread is not
+  /// touched — no turn, no scroll, and a reply streaming underneath carries on;
+  /// pictures waiting in the tray stay there for the next real send.
+  void _askAside(AppState state, String question) {
+    if (question.isEmpty) {
+      _toast('Say what to ask: /btw <question>.');
+      return;
+    }
+    if (!state.isConfigured) {
+      _openSettings();
+      return;
+    }
+    _input.clear();
+    final conversation = state.active;
+    unawaited(showBtwSheet(
+      context,
+      question: question,
+      ask: (run, onProgress) => state.askAside(
+        question,
+        conversation: conversation,
+        run: run,
+        onProgress: onProgress,
+      ),
+    ));
   }
 
   /// Picks a picture out of the app's own gallery for the next send.
@@ -1899,31 +1936,46 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) _toast('Now impersonating ${character.displayName}.');
   }
 
-  /// Doubles as the stop control while a reply is streaming.
+  /// Doubles as the stop control while a reply is streaming — except while
+  /// the box holds a `/btw` line, which can be asked mid-reply: then it asks.
   Widget _sendButton(AppState state) {
     final scheme = Theme.of(context).colorScheme;
-    if (state.streaming) {
-      return IconButton.filled(
-        tooltip: 'Stop',
-        onPressed: state.stop,
-        style: IconButton.styleFrom(
-          backgroundColor: scheme.error,
-          foregroundColor: scheme.onError,
-        ),
-        icon: const Icon(Icons.stop),
-      );
-    }
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: _input,
-      builder: (context, value, _) => IconButton.filled(
-        tooltip: 'Send',
-        // A picture on its own is a message: Send stays live with an empty box
-        // as long as something is attached.
-        onPressed: value.text.trim().isEmpty && _attachments.isEmpty
-            ? null
-            : () => _send(state),
-        icon: const Icon(Icons.arrow_upward),
-      ),
+      builder: (context, value, _) {
+        if (btwQuestion(value.text) != null) {
+          return IconButton.filled(
+            key: const Key('chat-ask-aside'),
+            tooltip: 'Ask on the side',
+            onPressed: () => _send(state),
+            style: IconButton.styleFrom(
+              backgroundColor: scheme.tertiary,
+              foregroundColor: scheme.onTertiary,
+            ),
+            icon: const Icon(Icons.tips_and_updates_outlined),
+          );
+        }
+        if (state.streaming) {
+          return IconButton.filled(
+            tooltip: 'Stop',
+            onPressed: state.stop,
+            style: IconButton.styleFrom(
+              backgroundColor: scheme.error,
+              foregroundColor: scheme.onError,
+            ),
+            icon: const Icon(Icons.stop),
+          );
+        }
+        return IconButton.filled(
+          tooltip: 'Send',
+          // A picture on its own is a message: Send stays live with an empty
+          // box as long as something is attached.
+          onPressed: value.text.trim().isEmpty && _attachments.isEmpty
+              ? null
+              : () => _send(state),
+          icon: const Icon(Icons.arrow_upward),
+        );
+      },
     );
   }
 }

@@ -92,6 +92,12 @@ const List<StudioCommand> kBuiltInCommands = [
     description: 'Stop the Studio and every sub-agent',
     kind: StudioCommandKind.builtIn,
   ),
+  StudioCommand(
+    name: 'btw',
+    description: 'Ask a quick side question — not kept in the session',
+    kind: StudioCommandKind.builtIn,
+    argumentHint: '<question>',
+  ),
 ];
 
 /// Every command there is: the built-ins first, then the user's own, then

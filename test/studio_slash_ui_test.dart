@@ -213,10 +213,11 @@ void main() {
     expect(sheet, findsOneWidget);
     expect(find.text('Built in'), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.text('Your commands'),
+      find.text('/villain'),
       200,
       scrollable: find.descendant(of: sheet, matching: find.byType(Scrollable)),
     );
+    expect(find.text('Your commands'), findsOneWidget);
     expect(find.text('/villain'), findsOneWidget);
     expect(find.text('Skills'), findsOneWidget);
   });

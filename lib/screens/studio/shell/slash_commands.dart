@@ -22,12 +22,17 @@ class StudioSlashCommands {
     required this.onNewSession,
     required this.onToast,
     required this.onUnknown,
+    this.onBtw,
     this.memory,
   });
 
   final StudioController controller;
   final void Function() onHelp;
   final void Function() onSkills;
+
+  /// `/btw <question>`: the screen opens the side-question sheet, which asks
+  /// through [StudioController.askAside]. Nothing reaches the session.
+  final void Function(String question, List<MessageImage> images)? onBtw;
 
   /// `/context`: the context inspector for the agent on screen.
   final void Function() onContext;
@@ -95,6 +100,17 @@ class StudioSlashCommands {
     switch (name) {
       case 'help':
         onHelp();
+      case 'btw':
+        if (args.isEmpty) {
+          onToast('Say what to ask: /btw <question>.');
+          return;
+        }
+        final ask = onBtw;
+        if (ask == null) {
+          onToast('Side questions are not available here.');
+          return;
+        }
+        ask(args, images);
       case 'skills':
         onSkills();
       case 'context':

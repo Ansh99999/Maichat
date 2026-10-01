@@ -6,6 +6,7 @@ import '../../../models/message_image.dart';
 import '../../../services/studio/studio_commands.dart';
 import '../../../services/studio/studio_controller.dart';
 import '../../../services/studio/studio_skills.dart';
+import '../../../widgets/btw_sheet.dart';
 import '../settings/studio_skills_page.dart';
 import 'slash_commands.dart';
 import 'slash_panel.dart';
@@ -41,6 +42,7 @@ class StudioSlashHost {
       onNewSession: onNewSession,
       onToast: _toast,
       onUnknown: state.showUnknown,
+      onBtw: _askAside,
     );
     controller.onSlashCommand = runner.handle;
     unawaited(_load());
@@ -141,6 +143,23 @@ class StudioSlashHost {
         behavior: SnackBarBehavior.floating,
         margin: EdgeInsets.fromLTRB(16, 0, 16, toastInset() + 12),
       ));
+  }
+
+  /// `/btw`: the side-question sheet, asking through
+  /// [StudioController.askAside] — nothing it says reaches the session.
+  void _askAside(String question, List<MessageImage> images) {
+    final ctx = context();
+    if (!ctx.mounted) return;
+    unawaited(showBtwSheet(
+      ctx,
+      question: question,
+      ask: (run, onProgress) => controller.askAside(
+        question,
+        images: images,
+        run: run,
+        onProgress: onProgress,
+      ),
+    ));
   }
 
   void _showHelp() {

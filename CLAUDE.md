@@ -406,6 +406,21 @@ bar or the overflow menu.
   it. The composer keeps the text in its own controller and only writes it to the
   store on close/send/leaving the chat — a prefs write per keystroke is a file
   rewrite per keystroke.
+- **Side questions (`/btw`):** Claude Code's `/btw` in both composers — the
+  chat's (its only slash command; `btwQuestion` in `services/btw.dart`, read
+  with the Studio's `parseSlash`) and the Studio's (a built-in). The answer
+  shows in `widgets/btw_sheet.dart` and is **never kept**: no turn, no queue,
+  no summary, no store write but the usage ledger, nothing in a later request.
+  `AppState.askAside` is the chat's own `_assemble` + `_wirePayload` with the
+  question as the last `user` turn (one leading system message holds; a reply
+  still streaming is left out of the context); `StudioController.askAside` is
+  `nextRequestFor(kMainAgent)` plus the question, tools declared with
+  `toolsOff`, and calls a running turn is still waiting on answered in the copy
+  only. Each runs on a client of its own and never touches `_streaming`, so a
+  reply in flight carries on (the chat's Stop button turns into "Ask on the
+  side" only while the box holds a `/btw` line); putting the sheet away
+  cancels it through `BtwRun`. `test/btw_test.dart` pins the wire,
+  `test/btw_ui_test.dart` the surfaces.
 - **Pictures in a chat (sending):** `models/message_image.dart` — a turn's
   `ChatMessage.images` hold a `local:`/URL ref plus a mime; the base64 only exists
   on the copy `AppState._wireImages` builds, capped at `kMaxWireImages` newest.
@@ -518,7 +533,8 @@ bar or the overflow menu.
     (`studio_commands.dart`, `StudioSlashHost` in the dock): built-ins, one per
     enabled skill, and the user's `$ARGUMENTS` templates in `studio/commands/`;
     parsed in one place and hooked through `StudioController.onSlashCommand`;
-    UI-only commands never reach the model.
+    UI-only commands never reach the model. `/btw` is answered aside and kept
+    out of the session — see **Side questions** above.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
