@@ -5,12 +5,12 @@ import '../../models/message_image.dart';
 import '../../models/studio.dart';
 import '../../services/studio/studio_controller.dart';
 import '../../services/studio/studio_store.dart';
+import '../../services/studio/studio_tools.dart' show studioAgentTypeLabel;
 import '../../state/app_state.dart';
 import 'shell/actions_capsule.dart';
 import 'shell/area_pages.dart';
 import 'shell/area_capsule.dart';
 import 'shell/bottom_fade.dart';
-import 'shell/context_meter.dart';
 import 'shell/context_sheet.dart';
 import 'shell/floating_button.dart';
 import 'shell/liquid_panel.dart';
@@ -61,6 +61,16 @@ class _StudioScreenState extends State<StudioScreen> {
   final TextEditingController _input = TextEditingController();
   final ValueNotifier<List<MessageImage>> _attachments =
       ValueNotifier<List<MessageImage>>(const <MessageImage>[]);
+
+  /// What is being written to the sub-agent on screen — kept apart from what
+  /// is being written to Main, and cleared when the chat changes hands.
+  final TextEditingController _subInput = TextEditingController();
+  final ValueNotifier<List<MessageImage>> _subAttachments =
+      ValueNotifier<List<MessageImage>>(const <MessageImage>[]);
+
+  /// The pictures waiting to go to whoever is on screen.
+  ValueNotifier<List<MessageImage>> get _pictures =>
+      _viewing == kMainAgent ? _attachments : _subAttachments;
   final GlobalKey _dockKey = GlobalKey();
 
   StudioArea _area = StudioArea.interface;
@@ -147,6 +157,8 @@ class _StudioScreenState extends State<StudioScreen> {
     _slash.dispose();
     _input.dispose();
     _attachments.dispose();
+    _subInput.dispose();
+    _subAttachments.dispose();
     StudioHub.instance.release(widget.session.id);
     super.dispose();
   }
@@ -236,14 +248,14 @@ class _StudioScreenState extends State<StudioScreen> {
     );
     if (image == null || !mounted) return;
     setState(() => _actionsOpen = false);
-    _attachments.value = [..._attachments.value, image];
+    _pictures.value = [..._pictures.value, image];
   }
 
   Future<void> _addFromDevice() async {
     final images = await pickStudioDevicePictures(context);
     if (images.isEmpty || !mounted) return;
     setState(() => _actionsOpen = false);
-    _attachments.value = [..._attachments.value, ...images];
+    _pictures.value = [..._pictures.value, ...images];
   }
 
   /// Shows [agentId]'s conversation (Main or a sub-agent's) on the Interface
@@ -253,6 +265,8 @@ class _StudioScreenState extends State<StudioScreen> {
       if (agentId != _viewing) {
         _teleportDirection = agentId == kMainAgent ? -1 : 1;
         _viewing = agentId;
+        _subInput.clear();
+        _subAttachments.value = const <MessageImage>[];
         _interfacePage = _buildInterface();
       }
       _panelOpen = false;
@@ -460,7 +474,7 @@ class _StudioScreenState extends State<StudioScreen> {
     required bool areasShown,
   }) {
     final showComposer = onConversation;
-    final showActions = onConversation && viewingMain && _actionsOpen;
+    final showActions = onConversation && _actionsOpen;
     final empty = !showComposer && !areasShown;
     return Stack(
       clipBehavior: Clip.none,
@@ -561,10 +575,25 @@ class _StudioScreenState extends State<StudioScreen> {
                           onToggleActions: () =>
                               setState(() => _actionsOpen = !_actionsOpen),
                         ))
-                      : _ViewingBar(
-                          controller: _controller,
-                          agentId: _viewing,
-                          onBack: () => _teleport(kMainAgent),
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _ViewingBar(
+                              controller: _controller,
+                              agentId: _viewing,
+                              onBack: () => _teleport(kMainAgent),
+                            ),
+                            StudioComposer(
+                              key: const Key('studio-subagent-composer'),
+                              controller: _controller,
+                              agentId: _viewing,
+                              input: _subInput,
+                              attachments: _subAttachments,
+                              actionsOpen: _actionsOpen,
+                              onToggleActions: () =>
+                                  setState(() => _actionsOpen = !_actionsOpen),
+                            ),
+                          ],
                         ),
                 ),
               ],
@@ -699,8 +728,9 @@ class _AgentsButton extends StatelessWidget {
   }
 }
 
-/// What replaces the composer while a sub-agent's conversation is on screen:
-/// its conversation is its own, and read-only.
+/// What sits over the composer while a sub-agent's conversation is on screen:
+/// whom the composer is writing to, and the way back to Main. A slim strip —
+/// the composer under it does the talking.
 class _ViewingBar extends StatelessWidget {
   const _ViewingBar({
     required this.controller,
@@ -716,43 +746,57 @@ class _ViewingBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final agent = controller.subagent(agentId);
-    return SafeArea(
-      top: false,
-      bottom: false,
-      child: Container(
-        key: const Key('studio-viewing-bar'),
-        margin: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-        padding: const EdgeInsets.fromLTRB(16, 6, 6, 6),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(28),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.smart_toy_outlined, size: 18, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Viewing ${agent?.label ?? 'a sub-agent'} · read-only',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final agent = controller.subagent(agentId);
+        final working = agent?.running ?? false;
+        final type = agent == null ? '' : studioAgentTypeLabel(agent.role);
+        return Padding(
+          key: const Key('studio-viewing-bar'),
+          padding: const EdgeInsets.fromLTRB(16, 6, 12, 0),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(10, 6, 14, 6),
+                decoration: BoxDecoration(
+                  color: scheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      working ? Icons.smart_toy : Icons.smart_toy_outlined,
+                      size: 16,
+                      color: scheme.onSecondaryContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: Text(
+                        'Talking to ${agent?.label ?? 'a sub-agent'}'
+                        '${type.isEmpty ? '' : ' · $type'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelLarge
+                            ?.copyWith(color: scheme.onSecondaryContainer),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            // How full this sub-agent's own context is; tap for the detail.
-            StudioContextMeter(controller: controller, agentId: agentId),
-            const SizedBox(width: 4),
-            FilledButton.tonalIcon(
-              key: const Key('studio-back-to-main'),
-              onPressed: onBack,
-              icon: const Icon(Icons.hub_outlined, size: 18),
-              label: const Text('Main'),
-            ),
-          ],
-        ),
-      ),
+              const Spacer(),
+              TextButton.icon(
+                key: const Key('studio-back-to-main'),
+                onPressed: onBack,
+                icon: const Icon(Icons.hub_outlined, size: 18),
+                label: const Text('Main'),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

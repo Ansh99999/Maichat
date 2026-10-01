@@ -239,7 +239,9 @@ class StudioSubagent {
     List<StudioCompaction>? compactions,
     this.background = false,
     this.interrupted = false,
+    List<StudioQueuedMessage>? queued,
   })  : transcript = transcript ?? <AgentMessage>[],
+        queued = queued ?? <StudioQueuedMessage>[],
         todos = todos ?? <StudioTodo>[],
         resumeCallIds = resumeCallIds ?? <String>[],
         compactions = compactions ?? <StudioCompaction>[],
@@ -293,6 +295,11 @@ class StudioSubagent {
   /// and `task` with its id carries it on.
   bool interrupted;
 
+  /// What the user wrote to it directly and it has not read yet — taken in
+  /// at its next step while it works, or the moment it is carried on. Saved,
+  /// so a message sent just before the app closed is still there to read.
+  final List<StudioQueuedMessage> queued;
+
   /// Its last request, as the host counted it beside the Studio's estimate —
   /// what the context inspector compares. Null until a host reports real
   /// usage.
@@ -332,6 +339,7 @@ class StudioSubagent {
           'compactions': [for (final c in compactions) c.toJson()],
         if (background) 'background': true,
         if (interrupted) 'interrupted': true,
+        if (queued.isNotEmpty) 'queued': [for (final q in queued) q.toJson()],
         if (lastRequest != null) 'lastRequest': lastRequest!.toJson(),
       };
 
@@ -373,6 +381,12 @@ class StudioSubagent {
       compactions: StudioCompaction.listFrom(json['compactions']),
       background: json['background'] as bool? ?? false,
       interrupted: interrupted,
+      queued: [
+        if (json['queued'] is List)
+          for (final q in json['queued'] as List)
+            if (q is Map)
+              StudioQueuedMessage.fromJson(Map<String, dynamic>.from(q)),
+      ],
     )..lastRequest = StudioRequestSize.fromJson(json['lastRequest']);
   }
 }

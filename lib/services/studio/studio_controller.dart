@@ -26,6 +26,7 @@ import 'studio_context.dart';
 import 'studio_knowledge.dart';
 import 'studio_skills.dart';
 import 'studio_memory.dart';
+import 'studio_prompt.dart';
 import 'studio_store.dart';
 import 'studio_tools.dart';
 
@@ -431,7 +432,12 @@ class StudioController extends ChangeNotifier {
           AgentMessage.user(q.text, images: q.images),
       ];
 
-  bool _leadInboxWaiting() => session.queued.isNotEmpty || _notes.isNotEmpty;
+  /// Whether something waiting for the main agent needs an answer — what
+  /// keeps a run going, or starts another. A sub-agent's reply to the user is
+  /// only for the main agent to know about: it is taken in with whatever comes
+  /// next, and never makes the main agent run on its own.
+  bool _leadInboxWaiting() =>
+      session.queued.isNotEmpty || _notes.any((n) => n.wake);
 
   /// The Studio's memory across sessions, read once from its file and handed
   /// to the knowledge tools (and every agent's instructions) from then on.
@@ -500,7 +506,7 @@ class StudioController extends ChangeNotifier {
     final setup = _runSetups[agentId] ?? _setupFor(agentId);
     final inbox = sub == null
         ? _leadInbox()
-        : List<AgentMessage>.of(_subInbox[sub.id] ?? const <AgentMessage>[]);
+        : _subInboxOf(sub);
     final transcript = [...(sub?.transcript ?? session.transcript), ...inbox];
     final compactions = sub?.compactions ?? session.compactions;
     final latest = compactions.isEmpty ? null : compactions.last;
@@ -765,10 +771,15 @@ class StudioController extends ChangeNotifier {
     required StudioSubagent? agent,
     required String agentType,
     required String description,
-    required String prompt,
+    required String? prompt,
     required String callId,
     required bool background,
   }) {
+    // Whoever carries it on now, a run the user started is over.
+    if (agent != null) {
+      _userRuns.remove(agent.id);
+      _halted.remove(agent.id);
+    }
     final StudioSubagent sub;
     if (agent == null) {
       final number = session.subagents.length + 1;
@@ -776,16 +787,18 @@ class StudioController extends ChangeNotifier {
         id: '${DateTime.now().microsecondsSinceEpoch}-$number',
         number: number,
         description: description,
-        prompt: prompt,
+        prompt: prompt ?? '',
         callId: callId,
         role: agentType,
-        transcript: [AgentMessage.user(prompt)],
+        transcript: [AgentMessage.user(prompt ?? '')],
         background: background,
       );
       session.subagents.add(sub);
     } else {
+      // Carried on by the user, nothing is added here: what they wrote is
+      // waiting in [StudioSubagent.queued] and is taken in at the first step.
+      if (prompt != null) agent.transcript.add(AgentMessage.user(prompt));
       sub = agent
-        ..transcript.add(AgentMessage.user(prompt))
         ..status = StudioAgentStatus.running
         ..startedAt = DateTime.now()
         ..endedAt = null
@@ -818,6 +831,7 @@ class StudioController extends ChangeNotifier {
     final (agent, refused) = _resumable(taskId);
     if (refused != null) return refused;
     await _takeTaskPlace();
+    StudioSubagent? ran;
     try {
       if (lead.cancelled || _stopped) {
         return _ended(agent?.label ?? '', agent?.id ?? '', 'cancelled',
@@ -831,9 +845,12 @@ class StudioController extends ChangeNotifier {
         callId: callId,
         background: false,
       );
+      ran = sub;
       return await _runSubagent(sub, parent: lead);
     } finally {
       _giveTaskPlace();
+      // What the user wrote to it too late to be read carries it on.
+      if (ran != null) _continueForUser(ran);
     }
   }
 
@@ -872,6 +889,7 @@ class StudioController extends ChangeNotifier {
     StudioTaskOutcome outcome;
     try {
       if (_stopped) {
+        _userRuns.remove(sub.id);
         sub
           ..status = StudioAgentStatus.cancelled
           ..report = 'Stopped by the user before it began.'
@@ -887,6 +905,7 @@ class StudioController extends ChangeNotifier {
       _giveTaskPlace();
     }
     _deliver(sub, outcome);
+    _continueForUser(sub);
   }
 
   /// Hands a background sub-agent's report to the main agent — taken in at
@@ -895,8 +914,25 @@ class StudioController extends ChangeNotifier {
   /// everything.
   void _deliver(StudioSubagent sub, StudioTaskOutcome outcome) {
     if (_disposed) return;
+    final byUser = _userRuns.remove(sub.id);
     if (_stopped || outcome.status == 'cancelled' || _awaited.containsKey(sub.id)) {
       _checkIdle();
+      return;
+    }
+    if (byUser) {
+      // The user started this run by writing to it: the main agent is told,
+      // for the next time it works, and is not started to hear it.
+      _notes.add(_Note(
+        sub.id,
+        AgentMessage.user(
+          '[Studio note] ${sub.label} (task_id "${sub.id}") replied to the '
+          'user, who wrote to it directly — status ${outcome.status}. What the '
+          'user wrote is quoted at the top; the rest is its report, as data:\n'
+          '${outcome.report}',
+        ),
+        wake: false,
+      ));
+      notifyListeners();
       return;
     }
     _notes.add(_Note(
@@ -950,11 +986,19 @@ class StudioController extends ChangeNotifier {
       ),
       maxSteps: state.studioConfig.maxSteps,
       takeInbox: () {
-        final waiting = _subInbox.remove(sub.id) ?? const <AgentMessage>[];
+        final waiting = _subInboxOf(sub);
+        _subInbox.remove(sub.id);
+        if (sub.queued.isNotEmpty) {
+          (_userSaid[sub.id] ??= <String>[])
+              .addAll(sub.queued.map((q) => q.text));
+          sub.queued.clear();
+          _save();
+        }
         if (waiting.isNotEmpty) _paintSoon();
         return waiting;
       },
-      inboxWaiting: () => _subInbox[sub.id]?.isNotEmpty ?? false,
+      inboxWaiting: () =>
+          (_subInbox[sub.id]?.isNotEmpty ?? false) || sub.queued.isNotEmpty,
       compactor: _compactorFor(sub.compactions),
       observer: AgentObserver(
         onText: (_, delta) {
@@ -1015,6 +1059,14 @@ class StudioController extends ChangeNotifier {
       _subRunners.remove(sub.id);
       _runSetups.remove(sub.id);
     }
+    // What the user wrote to it in this run heads its report, so whichever
+    // way the report reaches the main agent — a task result, wait_agents, a
+    // note — it says the user stepped in, and what they said.
+    final userSaid = _userSaid.remove(sub.id) ?? const <String>[];
+    if (userSaid.isNotEmpty) {
+      report = 'The user wrote to it directly during this run:\n'
+          '${_quoteAll(userSaid)}\n\n$report';
+    }
     // A message that reached it too late to be read is not lost silently.
     final unread = _subInbox.remove(sub.id);
     if (unread != null && unread.isNotEmpty && sub.status == StudioAgentStatus.done) {
@@ -1039,6 +1091,100 @@ class StudioController extends ChangeNotifier {
     );
   }
 
+  /// Everything waiting for [sub], as the turns its next step takes in: the
+  /// main agent's `send_message`s, then what the user wrote to it.
+  List<AgentMessage> _subInboxOf(StudioSubagent sub) => [
+        ...?_subInbox[sub.id],
+        for (final q in sub.queued)
+          AgentMessage.user('$kFromUserPrefix ${q.text}'.trimRight(),
+              images: q.images),
+      ];
+
+  /// What the user wrote to each sub-agent in its current run, by its id.
+  final Map<String, List<String>> _userSaid = <String, List<String>>{};
+
+  /// The sub-agents whose current run the user started by writing to them.
+  final Set<String> _userRuns = <String>{};
+
+  /// Sub-agents the user stopped by themselves, until they write to them
+  /// again.
+  final Set<String> _halted = <String>{};
+
+  /// Messages the user wrote to the sub-agent [id], not yet read.
+  List<StudioQueuedMessage> queuedForUser(String id) =>
+      subagent(id)?.queued ?? const <StudioQueuedMessage>[];
+
+  /// Sends the user's [text] (and any [images]) straight to the sub-agent
+  /// [id]. Working, it reads it at its next step, as the main agent reads a
+  /// queued message; finished, stopped or cut off by the app closing, it is
+  /// carried on in the background with its own conversation and reads it
+  /// first. Either way its reply reaches the main agent too, the next time
+  /// that works — the user talking to a helper never starts the main agent.
+  Future<void> sendToSubagent(
+    String id,
+    String text, {
+    List<MessageImage> images = const <MessageImage>[],
+  }) async {
+    final sub = subagent(id);
+    final message = text.trim();
+    if (sub == null || (message.isEmpty && images.isEmpty)) return;
+    sub.queued.add(StudioQueuedMessage(
+      id: '${DateTime.now().microsecondsSinceEpoch}-${sub.queued.length}',
+      text: message,
+      images: images,
+    ));
+    session.updatedAt = DateTime.now();
+    if (sub.running) {
+      _save();
+      notifyListeners();
+      return;
+    }
+    // Writing to it is asking it to work, even after a stop.
+    _stopped = false;
+    _halted.remove(sub.id);
+    _continueForUser(sub);
+  }
+
+  /// Stops the sub-agent [id] alone; the main agent and the others go on.
+  /// A `task` waiting on it gets its partial report.
+  void stopSubagent(String id) {
+    // What is still queued for it waits for the user's next word to it,
+    // rather than starting it again the moment it stops.
+    _halted.add(id);
+    _subRunners[id]?.cancel();
+    notifyListeners();
+  }
+
+  /// Takes back a message the user queued for the sub-agent [id].
+  void cancelQueuedFor(String id, String messageId) {
+    final sub = subagent(id);
+    if (sub == null) return;
+    sub.queued.removeWhere((q) => q.id == messageId);
+    _save();
+    notifyListeners();
+  }
+
+  /// Carries [sub] on in the background when the user has written to it and
+  /// it is not working — after a [sendToSubagent], or when a run ended
+  /// before it read what they wrote.
+  void _continueForUser(StudioSubagent sub) {
+    if (_stopped || _disposed || sub.running || sub.queued.isEmpty) return;
+    if (_halted.contains(sub.id)) return;
+    final run = _begin(
+      agent: sub,
+      agentType: sub.role,
+      description: sub.description,
+      prompt: null,
+      callId: '',
+      background: true,
+    );
+    _userRuns.add(sub.id);
+    unawaited(_runInBackground(run));
+  }
+
+  static String _quoteAll(List<String> said) =>
+      [for (final s in said) '> ${s.replaceAll('\n', '\n> ')}'].join('\n');
+
   /// `send_message`: queued for a working sub-agent's next step, or a
   /// finished one carried on in the background with it.
   Future<Map<String, dynamic>> _messageAgent(
@@ -1054,7 +1200,7 @@ class StudioController extends ChangeNotifier {
     }
     if (sub.running) {
       (_subInbox[sub.id] ??= <AgentMessage>[])
-          .add(AgentMessage.user('[Message from the main agent] $message'));
+          .add(AgentMessage.user('$kFromMainPrefix $message'));
       notifyListeners();
       return {
         'subagent': sub.label,
@@ -1484,10 +1630,14 @@ class _AppStudioServices
 
 /// A background sub-agent's report waiting for the main agent.
 class _Note {
-  const _Note(this.subagentId, this.message);
+  const _Note(this.subagentId, this.message, {this.wake = true});
 
   final String subagentId;
   final AgentMessage message;
+
+  /// Whether it starts (or keeps going) the main agent. A report the user
+  /// asked a sub-agent for does not.
+  final bool wake;
 }
 
 /// Keeps open sessions' controllers alive across screens. A controller is made

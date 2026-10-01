@@ -13,6 +13,7 @@ import '../../widgets/message_markdown.dart';
 import '../../widgets/smooth_image.dart';
 import '../../widgets/thinking_block.dart';
 import '../../services/studio/studio_skills.dart';
+import '../../services/studio/studio_prompt.dart' show kFromMainPrefix, kFromUserPrefix;
 import 'shell/shell_format.dart';
 import 'shell/studio_chrome.dart';
 
@@ -110,17 +111,34 @@ class _StudioAgentViewState extends State<StudioAgentView>
             }
           } else if (subagent != null && first) {
             out.add(_TaskBrief(subagent: subagent));
+          } else if (subagent != null && m.text.startsWith(kFromUserPrefix)) {
+            // What the user wrote to this sub-agent: theirs, like any turn
+            // of theirs.
+            out.add(_UserBubble(
+              message:
+                  m.withText(m.text.substring(kFromUserPrefix.length).trim()),
+              label: 'You',
+            ));
           } else if (background != null) {
             out.add(_BackgroundReport(
               label: background.group(1)!,
               taskId: background.group(2)!,
+              toUser: background.group(3) == 'replied to the user',
               onOpen: widget.onOpenAgent,
             ));
           } else if (m.text.startsWith('[Studio note]')) {
             out.add(_Note(text: m.text.substring('[Studio note]'.length).trim()));
-          } else if (m.text.startsWith(_fromMain)) {
+          } else if (m.text.startsWith(kFromMainPrefix)) {
             out.add(_Note(
-              text: 'From Main: ${m.text.substring(_fromMain.length).trim()}',
+              text:
+                  'From Main: ${m.text.substring(kFromMainPrefix.length).trim()}',
+              icon: Icons.forward_to_inbox_outlined,
+            ));
+          } else if (subagent != null && m.images.isEmpty) {
+            // In a sub-agent's chat every other plain turn is the main agent
+            // carrying it on (task with its task_id, send_message).
+            out.add(_Note(
+              text: 'From Main: ${m.text.trim()}',
               icon: Icons.forward_to_inbox_outlined,
             ));
           } else {
@@ -182,8 +200,16 @@ class _StudioAgentViewState extends State<StudioAgentView>
       for (final m in _c.queuedForAgent(subagent.id)) {
         out.add(_Note(
           text: 'Waiting for its next step — from Main: '
-              '${m.text.replaceFirst(_fromMain, '').trim()}',
+              '${m.text.replaceFirst(kFromMainPrefix, '').trim()}',
           icon: Icons.schedule_send_outlined,
+        ));
+      }
+      for (final q in _c.queuedForUser(subagent.id)) {
+        out.add(_QueuedBubble(
+          key: ValueKey<String>('queued-${q.id}'),
+          text: q.text,
+          pictures: q.images.length,
+          onCancel: () => _c.cancelQueuedFor(subagent.id, q.id),
         ));
       }
     }
@@ -223,9 +249,13 @@ class _AgentText extends StatelessWidget {
 }
 
 class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.message});
+  const _UserBubble({required this.message, this.label});
 
   final AgentMessage message;
+
+  /// Who wrote it, over the bubble — set where a turn could be someone
+  /// else's (a sub-agent's chat).
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -244,6 +274,17 @@ class _UserBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (label != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  label!,
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelSmall
+                      ?.copyWith(color: scheme.onPrimaryContainer),
+                ),
+              ),
             if (message.images.isNotEmpty)
               Padding(
                 padding: EdgeInsets.only(bottom: message.text.isEmpty ? 0 : 8),
@@ -428,11 +469,9 @@ class _Plan extends StatelessWidget {
 /// The note a background sub-agent's report arrives as (see the controller's
 /// `_deliver`): its label and task id.
 final RegExp _backgroundReport = RegExp(
-  r'^\[Studio note\] (Subagent \d+) \(task_id "([^"]+)"\) finished in the background',
+  r'^\[Studio note\] (Subagent \d+) \(task_id "([^"]+)"\) '
+  r'(finished in the background|replied to the user)',
 );
-
-/// How a `send_message` from the main agent reads in a sub-agent's chat.
-const String _fromMain = '[Message from the main agent]';
 
 class _Note extends StatelessWidget {
   const _Note({required this.text, this.icon = Icons.history});
@@ -970,10 +1009,14 @@ class _BackgroundReport extends StatelessWidget {
     required this.label,
     required this.taskId,
     required this.onOpen,
+    this.toUser = false,
   });
 
   final String label;
   final String taskId;
+
+  /// Whether it is a sub-agent's reply to the user, who wrote to it directly.
+  final bool toUser;
   final ValueChanged<String>? onOpen;
 
   @override
@@ -998,7 +1041,9 @@ class _BackgroundReport extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    '$label finished in the background',
+                    toUser
+                        ? '$label replied to you'
+                        : '$label finished in the background',
                     style: theme.textTheme.bodyMedium
                         ?.copyWith(color: scheme.onSecondaryContainer),
                   ),

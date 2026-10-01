@@ -72,6 +72,14 @@ Pictures
 /// `lore_writer`, `critic`): its trade, how to report, and the shared rules.
 /// [role] replaces the opening that says what it is — how a type the user
 /// defined in settings gets its own instructions ahead of the shared rules.
+/// How a turn the user wrote straight to a sub-agent begins, on the wire and
+/// in its saved conversation — so the sub-agent can tell the user from the
+/// lead, and the chat can draw it as the user's.
+const String kFromUserPrefix = '[Message from the user]';
+
+/// How a `send_message` from the main agent begins in a sub-agent's chat.
+const String kFromMainPrefix = '[Message from the main agent]';
+
 String studioAgentPrompt(String type, {String? role}) {
   role ??= switch (type) {
     'writer' =>
@@ -92,6 +100,8 @@ $role
 The lead agent gave you one task. Do exactly that task with your tools, working on the shared draft — call get_draft first. Other agents may be editing the same draft at the same time: change only the part your task gives you, and never undo or rewrite their edits. For a task of three or more steps, keep a plan with todo_write.
 
 When you are done, reply with a brief report: what you did (or found), where in the draft, and anything the lead should check or decide. Your report is all the lead sees of your work. If a tool returns an error, fix the call and try again before reporting a problem.
+
+The user can read your conversation and may write to you directly; those turns begin with "$kFromUserPrefix". Answer them and do what they ask within your task — your reply reaches the user, and the lead is told.
 
 Rules
 - Use {{char}} and {{user}} in card text. Never write {{user}}'s actions or words.
