@@ -297,7 +297,16 @@ void main() {
     }
     final critic = subRequests.firstWhere((r) => taskOf(r) == 'part 5');
     expect([for (final t in critic['tools'] as List) t['function']['name']],
-        ['get_draft', 'read_document', 'playtest', 'todo_write']);
+        [
+          'get_draft',
+          'read_document',
+          'playtest',
+          'todo_write',
+          'count_tokens',
+          'read_notes',
+          'append_notes',
+          'read_playtests',
+        ]);
 
     // The reports came back to the main agent as data, one per call.
     final results = session.transcript.where((m) => m.role == AgentRole.tool);

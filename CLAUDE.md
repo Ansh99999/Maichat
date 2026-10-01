@@ -519,19 +519,39 @@ bar or the overflow menu.
     enabled skill, and the user's `$ARGUMENTS` templates in `studio/commands/`;
     parsed in one place and hooked through `StudioController.onSlashCommand`;
     UI-only commands never reach the model.
+  - **Workbench** (`workbench_tools.dart`): `count_tokens` (the app's BPE over
+    any text or named draft parts, and `prompt` — the first request of a chat
+    with the draft, assembled by `AppState.playtestPromptSize`, sent nowhere —
+    through the optional `StudioPromptSizer`); the session's **notes**
+    (`StudioWorkspace.notes`, part key `notes`: snapshotted, rewound and
+    stale-guarded like any part, **never applied**; `read_notes`/`append_notes`
+    for every agent, `write_notes`/`edit_notes` not for a critic; the Draft's
+    Notes tab hand-edits them); and the **Playground** (`StudioPlaytest`s on
+    the *session*, not the workspace, so a rewind leaves them and snapshots stay
+    small; capped at `kStudioPlaytestLimit`). `playtest` files each run there
+    and carries one on with `playtest_id` (its whole chat goes back as
+    `earlier`), with an optional persona label and a test-only `scenario`
+    (laid on as the throwaway chat's `scenarioOverride`); `read_playtests`
+    reads the user's chats too. The user's own Playground chats go through
+    `StudioController.playgroundSend` → the same `playtestCharacter`, streaming
+    via `onText`; a failed reply is kept as an error turn and never sent back.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
     (the draft through the real `_assemble` as per-chat overrides on a
-    throwaway, never-stored `Conversation`).
+    throwaway, never-stored `Conversation`; `transcript` replaces the
+    greeting when a playtest carries on).
   - UI: `screens/studio/` — `studio_screen.dart` is a chat-first shell with
     **no app bar on any page**: floating soft squares (`shell/floating_button.dart`)
     for the menu (drawer: session name + spend, Home / Settings / Sessions) and
     sub-agents; everything at the bottom floats over the page — notice, the
     actions capsule the composer's ⋯ raises (Image → Gallery/Device, the
-    other-areas symbol), the Interface | Draft | Changes capsule (persisted as
-    `StudioConfig.areasCapsule`; only that symbol turns it off), and the composer
-    (conversation only). Pages lay out under it and keep clear through
+    other-areas symbol), the Interface | Draft | Playground | Changes capsule
+    (persisted as `StudioConfig.areasCapsule`; only that symbol turns it off;
+    when the labels do not all fit, the chosen slot grows on the indicator's
+    spring and the others show icons), and the composer (conversation only —
+    the Playground floats a `PlaygroundComposer` of its own, measured like the
+    conversation's dock). Pages lay out under it and keep clear through
     `shell/studio_chrome.dart` (`StudioChrome.of`: top/side/bottom insets); the
     dock's height is taken only once it has held for a frame, so a spring does
     not relayout the page every frame. `shell/bottom_fade.dart` is the frosted
@@ -543,7 +563,7 @@ bar or the overflow menu.
     once, only the clip/paint animate) listing Main + sub-agents with ticking
     time • tokens; a row teleports the chat into that agent's transcript.
     `studio_draft_view.dart` + `draft/` is the Draft page (Chrome-style tabs:
-    Character, Images, Lorebook, Embeddings, Documents, Scenarios; a
+    Character, Images, Lorebook, Embeddings, Documents, Scenarios, Notes; a
     ratio-aware header on the Character tab only — square/portrait top-left,
     landscape full width). The
     Lorebook tab reuses `LorebookEditScreen` through its optional `onSave`
@@ -552,7 +572,9 @@ bar or the overflow menu.
   - Tests: `studio_test.dart`, `studio_agents_test.dart`,
     `studio_controller_test.dart` (end to end against a loopback model),
     `studio_runtime_test.dart`, `studio_knowledge_test.dart`,
-    `studio_area_pages_test.dart`, and the `*_ui_test.dart` files.
+    `studio_workbench_test.dart` (incl. the Playground against a loopback
+    model), `studio_area_pages_test.dart`, and the `*_ui_test.dart` files
+    (`studio_playground_ui_test.dart` has the capsule's width × area matrix).
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by
   `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over

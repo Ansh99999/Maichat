@@ -5343,38 +5343,29 @@ class AppState extends ChangeNotifier {
   /// card would: the chat's preset, persona, provider, lorebook scan and regex
   /// rules all apply. That is the point of a playtest — it is the real prompt,
   /// not a re-derivation of it.
+  ///
+  /// [transcript], when given, is the playtest so far (the greeting and every
+  /// turn since) and replaces the greeting — how a Playground chat or an
+  /// agent's continued playtest carries on. [scenario] is a situation for this
+  /// test alone, laid over the card's own as a chat's scenario would be.
+  /// [onText] hears the reply so far as it streams, reasoning split off.
   Future<List<String>> playtestCharacter({
     required Character character,
     List<Lorebook> lorebooks = const <Lorebook>[],
     required List<String> userTurns,
     int greetingIndex = 0,
+    List<ChatMessage>? transcript,
+    String scenario = '',
     ChatClient? client,
+    void Function(String text)? onText,
   }) async {
-    final now = DateTime.now();
-    final greetings = character.greetings;
-    final conversation = Conversation(
-      id: 'studio-playtest-${now.microsecondsSinceEpoch}',
-      title: 'Playtest',
-      messages: <ChatMessage>[],
-      updatedAt: now,
-      characterId: character.id,
-      characterName: character.displayName,
-      overrideDefinitions: true,
-      characterOverrides: {character.id: character},
-      lorebookOverrides: {for (final b in lorebooks) b.id: b},
+    final conversation = _playtestConversation(
+      character: character,
+      lorebooks: lorebooks,
+      greetingIndex: greetingIndex,
+      transcript: transcript,
+      scenario: scenario,
     );
-    final persona = impersonationFor(conversation);
-    final userName = persona?.displayName ?? 'User';
-    if (greetings.isNotEmpty) {
-      conversation.messages.add(ChatMessage(
-        role: 'assistant',
-        content: Character.resolveMacros(
-          greetings[greetingIndex.clamp(0, greetings.length - 1)],
-          charName: character.displayName,
-          userName: userName,
-        ),
-      ));
-    }
     final chat = client ?? ChatClient();
     final replies = <String>[];
     for (final turn in userTurns) {
@@ -5388,6 +5379,10 @@ class AppState extends ChangeNotifier {
       if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
       final assembled = _assemble(conversation);
       final provider = _applyKey(base);
+      final tags = ReasoningTags(
+        start: preset?.thinkStartTag.trim() ?? '',
+        end: preset?.thinkEndTag.trim() ?? '',
+      );
       final raw = StringBuffer();
       TokenUsage? reported;
       try {
@@ -5398,6 +5393,9 @@ class AppState extends ChangeNotifier {
         )) {
           raw.write(delta.text);
           if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);
+          if (onText != null && delta.text.isNotEmpty) {
+            onText(splitReasoning(raw.toString(), tags).text);
+          }
         }
       } on ChatApiException {
         _advanceKeyOnError(base);
@@ -5414,10 +5412,6 @@ class AppState extends ChangeNotifier {
               ),
         );
       }
-      final tags = ReasoningTags(
-        start: preset?.thinkStartTag.trim() ?? '',
-        end: preset?.thinkEndTag.trim() ?? '',
-      );
       final reply = splitReasoning(raw.toString(), tags).text.trim();
       replies.add(reply);
       conversation.messages.add(ChatMessage(role: 'assistant', content: reply));
@@ -5425,6 +5419,89 @@ class AppState extends ChangeNotifier {
     await _persistUsage();
     notifyListeners();
     return replies;
+  }
+
+  /// How big the prompt of a chat with [character] would be on its first
+  /// reply — the preset, persona, card, lore and greeting, assembled through
+  /// [_assemble] exactly as a playtest sends it — beside the context the
+  /// preset allows. Nothing is sent. Null when no provider is set up.
+  ({int tokens, int context, List<PromptSection> sections})? playtestPromptSize({
+    required Character character,
+    List<Lorebook> lorebooks = const <Lorebook>[],
+    int greetingIndex = 0,
+    String userTurn = 'Hello.',
+  }) {
+    final conversation = _playtestConversation(
+      character: character,
+      lorebooks: lorebooks,
+      greetingIndex: greetingIndex,
+    );
+    conversation.messages.add(ChatMessage(role: 'user', content: userTurn));
+    final preset = presetFor(conversation);
+    if (_resolveProvider(preset, conversation: conversation) == null) return null;
+    final assembled = _assemble(conversation);
+    return (
+      tokens: assembled.totalTokens,
+      context: assembled.maxContext,
+      sections: assembled.sections,
+    );
+  }
+
+  /// The throwaway, never-stored chat a playtest runs in: the draft as a
+  /// per-chat override, its books likewise, opening on the chosen greeting —
+  /// or on [transcript], when a playtest carries on.
+  Conversation _playtestConversation({
+    required Character character,
+    required List<Lorebook> lorebooks,
+    int greetingIndex = 0,
+    List<ChatMessage>? transcript,
+    String scenario = '',
+  }) {
+    final now = DateTime.now();
+    final greetings = character.greetings;
+    final conversation = Conversation(
+      id: 'studio-playtest-${now.microsecondsSinceEpoch}',
+      title: 'Playtest',
+      messages: <ChatMessage>[],
+      updatedAt: now,
+      characterId: character.id,
+      characterName: character.displayName,
+      overrideDefinitions: true,
+      characterOverrides: {character.id: character},
+      lorebookOverrides: {for (final b in lorebooks) b.id: b},
+      scenarioOverride: scenario.trim(),
+    );
+    final persona = impersonationFor(conversation);
+    final userName = persona?.displayName ?? 'User';
+    String resolve(String text) => Character.resolveMacros(
+          text,
+          charName: character.displayName,
+          userName: userName,
+        );
+    if (transcript != null) {
+      for (final m in transcript) {
+        conversation.messages.add(ChatMessage(
+          role: m.role,
+          content: m.role == 'assistant' ? resolve(m.content) : m.content,
+        ));
+      }
+    } else if (greetings.isNotEmpty) {
+      conversation.messages.add(ChatMessage(
+        role: 'assistant',
+        content: resolve(greetings[greetingIndex.clamp(0, greetings.length - 1)]),
+      ));
+    }
+    return conversation;
+  }
+
+  /// The user's name in a playtest of [character] — the persona a chat with
+  /// it would use — for the Playground to draw beside the user's lines.
+  String playtestUserName(Character character) {
+    final persona = impersonationFor(_playtestConversation(
+      character: character,
+      lorebooks: const <Lorebook>[],
+    ));
+    return persona?.displayName ?? 'You';
   }
 
   /// What the model is told when it is writing the user's line rather than the

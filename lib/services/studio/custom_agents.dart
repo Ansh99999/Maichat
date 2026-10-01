@@ -7,10 +7,12 @@ import 'studio_memory.dart';
 import 'studio_prompt.dart';
 import 'studio_skills.dart';
 import 'studio_tools.dart';
+import 'workbench_tools.dart';
 
 /// The groups a custom sub-agent's tools are picked from, in the order the
-/// settings page lists them: a label and the tools in it. `todo_write` is
-/// always given — a plan costs nothing — and `task` never is: sub-agents do not
+/// settings page lists them: a label and the tools in it. `todo_write`,
+/// `count_tokens` and the notes are always given — they cost nothing — and
+/// `task` never is: sub-agents do not
 /// start sub-agents.
 const Map<String, (String, List<String>)> kStudioToolGroups = {
   'read': (
@@ -35,7 +37,7 @@ const Map<String, (String, List<String>)> kStudioToolGroups = {
   ),
   'documents': ('Documents', ['upsert_document', 'delete_document']),
   'pictures': ('Portraits and pictures', ['generate_avatar', ...kImageToolNames]),
-  'playtest': ('Playtest', ['playtest']),
+  'playtest': ('Playtest', ['playtest', 'read_playtests']),
   'web': ('Web research', kWebToolNames),
   'memory': ('Memory', kMemoryToolNames),
 };
@@ -109,6 +111,9 @@ List<StudioTool> studioToolsForType(
     final names = <String>{
       for (final g in custom.toolGroups) ...?kStudioToolGroups[g]?.$2,
       'todo_write',
+      // Counting and the notes cost nothing and are every agent's.
+      ...kWorkbenchAlways,
+      ...?kWorkbenchToolsFor['custom'],
       // Like the plan, skills are given to every type: they are advice, and
       // cost nothing until one is loaded.
       ...kSkillToolNames,

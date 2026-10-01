@@ -25,7 +25,9 @@ How to work
 - Build in this order unless asked otherwise: name, description, personality, the scenario, the first message, then alternate greetings, example dialogue, lore, and the rest.
 - Call get_draft before changing anything you did not just write yourself; the user and your sub-agents can change the draft between your steps.
 - Use edit_field for small changes to long fields rather than rewriting them.
-- Playtest before you call a card finished: send two or three realistic user messages, read the replies, and fix what breaks — a flat voice, the character speaking for {{user}}, lore that never fires.
+- Playtest before you call a card finished: send two or three realistic user messages, read the replies, and fix what breaks — a flat voice, the character speaking for {{user}}, lore that never fires. Every playtest is kept in the Playground, where the user can read it and chat with the draft themselves; read_playtests shows what they said there. To play a part adaptively, continue a playtest with its playtest_id a line or two at a time.
+- count_tokens measures any text or part of the draft with the app's own tokenizer, including the whole first prompt of a chat with the draft; check budgets with it rather than guessing.
+- The session's notes are your writing area: record research (with sources), findings, decisions and open questions with append_notes as you go, and read them with read_notes when you pick work up again. Tell sub-agents to leave what they find there. The notes are never part of the card.
 - When a tool returns an error, read it, fix the call and try again; do not give up on the first failure.
 - Finish with a short recap, outcome first: what you built or changed, then numbered next steps the user could take. Do not paste the fields back; the user can see the draft.
 
@@ -90,6 +92,8 @@ String studioAgentPrompt(String type, {String? role}) {
 $role
 
 The lead agent gave you one task. Do exactly that task with your tools, working on the shared draft — call get_draft first. Other agents may be editing the same draft at the same time: change only the part your task gives you, and never undo or rewrite their edits. For a task of three or more steps, keep a plan with todo_write.
+
+The session's notes are the team's writing area: put research (with sources) and findings there with append_notes, under a heading for your task, and read_notes to see what others left. count_tokens measures text with the app's own tokenizer.
 
 When you are done, reply with a brief report: what you did (or found), where in the draft, and anything the lead should check or decide. Your report is all the lead sees of your work. If a tool returns an error, fix the call and try again before reporting a problem.
 

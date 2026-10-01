@@ -9,10 +9,12 @@ import 'draft/draft_documents_tab.dart';
 import 'draft/draft_embeddings_tab.dart';
 import 'draft/draft_images_tab.dart';
 import 'draft/draft_lorebook_tab.dart';
+import 'draft/draft_notes_tab.dart';
 import 'draft/draft_scenarios_tab.dart';
 
 /// The draft as it stands, under browser-style tabs: Character, Images,
-/// Lorebook, Embeddings, Documents, Scenarios. The Character tab opens with the
+/// Lorebook, Embeddings, Documents, Scenarios — and Notes, the session's
+/// writing area, which is never applied. The Character tab opens with the
 /// character's picture and identity, laid out by the picture's shape; every
 /// other tab is only its own part of the draft.
 ///
@@ -66,6 +68,11 @@ class StudioDraftView extends StatelessWidget {
           label: 'Scenarios',
           icon: Icons.theaters_outlined,
           page: page(() => DraftScenariosTab(controller: controller)),
+        ),
+        ChromeTab(
+          label: 'Notes',
+          icon: Icons.edit_note,
+          page: page(() => DraftNotesTab(controller: controller)),
         ),
       ],
     );

@@ -646,6 +646,8 @@ class _Bare implements StudioServices {
     required List<Lorebook> lorebooks,
     required List<String> userTurns,
     int greetingIndex = 0,
+    List<StudioPlaytestTurn> earlier = const <StudioPlaytestTurn>[],
+    String scenario = '',
   }) =>
       throw UnimplementedError();
   @override
