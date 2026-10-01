@@ -12,7 +12,6 @@ import '../../models/message.dart';
 import '../../models/message_image.dart';
 import '../../models/scenario.dart';
 import '../../models/studio.dart';
-import '../../models/studio_revisions.dart';
 import '../../models/usage.dart';
 import '../../state/app_state.dart';
 import '../agent_client.dart';
@@ -31,6 +30,7 @@ import 'studio_context.dart';
 import 'studio_knowledge.dart';
 import 'studio_skills.dart';
 import 'studio_memory.dart';
+import 'studio_playground.dart';
 import 'studio_prompt.dart';
 import 'studio_store.dart';
 import 'studio_tools.dart';
@@ -1315,133 +1315,38 @@ class StudioController extends ChangeNotifier {
 
   // --- the Playground ------------------------------------------------------------
 
-  /// The Playground chat a reply is being written for, or null.
-  String? get playgroundBusy => _playId;
-  String? _playId;
-
-  /// The reply so far, while one streams.
-  String get playgroundLive => _playLive;
-  String _playLive = '';
-  ChatClient? _playClient;
-  bool _playStopped = false;
+  /// The Playground: the session's chats with the draft, hosted in the app's
+  /// own chat screen ([StudioPlayground]).
+  StudioPlayground get playground => _playground ??= StudioPlayground(this);
+  StudioPlayground? _playground;
 
   /// The playtests, newest first — what the Playground lists.
-  List<StudioPlaytest> get playtests => session.playtests.reversed.toList();
+  List<StudioPlaytest> get playtests => playground.playtests;
 
   /// Starts a new Playground chat of the user's with the draft, opening on
   /// greeting [greetingIndex], and returns it.
-  StudioPlaytest newPlaygroundChat({int greetingIndex = 0}) {
-    final greetings = session.workspace.character.greetings;
-    final index =
-        greetingIndex.clamp(0, greetings.isEmpty ? 0 : greetings.length - 1);
-    final test = StudioPlaytest(
-      id: '${DateTime.now().microsecondsSinceEpoch}',
-      by: kUserEditor,
-      greetingIndex: index,
-      turns: [
-        if (greetings.isNotEmpty)
-          StudioPlaytestTurn(user: false, text: greetings[index]),
-      ],
-    );
-    session.addPlaytest(test);
-    _save();
-    notifyListeners();
-    return test;
-  }
+  StudioPlaytest newPlaygroundChat({int greetingIndex = 0}) =>
+      playground.startChat(greetingIndex: greetingIndex);
 
-  /// Sends [text] as the user in the Playground chat [playtestId], and waits
-  /// for the draft's reply — through the real chat prompt, with the draft as
-  /// it stands now. A failure lands in the chat as an error line.
-  Future<void> playgroundSend(String playtestId, String text) async {
-    final test = session.playtest(playtestId);
-    final line = text.trim();
-    if (test == null || !test.byUser || line.isEmpty || _playId != null) return;
-    final earlier = test.sendable;
-    test.turns.add(StudioPlaytestTurn(user: true, text: line));
-    if (test.title.trim().isEmpty) test.title = _titleFrom(line);
-    await _playgroundReply(test, earlier, line);
-  }
-
-  /// Writes the last reply of [playtestId] again.
-  Future<void> playgroundRetry(String playtestId) async {
-    final test = session.playtest(playtestId);
-    if (test == null || !test.byUser || _playId != null) return;
-    while (test.turns.isNotEmpty && !test.turns.last.user) {
-      test.turns.removeLast();
-    }
-    if (test.turns.isEmpty) return;
-    final line = test.turns.last.text;
-    final earlier = test.turns.sublist(0, test.turns.length - 1)
-        .where((t) => !t.error)
-        .toList();
-    await _playgroundReply(test, earlier, line);
-  }
-
-  Future<void> _playgroundReply(
-    StudioPlaytest test,
-    List<StudioPlaytestTurn> earlier,
-    String line,
-  ) async {
-    final ws = session.workspace;
-    final client = ChatClient();
-    _playClient = client;
-    _playStopped = false;
-    _playId = test.id;
-    _playLive = '';
-    test.updatedAt = DateTime.now();
-    notifyListeners();
-    try {
-      final replies = await state.playtestCharacter(
-        character: ws.character.clone(),
-        lorebooks: [for (final b in ws.lorebooks) b.copyWith()],
-        userTurns: [line],
-        greetingIndex: test.greetingIndex,
-        transcript: earlier.isEmpty ? null : _playtestMessages(earlier),
-        scenario: test.scenario,
-        client: client,
-        onText: (text) {
-          _playLive = text;
-          _paintSoon();
-        },
-      );
-      test.turns.add(StudioPlaytestTurn(user: false, text: replies.first));
-    } catch (e) {
-      // A stop is not a failure: what streamed so far is kept, if anything.
-      final stopped = _playStopped;
-      if (stopped && _playLive.trim().isNotEmpty) {
-        test.turns.add(StudioPlaytestTurn(user: false, text: _playLive.trim()));
-      } else {
-        test.turns.add(StudioPlaytestTurn(
-          user: false,
-          text: stopped ? 'Stopped.' : '$e',
-          error: true,
-        ));
-      }
-    } finally {
-      if (_playClient == client) _playClient = null;
-      _playId = null;
-      _playLive = '';
-      test.updatedAt = DateTime.now();
-      session.updatedAt = DateTime.now();
-      _save();
-      if (!_disposed) notifyListeners();
-    }
-  }
-
-  /// Stops the reply being written in the Playground.
-  void stopPlayground() {
-    if (_playClient == null) return;
-    _playStopped = true;
-    _playClient!.cancel();
-  }
-
-  /// Removes a playtest from the Playground.
-  void deletePlaytest(String id) {
-    if (_playId == id) return;
-    session.playtests.removeWhere((p) => p.id == id);
+  /// A Playground chat changed (a turn, a new chat, one deleted): it is kept
+  /// with the session, and the Playground's list hears of it.
+  void playgroundChanged() {
     session.updatedAt = DateTime.now();
     _save();
-    notifyListeners();
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Removes a playtest from the Playground. The chat on screen goes the way
+  /// any chat is deleted, so the screen moves on to another.
+  void deletePlaytest(String id) {
+    final test = session.playtest(id);
+    if (test == null) return;
+    if (state.hostedChatId == test.chat.id) {
+      unawaited(state.deleteConversation(test.chat.id));
+      return;
+    }
+    session.playtests.remove(test);
+    playgroundChanged();
   }
 
   void rename(String title) {
@@ -1574,7 +1479,7 @@ class StudioController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _paint?.cancel();
-    _playClient?.cancel();
+    _playground?.dispose();
     _lead?.cancel();
     for (final runner in _subRunners.values.toList()) {
       runner.cancel();

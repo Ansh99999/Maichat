@@ -1,17 +1,21 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/studio.dart';
 import 'package:maichat/models/studio_revisions.dart';
+import 'package:maichat/screens/chat_screen.dart';
+import 'package:maichat/screens/presets/chat_preset_panel.dart';
 import 'package:maichat/screens/studio/shell/area_capsule.dart';
 import 'package:maichat/screens/studio/studio_draft_view.dart';
-import 'package:maichat/screens/studio/studio_playground_view.dart';
 import 'package:maichat/screens/studio/studio_screen.dart';
 import 'package:maichat/services/studio/studio_controller.dart';
 import 'package:maichat/services/studio/studio_store.dart';
 import 'package:maichat/state/app_state.dart';
+import 'package:maichat/widgets/message_bubble.dart';
 import 'package:provider/provider.dart' hide Provider;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -159,84 +163,223 @@ void main() {
     }
   }
 
-  testWidgets('the Playground opens on the newest chat, an agent\'s: read-only, '
-      'with the way to the user\'s own', (tester) async {
+  Finder chatScreen() => find.byKey(const Key('studio-playground-chat'));
+
+  testWidgets('the Playground is the app\'s own chat screen, on the newest '
+      'chat, with the draft as the character', (tester) async {
     phone(tester);
     final state = await boot();
-    await openPlayground(tester, state, seeded());
-
-    expect(find.byType(StudioPlaygroundView), findsOneWidget);
-    expect(tester.getTopLeft(find.byType(StudioPlaygroundView)).dx, 0);
-    // The conversation's composer stays with the conversation.
-    expect(find.byKey(const Key('studio-composer-field')), findsNothing);
-    // The chats, newest first, in a strip that scrolls sideways.
-    expect(find.byKey(const Key('playground-chat-agent')), findsOneWidget);
-    await tester.dragUntilVisible(
-      find.byKey(const Key('playground-chat-mine')),
-      find.byKey(const Key('playground-strip')),
-      const Offset(-120, 0),
-    );
-    expect(
-      tester.getTopLeft(find.byKey(const Key('playground-chat-mine'))).dx,
-      greaterThan(tester.getTopLeft(find.byKey(const Key('playground-new'))).dx),
-    );
-    expect(find.text('Playtest by Subagent 2'), findsOneWidget);
-    expect(find.text('Playing: a wary sailor'), findsOneWidget);
-    expect(find.text('The light needs me.', findRichText: true), findsOneWidget);
-    expect(find.byKey(const Key('playground-readonly')), findsOneWidget);
-    expect(find.byKey(const Key('playground-input')), findsNothing);
-    expect(find.byType(AppBar), findsNothing);
-
-    await tester.tap(find.byKey(const Key('playground-own-chat')));
-    await tester.pumpAndSettle();
-    expect(find.text('Your chat with the draft'), findsOneWidget);
-    expect(find.text('Mind the tide.', findRichText: true), findsOneWidget);
-    expect(find.byKey(const Key('playground-input')), findsOneWidget);
-    expect(find.byKey(const Key('playground-send')), findsOneWidget);
-    // Its last reply can be written again.
-    expect(find.byKey(const Key('playground-retry')), findsOneWidget);
-
-    // Back to the agent's by its chip.
-    await tester.dragUntilVisible(
-      find.byKey(const Key('playground-chat-agent')),
-      find.byKey(const Key('playground-strip')),
-      const Offset(120, 0),
-    );
-    await tester.tap(find.byKey(const Key('playground-chat-agent')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('playground-readonly')), findsOneWidget);
-    expect(find.byKey(const Key('playground-retry')), findsNothing);
-  });
-
-  testWidgets('an empty Playground explains itself; a new chat starts from the '
-      'greeting picked', (tester) async {
-    phone(tester);
-    final state = await boot();
-    final session = seeded(playtests: false);
+    final session = seeded();
     await openPlayground(tester, state, session);
 
-    expect(find.textContaining('Talk to the draft as it stands'), findsOneWidget);
-    expect(find.byKey(const Key('playground-input')), findsOneWidget);
+    expect(chatScreen(), findsOneWidget);
+    expect(find.byType(ChatScreen), findsOneWidget);
+    expect(state.hostedChatId, session.playtest('agent')!.chat.id);
+    // Its own chrome, not the Studio's: the chat's menu square and composer.
+    expect(find.byKey(chatMenuButtonKey), findsOneWidget);
+    expect(find.byKey(const Key('studio-menu')), findsNothing);
+    expect(find.byKey(const Key('composer-field')), findsOneWidget);
+    expect(find.byKey(const Key('studio-composer-field')), findsNothing);
+    expect(find.byType(AppBar), findsNothing);
+    // The real bubbles, with their action bars, and the draft's name on them.
+    expect(find.byType(MessageBubble), findsNWidgets(3));
+    expect(find.text('The light needs me.', findRichText: true), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(MessageBubble).first,
+        matching: find.byType(IconButton),
+      ),
+      findsWidgets,
+    );
+    final bubbles = tester.widgetList<MessageBubble>(find.byType(MessageBubble));
+    expect(bubbles.where((b) => !b.message.isUser).map((b) => b.character?.name),
+        everyElement('Maren'));
+    // A copy of the draft as it stands, never the draft itself, so nothing the
+    // chat does writes into the draft behind the Studio's back.
+    expect(bubbles.first.character, isNot(same(session.workspace.character)));
+    // An edit to the draft reaches the chat on screen.
+    StudioHub.instance.find(session.id)!.editByHand(
+      'Renamed by hand',
+      (ws) => ws.character.name = 'Marenna',
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widgetList<MessageBubble>(find.byType(MessageBubble))
+          .where((b) => !b.message.isUser)
+          .map((b) => b.character?.name),
+      everyElement('Marenna'),
+    );
+    // None of it is in the app's own chats.
+    expect(state.conversations, isEmpty);
+  });
 
+  testWidgets('the Playground\'s sidebar: symbols, a line with +, the chats; '
+      'a long press pours out export, import and delete', (tester) async {
+    phone(tester);
+    final state = await boot();
+    await state.addCharacter(Character(id: 'me', name: 'Ash'));
+    await state.setDefaultPersona('me');
+    final session = seeded();
+    await openPlayground(tester, state, session);
+
+    await tester.tap(find.byKey(chatMenuButtonKey));
+    await tester.pumpAndSettle();
+    final symbols = find.byKey(const Key('playground-symbols'));
+    expect(symbols, findsOneWidget);
+    for (final key in ['preset', 'provider', 'group', 'interface']) {
+      expect(find.byKey(Key('playground-$key')), findsOneWidget, reason: key);
+    }
+    // Symbols only, side by side.
+    expect(find.descendant(of: symbols, matching: find.byType(Text)), findsNothing);
+    final preset = tester.getCenter(find.byKey(const Key('playground-preset')));
+    final ui = tester.getCenter(find.byKey(const Key('playground-interface')));
+    expect(preset.dy, closeTo(ui.dy, 0.5));
+    expect(preset.dx, lessThan(ui.dx));
+    // Under them the line with its +, then the chats, newest first; the
+    // agent's is marked as the agent's.
+    final plus = tester.getCenter(find.byKey(const Key('playground-new')));
+    expect(plus.dy, greaterThan(preset.dy));
+    final agentRow = find.byKey(const Key('playground-chat-agent'));
+    final mineRow = find.byKey(const Key('playground-chat-mine'));
+    expect(tester.getTopLeft(agentRow).dy, greaterThan(plus.dy));
+    expect(tester.getTopLeft(mineRow).dy, greaterThan(tester.getTopLeft(agentRow).dy));
+    expect(find.descendant(of: agentRow, matching: find.byKey(const Key('playground-agent-mark'))),
+        findsOneWidget);
+    expect(find.descendant(of: mineRow, matching: find.byKey(const Key('playground-agent-mark'))),
+        findsNothing);
+    // The preset symbol opens the chat's own preset panel, in the drawer.
+    await tester.tap(find.byKey(const Key('playground-preset')));
+    await tester.pumpAndSettle();
+    expect(find.byType(ChatPresetPanel), findsOneWidget);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(symbols, findsOneWidget);
+
+    // A chat opens in the chat screen.
+    await tester.tap(mineRow);
+    await tester.pumpAndSettle();
+    expect(state.hostedChatId, session.playtest('mine')!.chat.id);
+    expect(find.text('Mind the tide.', findRichText: true), findsOneWidget);
+
+    // + starts a chat with the draft, as any new chat starts: its greeting,
+    // and the default persona as the user's.
+    await tester.tap(find.byKey(chatMenuButtonKey));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('playground-new')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('playground-greeting-1')));
-    await tester.pumpAndSettle();
-    final chat = session.playtests.single;
-    expect(chat.byUser, isTrue);
-    expect(chat.greetingIndex, 1);
-    expect(find.text('The lamp is out again.', findRichText: true), findsOneWidget);
-    expect(find.text('From alternate greeting 1'), findsOneWidget);
-    expect(find.byKey(Key('playground-chat-${chat.id}')), findsOneWidget);
+    expect(session.playtests, hasLength(3));
+    final fresh = session.playtests.last;
+    expect(state.hostedChatId, fresh.chat.id);
+    expect(fresh.chat.impersonateId, 'me');
+    expect(find.text('You came back.', findRichText: true), findsOneWidget);
+    expect(find.text('Ash'), findsWidgets);
+    expect(state.conversations, isEmpty);
 
-    // A long press on a chat removes it.
-    await tester.longPress(find.byKey(Key('playground-chat-${chat.id}')));
+    // A long press pours out the options; Delete asks first.
+    await tester.tap(find.byKey(chatMenuButtonKey));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('playground-delete')), findsNothing);
+    await tester.longPress(find.byKey(Key('playground-chat-${fresh.id}')));
+    await tester.pumpAndSettle();
+    for (final key in ['export', 'import', 'delete']) {
+      expect(find.byKey(Key('playground-$key')), findsOneWidget, reason: key);
+    }
     await tester.tap(find.byKey(const Key('playground-delete')));
     await tester.pumpAndSettle();
-    expect(session.playtests, isEmpty);
-    expect(find.textContaining('Talk to the draft as it stands'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('playground-delete-confirm')));
+    await tester.pumpAndSettle();
+    expect(session.playtest(fresh.id), isNull);
+    expect(find.byKey(Key('playground-chat-${fresh.id}')), findsNothing);
+    // The screen moved on to another of the Playground's chats.
+    expect(session.playtests.map((p) => p.chat.id), contains(state.hostedChatId));
+
+    // Export offers the app's own export shapes.
+    await tester.longPress(mineRow);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('playground-export')));
+    await tester.pumpAndSettle();
+    expect(find.text('EXPORT AS'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+
+    // Import reads a chat the app's importers read, as a chat with the draft.
+    await tester.longPress(mineRow);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('playground-import')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste JSON'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField).last,
+      jsonEncode([
+        {'role': 'user', 'content': 'An old hello'},
+        {'role': 'assistant', 'content': 'An old reply'},
+      ]),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Import'));
+    await tester.pumpAndSettle();
+    final imported = session.playtests.last;
+    expect(imported.byUser, isTrue);
+    expect(imported.chat.messages.map((m) => m.content),
+        ['An old hello', 'An old reply']);
+    expect(imported.chat.id, startsWith(kHostedChatPrefix));
+    expect(state.conversations, isEmpty);
   });
+
+  // Whichever composer the Chat Interface has, and whether the capsule is up:
+  // the Playground is the chat screen with the Studio's chrome put away, and
+  // its composer can always bring the capsule back.
+  for (final style in ComposerStyle.values) {
+    for (final capsule in [true, false]) {
+      testWidgets('the Playground with the ${style.name} composer, capsule '
+          '${capsule ? 'up' : 'away'}', (tester) async {
+        phone(tester);
+        final state = await boot();
+        await state.updateChatInterface(
+            state.chatInterface.copyWith(composerStyle: style));
+        await openPlayground(tester, state, seeded());
+        if (!capsule) {
+          // Put away from the Playground itself, it stays on the Playground.
+          await tester.tap(find.byKey(const Key('composer-ops-button')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('playground-areas-button')));
+          await tester.pumpAndSettle();
+          expect(state.studioConfig.areasCapsule, isFalse);
+        }
+        expect(chatScreen(), findsOneWidget);
+        expect(find.byKey(const Key('composer-field')), findsOneWidget);
+        expect(find.byKey(const Key('studio-menu')), findsNothing);
+        expect(find.byKey(const Key('studio-composer-field')), findsNothing);
+        final areas = find.byKey(const Key('playground-areas'));
+        expect(areas, capsule ? findsOneWidget : findsNothing);
+        if (capsule) {
+          // Over the composer, inside the chat screen.
+          expect(tester.getBottomLeft(areas).dy,
+              lessThanOrEqualTo(tester.getTopLeft(find.byKey(const Key('composer-field'))).dy));
+        }
+        // The composer's strip has the way back to the capsule.
+        if (find.byKey(const Key('playground-areas-button')).evaluate().isEmpty) {
+          await tester.tap(find.byKey(const Key('composer-ops-button')));
+          await tester.pumpAndSettle();
+        }
+        await tester.tap(find.byKey(const Key('playground-areas-button')));
+        await tester.pumpAndSettle();
+        expect(state.studioConfig.areasCapsule, !capsule);
+        if (capsule) return;
+        // Brought back, it leads out to the other areas, where the Studio's
+        // own chrome is again.
+        expect(areas, findsOneWidget);
+        await tester.tap(find.descendant(
+          of: areas,
+          matching: find.byKey(const Key('studio-area-draft')),
+        ));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('studio-menu')), findsOneWidget);
+        expect(find.byType(StudioDraftView), findsOneWidget);
+      });
+    }
+  }
 
   testWidgets('the Draft\'s Notes tab reads the notes and edits them by hand',
       (tester) async {

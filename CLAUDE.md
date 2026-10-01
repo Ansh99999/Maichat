@@ -392,6 +392,11 @@ bar or the overflow menu.
   action bar for ✕/✓; the avatar, name, pictures and layout do not move. Both of
   those have sharp edges worth reading before touching them (gesture-arena order,
   field height, deferred save): `developer notes/feature-notes-and-test-traps.md`.
+  `ChatScreen(host:)` is the one way to show the chat screen inside another
+  screen (the Studio's Playground): a `ChatScreenHost` replaces the sidebar
+  and adds a riser above the composer and strip symbols, nothing else —
+  everything else stays the chat's own, and the chat it shows is `active`
+  (see `ChatHost` under the Studio).
 - **Response hint:** a line of steering typed beside a chat and injected into
   every send until it is erased (Agnai's own hint, plus a depth). Switched on
   app-wide in Chat Interface (`ChatInterface.responseHintEnabled` /
@@ -553,13 +558,17 @@ bar or the overflow menu.
     for every agent, `write_notes`/`edit_notes` not for a critic; the Draft's
     Notes tab hand-edits them); and the **Playground** (`StudioPlaytest`s on
     the *session*, not the workspace, so a rewind leaves them and snapshots stay
-    small; capped at `kStudioPlaytestLimit`). `playtest` files each run there
-    and carries one on with `playtest_id` (its whole chat goes back as
-    `earlier`), with an optional persona label and a test-only `scenario`
-    (laid on as the throwaway chat's `scenarioOverride`); `read_playtests`
-    reads the user's chats too. The user's own Playground chats go through
-    `StudioController.playgroundSend` → the same `playtestCharacter`, streaming
-    via `onText`; a failed reply is kept as an error turn and never sent back.
+    small; capped at `kStudioPlaytestLimit`). A playtest **is a chat**:
+    `StudioPlaytest.chat` is a real `Conversation` (id `kHostedChatPrefix` +
+    the playtest's), and `turns` is a view over its messages (an error turn is
+    a `ChatMessage` with `error`), so the tools' contract held while the
+    storage changed underneath; a session saved with plain `turns` loads them
+    as the chat's messages. `playtest` files each run there and carries one on
+    with `playtest_id` (its whole chat goes back as `earlier`, through the
+    throwaway `playtestCharacter` path), with an optional persona label and a
+    test-only `scenario` (the chat's own `scenarioOverride`); `read_playtests`
+    reads the user's chats too. The user talks to the draft in the **real chat
+    screen** — see **The Playground is the real chat screen** below.
   - **Bringing things in** (`library_tools.dart` + `studio_discover.dart`):
     from the library — `list_library`/`read_library_item` cover characters,
     lorebooks and scenarios; `load_library_character` (`replace`: the draft
@@ -589,7 +598,54 @@ bar or the overflow menu.
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
     (the draft through the real `_assemble` as per-chat overrides on a
     throwaway, never-stored `Conversation`; `transcript` replaces the
-    greeting when a playtest carries on).
+    greeting when a playtest carries on — the agents' path), plus the
+    hosted-chat seam the Playground uses (`ChatHost`, below).
+  - **The Playground is the real chat screen.** Nothing of the chat is
+    rebuilt: the area is `ChatScreen(host: ChatScreenHost(...))` — the same
+    thread, bubbles and action bars, swipes, edit-in-place, delete dialog,
+    floating pictures, composer with persona/strip/attachments/image
+    studio/`/btw`, styled by the app's Chat Interface. Two seams make it work:
+    - `ChatScreenHost` (`chat_screen.dart`) swaps in only a sidebar
+      (`PlaygroundDrawer`: preset / provider / group chats / Chat Interface as
+      symbols, a hairline with +, the session's chats newest first with the
+      agents' marked; a long press pours Export / Import / Delete out of a
+      `LiquidPanel`, through `exportChat` and `importChats(into:)`), a widget
+      above the composer (the areas capsule) and extra strip symbols (the one
+      that puts the capsule up or away). Without a host the screen is exactly
+      what it was.
+    - `ChatHost` (`state/chat_host.dart`), attached with
+      `AppState.hostChats` by `StudioPlayground` (`services/studio/
+      studio_playground.dart`) when the Playground is opened: one of its chats
+      becomes `active`, so every send/swipe/edit/fork/delete runs through the
+      app's own paths. The chats are the host's, **never in
+      `AppState.conversations`** (no chat list shows them, and the
+      `conversations` entry never carries them); `_conversationById` finds
+      them, `_saveChat` keeps a hosted chat's turn through `ChatHost.save`
+      (the session file) without re-encoding the app's chats, and
+      `_saveConversations` also tells the host. `characterFor` /
+      `lorebookFor` / `avatarPoolIn` ask the host first, after a chat's own
+      per-chat override: the host answers with a **copy** of the workspace's
+      character taken at `StudioSession.draftVersion` (bumped by every edit and
+      rewind), so the next reply is written from the draft as it stands and
+      nothing the chat does writes into the draft. The avatar actions
+      (`addAvatarToPool`, `removeAvatarFromPool`, `setDefaultAvatar`,
+      `chooseDefaultAvatar`) on the hosted draft's id go to
+      `ChatHost.editCharacter` — a hand edit of the draft — never to a roster
+      card that shares the id ("Open in Studio" keeps it). While a host is attached,
+      `active` never falls back into the app's list (it would mint a stray
+      chat); choosing one of the app's own chats (`selectConversation`,
+      `newConversation`, `startChatWithCharacter`) detaches it; a fork of a
+      hosted chat is `adopt`ed by its host; a reply that lands after its host
+      was detached is still saved through it (`_formerHost`). New chats are
+      seeded by `AppState.newChatWith` — the same seeding as
+      `startChatWithCharacter` (default persona, folder defaults, greetings as
+      swipes), filed by the caller. Hosted chats' pictures are kept by the
+      sweep through `Conversation.pictureRefs` (shared with the app's chats)
+      in `StudioStore.pictureRefs`; their response hints survive startup's
+      prune by their id prefix. Applying the draft leaves the chats with the
+      session; deleting the session deletes them with its file. The Studio's
+      own chrome (menu square, sub-agent square, dock) steps aside on this
+      page; hiding the capsule from here does not leave the Playground.
   - UI: `screens/studio/` — `studio_screen.dart` is a chat-first shell with
     **no app bar on any page**: floating soft squares (`shell/floating_button.dart`)
     for the menu (drawer: session name + spend, Home / Settings / Sessions) and
@@ -599,14 +655,13 @@ bar or the overflow menu.
     (persisted as `StudioConfig.areasCapsule`; only that symbol turns it off;
     when the labels do not all fit, the chosen slot grows on the indicator's
     spring and the others show icons), and the composer (conversation only —
-    the Playground floats a `PlaygroundComposer` of its own, measured like the
-    conversation's dock). Pages lay out under it and keep clear through
-    `shell/studio_chrome.dart` (`StudioChrome.of`: top/side/bottom insets); the
+    the Playground is the app's chat screen, with its own composer). Pages lay
+    out under it and keep clear through `shell/studio_chrome.dart` (`StudioChrome.of`: top/side/bottom insets); the
     dock's height is taken only once it has held for a frame, so a spring does
     not relayout the page every frame. `shell/bottom_fade.dart` is the frosted
     fade behind the dock — its blur is the one per-frame cost, kept to that
-    band. The composer copies both chat styles without persona —
-    `chat_screen.dart` is untouched. Save/apply is the card at the top of
+    band. The Studio composer copies both chat styles without persona; of
+    `chat_screen.dart` the Studio uses only the hosting seam above. Save/apply is the card at the top of
     Changes (`shell/studio_apply.dart`). The top-right sub-agent button opens
     `shell/liquid_panel.dart` (a spring-driven metaball clip; content laid out
     once, only the clip/paint animate) listing Main + sub-agents with ticking
@@ -636,11 +691,14 @@ bar or the overflow menu.
     `studio_controller_test.dart` (end to end against a loopback model),
     `studio_runtime_test.dart`, `studio_subagent_chat_test.dart`,
     `studio_knowledge_test.dart`,
-    `studio_workbench_test.dart` (incl. the Playground against a loopback
-    model), `studio_library_test.dart` (library → draft and Discover against
-    loopback Chub / Character Tavern), `studio_library_controller_test.dart`,
-    `studio_area_pages_test.dart`, and the `*_ui_test.dart` files
-    (`studio_playground_ui_test.dart` has the capsule's width × area matrix).
+    `studio_workbench_test.dart` (incl. the Playground's real send against a
+    loopback model: the draft as it stands, the persona, one system message,
+    kept in the session and not in `conversations`), `studio_library_test.dart`
+    (library → draft and Discover against loopback Chub / Character Tavern),
+    `studio_library_controller_test.dart`, `studio_area_pages_test.dart`,
+    and the `*_ui_test.dart` files (`studio_playground_ui_test.dart` has the
+    capsule's width × area matrix, the hosted chat screen, its sidebar, and the
+    composer style × capsule up/away matrix).
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by
   `AppState.forkConversation`). `services/chat_graph.dart` is the pure view over

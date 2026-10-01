@@ -9,11 +9,14 @@
 /// quickly, and a large preferences entry is what once made the app unopenable.
 library;
 
+import 'dart:collection';
 import 'dart:convert';
 
 import 'agent_message.dart';
 import 'character.dart';
+import 'conversation.dart';
 import 'lorebook.dart';
+import 'message.dart';
 import 'message_image.dart';
 import 'studio_agent_type.dart';
 import 'studio_revisions.dart';
@@ -159,9 +162,15 @@ class StudioPlaytestTurn {
   }
 }
 
-/// One playtest chat with the draft, kept for the Playground: the user's own
-/// (typed there) or one an agent ran with the `playtest` tool. Every reply
-/// went through the real chat prompt — see `AppState.playtestCharacter`.
+/// One Playground chat with the draft, kept with the session: the user's own
+/// or one an agent ran with the `playtest` tool.
+///
+/// It *is* a chat — [chat] is a real [Conversation], shown in the real chat
+/// screen and carried on through the real send path, with the draft as its
+/// character (the Studio hosts it: see `ChatHost`). The agents' tools read
+/// and write it as [turns], a view over the chat's messages, so a playtest an
+/// agent ran is a chat the user can open and carry on, and a chat the user
+/// had is a transcript an agent can read.
 ///
 /// Kept on the session, not the workspace: a rewind changes the draft, not
 /// what was said to it, and snapshots stay small.
@@ -171,14 +180,24 @@ class StudioPlaytest {
     required this.by,
     this.title = '',
     this.persona = '',
-    this.scenario = '',
+    String scenario = '',
     this.greetingIndex = 0,
     List<StudioPlaytestTurn>? turns,
+    Conversation? chat,
     DateTime? createdAt,
     DateTime? updatedAt,
-  })  : turns = turns ?? <StudioPlaytestTurn>[],
+  })  : chat = chat ??
+            Conversation(
+              id: '$kHostedChatPrefix$id',
+              title: title.trim().isEmpty ? 'Playground' : title.trim(),
+              messages: [for (final t in turns ?? const []) _messageOf(t)],
+              updatedAt: updatedAt ?? DateTime.now(),
+              scenarioOverride: scenario.trim(),
+            ),
         createdAt = createdAt ?? DateTime.now(),
-        updatedAt = updatedAt ?? DateTime.now();
+        updatedAt = updatedAt ?? DateTime.now() {
+    this.turns = _PlaytestTurns(this.chat.messages);
+  }
 
   final String id;
 
@@ -190,14 +209,28 @@ class StudioPlaytest {
   /// Who the tester was playing, as the agent described it.
   String persona;
 
-  /// A situation for this test only, in place of the card's scenario.
-  String scenario;
+  /// A situation for this test only, in place of the card's scenario — the
+  /// chat's own scenario, as any chat can have.
+  String get scenario => chat.scenarioOverride;
+  set scenario(String value) => chat.scenarioOverride = value.trim();
+
   int greetingIndex;
-  final List<StudioPlaytestTurn> turns;
+
+  /// The chat itself.
+  final Conversation chat;
+
+  /// The chat's turns, as the tools see them: who spoke, what was said, and
+  /// whether it was a reply that failed. Adding to it adds to the chat.
+  late final List<StudioPlaytestTurn> turns;
+
   final DateTime createdAt;
   DateTime updatedAt;
 
   bool get byUser => by == kUserEditor;
+
+  /// When it was last said anything in — by the agent's tool or in the chat.
+  DateTime get lastActive =>
+      chat.updatedAt.isAfter(updatedAt) ? chat.updatedAt : updatedAt;
 
   /// The turns that go back to the model: everything but failed replies.
   List<StudioPlaytestTurn> get sendable => [for (final t in turns) if (!t.error) t];
@@ -213,9 +246,8 @@ class StudioPlaytest {
         'by': by,
         if (title.isNotEmpty) 'title': title,
         if (persona.isNotEmpty) 'persona': persona,
-        if (scenario.isNotEmpty) 'scenario': scenario,
         if (greetingIndex != 0) 'greetingIndex': greetingIndex,
-        'turns': [for (final t in turns) t.toJson()],
+        'chat': chat.toJson(),
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
@@ -224,21 +256,74 @@ class StudioPlaytest {
     if (json is! Map) return null;
     final id = json['id'] as String? ?? '';
     if (id.isEmpty) return null;
+    final stored = json['chat'];
     return StudioPlaytest(
       id: id,
       by: json['by'] as String? ?? kUserEditor,
       title: json['title'] as String? ?? '',
       persona: json['persona'] as String? ?? '',
+      // A session saved before playtests were chats kept a scenario and plain
+      // turns; they become the chat's own scenario and its messages.
       scenario: json['scenario'] as String? ?? '',
       greetingIndex: (json['greetingIndex'] as num?)?.toInt() ?? 0,
       turns: [
-        if (json['turns'] is List)
+        if (stored is! Map && json['turns'] is List)
           for (final t in json['turns'] as List) ?StudioPlaytestTurn.fromJson(t),
       ],
+      chat: stored is Map
+          ? Conversation.fromJson(Map<String, dynamic>.from(stored))
+          : null,
       createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
       updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
     );
   }
+}
+
+ChatMessage _messageOf(StudioPlaytestTurn turn) => ChatMessage(
+      role: turn.user ? 'user' : 'assistant',
+      content: turn.text,
+      error: turn.error,
+    );
+
+StudioPlaytestTurn _turnOf(ChatMessage message) => StudioPlaytestTurn(
+      user: message.isUser,
+      text: message.content,
+      error: message.error,
+    );
+
+/// [StudioPlaytest.turns]: a chat's messages, read and written as turns.
+class _PlaytestTurns extends ListBase<StudioPlaytestTurn> {
+  _PlaytestTurns(this._messages);
+
+  final List<ChatMessage> _messages;
+
+  @override
+  int get length => _messages.length;
+
+  @override
+  set length(int value) {
+    if (value > _messages.length) {
+      throw UnsupportedError('A playtest grows by adding turns.');
+    }
+    _messages.length = value;
+  }
+
+  @override
+  StudioPlaytestTurn operator [](int index) => _turnOf(_messages[index]);
+
+  @override
+  void operator []=(int index, StudioPlaytestTurn value) =>
+      _messages[index] = _messageOf(value);
+
+  @override
+  void add(StudioPlaytestTurn element) => _messages.add(_messageOf(element));
+
+  @override
+  void addAll(Iterable<StudioPlaytestTurn> iterable) =>
+      _messages.addAll(iterable.map(_messageOf));
+
+  @override
+  StudioPlaytestTurn removeLast() => _turnOf(_messages.removeLast());
 }
 
 /// How many playtests a session keeps; the oldest go first.
@@ -782,12 +867,18 @@ class StudioSession {
   /// changing what somebody else changed, which is the safe side.
   final Map<String, Map<String, int>> seen = <String, Map<String, int>>{};
 
+  /// Goes up whenever any part of the draft changes (an edit, by anyone, or a
+  /// rewind). Not saved: it only has to tell a copy of the draft taken in this
+  /// run from the draft as it is now — the Playground's chats use it.
+  int draftVersion = 0;
+
   /// What [agent] has seen, created on first use.
   Map<String, int> seenBy(String agent) =>
       seen.putIfAbsent(agent, () => <String, int>{});
 
   /// Records that [parts] changed, by [by], bumping each one's revision.
   Set<String> _bump(Iterable<String> parts, String by) {
+    if (parts.isNotEmpty) draftVersion++;
     final out = <String>{};
     for (final key in parts) {
       revisions[key] = StudioRevision((revisions[key]?.rev ?? 0) + 1, by);

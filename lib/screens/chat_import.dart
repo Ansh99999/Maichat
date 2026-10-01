@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/character.dart';
+import '../models/conversation.dart';
 import '../services/chat_codec.dart';
 import '../state/app_state.dart';
 import '../widgets/brand_mark.dart';
@@ -21,9 +22,14 @@ import '../widgets/brand_mark.dart';
 ///
 /// [preselectCharacterId] is the character to offer by default, which is how the
 /// per-character chat list imports straight into the character it is showing.
+///
+/// [into], when given, is where the chats go instead of the app's list — and
+/// they already have their character, so nothing is asked: the Studio's
+/// Playground files them as chats with the draft.
 Future<void> importChats(
   BuildContext context, {
   String? preselectCharacterId,
+  Future<void> Function(List<Conversation> chats)? into,
 }) async {
   final choice = await showModalBottomSheet<String>(
     context: context,
@@ -63,16 +69,20 @@ Future<void> importChats(
   );
   if (choice == null || !context.mounted) return;
   if (choice == 'file') {
-    await _fromFiles(context, preselectCharacterId);
+    await _fromFiles(context, preselectCharacterId, into);
   } else {
-    await _fromPaste(context, preselectCharacterId);
+    await _fromPaste(context, preselectCharacterId, into);
   }
 }
 // APPEND-MARKER
 
 /// Reads every picked file, keeping whichever chats parse. A file that fails does
 /// not sink the others — its complaint is reported once at the end.
-Future<void> _fromFiles(BuildContext context, String? preselect) async {
+Future<void> _fromFiles(
+  BuildContext context,
+  String? preselect,
+  _Into? into,
+) async {
   FilePickerResult? result;
   try {
     result = await FilePicker.pickFiles(
@@ -107,18 +117,22 @@ Future<void> _fromFiles(BuildContext context, String? preselect) async {
     }
   }
   if (!context.mounted) return;
-  await _confirm(context, chats, firstError, preselect);
+  await _confirm(context, chats, firstError, preselect, into);
 }
 
 /// The clipboard route, for a chat copied out of a browser or another app.
-Future<void> _fromPaste(BuildContext context, String? preselect) async {
+Future<void> _fromPaste(
+  BuildContext context,
+  String? preselect,
+  _Into? into,
+) async {
   final text = await showDialog<String>(
     context: context,
     builder: (context) => const _PasteDialog(),
   );
   if (text == null || text.trim().isEmpty || !context.mounted) return;
   try {
-    await _confirm(context, ChatCodec.parse(text), null, preselect);
+    await _confirm(context, ChatCodec.parse(text), null, preselect, into);
   } on FormatException catch (e) {
     if (context.mounted) _say(context, e.message);
   }
@@ -190,9 +204,16 @@ Future<void> _confirm(
   List<ImportedChat> chats,
   String? error,
   String? preselect,
+  _Into? into,
 ) async {
   if (chats.isEmpty) {
     _say(context, error ?? 'Nothing in there looked like a chat.');
+    return;
+  }
+  if (into != null) {
+    await into(chats.map((c) => c.conversation).toList());
+    if (!context.mounted) return;
+    _say(context, _imported(chats, error));
     return;
   }
   final state = context.read<AppState>();
@@ -212,10 +233,17 @@ Future<void> _confirm(
     bind: binding.character,
   );
   if (!context.mounted) return;
+  _say(context, _imported(chats, error));
+}
+
+/// Where [importChats] files the chats when not in the app's list.
+typedef _Into = Future<void> Function(List<Conversation> chats);
+
+String _imported(List<ImportedChat> chats, String? error) {
   final done = chats.length == 1
       ? 'Imported "${chats.single.conversation.title}".'
       : 'Imported ${chats.length} chats.';
-  _say(context, error == null ? done : '$done One file was skipped: $error');
+  return error == null ? done : '$done One file was skipped: $error';
 }
 
 /// The saved character the file is probably about: same name, ignoring case.

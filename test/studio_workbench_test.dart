@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/lorebook.dart';
 import 'package:maichat/models/message.dart';
+import 'package:maichat/models/message_image.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/models/studio.dart';
 import 'package:maichat/models/studio_revisions.dart';
@@ -376,6 +377,71 @@ void main() {
       session.rewindTo(session.ops.length - 1);
       expect(session.playtests, hasLength(kStudioPlaytestLimit));
     });
+
+    test('a playtest is a chat: its turns are the chat\'s messages', () {
+      final test = StudioPlaytest(id: 'p', by: 'Subagent 1', title: 'Voice',
+          scenario: 'A storm night.', turns: const [
+        StudioPlaytestTurn(user: false, text: 'You came back.'),
+      ]);
+      expect(test.chat.id, '${kHostedChatPrefix}p');
+      expect(test.chat.scenarioOverride, 'A storm night.');
+      test.turns
+        ..add(const StudioPlaytestTurn(user: true, text: 'Hello?'))
+        ..add(const StudioPlaytestTurn(user: false, text: 'no', error: true));
+      expect(test.chat.messages.map((m) => (m.role, m.content, m.error)), [
+        ('assistant', 'You came back.', false),
+        ('user', 'Hello?', false),
+        ('assistant', 'no', true),
+      ]);
+      // A turn the chat screen added reads back as a turn.
+      test.chat.messages.add(ChatMessage(role: 'assistant', content: 'Mind it.'));
+      expect(test.turns.last.text, 'Mind it.');
+      expect(test.sendable.map((t) => t.text),
+          ['You came back.', 'Hello?', 'Mind it.']);
+    });
+
+    test('a session saved before playtests were chats loads them as chats', () {
+      final old = StudioPlaytest.fromJson({
+        'id': 'old',
+        'by': kUserEditor,
+        'scenario': 'A storm night.',
+        'turns': [
+          {'user': false, 'text': 'Hi'},
+          {'user': true, 'text': 'Yo'},
+          {'user': false, 'text': 'boom', 'error': true},
+        ],
+      })!;
+      expect(old.chat.id, '${kHostedChatPrefix}old');
+      expect(old.scenario, 'A storm night.');
+      expect(old.chat.messages.map((m) => (m.isUser, m.content, m.error)), [
+        (false, 'Hi', false),
+        (true, 'Yo', false),
+        (false, 'boom', true),
+      ]);
+      final again = StudioPlaytest.fromJson(
+          jsonDecode(jsonEncode(old.toJson())) as Map<String, dynamic>)!;
+      expect(again.turns.map((t) => t.text), ['Hi', 'Yo', 'boom']);
+      expect(again.scenario, 'A storm night.');
+    });
+
+    test('a Playground chat\'s pictures are kept by the picture sweep',
+        () async {
+      final dir = await Directory.systemTemp.createTemp('studio_pg_pics');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = StudioStore(dir);
+      final test = StudioPlaytest(id: 'p', by: kUserEditor);
+      test.chat
+        ..backgroundImage = 'local:behind.png'
+        ..messages.add(ChatMessage(
+          role: 'user',
+          content: 'Look',
+          images: [const MessageImage(ref: 'local:sent.png', mime: 'image/png')],
+        ));
+      session.addPlaytest(test);
+      await store.save(session);
+      final refs = await store.pictureRefs();
+      expect(refs, containsAll(['local:behind.png', 'local:sent.png']));
+    });
   });
 
   group('against the real app', () {
@@ -509,11 +575,13 @@ void main() {
       expect(bodies, isEmpty);
     });
 
-    test('the Playground: the user chats with the draft, and an agent\'s '
-        'playtest lands beside it', () async {
+    test('the Playground is a real chat with the draft: the app\'s own send, '
+        'the draft as it stands, kept with the session and nowhere else',
+        () async {
       script = [
-        // The user's line, through the chat path.
+        // The user's lines, through the chat's own send.
         [words('Mind the tide, stranger.')],
+        [words('Then stay a while.')],
         // The lead's playtest: its call, then the character's reply, then its
         // closing words.
         [toolCall('t1', 'playtest', {'messages': ['Why stay?'], 'title': 'Why'})],
@@ -524,26 +592,63 @@ void main() {
       final store = StudioStore(dir);
       final session = newStudioSession()
         ..workspace.character.name = 'Maren'
+        ..workspace.character.description = 'DESC_TOKEN keeps the light'
         ..workspace.character.firstMes = 'You came back.'
         ..workspace.notes = 'NOTES_TOKEN';
+      // The user's default persona: a new chat with the draft speaks as it,
+      // as any new chat does.
+      await state.addCharacter(
+          Character(id: 'me', name: 'Ash', description: 'PERSONA_TOKEN'));
+      await state.setDefaultPersona('me');
       final controller = StudioController(state: state, store: store, session: session);
       addTearDown(controller.flush);
 
-      final chat = controller.newPlaygroundChat();
-      expect(chat.turns.single.text, 'You came back.');
-      await controller.playgroundSend(chat.id, 'Hello?');
-      expect(chat.turns.map((t) => t.text),
-          ['You came back.', 'Hello?', 'Mind the tide, stranger.']);
-      expect(chat.title, 'Hello?');
-      // The user's line went out as a real chat request, no tools, and the
-      // notes never reach the character's prompt.
-      final userRequest = bodies.single;
-      expect(userRequest.containsKey('tools'), isFalse);
-      expect(messagesOf(userRequest).first['role'], 'system');
-      expect(
-          messagesOf(userRequest).where((m) => m['role'] == 'system'), hasLength(1));
-      expect(jsonEncode(userRequest), isNot(contains('NOTES_TOKEN')));
+      // Opening the Playground makes one of its chats the app's active chat —
+      // a new one, seeded the way any new chat with a character is.
+      final chatId = controller.playground.open();
+      expect(state.hostedChatId, chatId);
+      expect(state.active.id, chatId);
+      expect(state.active.characterId, session.workspace.character.id);
+      expect(state.active.messages.single.content, 'You came back.');
+      // …and it is in none of the app's own lists.
+      expect(state.conversations, isEmpty);
 
+      await state.send('Hello?');
+      final mine = controller.playtests.single;
+      expect(mine.byUser, isTrue);
+      expect(mine.turns.map((t) => t.text),
+          ['You came back.', 'Hello?', 'Mind the tide, stranger.']);
+      // A real chat request: one system message first, the draft's card in
+      // it, no tools, and the notes nowhere.
+      final first = bodies.single;
+      expect(first.containsKey('tools'), isFalse);
+      expect(messagesOf(first).first['role'], 'system');
+      expect(messagesOf(first).where((m) => m['role'] == 'system'), hasLength(1));
+      expect(jsonEncode(first), contains('DESC_TOKEN'));
+      expect(jsonEncode(first), contains('PERSONA_TOKEN'));
+      expect(state.active.impersonateId, 'me');
+      expect(jsonEncode(first), isNot(contains('NOTES_TOKEN')));
+
+      // The draft as it stands: an edit reaches the very next reply.
+      controller.editByHand(
+        'Changed the description by hand',
+        (ws) => ws.character.description = 'FRESH_TOKEN keeps the light',
+      );
+      await state.send('Why here?');
+      final second = jsonEncode(bodies[1]);
+      expect(second, contains('FRESH_TOKEN'));
+      expect(second, isNot(contains('DESC_TOKEN')));
+      expect(second, contains('Mind the tide, stranger.'));
+
+      // Kept with the session, and not in the app's conversations entry.
+      await controller.flush();
+      final back = await store.read(session.id);
+      expect(back!.playtests.single.chat.messages.map((m) => m.content).last,
+          'Then stay a while.');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('conversations') ?? '', isNot(contains('Why here?')));
+
+      // An agent's playtest lands beside it, as a chat of its own.
       await controller.send('Playtest her.');
       await controller.flush();
       expect(controller.notice, isNull);
@@ -551,20 +656,92 @@ void main() {
       expect(agentTest.by, kMainAgentEditor);
       expect(agentTest.title, 'Why');
       expect(agentTest.turns.last.text, 'The light needs me.');
-      expect(controller.playtests.map((p) => p.id), [agentTest.id, chat.id]);
+      expect(controller.playtests.map((p) => p.id), [agentTest.id, mine.id]);
+      // The chat screen can show it: it is a chat with the draft.
+      expect(controller.playground.chats.first.characterId,
+          session.workspace.character.id);
+      expect(state.conversations, isEmpty);
 
-      // Saved, both of them.
-      final back = await store.read(session.id);
-      expect(back!.playtests, hasLength(2));
-      expect(back.playtests.first.turns.last.text, 'Mind the tide, stranger.');
-
-      // A failure lands in the chat, and is not sent back next time.
+      // A failure lands in the chat as an error turn, never sent back.
       await server.close(force: true);
-      await controller.playgroundSend(chat.id, 'Still there?');
-      expect(chat.turns.last.error, isTrue);
-      expect(chat.sendable.last.text, 'Still there?');
-      controller.deletePlaytest(chat.id);
+      await state.send('Still there?');
+      expect(mine.turns.last.error, isTrue);
+      expect(mine.sendable.last.text, 'Still there?');
+
+      // Deleting the chat on screen moves the screen on to another.
+      controller.deletePlaytest(mine.id);
+      await Future<void>.delayed(Duration.zero);
       expect(controller.playtests.map((p) => p.id), [agentTest.id]);
+      expect(state.hostedChatId, agentTest.chat.id);
+
+      // Leaving hands the screen back to the app's own chats.
+      controller.playground.close();
+      expect(state.hostedChatId, isNull);
+      expect(state.conversations, isEmpty);
+    });
+
+    test('a branch of a Playground chat stays in the Playground', () async {
+      script = [];
+      final state = await boot();
+      final session = newStudioSession()
+        ..workspace.character.name = 'Maren'
+        ..workspace.character.firstMes = 'You came back.';
+      final controller =
+          StudioController(state: state, store: StudioStore(dir), session: session);
+      addTearDown(controller.flush);
+      final chatId = controller.playground.open();
+      state.active.messages.add(ChatMessage(role: 'user', content: 'Hello?'));
+      final fork = await state.forkConversation(chatId, 0);
+      expect(fork, startsWith(kHostedChatPrefix));
+      expect(state.hostedChatId, fork);
+      expect(state.active.messages.single.content, 'You came back.');
+      expect(controller.playtests.map((p) => p.chat.id), [fork, chatId]);
+      expect(state.conversations, isEmpty);
+      // Choosing a chat of the app's own leaves the Playground.
+      final own = state.startChatWithCharacter(Character(id: 'o', name: 'Other'));
+      expect(state.hostedChatId, isNull);
+      expect(state.active.id, own);
+      expect(state.conversations.map((c) => c.id), [own]);
+    });
+
+    test('an avatar action in a Playground chat edits the draft, never the '
+        'library card that shares its id', () async {
+      script = [];
+      final state = await boot();
+      // "Open in Studio": the draft keeps the library character's id.
+      await state.addCharacter(
+          Character(id: 'maren', name: 'Maren', avatar: 'local:old.png'));
+      final session = newStudioSession();
+      session.workspace.character = Character(
+          id: 'maren', name: 'Maren', avatar: 'local:old.png');
+      final controller =
+          StudioController(state: state, store: StudioStore(dir), session: session);
+      addTearDown(controller.flush);
+      controller.playground.open();
+      final opsBefore = session.ops.length;
+
+      await state.addAvatarToPool('maren', 'local:new.png');
+      await state.setDefaultAvatar('maren', 'local:new.png');
+      final draft = session.workspace.character;
+      expect(draft.avatar, 'local:new.png');
+      expect(draft.avatars, contains('local:old.png'));
+      // Each is a change of the draft's, shown in Changes and rewindable.
+      expect(session.ops.length, opsBefore + 2);
+      // The hosted chat sees the draft as it now stands.
+      expect(state.characterFor(state.active, 'maren')?.avatar, 'local:new.png');
+      // The library card is untouched until the draft is applied.
+      final card = state.characterById('maren')!;
+      expect(card.avatar, 'local:old.png');
+      expect(card.avatars, isEmpty);
+      // Doing it again changes nothing, so nothing is recorded.
+      await state.setDefaultAvatar('maren', 'local:new.png');
+      expect(session.ops.length, opsBefore + 2);
+
+      // Back in the app's own chats, the same action is the card's again.
+      controller.playground.close();
+      await state.addAvatarToPool('maren', 'local:third.png');
+      expect(state.characterById('maren')!.avatars, ['local:third.png']);
+      expect(session.workspace.character.avatars, isNot(contains('local:third.png')));
     });
   });
 }
