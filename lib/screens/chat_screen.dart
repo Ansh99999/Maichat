@@ -64,11 +64,52 @@ const Key jumpToLatestKey = ValueKey('jump-to-latest');
 /// every option lives (provider/model, edit, export, restart, delete, and the
 /// jumps to the other sections).
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  const ChatScreen({super.key, this.host});
+
+  /// Set when the chat is shown inside another screen that keeps chats of its
+  /// own — the Studio's Playground (see `ChatHost`). Everything about the chat
+  /// is the same; [ChatScreenHost] names the few things the host swaps in.
+  final ChatScreenHost? host;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
+
+/// What a screen hosting [ChatScreen] swaps in — and only that: the thread,
+/// the bubbles and their actions, the floating pictures, the composer and
+/// everything it opens are the chat's own.
+class ChatScreenHost {
+  const ChatScreenHost({
+    required this.drawer,
+    this.aboveComposer,
+    this.composerActions = const <WidgetBuilder>[],
+  });
+
+  /// The sidebar the menu square opens, in place of the chat's own (whose
+  /// jumps — Characters, Chats, Profile — lead out of the host).
+  final WidgetBuilder drawer;
+
+  /// Rides above the composer (and the group bar), rising out of it the way
+  /// its own panels do: the Studio's areas capsule.
+  final WidgetBuilder? aboveComposer;
+
+  /// Extra symbols at the end of the composer's operations strip.
+  final List<WidgetBuilder> composerActions;
+}
+
+/// The chat's provider & model picker — the sheet "Provider & model" opens in
+/// the chat sidebar, and the Studio Playground's provider symbol.
+void showChatProviderSheet(BuildContext context) => showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => _QuickSettingsSheet(onManage: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+        );
+      }),
+    );
 
 class _ChatScreenState extends State<ChatScreen> {
   final _ComposerController _input = _ComposerController();
@@ -453,15 +494,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _openQuickSettings() => showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (_) => _QuickSettingsSheet(onManage: () {
-          Navigator.of(context).pop();
-          _openSettings();
-        }),
-      );
+  void _openQuickSettings() => showChatProviderSheet(context);
 
   /// Opens the chat's own settings: title, background, a style of its own, and
   /// the characters taking part. Replaces the old rename-only dialog — renaming
@@ -757,7 +790,7 @@ class _ChatScreenState extends State<ChatScreen> {
       onDrawerChanged: (opened) {
         if (opened) FocusManager.instance.primaryFocus?.unfocus();
       },
-      drawer: _ChatDrawer(
+      drawer: widget.host?.drawer(context) ?? _ChatDrawer(
         onProfile: _goHome,
         onCharacters: _openCharacters,
         onChats: _goChats,
@@ -947,6 +980,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return Column(
         children: [
           Expanded(child: thread),
+          ?widget.host?.aboveComposer?.call(context),
           groupBar,
           composer,
         ],
@@ -981,7 +1015,11 @@ class _ChatScreenState extends State<ChatScreen> {
             child: RepaintBoundary(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                children: [groupBar, composer],
+                children: [
+                  ?widget.host?.aboveComposer?.call(context),
+                  groupBar,
+                  composer,
+                ],
               ),
             ),
           ),
@@ -1253,8 +1291,11 @@ class _ChatScreenState extends State<ChatScreen> {
       AppState state, Conversation conversation, int index) async {    await state.forkConversation(conversation.id, index);
     if (!mounted) return;
     // The fork joins this chat's tree rather than becoming a separate row in the
-    // lists, so the toast points at where it can be found.
-    _toast('Branched — see Chat Graph');
+    // lists, so the toast points at where it can be found. A hosted chat's
+    // branch is a chat of the host's, listed in its sidebar.
+    _toast(widget.host == null
+        ? 'Branched — see Chat Graph'
+        : 'Branched — it is in the chat list');
     _stickToLatest();
   }
 
@@ -1354,7 +1395,9 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () async {
                 Navigator.of(sheet).pop();
                 await state.forkConversation(conversation.id, index);
-                _toast('Branched — see Chat Graph');
+                _toast(widget.host == null
+                    ? 'Branched — see Chat Graph'
+                    : 'Branched — it is in the chat list');
                 _scrollToEnd();
               },
             ),
@@ -1604,6 +1647,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                 onPressed: () => _toggleGroupBar(state),
                                 icon: const Icon(Icons.groups_outlined),
                               ),
+                            // A host's own symbols (the Studio's way back to
+                            // its areas), nearest the ⋯ that opened them.
+                            for (final action
+                                in widget.host?.composerActions ??
+                                    const <WidgetBuilder>[])
+                              action(context),
                           ],
                         ),
                       ),

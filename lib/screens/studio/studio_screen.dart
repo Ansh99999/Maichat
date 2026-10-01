@@ -25,6 +25,7 @@ import 'studio_agent_view.dart';
 import 'studio_changes_view.dart';
 import 'studio_draft_view.dart';
 import 'studio_home_screen.dart';
+import '../chat_screen.dart' show ChatScreenHost;
 import 'studio_playground_view.dart';
 import 'studio_settings_page.dart';
 import 'studio_text_dialog.dart';
@@ -97,15 +98,6 @@ class _StudioScreenState extends State<StudioScreen> {
   double _dockHeight = 0;
   double? _pendingDock;
 
-  /// The same, for the Playground: its own composer floats there, so its
-  /// page keeps clear of a dock of its own, measured the same way.
-  double _playDockHeight = _areasDock + 64;
-  double? _pendingPlayDock;
-
-  /// Which Playground chat is on screen, shared by its page and its composer.
-  late final PlaygroundSelection _playSelection = PlaygroundSelection(
-    _controller.playtests.isEmpty ? null : _controller.playtests.first.id,
-  );
 
   /// What floats over the draft and its changes: the areas capsule alone —
   /// 52 tall, 6 above it and 14 below.
@@ -117,9 +109,22 @@ class _StudioScreenState extends State<StudioScreen> {
   /// it shows changes.
   late final Widget _draftPage = StudioDraftView(controller: _controller);
   late final Widget _changesPage = StudioChangesView(controller: _controller);
+  /// The Playground is the app's own chat screen; the Studio lends it a
+  /// sidebar of its own and the way back to the other areas — the capsule,
+  /// rising out of the composer, and a symbol in its strip that brings it
+  /// back when it has been put away.
   late final Widget _playgroundPage = StudioPlaygroundView(
     controller: _controller,
-    selection: _playSelection,
+    host: ChatScreenHost(
+      drawer: (_) => PlaygroundDrawer(controller: _controller),
+      aboveComposer: (_) => _PlaygroundAreas(
+        controller: _controller,
+        onChanged: _setArea,
+      ),
+      composerActions: [
+        (_) => _PlaygroundAreasButton(onPressed: _toggleAreas),
+      ],
+    ),
   );
   late Widget _interfacePage = _buildInterface();
 
@@ -170,8 +175,8 @@ class _StudioScreenState extends State<StudioScreen> {
   @override
   void dispose() {
     _controller.removeListener(_onController);
+    _controller.playground.close();
     _slash.dispose();
-    _playSelection.dispose();
     _input.dispose();
     _attachments.dispose();
     _subInput.dispose();
@@ -189,41 +194,24 @@ class _StudioScreenState extends State<StudioScreen> {
   }
 
   void _measureDock() {
-    if (!mounted) return;
-    final play = _area == StudioArea.playground;
-    if (_area != StudioArea.interface && !play) return;
+    if (!mounted || _area != StudioArea.interface) return;
     final box = _dockKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
     final height = box.size.height;
-    final current = play ? _playDockHeight : _dockHeight;
-    final pending = play ? _pendingPlayDock : _pendingDock;
-    if ((height - current).abs() <= 0.5) {
-      if (play) {
-        _pendingPlayDock = null;
-      } else {
-        _pendingDock = null;
-      }
+    if ((height - _dockHeight).abs() <= 0.5) {
+      _pendingDock = null;
       return;
     }
-    if (pending != null && (height - pending).abs() <= 0.5) {
+    if (_pendingDock != null && (height - _pendingDock!).abs() <= 0.5) {
       setState(() {
-        if (play) {
-          _pendingPlayDock = null;
-          _playDockHeight = height;
-        } else {
-          _pendingDock = null;
-          _dockHeight = height;
-        }
+        _pendingDock = null;
+        _dockHeight = height;
       });
       return;
     }
     // Still moving (or just moved): look again next frame, and take it once it
     // has stopped.
-    if (play) {
-      _pendingPlayDock = height;
-    } else {
-      _pendingDock = height;
-    }
+    _pendingDock = height;
     WidgetsBinding.instance
       ..addPostFrameCallback((_) => _measureDock())
       ..scheduleFrame();
@@ -260,6 +248,9 @@ class _StudioScreenState extends State<StudioScreen> {
 
   void _setArea(StudioArea area) {
     if (area == _area) return;
+    // The Playground shows one of the session's chats in the chat screen:
+    // the one it was left on, or its newest.
+    if (area == StudioArea.playground) _controller.playground.open();
     setState(() {
       _area = area;
       _actionsOpen = false;
@@ -274,7 +265,11 @@ class _StudioScreenState extends State<StudioScreen> {
     final shown = !state.studioConfig.areasCapsule;
     state.updateStudioConfig(state.studioConfig.copyWith(areasCapsule: shown));
     setState(() => _actionsOpen = false);
-    if (!shown) _setArea(StudioArea.interface);
+    // Put away from the Playground, the capsule leaves it where it is: its
+    // composer has the symbol that brings the capsule back.
+    if (!shown && _area != StudioArea.playground) {
+      _setArea(StudioArea.interface);
+    }
   }
 
   Future<void> _addFromGallery() async {
@@ -329,7 +324,9 @@ class _StudioScreenState extends State<StudioScreen> {
         context.select<AppState, bool>((s) => s.studioConfig.areasCapsule);
     // A capsule switched off elsewhere (another session's screen) takes this
     // one back to the conversation, where the composer is.
-    if (!areasShown && _area != StudioArea.interface) {
+    if (!areasShown &&
+        _area != StudioArea.interface &&
+        _area != StudioArea.playground) {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _setArea(StudioArea.interface));
     }
@@ -337,6 +334,9 @@ class _StudioScreenState extends State<StudioScreen> {
     // measured once it has landed.
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureDock());
     final onConversation = _area == StudioArea.interface;
+    // The Playground is a chat screen with chrome of its own — its menu
+    // square, its looks square and its composer — so the Studio's step aside.
+    final onPlayground = _area == StudioArea.playground;
     final viewingMain = _viewing == kMainAgent;
     const buttonTop = StudioChrome.buttonTop;
     const margin = StudioChrome.buttonMargin;
@@ -392,7 +392,6 @@ class _StudioScreenState extends State<StudioScreen> {
                         bottom: view.bottom +
                             switch (area) {
                               StudioArea.interface => _dockHeight,
-                              StudioArea.playground => _playDockHeight,
                               _ => areasShown ? _areasDock : 0,
                             },
                         rightButton: _hasSubagents,
@@ -408,66 +407,68 @@ class _StudioScreenState extends State<StudioScreen> {
               ),
               // What scrolls up under the status bar fades out there, rather
               // than running under the clock. A plain gradient: no blur.
-              Positioned(
-                left: 0,
-                right: 0,
-                top: 0,
-                height: view.top + 14,
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          scheme.surface.withValues(alpha: 0.92),
-                          scheme.surface.withValues(alpha: 0),
-                        ],
-                        stops: [
-                          view.top / (view.top + 14),
-                          1,
-                        ],
+              if (!onPlayground)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: view.top + 14,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            scheme.surface.withValues(alpha: 0.92),
+                            scheme.surface.withValues(alpha: 0),
+                          ],
+                          stops: [
+                            view.top / (view.top + 14),
+                            1,
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _KeyboardLift(
-                  child: NotificationListener<SizeChangedLayoutNotification>(
-                    onNotification: (_) {
-                      WidgetsBinding.instance
-                          .addPostFrameCallback((_) => _measureDock());
-                      return true;
-                    },
-                    child: SizeChangedLayoutNotifier(
-                      child: _dock(
-                        view: view,
-                        onConversation: onConversation,
-                        onPlayground: _area == StudioArea.playground,
-                        viewingMain: viewingMain,
-                        areasShown: areasShown,
+              if (!onPlayground)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _KeyboardLift(
+                    child: NotificationListener<SizeChangedLayoutNotification>(
+                      onNotification: (_) {
+                        WidgetsBinding.instance
+                            .addPostFrameCallback((_) => _measureDock());
+                        return true;
+                      },
+                      child: SizeChangedLayoutNotifier(
+                        child: _dock(
+                          view: view,
+                          onConversation: onConversation,
+                          viewingMain: viewingMain,
+                          areasShown: areasShown,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              Positioned(
-                top: view.top + buttonTop,
-                left: view.left + margin,
-                child: Builder(
-                  builder: (context) => StudioFloatingButton(
-                    key: const Key('studio-menu'),
-                    tooltip: 'Menu',
-                    icon: const Icon(Icons.menu),
-                    onPressed: () => Scaffold.of(context).openDrawer(),
+              if (!onPlayground)
+                Positioned(
+                  top: view.top + buttonTop,
+                  left: view.left + margin,
+                  child: Builder(
+                    builder: (context) => StudioFloatingButton(
+                      key: const Key('studio-menu'),
+                      tooltip: 'Menu',
+                      icon: const Icon(Icons.menu),
+                      onPressed: () => Scaffold.of(context).openDrawer(),
+                    ),
                   ),
                 ),
-              ),
-              if (_hasSubagents)
+              if (_hasSubagents && !onPlayground)
                 Positioned(
                   top: view.top + buttonTop,
                   right: view.right + margin,
@@ -487,7 +488,7 @@ class _StudioScreenState extends State<StudioScreen> {
                 ),
               Positioned.fill(
                 child: LiquidPanel(
-                  open: _panelOpen && _hasSubagents,
+                  open: _panelOpen && _hasSubagents && !onPlayground,
                   anchor: anchor,
                   panel: panel,
                   color: scheme.surfaceContainerHigh,
@@ -510,13 +511,12 @@ class _StudioScreenState extends State<StudioScreen> {
   Widget _dock({
     required EdgeInsets view,
     required bool onConversation,
-    required bool onPlayground,
     required bool viewingMain,
     required bool areasShown,
   }) {
     final showComposer = onConversation;
     final showActions = onConversation && _actionsOpen;
-    final empty = !showComposer && !onPlayground && !areasShown;
+    final empty = !showComposer && !areasShown;
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -578,7 +578,7 @@ class _StudioScreenState extends State<StudioScreen> {
                       6,
                       16,
                       // Alone on Draft and Changes, it keeps off the edge.
-                      showComposer || onPlayground ? 0 : 14,
+                      showComposer ? 0 : 14,
                     ),
                     child: ListenableBuilder(
                       listenable: _controller,
@@ -637,17 +637,6 @@ class _StudioScreenState extends State<StudioScreen> {
                           ],
                         ),
                 ),
-                // The Playground has a composer of its own: a line to the
-                // draft, played as a chat.
-                _Reveal(
-                  show: onPlayground,
-                  alignment: Alignment.topCenter,
-                  scale: false,
-                  child: PlaygroundComposer(
-                    controller: _controller,
-                    selection: _playSelection,
-                  ),
-                ),
               ],
             ),
           ),
@@ -701,6 +690,59 @@ class _KeyboardLift extends StatelessWidget {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final lift = (keyboard - view.bottom).clamp(0.0, double.infinity);
     return Transform.translate(offset: Offset(0, -lift), child: child);
+  }
+}
+
+/// The areas capsule over the Playground's composer, rising out of it while
+/// the capsule is on, as it rides over the conversation's.
+class _PlaygroundAreas extends StatelessWidget {
+  const _PlaygroundAreas({required this.controller, required this.onChanged});
+
+  final StudioController controller;
+  final ValueChanged<StudioArea> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown =
+        context.select<AppState, bool>((s) => s.studioConfig.areasCapsule);
+    return _Reveal(
+      show: shown,
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        key: const Key('playground-areas'),
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+        child: ListenableBuilder(
+          listenable: controller,
+          builder: (context, _) => AreaCapsule(
+            area: StudioArea.playground,
+            changes: controller.session.ops.where((o) => !o.reverted).length,
+            onChanged: onChanged,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Playground composer's way back to the Studio: the symbol that puts the
+/// areas capsule up (or away) — reachable however the capsule was left.
+class _PlaygroundAreasButton extends StatelessWidget {
+  const _PlaygroundAreasButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown =
+        context.select<AppState, bool>((s) => s.studioConfig.areasCapsule);
+    return IconButton(
+      key: const Key('playground-areas-button'),
+      tooltip: shown ? 'Hide the Studio areas' : 'Studio areas',
+      isSelected: shown,
+      onPressed: onPressed,
+      icon: const Icon(Icons.space_dashboard_outlined),
+      selectedIcon: const Icon(Icons.space_dashboard),
+    );
   }
 }
 

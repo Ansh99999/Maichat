@@ -64,6 +64,9 @@ import '../services/tokenizer.dart';
 import '../services/update_service.dart';
 import '../services/usage_ledger.dart';
 import '../services/world_info.dart';
+import 'chat_host.dart';
+
+export 'chat_host.dart' show ChatHost, kHostedChatPrefix;
 
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
@@ -287,7 +290,7 @@ class AppState extends ChangeNotifier {
     if (_floatPersist?.isActive ?? false) {
       _floatPersist!.cancel();
       _floatPersist = null;
-      if (_writable) await _storage.saveConversations(_conversations);
+      await _saveConversations();
     }
     if (_imageRatioPersist?.isActive ?? false) {
       _imageRatioPersist!.cancel();
@@ -331,8 +334,110 @@ class AppState extends ChangeNotifier {
   /// Whether there is an active provider ready to send.
   bool get isConfigured => activeProvider?.isConfigured ?? false;
 
+  // --- Hosted chats ----------------------------------------------------------
+
+  /// The host whose chat is on screen (the Studio's Playground), or null — see
+  /// [ChatHost]. Only one at a time: the Playground of the session open now.
+  ChatHost? _host;
+
+  /// Which of [_host]'s chats is the active one.
+  String? _hostedId;
+
+  /// The host attached now, if any.
+  ChatHost? get chatHost => _host;
+
+  /// The id of the hosted chat on screen, or null when none is.
+  String? get hostedChatId => _host == null ? null : _hostedId;
+
+  /// Makes [host]'s chat [conversationId] the active chat — what the chat
+  /// screen shows and every send works on — without touching the app's own
+  /// list or the stored active id, so the chat the user left is the one they
+  /// come back to.
+  void hostChats(ChatHost host, String conversationId) {
+    if (identical(_host, host) && _hostedId == conversationId) return;
+    _host = host;
+    _formerHost = host;
+    _hostedId = conversationId;
+    notifyListeners();
+  }
+
+  /// Detaches [host], when it is the one attached: the app's own active chat
+  /// is the active one again. A reply still being written carries on into
+  /// the chat it was asked for, and is kept through [host] when it lands.
+  void leaveHostedChats(ChatHost host) {
+    if (!identical(_host, host)) return;
+    _host = null;
+    _hostedId = null;
+    notifyListeners();
+  }
+
+  /// The host attached last, kept so a reply that lands after its host was
+  /// detached is still saved where its chat lives.
+  ChatHost? _formerHost;
+
+  /// Tells the chat screen that the attached host changed something it shows
+  /// (the draft its chats are with, a turn an agent added).
+  void hostedChatsChanged() {
+    if (_host != null) notifyListeners();
+  }
+
+  Conversation? _hostedChat(ChatHost host, String? id) {
+    if (id == null) return null;
+    for (final c in host.chats) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  /// Whether [conversation] is one of the attached host's chats.
+  bool isHostedChat(Conversation? conversation) => _isHosted(conversation);
+
+  bool _isHosted(Conversation? conversation) =>
+      _hostOf(conversation) != null && identical(_hostOf(conversation), _host);
+
+  /// The host [conversation] belongs to — the attached one, or the one
+  /// attached last — or null for one of the app's own.
+  ChatHost? _hostOf(Conversation? conversation) {
+    if (conversation == null) return null;
+    for (final host in [?_host, ?_formerHost]) {
+      for (final c in host.chats) {
+        if (identical(c, conversation)) return host;
+      }
+    }
+    return null;
+  }
+
+  /// Leaves the hosted chat for one of the app's own — whatever opened it
+  /// (a chat list, a character's "chat") means the app's chat now.
+  void _leaveHostForMain() {
+    _host = null;
+    _hostedId = null;
+  }
+
+  /// Persists [conversation]: through its host when it is hosted, otherwise
+  /// the app's list. The per-turn writes go through here, so a Playground
+  /// chat's turn never re-encodes every chat the app holds.
+  Future<void> _saveChat(Conversation conversation) async {
+    final host = _hostOf(conversation);
+    if (host != null) {
+      if (_writable) host.save();
+      return;
+    }
+    await _saveConversations();
+  }
+
   /// The visible thread, creating one on first run.
   Conversation get active {
+    final host = _host;
+    if (host != null) {
+      // While a host is attached the active chat is one of its own — never a
+      // fallback into the app's list, which would mint a stray chat there.
+      final hosted = _hostedChat(host, _hostedId);
+      if (hosted != null) return hosted;
+      final fallback = host.chats.isEmpty ? host.newChat() : host.chats.first;
+      _hostedId = fallback.id;
+      return fallback;
+    }
     final id = _activeId;
     if (id != null) {
       for (final conversation in _conversations) {
@@ -352,6 +457,7 @@ class AppState extends ChangeNotifier {
   /// The visible thread without creating one — for read-only peeks (e.g. before
   /// committing to a send).
   Conversation? _activeOrNull() {
+    if (_host != null) return active;
     final id = _activeId;
     if (id != null) {
       for (final conversation in _conversations) {
@@ -1101,13 +1207,11 @@ class AppState extends ChangeNotifier {
     String conversationId,
     String? presetId,
   ) async {
-    for (final c in _conversations) {
-      if (c.id == conversationId) {
-        c.presetId = presetId;
-        c.presetOverride = null;
-        c.updatedAt = DateTime.now();
-        break;
-      }
+    final c = _conversationById(conversationId);
+    if (c != null) {
+      c.presetId = presetId;
+      c.presetOverride = null;
+      c.updatedAt = DateTime.now();
     }
     notifyListeners();
     await _saveConversations();
@@ -1119,12 +1223,10 @@ class AppState extends ChangeNotifier {
     String conversationId,
     Preset preset,
   ) async {
-    for (final c in _conversations) {
-      if (c.id == conversationId) {
-        c.presetOverride = Preset.fromJson(preset.toJson());
-        c.updatedAt = DateTime.now();
-        break;
-      }
+    final c = _conversationById(conversationId);
+    if (c != null) {
+      c.presetOverride = Preset.fromJson(preset.toJson());
+      c.updatedAt = DateTime.now();
     }
     notifyListeners();
     await _saveConversations();
@@ -1136,16 +1238,10 @@ class AppState extends ChangeNotifier {
   /// size, say) apply everywhere *except* that chat, with nothing on screen to
   /// explain why.
   Future<void> clearChatPresetOverride(String conversationId) async {
-    var changed = false;
-    for (final c in _conversations) {
-      if (c.id == conversationId && c.presetOverride != null) {
-        c.presetOverride = null;
-        c.updatedAt = DateTime.now();
-        changed = true;
-        break;
-      }
-    }
-    if (!changed) return;
+    final c = _conversationById(conversationId);
+    if (c == null || c.presetOverride == null) return;
+    c.presetOverride = null;
+    c.updatedAt = DateTime.now();
     notifyListeners();
     await _saveConversations();
   }
@@ -1159,13 +1255,11 @@ class AppState extends ChangeNotifier {
   /// preset" path) and binds the chat to it, clearing any override.
   Future<void> savePresetToLibrary(String conversationId, Preset preset) async {
     await savePreset(preset);
-    for (final c in _conversations) {
-      if (c.id == conversationId) {
-        c.presetId = preset.id;
-        c.presetOverride = null;
-        c.updatedAt = DateTime.now();
-        break;
-      }
+    final c = _conversationById(conversationId);
+    if (c != null) {
+      c.presetId = preset.id;
+      c.presetOverride = null;
+      c.updatedAt = DateTime.now();
     }
     notifyListeners();
     await _saveConversations();
@@ -1204,6 +1298,10 @@ class AppState extends ChangeNotifier {
       final override = conversation.characterOverrides[id];
       if (override != null) return override;
     }
+    // In a hosted chat the host's character (the Studio's live draft) is the
+    // one meant, ahead of a roster card that may share its id.
+    final hosted = _hostOf(conversation)?.character(id);
+    if (hosted != null) return hosted;
     return characterById(id);
   }
 
@@ -1217,7 +1315,7 @@ class AppState extends ChangeNotifier {
     change(conversation);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    await _saveChat(conversation);
   }
 
   /// Sets (or clears, with a null [image]) the picture drawn behind this thread.
@@ -1567,6 +1665,8 @@ class AppState extends ChangeNotifier {
   /// a failed load is impossible to bypass.
   Future<void> _saveConversations() async {
     if (!_writable) return;
+    // A change made through a general path may have been to a hosted chat.
+    _host?.save();
     await _storage.saveConversations(_conversations);
   }
 
@@ -1716,21 +1816,11 @@ class AppState extends ChangeNotifier {
       // A saved look holds its own background and participant-bar picture, and
       // is the only thing referring to them until it is applied.
       ..._interfacePresets.expand((p) => p.ui.pictureRefs),
-      for (final c in _conversations) ...[
-        c.backgroundImage ?? '',
-        ...c.characterOverrides.values.map((o) => o.avatar),
-        ...c.characterOverrides.values.expand((o) => o.avatars),
-        ...c.avatarOverrides.values,
-        // A chat with its own copy of the interface has its own copy of whatever
-        // pictures that copy names.
-        ...?c.interfaceOverride?.pictureRefs,
-        // A float can carry a picture the gallery never held (an avatar off an
-        // imported card), and it is on screen right now.
-        ...c.floatingImages.map((f) => f.imageRef),
-        // A picture sent in a message is part of the transcript: it has to
-        // outlive the gallery record it may have been picked from.
-        ...c.messages.expand((m) => m.images.map((i) => i.ref)),
-      ],
+      for (final c in _conversations) ...c.pictureRefs,
+      // A hosted chat's pictures are in its host's files too, but the chat on
+      // screen may hold one that has not been written there yet.
+      for (final host in [?_host, ?_formerHost])
+        for (final c in host.chats) ...c.pictureRefs,
       // A Studio draft's portrait and the pictures sent to the Studio live only
       // in its session files until the draft is applied.
       ...studioRefs,
@@ -2524,6 +2614,8 @@ class AppState extends ChangeNotifier {
       final override = conversation.lorebookOverrides[id];
       if (override != null) return override;
     }
+    final hosted = _hostOf(conversation)?.lorebook(id);
+    if (hosted != null) return hosted;
     return lorebookById(id);
   }
 
@@ -4024,6 +4116,8 @@ class AppState extends ChangeNotifier {
     var stale = false;
     for (final id in _responseHints.keys.toList()) {
       if (_conversationById(id) != null) continue;
+      // A hosted chat's host is not open at startup; its hint is kept.
+      if (id.startsWith(kHostedChatPrefix)) continue;
       _responseHints.remove(id);
       stale = true;
     }
@@ -4406,7 +4500,9 @@ class AppState extends ChangeNotifier {
   /// never about which pictures exist, so both pools are unioned here and the
   /// chat's own choice leads.
   List<String> avatarPoolIn(Conversation? conversation, String characterId) {
-    final roster = characterById(characterId);
+    // A hosted chat's character is the host's (the draft), and so is its pool.
+    final roster = _hostOf(conversation)?.character(characterId) ??
+        characterById(characterId);
     final override = conversation?.overrideDefinitions == true
         ? conversation?.characterOverrides[characterId]
         : null;
@@ -4677,6 +4773,27 @@ class AppState extends ChangeNotifier {
   /// a per-chat [providerOverride]), its lorebooks when [Folder.autoLorebooks]
   /// is on, and its documents when [Folder.sharedEmbeddings] is on.
   String startChatWithCharacter(Character character, {String? folderId}) {
+    final conversation = newChatWith(character, folderId: folderId);
+    _conversations.insert(0, conversation);
+    _leaveHostForMain();
+    _activeId = conversation.id;
+    notifyListeners();
+    _storage
+      ..saveActiveId(conversation.id)
+      ..saveConversations(_conversations);
+    return conversation.id;
+  }
+
+  /// A fresh thread with [character], seeded the way every new chat is — its
+  /// title, stored persona, the default persona as the user's identity, the
+  /// folder's defaults and the greetings — but kept nowhere: the caller files
+  /// it. [startChatWithCharacter] puts it in the app's list; the Studio's
+  /// Playground keeps it with its session ([ChatHost]), under [id].
+  Conversation newChatWith(
+    Character character, {
+    String? folderId,
+    String? id,
+  }) {
     final conversation = Conversation.empty()
       ..title = character.displayName
       ..characterId = character.id
@@ -4730,18 +4847,13 @@ class AppState extends ChangeNotifier {
         ChatMessage(role: 'assistant', swipes: greetings),
       );
     }
-    _conversations.insert(0, conversation);
-    _activeId = conversation.id;
-    notifyListeners();
-    _storage
-      ..saveActiveId(conversation.id)
-      ..saveConversations(_conversations);
-    return conversation.id;
+    return id == null ? conversation : conversation.copyAs(id: id);
   }
 
   /// Opens a fresh thread, reusing an existing empty one so repeated taps do
   /// not pile up blank entries.
   void newConversation() {
+    _leaveHostForMain();
     final existing = _conversations
         .where((c) => c.isEmpty)
         .cast<Conversation?>()
@@ -4761,6 +4873,14 @@ class AppState extends ChangeNotifier {
   }
 
   void selectConversation(String id) {
+    // A hosted chat is chosen through its host, never stored as the app's.
+    final hosted = _host == null ? null : _hostedChat(_host!, id);
+    if (hosted != null) {
+      _hostedId = id;
+      notifyListeners();
+      return;
+    }
+    _leaveHostForMain();
     _activeId = id;
     notifyListeners();
     _saveActiveId(id);
@@ -4770,12 +4890,10 @@ class AppState extends ChangeNotifier {
   Future<void> renameConversation(String id, String title) async {
     final trimmed = title.trim();
     if (trimmed.isEmpty) return;
-    for (final conversation in _conversations) {
-      if (conversation.id == id) {
-        conversation.title = trimmed;
-        conversation.updatedAt = DateTime.now();
-        break;
-      }
+    final conversation = _conversationById(id);
+    if (conversation != null) {
+      conversation.title = trimmed;
+      conversation.updatedAt = DateTime.now();
     }
     notifyListeners();
     await _saveConversations();
@@ -4832,11 +4950,29 @@ class AppState extends ChangeNotifier {
     }
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    await _saveChat(conversation);
   }
 
   Future<void> deleteConversation(String id) async {
     if (id == active.id && _streaming) stop();
+    final host = _host;
+    if (host != null && _hostedChat(host, id) != null) {
+      // A hosted chat goes from its host, and the host always has one to show.
+      // The one on screen moves on first, so nothing reads a chat that is gone.
+      if (_hostedId == id) {
+        final rest = host.chats.where((c) => c.id != id);
+        _hostedId = rest.isEmpty ? null : rest.first.id;
+      }
+      host.remove(id);
+      _hostedId ??= host.newChat().id;
+      if (_responseHints.remove(id) != null) {
+        _hintsDirty = true;
+        unawaited(saveResponseHints());
+      }
+      notifyListeners();
+      if (_writable) host.save();
+      return;
+    }
     _conversations.removeWhere((c) => c.id == id);
     if (_activeId == id) _activeId = null;
     // The chat is gone, so its response hint has nothing left to steer.
@@ -4947,7 +5083,7 @@ class AppState extends ChangeNotifier {
         conversation.updatedAt = DateTime.now();
         _moveToTop(conversation);
         notifyListeners();
-        await _saveConversations();
+        await _saveChat(conversation);
         return;
       }
       await _generate(conversation, responder: responder);
@@ -5597,16 +5733,6 @@ class AppState extends ChangeNotifier {
     return conversation;
   }
 
-  /// The user's name in a playtest of [character] — the persona a chat with
-  /// it would use — for the Playground to draw beside the user's lines.
-  String playtestUserName(Character character) {
-    final persona = impersonationFor(_playtestConversation(
-      character: character,
-      lorebooks: const <Lorebook>[],
-    ));
-    return persona?.displayName ?? 'You';
-  }
-
   /// What the model is told when it is writing the user's line rather than the
   /// character's. Shaped after the impersonation prompt both SillyTavern and
   /// Agnai use: whose voice, taken from the conversation, and a clear fence
@@ -5983,7 +6109,7 @@ class AppState extends ChangeNotifier {
       // waits for the frame carrying the last of the reply rather than holding
       // it back — the alternative is a visible hitch exactly as a reply lands.
       await _letTheFrameLand();
-      await _saveConversations();
+      await _saveChat(conversation);
       await _persistUsage();
       // Deliberately *not* saving the macro scopes here. The engine never
       // touches MacroVariables (grep macro_engine.dart), so this was a second
@@ -6092,7 +6218,7 @@ class AppState extends ChangeNotifier {
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
     notifyListeners();
-    unawaited(_saveConversations());
+    unawaited(_saveChat(conversation));
   }
 
   /// Joins provider-returned thinking with thinking parsed out of the reply
@@ -6108,6 +6234,12 @@ class AppState extends ChangeNotifier {
   Conversation? _conversationById(String id) {
     for (final c in _conversations) {
       if (c.id == id) return c;
+    }
+    // A hosted chat (the Studio's Playground) is found by the same actions.
+    for (final host in [?_host, ?_formerHost]) {
+      for (final c in host.chats) {
+        if (c.id == id) return c;
+      }
     }
     return null;
   }
@@ -6129,7 +6261,7 @@ class AppState extends ChangeNotifier {
     );
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    await _saveChat(conversation);
   }
 
   /// Removes the message at [index] — the "delete turn" action. Ignored while
@@ -6142,7 +6274,7 @@ class AppState extends ChangeNotifier {
     conversation.messages.removeAt(index);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    await _saveChat(conversation);
   }
 
   /// Removes the message at [index] **and everything after it** — "delete from
@@ -6165,7 +6297,7 @@ class AppState extends ChangeNotifier {
     conversation.messages.removeRange(index, conversation.messages.length);
     conversation.updatedAt = DateTime.now();
     notifyListeners();
-    await _saveConversations();
+    await _saveChat(conversation);
   }
 
   /// Copies messages [0..index] (inclusive) into a NEW thread, makes it active,
@@ -6186,8 +6318,10 @@ class AppState extends ChangeNotifier {
       for (var i = 0; i <= end; i++)
         ChatMessage.fromJson(source.messages[i].toJson()),
     ];
+    final host = _hostOf(source);
     final fork = source.copyAs(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: '${host == null ? '' : kHostedChatPrefix}'
+          '${DateTime.now().microsecondsSinceEpoch}',
       // Branches are named after the tree's root rather than piling up
       // "(fork) (fork)" suffixes: the graph already says where each split, and
       // the root's title is what the chat lists show.
@@ -6209,6 +6343,14 @@ class AppState extends ChangeNotifier {
       _hintsDirty = true;
       unawaited(saveResponseHints());
     }
+    if (host != null) {
+      // A branch of a hosted chat stays with its host, as a chat of its own.
+      host.adopt(fork);
+      if (identical(host, _host)) _hostedId = fork.id;
+      notifyListeners();
+      if (_writable) host.save();
+      return fork.id;
+    }
     _conversations.insert(0, fork);
     _activeId = fork.id;
     notifyListeners();
@@ -6222,11 +6364,12 @@ class AppState extends ChangeNotifier {
   /// two branches in one family read alike. The graph row says which chat it
   /// actually split from, so the title does not have to.
   String _branchTitle(Conversation source) {
-    final rootId = rootIdOf(_conversations, source.id);
+    final pool = _hostOf(source)?.chats ?? _conversations;
+    final rootId = rootIdOf(pool, source.id);
     final root = _conversationById(rootId) ?? source;
-    final inTree = _conversations
+    final inTree = pool
         .where(
-          (c) => c.id != rootId && rootIdOf(_conversations, c.id) == rootId,
+          (c) => c.id != rootId && rootIdOf(pool, c.id) == rootId,
         )
         .length;
     return '${root.title} · Branch ${inTree + 1}';
@@ -7057,7 +7200,7 @@ class AppState extends ChangeNotifier {
     conversation.updatedAt = DateTime.now();
     _moveToTop(conversation);
     notifyListeners();
-    await _saveConversations();
+    await _saveChat(conversation);
   }
 
   /// The exact prompt behind the message at [index] — for "View prompt"/"Info".
@@ -7321,7 +7464,8 @@ class AppState extends ChangeNotifier {
   }
 
   void _moveToTop(Conversation conversation) {
-    _conversations.remove(conversation);
+    // A hosted chat is not in the app's list and must never be put into it.
+    if (!_conversations.remove(conversation)) return;
     _conversations.insert(0, conversation);
   }
 

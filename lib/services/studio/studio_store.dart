@@ -106,6 +106,11 @@ class StudioStore {
       ]) {
         refs.addAll(q.images.map((i) => i.ref));
       }
+      // The Playground's chats are chats like any other, with pictures in
+      // their turns, behind them and floating over them.
+      for (final p in session.playtests) {
+        refs.addAll(p.chat.pictureRefs);
+      }
     }
     return refs;
   }

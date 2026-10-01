@@ -11,6 +11,11 @@ import 'summary.dart';
 /// nobody replies automatically (the user taps a chip to pick who speaks).
 const String kGroupResponderRandom = '__random__';
 
+/// Where a hosted chat's id starts (see `ChatHost`). A hosted chat is not in
+/// the app's own list, so anything that tidies away state for "chats that no
+/// longer exist" at startup (the response hints) knows to leave these alone.
+const String kHostedChatPrefix = 'studio-play-';
+
 /// A named thread of messages, persisted as a whole.
 class Conversation {
   Conversation({
@@ -234,6 +239,25 @@ class Conversation {
       );
 
   bool get isEmpty => messages.isEmpty;
+
+  /// Every picture this thread refers to — what the picture sweep must keep
+  /// for it, wherever the thread is stored (the app's list, or a Studio
+  /// session's Playground).
+  Iterable<String> get pictureRefs => [
+        backgroundImage ?? '',
+        ...characterOverrides.values.map((o) => o.avatar),
+        ...characterOverrides.values.expand((o) => o.avatars),
+        ...avatarOverrides.values,
+        // A chat with its own copy of the interface has its own copy of
+        // whatever pictures that copy names.
+        ...?interfaceOverride?.pictureRefs,
+        // A float can carry a picture the gallery never held (an avatar off an
+        // imported card), and it is on screen right now.
+        ...floatingImages.map((f) => f.imageRef),
+        // A picture sent in a message is part of the transcript: it has to
+        // outlive the gallery record it may have been picked from.
+        ...messages.expand((m) => m.images.map((i) => i.ref)),
+      ];
 
   /// A copy under a new [id], carrying every per-chat setting across — used for
   /// forking a thread and for renumbering an imported one. Everything mutable is
