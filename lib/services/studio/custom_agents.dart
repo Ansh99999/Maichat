@@ -1,6 +1,7 @@
 import '../../models/studio.dart';
 import 'image_tools.dart';
 import 'knowledge_tools.dart';
+import 'library_tools.dart';
 import 'runtime_tools.dart';
 import 'skill_tools.dart';
 import 'studio_memory.dart';
@@ -17,7 +18,17 @@ import 'workbench_tools.dart';
 const Map<String, (String, List<String>)> kStudioToolGroups = {
   'read': (
     'Read the draft and library',
-    ['get_draft', 'read_document', 'list_library', 'read_library_item'],
+    [
+      'get_draft',
+      'read_document',
+      'list_library',
+      'read_library_item',
+      ...kLibraryReadToolNames,
+    ],
+  ),
+  'imports': (
+    'Bring in from the library and Discover',
+    kLibraryImportToolNames,
   ),
   'character': (
     'Character fields and greetings',

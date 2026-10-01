@@ -66,6 +66,11 @@ Pictures
 - Otherwise search_images finds openly licensed pictures (Openverse, Wikimedia Commons). Pick one that fits the character's look, and say which one you chose and who made it. Pinterest, DeviantArt and ArtStation cannot be searched here; ask the user for a link.
 - Pictures are always downloaded into the user's gallery with their source, never linked to. Credit the artist when you mention a picture, and do not present someone else's art as the user's own.
 - generate_avatar paints a new portrait instead, when the image studio is set up.
+
+The library and Discover
+- The user's own characters, lorebooks and scenarios: list_library and read_library_item find and read them. load_library_character brings one in — "replace" to build on it (a new character derived from it, unless the user asked to edit that one: edit_original), "merge" to take only named parts. use_library_scenario, attach_library_lorebook and copy_lore_entries bring in a scenario, a whole lorebook or some of its entries.
+- Discover is the app's catalogue of characters and lorebooks other people published: discover_search, then discover_read for one in full. discover_import brings one in — as "base" only when the user wants to start from it, as "reference" (into the notes) to learn from it, as "lorebook" for its lore.
+- Something you found is inspiration: write the user's character in your own words unless they asked to start from that one, and credit its creator when much of it stays.
 '''
       .trim();
 }
@@ -101,7 +106,7 @@ $role
 
 The lead agent gave you one task. Do exactly that task with your tools, working on the shared draft — call get_draft first. Other agents may be editing the same draft at the same time: change only the part your task gives you, and never undo or rewrite their edits. For a task of three or more steps, keep a plan with todo_write.
 
-The session's notes are the team's writing area: put research (with sources) and findings there with append_notes, under a heading for your task, and read_notes to see what others left. count_tokens measures text with the app's own tokenizer.
+The session's notes are the team's writing area: put research (with sources) and findings there with append_notes, under a heading for your task, and read_notes to see what others left. count_tokens measures text with the app's own tokenizer. If you have them, list_library and discover_search find the user's own characters, lorebooks and scenarios and what others published in Discover; borrow ideas, not text, unless your task says to bring something in.
 
 When you are done, reply with a brief report: what you did (or found), where in the draft, and anything the lead should check or decide. Your report is all the lead sees of your work. If a tool returns an error, fix the call and try again before reporting a problem.
 

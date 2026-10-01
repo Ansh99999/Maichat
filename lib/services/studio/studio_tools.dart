@@ -9,6 +9,7 @@ import '../../models/studio_revisions.dart';
 import 'custom_agents.dart';
 import 'image_tools.dart';
 import 'knowledge_tools.dart';
+import 'library_tools.dart';
 import 'runtime_tools.dart';
 import 'skill_tools.dart';
 import 'studio_knowledge.dart';
@@ -330,6 +331,14 @@ final List<_TextField> _textFields = [
   _TextField('character_version', 'version', (c) => c.characterVersion,
       (c, v) => c.characterVersion = v),
 ];
+
+/// The card's text fields by the name tools give them (`description`,
+/// `first_message` …), each with how to read and write it — for the tools that
+/// live in other files.
+final Map<String, (String Function(Character), void Function(Character, String))>
+    kStudioTextFields = {
+  for (final f in _textFields) f.key: (f.read, f.write),
+};
 
 _TextField? _field(String key) {
   for (final f in _textFields) {
@@ -1156,14 +1165,16 @@ final StudioTool generateAvatarTool = StudioTool(
 final StudioTool listLibraryTool = StudioTool(
   const ToolSpec(
     name: 'list_library',
-    description: 'Lists what is already in the user\'s library — characters or '
-        'lorebooks — with ids, for reference or to bring a lorebook in.',
+    description: 'Lists what is already in the user\'s library — characters, '
+        'lorebooks or scenarios — with ids, to read (read_library_item) or to '
+        'bring into the draft (load_library_character, '
+        'attach_library_lorebook, copy_lore_entries, use_library_scenario).',
     parameters: {
       'type': 'object',
       'properties': {
         'kind': {
           'type': 'string',
-          'enum': ['characters', 'lorebooks'],
+          'enum': ['characters', 'lorebooks', 'scenarios'],
         },
         'search': {
           'type': 'string',
@@ -1185,7 +1196,12 @@ final StudioTool listLibraryTool = StudioTool(
       return StudioToolResult.json({
         'characters': [
           for (final c in matches.take(80))
-            {'id': c.id, 'name': c.displayName, 'about': _preview(c.blurb, 140)},
+            {
+              'id': c.id,
+              'name': c.displayName,
+              'about': _preview(c.blurb, 140),
+              if (c.lorebookIds.isNotEmpty) 'lorebooks': c.lorebookIds.length,
+            },
         ],
       });
     }
@@ -1198,21 +1214,37 @@ final StudioTool listLibraryTool = StudioTool(
         ],
       });
     }
-    throw StudioToolError('"kind" is characters or lorebooks.');
+    if (kind == 'scenarios') {
+      final matches = libraryScenariosOf(ctx.services)
+          .where((s) => search.isEmpty || s.matches(search));
+      return StudioToolResult.json({
+        'scenarios': [
+          for (final s in matches.take(80))
+            {
+              'id': s.id,
+              'name': s.displayName,
+              'preview': _preview(s.text, 160),
+              if (s.tags.isNotEmpty) 'tags': s.tags,
+            },
+        ],
+      });
+    }
+    throw StudioToolError('"kind" is characters, lorebooks or scenarios.');
   },
 );
 
 final StudioTool readLibraryTool = StudioTool(
   const ToolSpec(
     name: 'read_library_item',
-    description: 'Reads one library character or lorebook in full — to borrow '
-        'its style, or to check what already exists. Read-only.',
+    description: 'Reads one library character, lorebook or scenario in full — '
+        'to borrow its style, check what already exists, or see what to bring '
+        'into the draft. Read-only.',
     parameters: {
       'type': 'object',
       'properties': {
         'kind': {
           'type': 'string',
-          'enum': ['character', 'lorebook'],
+          'enum': ['character', 'lorebook', 'scenario'],
         },
         'id': _string,
       },
@@ -1225,14 +1257,39 @@ final StudioTool readLibraryTool = StudioTool(
     if (kind == 'character') {
       final c = ctx.services.libraryCharacters.where((c) => c.id == id).firstOrNull;
       if (c == null) throw StudioToolError('No library character "$id".');
-      return StudioToolResult.json(describeCharacter(c, ctx.services));
+      return StudioToolResult.json({
+        ...describeCharacter(c, ctx.services),
+        'lorebooks': [
+          for (final bookId in c.lorebookIds)
+            if (ctx.services.libraryLorebooks
+                    .where((b) => b.id == bookId)
+                    .firstOrNull
+                case final b?)
+              describeLorebook(b, entries: false),
+        ],
+      });
     }
     if (kind == 'lorebook') {
       final b = ctx.services.libraryLorebooks.where((b) => b.id == id).firstOrNull;
       if (b == null) throw StudioToolError('No library lorebook "$id".');
       return StudioToolResult.json(describeLorebook(b));
     }
-    throw StudioToolError('"kind" is character or lorebook.');
+    if (kind == 'scenario') {
+      final s =
+          libraryScenariosOf(ctx.services).where((s) => s.id == id).firstOrNull;
+      if (s == null) throw StudioToolError('No library scenario "$id".');
+      return StudioToolResult.json({
+        'id': s.id,
+        'name': s.displayName,
+        'text': s.text,
+        if (s.tags.isNotEmpty) 'tags': s.tags,
+        'when_used_as_main': s.overwriteCharacterScenario
+            ? 'replaces the card\'s scenario'
+            : 'is added after the card\'s scenario',
+        'tokens': ctx.services.countTokens(s.text),
+      });
+    }
+    throw StudioToolError('"kind" is character, lorebook or scenario.');
   },
 );
 
@@ -1490,6 +1547,7 @@ final Map<String, StudioTool> kStudioTools = {
     ...kSkillTools,
     ...kImageTools,
     ...kWorkbenchTools,
+    ...kLibraryTools,
   ])
     t.name: t,
 };
@@ -1508,7 +1566,12 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
         'remove_greeting',
         'upsert_scenario',
         'delete_scenario',
+        'list_library',
         'read_library_item',
+        'load_library_character',
+        'use_library_scenario',
+        ...kLibraryReadToolNames,
+        'discover_import',
         'todo_write',
       ],
     'lore_writer' => [
@@ -1521,9 +1584,22 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
         'delete_document',
         'list_library',
         'read_library_item',
+        'attach_library_lorebook',
+        'copy_lore_entries',
+        ...kLibraryReadToolNames,
+        'discover_import',
         'todo_write',
       ],
-    'critic' => [..._readTools, 'playtest', 'todo_write'],
+    // Reading the library and Discover changes nothing, so the critic may
+    // compare the draft with them.
+    'critic' => [
+        ..._readTools,
+        'playtest',
+        'list_library',
+        'read_library_item',
+        ...kLibraryReadToolNames,
+        'todo_write',
+      ],
     // Every draft tool, but none of the run's own: a sub-agent neither spawns
     // nor messages other agents (one level deep).
     'general' => [

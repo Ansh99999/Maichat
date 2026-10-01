@@ -10,6 +10,7 @@ import '../../models/gallery_image.dart';
 import '../../models/lorebook.dart';
 import '../../models/message.dart';
 import '../../models/message_image.dart';
+import '../../models/scenario.dart';
 import '../../models/studio.dart';
 import '../../models/studio_revisions.dart';
 import '../../models/usage.dart';
@@ -21,6 +22,8 @@ import '../document_sources.dart';
 import '../model_context.dart';
 import 'agent_runner.dart';
 import 'image_tools.dart';
+import 'library_tools.dart';
+import 'studio_discover.dart';
 import 'studio_images.dart';
 import 'custom_agents.dart';
 import 'runtime_tools.dart';
@@ -1628,6 +1631,24 @@ String describeCall(ToolCall call) {
     'list_library' => 'Looked through the library',
     'read_library_item' => 'Read a library ${quoted(a['kind'])}',
     'attach_library_lorebook' => 'Attached a library lorebook',
+    'load_library_character' => a['mode'] == 'replace'
+        ? (a['edit_original'] == true
+            ? 'Opened a library character to edit'
+            : 'Started from a library character')
+        : 'Took ${a['parts'] is List ? (a['parts'] as List).map((p) => '$p'.replaceAll('_', ' ')).join(', ') : 'parts'} from a library character',
+    'use_library_scenario' => a['as'] == 'main'
+        ? 'Set the scenario from the library'
+        : 'Added a library scenario',
+    'copy_lore_entries' => 'Copied lore entries from the library',
+    'discover_search' =>
+      'Searched Discover${a['source'] is String ? ' (${quoted(a['source'])})' : ''}'
+          '${a['query'] is String && (a['query'] as String).trim().isNotEmpty ? ': "${quoted(a['query'])}"' : ''}',
+    'discover_read' => 'Read "${quoted(a['id'])}" on Discover',
+    'discover_import' => switch (a['as']) {
+        'base' => 'Started from "${quoted(a['id'])}" on Discover',
+        'lorebook' => 'Imported a lorebook from Discover',
+        _ => 'Noted "${quoted(a['id'])}" from Discover',
+      },
     'task' =>
       '${studioAgentTypeLabel((a['agent_type'] ?? 'general').toString())} — ${quoted(a['description'])}'
           '${a['background'] == true ? ' (background)' : ''}',
@@ -1660,7 +1681,9 @@ class _AppStudioServices
         StudioServices,
         StudioRuntime,
         StudioPictureServices,
-        StudioPromptSizer {
+        StudioPromptSizer,
+        StudioLibraryServices,
+        StudioDiscoverServices {
   _AppStudioServices(this.controller);
 
   final StudioController controller;
@@ -1676,6 +1699,18 @@ class _AppStudioServices
 
   @override
   List<Lorebook> get libraryLorebooks => _state.lorebooks;
+
+  @override
+  List<Scenario> get libraryScenarios => _state.scenarios;
+
+  @override
+  StudioDiscover get discover => StudioDiscover.shared;
+
+  @override
+  bool get discoverNsfw => _state.discoverPrefs.nsfw;
+
+  @override
+  String get discoverSourceId => _state.discoverPrefs.sourceId;
 
   @override
   bool get canGenerateImages => _state.imageGenReady;

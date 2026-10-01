@@ -560,6 +560,30 @@ bar or the overflow menu.
     reads the user's chats too. The user's own Playground chats go through
     `StudioController.playgroundSend` → the same `playtestCharacter`, streaming
     via `onText`; a failed reply is kept as an error turn and never sent back.
+  - **Bringing things in** (`library_tools.dart` + `studio_discover.dart`):
+    from the library — `list_library`/`read_library_item` cover characters,
+    lorebooks and scenarios; `load_library_character` (`replace`: the draft
+    becomes a *new* character derived from it, with copies of its books under
+    new ids, unless `edit_original` keeps the ids so apply upserts over it;
+    `merge`: only the named `parts`), `use_library_scenario` (a
+    `CharacterScenario` with `scenarioId`, or into the scenario field via
+    `Scenario.appliedOver`), `copy_lore_entries` (renumbered copies) — and from
+    Discover — `discover_search`, `discover_read`, `discover_import` (`base`,
+    `reference` into the notes, `lorebook`). Discover goes through the very
+    `DiscoverSource.search`/`fetch` the screen uses (same codecs and quirks),
+    via `StudioDiscover`, which remembers listed items (a fetch needs the whole
+    `DiscoverItem`: Chub's lorebook project id), keeps a few payloads (read
+    then import is one download) and is polite (one request per site at a
+    time, ≥1.2 s apart). Adult results follow `DiscoverPrefs.nsfw` — agents
+    cannot switch it; a bot-check (`DiscoverChallengeException`) tells the
+    agent to have the user download it in Discover. An imported card's picture
+    — base64 bytes or a link — is filed in the gallery through
+    `StudioPictureServices` (links through the guarded `fetchPicture`), never
+    kept as base64 or a bare URL. Both service halves are optional
+    interfaces (`StudioLibraryServices`, `StudioDiscoverServices`), so test
+    fakes without them still compile. Replaces are stale-guarded over the
+    whole character and rewindable; documents and notes are always kept.
+    Critics get the reads only.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
@@ -613,7 +637,9 @@ bar or the overflow menu.
     `studio_runtime_test.dart`, `studio_subagent_chat_test.dart`,
     `studio_knowledge_test.dart`,
     `studio_workbench_test.dart` (incl. the Playground against a loopback
-    model), `studio_area_pages_test.dart`, and the `*_ui_test.dart` files
+    model), `studio_library_test.dart` (library → draft and Discover against
+    loopback Chub / Character Tavern), `studio_library_controller_test.dart`,
+    `studio_area_pages_test.dart`, and the `*_ui_test.dart` files
     (`studio_playground_ui_test.dart` has the capsule's width × area matrix).
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by

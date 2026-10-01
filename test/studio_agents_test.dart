@@ -301,6 +301,11 @@ void main() {
           'get_draft',
           'read_document',
           'playtest',
+          // Reading the library and Discover changes nothing.
+          'list_library',
+          'read_library_item',
+          'discover_search',
+          'discover_read',
           'todo_write',
           'count_tokens',
           'read_notes',
