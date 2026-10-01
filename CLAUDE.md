@@ -542,6 +542,18 @@ bar or the overflow menu.
     `shell/liquid_panel.dart` (a spring-driven metaball clip; content laid out
     once, only the clip/paint animate) listing Main + sub-agents with ticking
     time • tokens; a row teleports the chat into that agent's transcript.
+    A conversation (Main's or a sub-agent's) is wrapped in `shell/transcript_scroller.dart`: a fixed-size fast-scroll
+    grip at the right edge (48 dp wide, only past 1.5 viewports, slides in
+    on scroll and out after a pause — never faded) mapped so the top of its
+    track is the *oldest* turn of the `reverse: true` list, plus a "jump to
+    latest" button above the dock that jumps most of a long way before
+    animating the rest. Both are transforms over the list; the grip's
+    `jumpTo` is itself the gesture, so it never cancels one of the list's.
+    The look is `StudioConfig.transcriptStyle` (Studio settings ▸ Look):
+    bubbles, or **document** — full-width turns under a speaker label that
+    appears only where the speaker changes (`_DocSpeaker`), tool calls as
+    compact ruled lines (`_ToolChip(dense:)`); `test/studio_transcript_ui_test.dart`
+    covers the look × lead/sub-agent × streaming matrix.
     `studio_draft_view.dart` + `draft/` is the Draft page (Chrome-style tabs:
     Character, Images, Lorebook, Embeddings, Documents, Scenarios; a
     ratio-aware header on the Character tab only — square/portrait top-left,

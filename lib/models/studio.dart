@@ -877,6 +877,7 @@ class StudioConfig {
     this.maxParallelSubagents = kStudioDefaultParallelSubagents,
     this.systemPrompt = '',
     this.areasCapsule = false,
+    this.transcriptStyle = StudioTranscriptStyle.bubbles,
     // Knowledge: the web, memory, and the user's own sub-agent types.
     this.webTools = true,
     this.searchProvider = StudioSearchProvider.duckduckgo,
@@ -911,6 +912,10 @@ class StudioConfig {
   /// across sessions and restarts — until it is switched off again from the
   /// composer's actions, which is the only place it is switched.
   final bool areasCapsule;
+
+  /// How a conversation with the Studio is drawn: chat bubbles, or a flowing
+  /// document.
+  final StudioTranscriptStyle transcriptStyle;
 
   /// The builder's instructions, or empty for the built-in ones.
   final String systemPrompt;
@@ -954,6 +959,7 @@ class StudioConfig {
     int? maxParallelSubagents,
     String? systemPrompt,
     bool? areasCapsule,
+    StudioTranscriptStyle? transcriptStyle,
     bool? webTools,
     StudioSearchProvider? searchProvider,
     String? searchUrl,
@@ -973,6 +979,7 @@ class StudioConfig {
         maxParallelSubagents: maxParallelSubagents ?? this.maxParallelSubagents,
         systemPrompt: systemPrompt ?? this.systemPrompt,
         areasCapsule: areasCapsule ?? this.areasCapsule,
+        transcriptStyle: transcriptStyle ?? this.transcriptStyle,
         webTools: webTools ?? this.webTools,
         searchProvider: searchProvider ?? this.searchProvider,
         searchUrl: searchUrl ?? this.searchUrl,
@@ -994,6 +1001,8 @@ class StudioConfig {
           'maxParallelSubagents': maxParallelSubagents,
         if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
         if (areasCapsule) 'areasCapsule': true,
+        if (transcriptStyle != StudioTranscriptStyle.bubbles)
+          'transcriptStyle': transcriptStyle.name,
         if (!webTools) 'webTools': false,
         if (searchProvider != StudioSearchProvider.duckduckgo)
           'searchProvider': searchProvider.name,
@@ -1020,6 +1029,7 @@ class StudioConfig {
             .clamp(1, 50),
         systemPrompt: json['systemPrompt'] as String? ?? '',
         areasCapsule: json['areasCapsule'] as bool? ?? false,
+        transcriptStyle: StudioTranscriptStyle.byName(json['transcriptStyle']),
         webTools: json['webTools'] as bool? ?? true,
         searchProvider: StudioSearchProvider.byName(json['searchProvider']),
         searchUrl: json['searchUrl'] as String? ?? '',
@@ -1033,6 +1043,28 @@ class StudioConfig {
 }
 
 const int kStudioDefaultMaxSteps = 40;
+
+/// How the Studio draws a conversation (`StudioConfig.transcriptStyle`).
+enum StudioTranscriptStyle {
+  /// A messenger: the user's turns in bubbles at the right, the agent's words
+  /// and tool chips down the left.
+  bubbles('Bubbles'),
+
+  /// A flowing document: every turn full width under a quiet speaker label,
+  /// tool calls as compact lines in the text — the chat's own Document look.
+  document('Document');
+
+  const StudioTranscriptStyle(this.label);
+  final String label;
+
+  /// The style stored as [name]; anything else is the default, bubbles.
+  static StudioTranscriptStyle byName(Object? name) {
+    for (final s in values) {
+      if (s.name == name) return s;
+    }
+    return bubbles;
+  }
+}
 
 /// How many sub-agents work at once unless the user says otherwise.
 const int kStudioDefaultParallelSubagents = 20;
