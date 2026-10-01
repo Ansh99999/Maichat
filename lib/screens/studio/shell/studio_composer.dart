@@ -17,6 +17,9 @@ import 'context_meter.dart';
 ///
 /// The Expressive box floats: nothing is drawn around it, so the page shows
 /// through on every side, as it does in a chat.
+///
+/// With [agentId] naming a sub-agent, what is sent goes to that sub-agent
+/// ([StudioController.sendToSubagent]) and Stop stops only it.
 class StudioComposer extends StatefulWidget {
   const StudioComposer({
     super.key,
@@ -25,9 +28,13 @@ class StudioComposer extends StatefulWidget {
     required this.attachments,
     required this.actionsOpen,
     required this.onToggleActions,
+    this.agentId = kMainAgent,
   });
 
   final StudioController controller;
+
+  /// Whom this composer writes to: [kMainAgent], or a sub-agent's id.
+  final String agentId;
 
   /// The text box's controller, held by the shell so the empty state's
   /// example openings can drop text into it.
@@ -48,6 +55,16 @@ class _StudioComposerState extends State<StudioComposer> {
 
   StudioController get _c => widget.controller;
   List<MessageImage> get _attachments => widget.attachments.value;
+
+  bool get _toMain => widget.agentId == kMainAgent;
+
+  /// Whether the agent this composer writes to is working.
+  bool get _working =>
+      _toMain ? _c.running : (_c.subagent(widget.agentId)?.running ?? false);
+
+  /// Whether Stop is offered: anything at all for Main, which stops
+  /// everything; the sub-agent itself otherwise.
+  bool get _canStop => _toMain ? _c.busy : _working;
 
   @override
   void initState() {
@@ -85,7 +102,11 @@ class _StudioComposerState extends State<StudioComposer> {
     final images = List<MessageImage>.of(_attachments);
     widget.input.clear();
     widget.attachments.value = const <MessageImage>[];
-    _c.send(text, images: images);
+    if (_toMain) {
+      _c.send(text, images: images);
+    } else {
+      _c.sendToSubagent(widget.agentId, text, images: images);
+    }
   }
 
   void _remove(int i) =>
@@ -113,7 +134,7 @@ class _StudioComposerState extends State<StudioComposer> {
       valueListenable: widget.input,
       builder: (context, value, _) => IconButton.filled(
         key: const Key('studio-send'),
-        tooltip: _c.running ? 'Queue for the agent' : 'Send',
+        tooltip: _working ? 'Queue for the agent' : 'Send',
         onPressed: value.text.trim().isEmpty && _attachments.isEmpty
             ? null
             : _send,
@@ -123,7 +144,7 @@ class _StudioComposerState extends State<StudioComposer> {
     final stop = IconButton.filledTonal(
       key: const Key('studio-stop'),
       tooltip: 'Stop',
-      onPressed: _c.stop,
+      onPressed: _toMain ? _c.stop : () => _c.stopSubagent(widget.agentId),
       style: IconButton.styleFrom(
         backgroundColor: scheme.errorContainer,
         foregroundColor: scheme.onErrorContainer,
@@ -138,7 +159,7 @@ class _StudioComposerState extends State<StudioComposer> {
           duration: const Duration(milliseconds: 260),
           curve: Easing.emphasizedDecelerate,
           alignment: Alignment.centerRight,
-          child: _c.busy
+          child: _canStop
               ? Padding(padding: const EdgeInsets.only(right: 4), child: stop)
               : const SizedBox.shrink(),
         ),
@@ -258,7 +279,7 @@ class _StudioComposerState extends State<StudioComposer> {
                 ),
               ),
               const SizedBox(width: 8),
-              StudioContextMeter(controller: _c, agentId: kMainAgent),
+              StudioContextMeter(controller: _c, agentId: widget.agentId),
               _menu(),
               _sendButton(),
             ],
@@ -332,7 +353,7 @@ class _StudioComposerState extends State<StudioComposer> {
                 padding: const EdgeInsets.fromLTRB(10, 0, 8, 8),
                 child: Row(
                   children: [
-                    StudioContextMeter(controller: _c, agentId: kMainAgent),
+                    StudioContextMeter(controller: _c, agentId: widget.agentId),
                     const Spacer(),
                     _menu(),
                     _sendButton(),
@@ -346,7 +367,15 @@ class _StudioComposerState extends State<StudioComposer> {
     );
   }
 
-  String _hint() => _c.running
-      ? 'Working — add something and it reads it next'
-      : 'Describe the vibe, or ask for a change';
+  String _hint() {
+    if (_toMain) {
+      return _c.running
+          ? 'Working — add something and it reads it next'
+          : 'Describe the vibe, or ask for a change';
+    }
+    final label = _c.subagent(widget.agentId)?.label ?? 'the sub-agent';
+    return _working
+        ? '$label is working — it reads this next'
+        : 'Message $label…';
+  }
 }

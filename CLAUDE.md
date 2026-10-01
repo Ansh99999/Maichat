@@ -472,7 +472,16 @@ bar or the overflow menu.
     background, which would need a native foreground service);
     **background sub-agents** (`task` with `background: true`, plus
     `send_message` / `wait_agents` / `list_agents` in `runtime_tools.dart`,
-    never given to sub-agents); **stale-edit protection**
+    never given to sub-agents); **the user talking to a sub-agent**
+    (`StudioController.sendToSubagent`: the composer stays on a sub-agent's
+    chat and writes to it; what is sent lands in the persisted
+    `StudioSubagent.queued` and goes on the wire as `kFromUserPrefix` + text —
+    a working one takes it at its next step, a finished/stopped/cut-off one is
+    carried on in the background with its own transcript; a run's user words
+    head its report, and a run the *user* started reaches the lead as a
+    `_Note(wake: false)` — taken in with whatever the lead does next, **never
+    starting it**; `stopSubagent` stops one alone and leaves its queue until
+    the user writes again); **stale-edit protection**
     (`models/studio_revisions.dart`: every field, greeting, scenario, entry and
     document has a revision, each agent's reads are tracked in
     `StudioSession.seen`, and a write over something changed since that agent
@@ -541,7 +550,9 @@ bar or the overflow menu.
     Changes (`shell/studio_apply.dart`). The top-right sub-agent button opens
     `shell/liquid_panel.dart` (a spring-driven metaball clip; content laid out
     once, only the clip/paint animate) listing Main + sub-agents with ticking
-    time • tokens; a row teleports the chat into that agent's transcript.
+    time • tokens; a row teleports the chat into that agent's transcript,
+    where a slim "Talking to Subagent N" strip (`_ViewingBar`, with Main)
+    sits over a `StudioComposer(agentId:)` that has its own text and pictures.
     `studio_draft_view.dart` + `draft/` is the Draft page (Chrome-style tabs:
     Character, Images, Lorebook, Embeddings, Documents, Scenarios; a
     ratio-aware header on the Character tab only — square/portrait top-left,
@@ -551,7 +562,8 @@ bar or the overflow menu.
     `controller.editByHand`.
   - Tests: `studio_test.dart`, `studio_agents_test.dart`,
     `studio_controller_test.dart` (end to end against a loopback model),
-    `studio_runtime_test.dart`, `studio_knowledge_test.dart`,
+    `studio_runtime_test.dart`, `studio_subagent_chat_test.dart`,
+    `studio_knowledge_test.dart`,
     `studio_area_pages_test.dart`, and the `*_ui_test.dart` files.
 - **Branches / Chat Graph:** a branch is a whole `Conversation` linked to its
   source by `Conversation.parentId` + `forkIndex` (set only by

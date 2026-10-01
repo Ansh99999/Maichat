@@ -99,6 +99,13 @@ class StudioStore {
       ]) {
         refs.addAll(m.images.map((i) => i.ref));
       }
+      // Pictures sent with a message nobody has read yet are kept too.
+      for (final q in [
+        ...session.queued,
+        for (final a in session.subagents) ...a.queued,
+      ]) {
+        refs.addAll(q.images.map((i) => i.ref));
+      }
     }
     return refs;
   }

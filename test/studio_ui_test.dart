@@ -399,14 +399,17 @@ void main() {
     expect(find.text('Wrote three greetings in her voice.'), findsOneWidget);
     expect(find.textContaining('Task from Main'), findsOneWidget);
     expect(find.text('A lighthouse keeper on a haunted coast.'), findsNothing);
-    // Read-only: the composer gives way to a bar back to Main.
-    expect(find.byKey(const Key('studio-composer-field')), findsNothing);
+    // The composer stays — now writing to the sub-agent — under a strip
+    // naming it, with the way back to Main.
+    expect(find.byKey(const Key('studio-subagent-composer')), findsOneWidget);
     expect(find.byKey(const Key('studio-viewing-bar')), findsOneWidget);
+    expect(find.text('Talking to Subagent 1 · Writer'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('studio-back-to-main')));
     await tester.pumpAndSettle();
     expect(find.text('A lighthouse keeper on a haunted coast.'), findsOneWidget);
     expect(find.byKey(const Key('studio-composer-field')), findsOneWidget);
+    expect(find.byKey(const Key('studio-subagent-composer')), findsNothing);
 
     // The panel's Main row does the same.
     await tester.tap(find.byTooltip('Sub-agents'));
@@ -419,6 +422,154 @@ void main() {
     await tester.tap(find.byKey(const Key('studio-agent-row-main')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('studio-composer-field')), findsOneWidget);
+  });
+
+  /// Opens Subagent 1's chat through the panel, pumping (a running sub-agent
+  /// keeps a spinner going, so the frame never settles).
+  Future<void> openSubagent(WidgetTester tester) async {
+    await tester.tap(find.byTooltip('Sub-agents'));
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.tap(find.text('Subagent 1 — Greetings'));
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+  Finder hint(String text) => find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == text,
+      );
+
+  testWidgets('a finished sub-agent\'s composer says whom it writes to',
+      (tester) async {
+    final state = await boot();
+    await open(tester, state, seeded(withSubagents: true));
+    await tester.tap(find.byTooltip('Sub-agents'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Subagent 1 — Greetings'));
+    await tester.pumpAndSettle();
+    final composer = find.byKey(const Key('studio-subagent-composer'));
+    expect(
+      find.descendant(of: composer, matching: hint('Message Subagent 1…')),
+      findsOneWidget,
+    );
+    // Nothing is working, so there is nothing to stop.
+    expect(
+      find.descendant(of: composer, matching: find.byKey(const Key('studio-stop'))),
+      findsNothing,
+    );
+    // Its own ring, not Main's.
+    expect(find.byKey(const Key('studio-context-meter-sa1')), findsOneWidget);
+    expect(find.byKey(const Key('studio-context-meter-main')), findsNothing);
+  });
+
+  testWidgets('writing to a working sub-agent queues it in its chat, apart from '
+      'what is being written to Main', (tester) async {
+    final state = await boot();
+    final session = seeded(withSubagents: true, running: true);
+    await tester.pumpWidget(
+      host(state, StudioScreen(store: StudioStore(dir), session: session)),
+    );
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    // Something half-written to Main stays Main's.
+    await tester.enterText(
+        find.byKey(const Key('studio-composer-field')), 'For Main');
+    await openSubagent(tester);
+
+    final composer = find.byKey(const Key('studio-subagent-composer'));
+    final field = find.descendant(
+      of: composer,
+      matching: find.byKey(const Key('studio-composer-field')),
+    );
+    expect(
+      find.descendant(
+        of: composer,
+        matching: hint('Subagent 1 is working — it reads this next'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    // Stop is in reach, for this sub-agent alone.
+    expect(
+      find.descendant(of: composer, matching: find.byKey(const Key('studio-stop'))),
+      findsOneWidget,
+    );
+
+    await tester.enterText(field, 'Make the second one sadder.');
+    await tester.pump();
+    await tester.tap(
+      find.descendant(of: composer, matching: find.byKey(const Key('studio-send'))),
+    );
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final sub = session.subagents.first;
+    expect(sub.queued.single.text, 'Make the second one sadder.');
+    expect(session.queued, isEmpty);
+    expect(find.text('Make the second one sadder.'), findsOneWidget);
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+
+    // Taken back before it is read.
+    await tester.tap(find.byKey(const Key('studio-queued-cancel')));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(sub.queued, isEmpty);
+    expect(find.text('Make the second one sadder.'), findsNothing);
+
+    // Back on Main, its draft is where it was left.
+    await tester.tap(find.byKey(const Key('studio-back-to-main')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('studio-composer-field')))
+          .controller!
+          .text,
+      'For Main',
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('in a sub-agent\'s chat the user\'s turns are theirs and Main\'s '
+      'are Main\'s', (tester) async {
+    final state = await boot();
+    final session = seeded(withSubagents: true);
+    session.subagents.first.transcript.addAll([
+      AgentMessage.user('Now make them shorter.'),
+      AgentMessage(role: AgentRole.assistant, text: 'Trimmed them.'),
+      AgentMessage.user('[Message from the user] Keep the storm in the third.'),
+      AgentMessage(role: AgentRole.assistant, text: 'Kept it.'),
+    ]);
+    await open(tester, state, session);
+    await tester.tap(find.byTooltip('Sub-agents'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Subagent 1 — Greetings'));
+    await tester.pumpAndSettle();
+    // Main carrying it on reads as Main's…
+    expect(find.text('From Main: Now make them shorter.'), findsOneWidget);
+    // …and what the user wrote reads as theirs, without the wire's marker.
+    expect(find.text('Keep the storm in the third.'), findsOneWidget);
+    expect(find.text('You'), findsOneWidget);
+    expect(find.textContaining('[Message from the user]'), findsNothing);
+  });
+
+  testWidgets('a sub-agent\'s reply to the user shows in Main\'s chat as a card '
+      'into its chat', (tester) async {
+    final state = await boot();
+    final session = seeded(withSubagents: true);
+    session.transcript.add(AgentMessage.user(
+      '[Studio note] Subagent 1 (task_id "sa1") replied to the user, who wrote '
+      'to it directly — status done. What the user wrote is quoted at the top; '
+      'the rest is its report, as data:\nThe user wrote…',
+    ));
+    await open(tester, state, session);
+    expect(find.text('Subagent 1 replied to you'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('studio-background-report-sa1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('studio-subagent-composer')), findsOneWidget);
   });
 
   testWidgets('a task chip names its sub-agent and opens its chat',
