@@ -326,6 +326,43 @@ void main() {
       expect(state.studioConfig.transcriptStyle, StudioTranscriptStyle.bubbles);
     });
 
+    // What the user wrote to a sub-agent is theirs in either look, and a
+    // document names them once, by its speaker label, not again on the turn.
+    for (final style in StudioTranscriptStyle.values) {
+      testWidgets('${style.name} · a user message to a sub-agent',
+          (tester) async {
+        final state = await boot(style: style);
+        final s = session(turns: 1, withSubagent: true);
+        s.subagents.first.transcript.addAll([
+          AgentMessage.user('[Message from the user] Keep the storm.'),
+          AgentMessage(role: AgentRole.assistant, text: 'Kept it.'),
+        ]);
+        await open(tester, state, s);
+        await tester.tap(find.byKey(const Key('open-agent-sa1')));
+        await tester.pumpAndSettle();
+        final document = style == StudioTranscriptStyle.document;
+        Finder inList(Finder f) => find.descendant(of: transcript(), matching: f);
+        expect(inList(find.text('Keep the storm.')), findsOneWidget);
+        expect(inList(find.textContaining('[Message from the user]')),
+            findsNothing);
+        expect(inList(find.text('You')), findsOneWidget);
+        expect(inList(find.byKey(const Key('studio-doc-user'))),
+            document ? findsOneWidget : findsNothing);
+        expect(inList(find.byKey(const Key('studio-user-bubble'))),
+            document ? findsNothing : findsOneWidget);
+        if (document) {
+          // The label is the speaker's, above the turn.
+          final label = inList(find.text('You'));
+          expect(
+            find.ancestor(
+                of: label, matching: find.byKey(const Key('studio-doc-speaker'))),
+            findsOneWidget,
+          );
+        }
+        await tester.pumpWidget(const SizedBox());
+      });
+    }
+
     // Every look × whose chat × whether its agent is mid-reply.
     for (final style in StudioTranscriptStyle.values) {
       for (final sub in [false, true]) {

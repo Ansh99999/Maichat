@@ -8,8 +8,10 @@ import '../../models/embedding.dart';
 import '../../models/folder.dart';
 import '../../models/gallery_image.dart';
 import '../../models/lorebook.dart';
+import '../../models/message.dart';
 import '../../models/message_image.dart';
 import '../../models/studio.dart';
+import '../../models/studio_revisions.dart';
 import '../../models/usage.dart';
 import '../../state/app_state.dart';
 import '../agent_client.dart';
@@ -29,6 +31,7 @@ import 'studio_memory.dart';
 import 'studio_prompt.dart';
 import 'studio_store.dart';
 import 'studio_tools.dart';
+import 'workbench_tools.dart';
 
 /// The id [StudioController.liveFor] and [StudioController.transcriptFor] use
 /// for the main agent; a sub-agent is named by its [StudioSubagent.id].
@@ -1307,6 +1310,137 @@ class StudioController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- the Playground ------------------------------------------------------------
+
+  /// The Playground chat a reply is being written for, or null.
+  String? get playgroundBusy => _playId;
+  String? _playId;
+
+  /// The reply so far, while one streams.
+  String get playgroundLive => _playLive;
+  String _playLive = '';
+  ChatClient? _playClient;
+  bool _playStopped = false;
+
+  /// The playtests, newest first — what the Playground lists.
+  List<StudioPlaytest> get playtests => session.playtests.reversed.toList();
+
+  /// Starts a new Playground chat of the user's with the draft, opening on
+  /// greeting [greetingIndex], and returns it.
+  StudioPlaytest newPlaygroundChat({int greetingIndex = 0}) {
+    final greetings = session.workspace.character.greetings;
+    final index =
+        greetingIndex.clamp(0, greetings.isEmpty ? 0 : greetings.length - 1);
+    final test = StudioPlaytest(
+      id: '${DateTime.now().microsecondsSinceEpoch}',
+      by: kUserEditor,
+      greetingIndex: index,
+      turns: [
+        if (greetings.isNotEmpty)
+          StudioPlaytestTurn(user: false, text: greetings[index]),
+      ],
+    );
+    session.addPlaytest(test);
+    _save();
+    notifyListeners();
+    return test;
+  }
+
+  /// Sends [text] as the user in the Playground chat [playtestId], and waits
+  /// for the draft's reply — through the real chat prompt, with the draft as
+  /// it stands now. A failure lands in the chat as an error line.
+  Future<void> playgroundSend(String playtestId, String text) async {
+    final test = session.playtest(playtestId);
+    final line = text.trim();
+    if (test == null || !test.byUser || line.isEmpty || _playId != null) return;
+    final earlier = test.sendable;
+    test.turns.add(StudioPlaytestTurn(user: true, text: line));
+    if (test.title.trim().isEmpty) test.title = _titleFrom(line);
+    await _playgroundReply(test, earlier, line);
+  }
+
+  /// Writes the last reply of [playtestId] again.
+  Future<void> playgroundRetry(String playtestId) async {
+    final test = session.playtest(playtestId);
+    if (test == null || !test.byUser || _playId != null) return;
+    while (test.turns.isNotEmpty && !test.turns.last.user) {
+      test.turns.removeLast();
+    }
+    if (test.turns.isEmpty) return;
+    final line = test.turns.last.text;
+    final earlier = test.turns.sublist(0, test.turns.length - 1)
+        .where((t) => !t.error)
+        .toList();
+    await _playgroundReply(test, earlier, line);
+  }
+
+  Future<void> _playgroundReply(
+    StudioPlaytest test,
+    List<StudioPlaytestTurn> earlier,
+    String line,
+  ) async {
+    final ws = session.workspace;
+    final client = ChatClient();
+    _playClient = client;
+    _playStopped = false;
+    _playId = test.id;
+    _playLive = '';
+    test.updatedAt = DateTime.now();
+    notifyListeners();
+    try {
+      final replies = await state.playtestCharacter(
+        character: ws.character.clone(),
+        lorebooks: [for (final b in ws.lorebooks) b.copyWith()],
+        userTurns: [line],
+        greetingIndex: test.greetingIndex,
+        transcript: earlier.isEmpty ? null : _playtestMessages(earlier),
+        scenario: test.scenario,
+        client: client,
+        onText: (text) {
+          _playLive = text;
+          _paintSoon();
+        },
+      );
+      test.turns.add(StudioPlaytestTurn(user: false, text: replies.first));
+    } catch (e) {
+      // A stop is not a failure: what streamed so far is kept, if anything.
+      final stopped = _playStopped;
+      if (stopped && _playLive.trim().isNotEmpty) {
+        test.turns.add(StudioPlaytestTurn(user: false, text: _playLive.trim()));
+      } else {
+        test.turns.add(StudioPlaytestTurn(
+          user: false,
+          text: stopped ? 'Stopped.' : '$e',
+          error: true,
+        ));
+      }
+    } finally {
+      if (_playClient == client) _playClient = null;
+      _playId = null;
+      _playLive = '';
+      test.updatedAt = DateTime.now();
+      session.updatedAt = DateTime.now();
+      _save();
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// Stops the reply being written in the Playground.
+  void stopPlayground() {
+    if (_playClient == null) return;
+    _playStopped = true;
+    _playClient!.cancel();
+  }
+
+  /// Removes a playtest from the Playground.
+  void deletePlaytest(String id) {
+    if (_playId == id) return;
+    session.playtests.removeWhere((p) => p.id == id);
+    session.updatedAt = DateTime.now();
+    _save();
+    notifyListeners();
+  }
+
   void rename(String title) {
     session.title = title.trim();
     session.updatedAt = DateTime.now();
@@ -1437,6 +1571,7 @@ class StudioController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _paint?.cancel();
+    _playClient?.cancel();
     _lead?.cancel();
     for (final runner in _subRunners.values.toList()) {
       runner.cancel();
@@ -1477,7 +1612,19 @@ String describeCall(ToolCall call) {
     'list_gallery' => 'Looked through your gallery',
     'use_gallery_picture' =>
       a['as'] == 'pool' ? 'Added a gallery picture' : 'Set a gallery picture',
-    'playtest' => 'Playtest',
+    'playtest' => a['playtest_id'] != null
+        ? 'Playtest, continued'
+        : 'Playtest${a['title'] is String && (a['title'] as String).trim().isNotEmpty ? ': ${quoted(a['title'])}' : ''}',
+    'read_playtests' => a['playtest_id'] != null
+        ? 'Read a playtest'
+        : 'Looked through the Playground',
+    'count_tokens' => 'Counted tokens',
+    'read_notes' => 'Read the notes',
+    'write_notes' => 'Rewrote the notes',
+    'append_notes' => a['section'] is String && (a['section'] as String).trim().isNotEmpty
+        ? 'Notes: ${quoted(a['section'])}'
+        : 'Added to the notes',
+    'edit_notes' => 'Edited the notes',
     'list_library' => 'Looked through the library',
     'read_library_item' => 'Read a library ${quoted(a['kind'])}',
     'attach_library_lorebook' => 'Attached a library lorebook',
@@ -1501,8 +1648,19 @@ String _planLine(Object? todos) {
 }
 
 /// [StudioServices] over the real app.
+/// A playtest's turns as the chat path takes them.
+List<ChatMessage> _playtestMessages(List<StudioPlaytestTurn> turns) => [
+      for (final t in turns)
+        if (!t.error)
+          ChatMessage(role: t.user ? 'user' : 'assistant', content: t.text),
+    ];
+
 class _AppStudioServices
-    implements StudioServices, StudioRuntime, StudioPictureServices {
+    implements
+        StudioServices,
+        StudioRuntime,
+        StudioPictureServices,
+        StudioPromptSizer {
   _AppStudioServices(this.controller);
 
   final StudioController controller;
@@ -1554,6 +1712,8 @@ class _AppStudioServices
     required List<Lorebook> lorebooks,
     required List<String> userTurns,
     int greetingIndex = 0,
+    List<StudioPlaytestTurn> earlier = const <StudioPlaytestTurn>[],
+    String scenario = '',
   }) {
     final client = ChatClient();
     // A stop has to reach a playtest that is mid-reply, too.
@@ -1569,9 +1729,35 @@ class _AppStudioServices
           lorebooks: lorebooks,
           userTurns: userTurns,
           greetingIndex: greetingIndex,
+          transcript: earlier.isEmpty ? null : _playtestMessages(earlier),
+          scenario: scenario,
           client: client,
         )
-        .whenComplete(watcher.cancel);
+        .whenComplete(() {
+          watcher.cancel();
+          // The Playground lists it: show the replies as they land.
+          controller._save();
+          controller._paintSoon();
+        });
+  }
+
+  @override
+  ({int tokens, int context, List<(String, int)> sections})? promptSize({
+    required Character character,
+    required List<Lorebook> lorebooks,
+    int greetingIndex = 0,
+  }) {
+    final size = _state.playtestPromptSize(
+      character: character,
+      lorebooks: lorebooks,
+      greetingIndex: greetingIndex,
+    );
+    if (size == null) return null;
+    return (
+      tokens: size.tokens,
+      context: size.context,
+      sections: [for (final s in size.sections) (s.label, s.tokens)],
+    );
   }
 
   @override

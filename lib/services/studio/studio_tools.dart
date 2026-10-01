@@ -12,6 +12,7 @@ import 'knowledge_tools.dart';
 import 'runtime_tools.dart';
 import 'skill_tools.dart';
 import 'studio_knowledge.dart';
+import 'workbench_tools.dart';
 
 /// What a Studio tool can reach beyond the workspace: the library to read from,
 /// and the three things that need the rest of the app — a picture, a playtest,
@@ -33,11 +34,16 @@ abstract class StudioServices {
   });
 
   /// The draft's replies to each of [userTurns], through the real chat path.
+  /// [earlier] is the playtest so far (its greeting and every turn since),
+  /// which replaces the greeting when it is not empty; [scenario] is a
+  /// situation for this test alone.
   Future<List<String>> playtest({
     required Character character,
     required List<Lorebook> lorebooks,
     required List<String> userTurns,
     int greetingIndex = 0,
+    List<StudioPlaytestTurn> earlier = const <StudioPlaytestTurn>[],
+    String scenario = '',
   });
 
   /// Runs a sub-agent of [agentType] on [prompt] — or, with [taskId], carries
@@ -1147,55 +1153,6 @@ final StudioTool generateAvatarTool = StudioTool(
   },
 );
 
-final StudioTool playtestTool = StudioTool(
-  const ToolSpec(
-    name: 'playtest',
-    description: 'Chats with the draft as a user would, through the real chat '
-        'prompt (the user\'s preset, persona and model, the draft\'s lorebooks), '
-        'and returns what the character said. Each message is sent in turn, '
-        'after the chosen greeting. Use it to hear the voice, check that lore '
-        'triggers, and catch the card breaking character.',
-    parameters: {
-      'type': 'object',
-      'properties': {
-        'messages': {
-          ..._stringList,
-          'description': 'What the user says, one entry per turn (at most 4).',
-        },
-        'greeting_index': {
-          'type': 'integer',
-          'description': '0 is the first message, 1 the first alternate.',
-        },
-      },
-      'required': ['messages'],
-    },
-  ),
-  (ctx, args) async {
-    final turns = _optList(args, 'messages') ?? const <String>[];
-    if (turns.isEmpty) throw StudioToolError('Pass at least one message.');
-    if (turns.length > 4) {
-      throw StudioToolError('At most 4 messages per playtest.');
-    }
-    if (ctx.character.name.trim().isEmpty) {
-      throw StudioToolError('Give the character a name first.');
-    }
-    final replies = await ctx.services.playtest(
-      character: ctx.character.clone(),
-      lorebooks: [for (final b in ctx.ws.lorebooks) b.copyWith()],
-      userTurns: turns,
-      greetingIndex: _optInt(args, 'greeting_index') ?? 0,
-    );
-    return StudioToolResult.json({
-      'transcript': [
-        for (var i = 0; i < turns.length; i++) ...[
-          {'user': turns[i]},
-          {ctx.character.displayName: i < replies.length ? replies[i] : ''},
-        ],
-      ],
-    });
-  },
-);
-
 final StudioTool listLibraryTool = StudioTool(
   const ToolSpec(
     name: 'list_library',
@@ -1523,7 +1480,6 @@ final Map<String, StudioTool> kStudioTools = {
     readDocumentTool,
     deleteDocumentTool,
     generateAvatarTool,
-    playtestTool,
     listLibraryTool,
     readLibraryTool,
     attachLibraryLorebookTool,
@@ -1533,6 +1489,7 @@ final Map<String, StudioTool> kStudioTools = {
     ...kKnowledgeTools,
     ...kSkillTools,
     ...kImageTools,
+    ...kWorkbenchTools,
   ])
     t.name: t,
 };
@@ -1588,6 +1545,10 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
         ...?kRuntimeToolsFor[agent],
         ...?kKnowledgeToolsFor[agent],
         ...kSkillToolNames,
+        // Counting and the notes are every agent's; the playtests a
+        // critic's trade (and a writer's to read).
+        ...kWorkbenchAlways,
+        ...?kWorkbenchToolsFor[agent],
       ],
   };
   return [

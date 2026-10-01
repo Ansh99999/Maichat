@@ -49,6 +49,8 @@ class _FakeServices implements StudioServices {
     required List<Lorebook> lorebooks,
     required List<String> userTurns,
     int greetingIndex = 0,
+    List<StudioPlaytestTurn> earlier = const <StudioPlaytestTurn>[],
+    String scenario = '',
   }) async {
     playtests.add(userTurns);
     return [for (final t in userTurns) '${character.name} answers "$t"'];
@@ -327,7 +329,7 @@ void main() {
       expect(transcript, hasLength(4));
       expect(transcript[1]['Aria'], 'Aria answers "Who are you?"');
       final tooMany =
-          await call('playtest', {'messages': ['1', '2', '3', '4', '5']});
+          await call('playtest', {'messages': ['1', '2', '3', '4', '5', '6', '7']});
       expect(tooMany.isError, isTrue);
     });
 
@@ -343,6 +345,11 @@ void main() {
         'todo_write',
         'use_skill',
         'read_skill_file',
+        // The workbench: counting, adding to the notes, reading playtests.
+        'count_tokens',
+        'read_notes',
+        'append_notes',
+        'read_playtests',
       ]);
       expect(names('lore_writer'), isNot(contains('set_fields')));
       expect(names('writer'), isNot(contains('upsert_lore_entry')));

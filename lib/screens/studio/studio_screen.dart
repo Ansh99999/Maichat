@@ -25,6 +25,7 @@ import 'studio_agent_view.dart';
 import 'studio_changes_view.dart';
 import 'studio_draft_view.dart';
 import 'studio_home_screen.dart';
+import 'studio_playground_view.dart';
 import 'studio_settings_page.dart';
 import 'studio_text_dialog.dart';
 
@@ -40,9 +41,10 @@ const String kStudioSessionRoute = '/studio/session';
 /// Everything at the bottom floats over the page, as a chat's Expressive
 /// composer does: the composer, the actions capsule its ⋯ raises, and — once
 /// switched on there, and until it is switched off there again — the
-/// Interface | Draft | Changes capsule. The page runs on underneath and fades
-/// out behind a band of frost ([StudioBottomFade]). The Draft and Changes pages
-/// show the capsule alone; the composer belongs to the conversation.
+/// Interface | Draft | Playground | Changes capsule. The page runs on
+/// underneath and fades out behind a band of frost ([StudioBottomFade]). The
+/// Draft and Changes pages show the capsule alone; the composer belongs to the
+/// conversation, and the Playground has a composer of its own.
 ///
 /// It all runs over one [StudioController], which outlives this screen while
 /// the agent works.
@@ -95,16 +97,30 @@ class _StudioScreenState extends State<StudioScreen> {
   double _dockHeight = 0;
   double? _pendingDock;
 
+  /// The same, for the Playground: its own composer floats there, so its
+  /// page keeps clear of a dock of its own, measured the same way.
+  double _playDockHeight = _areasDock + 64;
+  double? _pendingPlayDock;
+
+  /// Which Playground chat is on screen, shared by its page and its composer.
+  late final PlaygroundSelection _playSelection = PlaygroundSelection(
+    _controller.playtests.isEmpty ? null : _controller.playtests.first.id,
+  );
+
   /// What floats over the draft and its changes: the areas capsule alone —
   /// 52 tall, 6 above it and 14 below.
   static const double _areasDock = 6 + 52 + 14;
 
-  /// The three pages, built once and handed back as the same instances on
+  /// The pages, built once and handed back as the same instances on
   /// every rebuild of the shell, so switching areas (a setState here) does not
   /// rebuild a page. The conversation's is remade only when whose conversation
   /// it shows changes.
   late final Widget _draftPage = StudioDraftView(controller: _controller);
   late final Widget _changesPage = StudioChangesView(controller: _controller);
+  late final Widget _playgroundPage = StudioPlaygroundView(
+    controller: _controller,
+    selection: _playSelection,
+  );
   late Widget _interfacePage = _buildInterface();
 
   /// `/` commands: their panel above the composer, and the hook the
@@ -155,6 +171,7 @@ class _StudioScreenState extends State<StudioScreen> {
   void dispose() {
     _controller.removeListener(_onController);
     _slash.dispose();
+    _playSelection.dispose();
     _input.dispose();
     _attachments.dispose();
     _subInput.dispose();
@@ -172,22 +189,41 @@ class _StudioScreenState extends State<StudioScreen> {
   }
 
   void _measureDock() {
-    if (!mounted || _area != StudioArea.interface) return;
+    if (!mounted) return;
+    final play = _area == StudioArea.playground;
+    if (_area != StudioArea.interface && !play) return;
     final box = _dockKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
     final height = box.size.height;
-    if ((height - _dockHeight).abs() <= 0.5) {
-      _pendingDock = null;
+    final current = play ? _playDockHeight : _dockHeight;
+    final pending = play ? _pendingPlayDock : _pendingDock;
+    if ((height - current).abs() <= 0.5) {
+      if (play) {
+        _pendingPlayDock = null;
+      } else {
+        _pendingDock = null;
+      }
       return;
     }
-    if (_pendingDock != null && (height - _pendingDock!).abs() <= 0.5) {
-      _pendingDock = null;
-      setState(() => _dockHeight = height);
+    if (pending != null && (height - pending).abs() <= 0.5) {
+      setState(() {
+        if (play) {
+          _pendingPlayDock = null;
+          _playDockHeight = height;
+        } else {
+          _pendingDock = null;
+          _dockHeight = height;
+        }
+      });
       return;
     }
     // Still moving (or just moved): look again next frame, and take it once it
     // has stopped.
-    _pendingDock = height;
+    if (play) {
+      _pendingPlayDock = height;
+    } else {
+      _pendingDock = height;
+    }
     WidgetsBinding.instance
       ..addPostFrameCallback((_) => _measureDock())
       ..scheduleFrame();
@@ -354,13 +390,16 @@ class _StudioScreenState extends State<StudioScreen> {
                       StudioChrome(
                         statusBar: view.top,
                         bottom: view.bottom +
-                            (area == StudioArea.interface
-                                ? _dockHeight
-                                : (areasShown ? _areasDock : 0)),
+                            switch (area) {
+                              StudioArea.interface => _dockHeight,
+                              StudioArea.playground => _playDockHeight,
+                              _ => areasShown ? _areasDock : 0,
+                            },
                         rightButton: _hasSubagents,
                         child: switch (area) {
                           StudioArea.interface => _interfacePage,
                           StudioArea.draft => _draftPage,
+                          StudioArea.playground => _playgroundPage,
                           StudioArea.changes => _changesPage,
                         },
                       ),
@@ -408,6 +447,7 @@ class _StudioScreenState extends State<StudioScreen> {
                       child: _dock(
                         view: view,
                         onConversation: onConversation,
+                        onPlayground: _area == StudioArea.playground,
                         viewingMain: viewingMain,
                         areasShown: areasShown,
                       ),
@@ -470,12 +510,13 @@ class _StudioScreenState extends State<StudioScreen> {
   Widget _dock({
     required EdgeInsets view,
     required bool onConversation,
+    required bool onPlayground,
     required bool viewingMain,
     required bool areasShown,
   }) {
     final showComposer = onConversation;
     final showActions = onConversation && _actionsOpen;
-    final empty = !showComposer && !areasShown;
+    final empty = !showComposer && !onPlayground && !areasShown;
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -537,7 +578,7 @@ class _StudioScreenState extends State<StudioScreen> {
                       6,
                       16,
                       // Alone on Draft and Changes, it keeps off the edge.
-                      showComposer ? 0 : 14,
+                      showComposer || onPlayground ? 0 : 14,
                     ),
                     child: ListenableBuilder(
                       listenable: _controller,
@@ -595,6 +636,17 @@ class _StudioScreenState extends State<StudioScreen> {
                             ),
                           ],
                         ),
+                ),
+                // The Playground has a composer of its own: a line to the
+                // draft, played as a chat.
+                _Reveal(
+                  show: onPlayground,
+                  alignment: Alignment.topCenter,
+                  scale: false,
+                  child: PlaygroundComposer(
+                    controller: _controller,
+                    selection: _playSelection,
+                  ),
                 ),
               ],
             ),

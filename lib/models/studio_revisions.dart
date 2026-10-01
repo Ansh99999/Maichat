@@ -6,7 +6,8 @@
 /// The draft is split into *parts*, each named by a key: a character field
 /// (`field:description`), an alternate greeting (`greeting:2`), one of the
 /// character's own scenarios (`scenario:<id>`), a lorebook's settings
-/// (`book:<id>`), one entry (`entry:<book>:<uid>`), a document (`doc:<id>`).
+/// (`book:<id>`), one entry (`entry:<book>:<uid>`), a document (`doc:<id>`),
+/// the session's notes (`notes`).
 /// [partFingerprints] reduces a workspace to one string per part; comparing
 /// the fingerprints before and after a change says which parts it touched, so
 /// every writer — a tool, a hand edit, a rewind — is counted without having to
@@ -99,6 +100,7 @@ Map<String, String> partFingerprints(StudioWorkspace ws) {
   for (final d in ws.documents) {
     out['doc:${d.id}'] = jsonEncode([d.name, d.text]);
   }
+  out['notes'] = ws.notes;
   return out;
 }
 
@@ -145,6 +147,8 @@ String describePart(StudioWorkspace ws, String key) {
     case 'doc':
       final d = ws.document(parts[1]);
       return d == null ? 'that document' : 'document "${d.name}"';
+    case 'notes':
+      return 'the notes';
   }
   return key;
 }

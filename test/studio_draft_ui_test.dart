@@ -97,7 +97,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('six browser-style tabs, and the page follows them',
+  testWidgets('seven browser-style tabs, and the page follows them',
       (tester) async {
     final (state, controller) = await boot(seeded());
     await tester.pumpWidget(host(state, StudioDraftView(controller: controller)));
@@ -110,6 +110,7 @@ void main() {
       'Embeddings',
       'Documents',
       'Scenarios',
+      'Notes',
     ]) {
       expect(find.bySemanticsLabel(label), findsOneWidget, reason: label);
     }

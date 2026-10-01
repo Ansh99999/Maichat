@@ -55,7 +55,9 @@ class StudioDocument {
 }
 
 /// Everything a session is building: one character, the lorebooks that go with
-/// it, and any embedding documents.
+/// it, any embedding documents — and the session's [notes], the agents' (and
+/// the user's) working notes, which are part of the draft so a rewind covers
+/// them, but are never applied to the library.
 ///
 /// Books keep their own ids, and the character's [Character.lorebookIds] name
 /// them — so applying is an upsert by id, and a book brought in from the library
@@ -65,12 +67,19 @@ class StudioWorkspace {
     required this.character,
     List<Lorebook>? lorebooks,
     List<StudioDocument>? documents,
+    this.notes = '',
   })  : lorebooks = lorebooks ?? <Lorebook>[],
         documents = documents ?? <StudioDocument>[];
 
   Character character;
   final List<Lorebook> lorebooks;
   final List<StudioDocument> documents;
+
+  /// Free-form markdown: research, findings, decisions, open questions — the
+  /// session's writing area. Read and written by every agent (`read_notes`,
+  /// `append_notes` …) and by hand in the Draft's Notes tab. Never applied:
+  /// it is the workbench, not the card.
+  String notes;
 
   Lorebook? lorebook(String id) {
     for (final book in lorebooks) {
@@ -90,6 +99,7 @@ class StudioWorkspace {
         'character': character.toJson(),
         'lorebooks': [for (final b in lorebooks) b.toJson()],
         'documents': [for (final d in documents) d.toJson()],
+        if (notes.isNotEmpty) 'notes': notes,
       };
 
   factory StudioWorkspace.fromJson(Map<String, dynamic> json) => StudioWorkspace(
@@ -108,6 +118,7 @@ class StudioWorkspace {
             for (final d in json['documents'] as List)
               if (d is Map) StudioDocument.fromJson(Map<String, dynamic>.from(d)),
         ],
+        notes: json['notes'] as String? ?? '',
       );
 
   /// A deep copy, through JSON — the same shape a session is saved in, so a
@@ -116,6 +127,122 @@ class StudioWorkspace {
         jsonDecode(jsonEncode(toJson())) as Map<String, dynamic>,
       );
 }
+
+/// One line of a playtest: what the tester said, or the character's reply.
+class StudioPlaytestTurn {
+  const StudioPlaytestTurn({
+    required this.user,
+    required this.text,
+    this.error = false,
+  });
+
+  /// Whether the tester said it; otherwise it is the character's.
+  final bool user;
+  final String text;
+
+  /// A reply that failed: [text] is the error. Shown, never sent back.
+  final bool error;
+
+  Map<String, dynamic> toJson() => {
+        'user': user,
+        'text': text,
+        if (error) 'error': true,
+      };
+
+  static StudioPlaytestTurn? fromJson(Object? json) {
+    if (json is! Map) return null;
+    return StudioPlaytestTurn(
+      user: json['user'] as bool? ?? false,
+      text: json['text'] as String? ?? '',
+      error: json['error'] as bool? ?? false,
+    );
+  }
+}
+
+/// One playtest chat with the draft, kept for the Playground: the user's own
+/// (typed there) or one an agent ran with the `playtest` tool. Every reply
+/// went through the real chat prompt — see `AppState.playtestCharacter`.
+///
+/// Kept on the session, not the workspace: a rewind changes the draft, not
+/// what was said to it, and snapshots stay small.
+class StudioPlaytest {
+  StudioPlaytest({
+    required this.id,
+    required this.by,
+    this.title = '',
+    this.persona = '',
+    this.scenario = '',
+    this.greetingIndex = 0,
+    List<StudioPlaytestTurn>? turns,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  })  : turns = turns ?? <StudioPlaytestTurn>[],
+        createdAt = createdAt ?? DateTime.now(),
+        updatedAt = updatedAt ?? DateTime.now();
+
+  final String id;
+
+  /// Who ran it: [kUserEditor] for the user, else an agent's name as a
+  /// revision records it (`the main agent`, `Subagent 3`).
+  final String by;
+  String title;
+
+  /// Who the tester was playing, as the agent described it.
+  String persona;
+
+  /// A situation for this test only, in place of the card's scenario.
+  String scenario;
+  int greetingIndex;
+  final List<StudioPlaytestTurn> turns;
+  final DateTime createdAt;
+  DateTime updatedAt;
+
+  bool get byUser => by == kUserEditor;
+
+  /// The turns that go back to the model: everything but failed replies.
+  List<StudioPlaytestTurn> get sendable => [for (final t in turns) if (!t.error) t];
+
+  String get displayTitle {
+    final t = title.trim();
+    if (t.isNotEmpty) return t;
+    return byUser ? 'Your chat' : 'Playtest';
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'by': by,
+        if (title.isNotEmpty) 'title': title,
+        if (persona.isNotEmpty) 'persona': persona,
+        if (scenario.isNotEmpty) 'scenario': scenario,
+        if (greetingIndex != 0) 'greetingIndex': greetingIndex,
+        'turns': [for (final t in turns) t.toJson()],
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
+  static StudioPlaytest? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final id = json['id'] as String? ?? '';
+    if (id.isEmpty) return null;
+    return StudioPlaytest(
+      id: id,
+      by: json['by'] as String? ?? kUserEditor,
+      title: json['title'] as String? ?? '',
+      persona: json['persona'] as String? ?? '',
+      scenario: json['scenario'] as String? ?? '',
+      greetingIndex: (json['greetingIndex'] as num?)?.toInt() ?? 0,
+      turns: [
+        if (json['turns'] is List)
+          for (final t in json['turns'] as List) ?StudioPlaytestTurn.fromJson(t),
+      ],
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
+    );
+  }
+}
+
+/// How many playtests a session keeps; the oldest go first.
+const int kStudioPlaytestLimit = 40;
 
 /// One change the agent (or the user, by hand) made to the workspace, with the
 /// whole workspace as it was just before it.
@@ -576,7 +703,9 @@ class StudioSession {
     List<StudioQueuedMessage>? queued,
     this.active = false,
     this.interrupted = false,
-  })  : transcript = transcript ?? <AgentMessage>[],
+    List<StudioPlaytest>? playtests,
+  })  : playtests = playtests ?? <StudioPlaytest>[],
+        transcript = transcript ?? <AgentMessage>[],
         ops = ops ?? <StudioOp>[],
         subagents = subagents ?? <StudioSubagent>[],
         todos = todos ?? <StudioTodo>[],
@@ -597,6 +726,26 @@ class StudioSession {
 
   /// The main agent's plan, from its `todo_write` calls.
   final List<StudioTodo> todos;
+
+  /// The Playground's chats with the draft — the user's and the agents' —
+  /// oldest first, at most [kStudioPlaytestLimit].
+  final List<StudioPlaytest> playtests;
+
+  StudioPlaytest? playtest(String id) {
+    for (final p in playtests) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  /// Files [test], dropping the oldest past the limit.
+  void addPlaytest(StudioPlaytest test) {
+    playtests.add(test);
+    while (playtests.length > kStudioPlaytestLimit) {
+      playtests.removeAt(0);
+    }
+    updatedAt = DateTime.now();
+  }
 
   /// The library character this session was opened from, when it was.
   final String? sourceCharacterId;
@@ -777,6 +926,8 @@ class StudioSession {
         if (active) 'active': true,
         if (interrupted) 'interrupted': true,
         if (lastRequest != null) 'lastRequest': lastRequest!.toJson(),
+        if (playtests.isNotEmpty)
+          'playtests': [for (final p in playtests) p.toJson()],
       };
 
   /// Reads a saved session. One saved while an agent worked ([active]) was cut
@@ -873,6 +1024,10 @@ class StudioSession {
         ],
         active: json['active'] as bool? ?? false,
         interrupted: json['interrupted'] as bool? ?? false,
+        playtests: [
+          if (json['playtests'] is List)
+            for (final p in json['playtests'] as List) ?StudioPlaytest.fromJson(p),
+        ],
       );
 }
 

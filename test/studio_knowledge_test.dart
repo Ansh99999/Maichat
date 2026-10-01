@@ -37,6 +37,8 @@ class _Services implements StudioServices {
     required List<Lorebook> lorebooks,
     required List<String> userTurns,
     int greetingIndex = 0,
+    List<StudioPlaytestTurn> earlier = const <StudioPlaytestTurn>[],
+    String scenario = '',
   }) async => const <String>[];
   @override
   Future<StudioTaskOutcome> runTask({
