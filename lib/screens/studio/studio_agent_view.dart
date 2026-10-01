@@ -16,6 +16,7 @@ import '../../services/studio/studio_skills.dart';
 import '../../services/studio/studio_prompt.dart' show kFromMainPrefix, kFromUserPrefix;
 import 'shell/shell_format.dart';
 import 'shell/studio_chrome.dart';
+import 'shell/transcript_scroller.dart';
 
 /// One agent's conversation: what it was asked, what it said, and every tool it
 /// called, as a chip that opens onto what went in and what came back. The main
@@ -46,17 +47,26 @@ class StudioAgentView extends StatefulWidget {
 class _StudioAgentViewState extends State<StudioAgentView>
     with AutomaticKeepAliveClientMixin {
   StudioController get _c => widget.controller;
+  final ScrollController _scroll = ScrollController();
 
   @override
   bool get wantKeepAlive => true;
 
   @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     super.build(context);
+    final document = context.select<AppState, bool>((s) =>
+        s.studioConfig.transcriptStyle == StudioTranscriptStyle.document);
     return ListenableBuilder(
       listenable: _c,
       builder: (context, _) {
-        final items = _items(context);
+        final items = _items(context, document: document);
         if (items.isEmpty && widget.agentId == kMainAgent) {
           return _Intro(onPick: (text) => widget.onPickExample?.call(text));
         }
@@ -67,18 +77,27 @@ class _StudioAgentViewState extends State<StudioAgentView>
         // padding lets the newest turn rest above the composer and the oldest
         // scroll clear of the squares.
         final chrome = StudioChrome.of(context);
-        return ListView.builder(
-          key: PageStorageKey<String>('studio-transcript-${widget.agentId}'),
-          reverse: true,
-          padding: EdgeInsets.fromLTRB(12, chrome.top, 12, chrome.bottom + 12),
-          itemCount: items.length,
-          itemBuilder: (context, i) => items[items.length - 1 - i],
+        // A document runs a little wider: there is no bubble to inset.
+        final side = document ? 16.0 : 12.0;
+        return StudioTranscriptScroller(
+          controller: _scroll,
+          top: chrome.top,
+          bottom: chrome.bottom,
+          child: ListView.builder(
+            key: PageStorageKey<String>('studio-transcript-${widget.agentId}'),
+            controller: _scroll,
+            reverse: true,
+            padding:
+                EdgeInsets.fromLTRB(side, chrome.top, side, chrome.bottom + 12),
+            itemCount: items.length,
+            itemBuilder: (context, i) => items[items.length - 1 - i],
+          ),
         );
       },
     );
   }
 
-  List<Widget> _items(BuildContext context) {
+  List<Widget> _items(BuildContext context, {required bool document}) {
     final id = widget.agentId;
     final transcript = _c.transcriptFor(id);
     final live = _c.liveFor(id);
@@ -93,31 +112,53 @@ class _StudioAgentViewState extends State<StudioAgentView>
         c.upTo: c,
     };
     final out = <Widget>[];
+    // Whose words these are. A document names the speaker once, where it
+    // changes, instead of drawing each turn in its own bubble; notes and the
+    // plan belong to nobody and leave it as it was.
+    final agentName = subagent?.label ?? 'Studio';
+    String? speaker;
+    void speak(String who, {bool user = false}) {
+      if (!document || speaker == who) return;
+      speaker = who;
+      out.add(_DocSpeaker(label: who, user: user));
+    }
+
     var first = true;
     for (var i = 0; i < transcript.length; i++) {
       final m = transcript[i];
       // Where the agent stopped seeing its older turns verbatim.
       final compaction = compactions[i];
-      if (compaction != null) out.add(_CompactionDivider(compaction: compaction));
+      if (compaction != null) {
+        out.add(_CompactionDivider(compaction: compaction));
+        speaker = null;
+      }
       switch (m.role) {
         case AgentRole.user:
           final background = _backgroundReport.firstMatch(m.text);
           final invoked = parseSkillInvocation(m.text);
           if (invoked != null) {
             // A `/skill` turn: the skill as a chip, not its whole text.
-            out.add(_SkillChip(name: invoked.skill));
+            speak('You', user: true);
+            out.add(_SkillChip(name: invoked.skill, document: document));
             if (invoked.userText.isNotEmpty || m.images.isNotEmpty) {
-              out.add(_UserBubble(message: m.withText(invoked.userText)));
+              out.add(_UserBubble(
+                message: m.withText(invoked.userText),
+                document: document,
+              ));
             }
           } else if (subagent != null && first) {
-            out.add(_TaskBrief(subagent: subagent));
+            // It names itself ("Task from Main"): a speaker of its own.
+            if (document) speaker = 'Main';
+            out.add(_TaskBrief(subagent: subagent, document: document));
           } else if (subagent != null && m.text.startsWith(kFromUserPrefix)) {
             // What the user wrote to this sub-agent: theirs, like any turn
-            // of theirs.
+            // of theirs. A document already names the speaker above it.
+            speak('You', user: true);
             out.add(_UserBubble(
               message:
                   m.withText(m.text.substring(kFromUserPrefix.length).trim()),
-              label: 'You',
+              label: document ? null : 'You',
+              document: document,
             ));
           } else if (background != null) {
             out.add(_BackgroundReport(
@@ -142,13 +183,21 @@ class _StudioAgentViewState extends State<StudioAgentView>
               icon: Icons.forward_to_inbox_outlined,
             ));
           } else {
-            out.add(_UserBubble(message: m));
+            speak('You', user: true);
+            out.add(_UserBubble(message: m, document: document));
           }
         case AgentRole.assistant:
+          if (m.reasoning.isNotEmpty ||
+              m.text.isNotEmpty ||
+              m.toolCalls.isNotEmpty) {
+            speak(agentName);
+          }
           if (m.reasoning.isNotEmpty) {
             out.add(ThinkingBlock(reasoning: m.reasoning));
           }
-          if (m.text.isNotEmpty) out.add(_AgentText(text: m.text));
+          if (m.text.isNotEmpty) {
+            out.add(_AgentText(text: m.text, document: document));
+          }
           for (final call in m.toolCalls) {
             final spawned =
                 call.name == 'task' ? _c.subagentForCall(call.id) : null;
@@ -160,6 +209,7 @@ class _StudioAgentViewState extends State<StudioAgentView>
                   (spawned?.running ?? false),
               subagent: spawned,
               onOpenAgent: widget.onOpenAgent,
+              dense: document,
             ));
           }
         case AgentRole.tool:
@@ -169,11 +219,12 @@ class _StudioAgentViewState extends State<StudioAgentView>
       first = false;
     }
     if (running) {
+      speak(agentName);
       if (live.reasoning.isNotEmpty) {
         out.add(ThinkingBlock(reasoning: live.reasoning, inProgress: true));
       }
       if (live.text.isNotEmpty) {
-        out.add(_AgentText(text: live.text));
+        out.add(_AgentText(text: live.text, document: document));
       } else if (live.activeCalls.isEmpty) {
         out.add(const _Working());
       }
@@ -184,6 +235,7 @@ class _StudioAgentViewState extends State<StudioAgentView>
     // Messages that have not been read yet, below what the agent is doing.
     if (subagent == null) {
       for (final q in _c.queued) {
+        speak('You', user: true);
         out.add(_QueuedBubble(
           key: ValueKey<String>('queued-${q.id}'),
           text: switch (parseSkillInvocation(q.text)) {
@@ -194,6 +246,7 @@ class _StudioAgentViewState extends State<StudioAgentView>
           },
           pictures: q.images.length,
           onCancel: () => _c.cancelQueued(q.id),
+          document: document,
         ));
       }
     } else {
@@ -205,17 +258,54 @@ class _StudioAgentViewState extends State<StudioAgentView>
         ));
       }
       for (final q in _c.queuedForUser(subagent.id)) {
+        speak('You', user: true);
         out.add(_QueuedBubble(
           key: ValueKey<String>('queued-${q.id}'),
           text: q.text,
           pictures: q.images.length,
           onCancel: () => _c.cancelQueuedFor(subagent.id, q.id),
+          document: document,
         ));
       }
     }
     final todos = _c.todosFor(id);
     if (todos.isNotEmpty) out.add(_Plan(todos: todos));
     return out;
+  }
+}
+
+/// Who is speaking, in a document: a quiet label and a hairline across the
+/// page, where the bubbles would have changed sides.
+class _DocSpeaker extends StatelessWidget {
+  const _DocSpeaker({required this.label, required this.user});
+
+  final String label;
+  final bool user;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Padding(
+      key: const Key('studio-doc-speaker'),
+      padding: const EdgeInsets.only(top: 22, bottom: 6),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: user ? scheme.primary : scheme.tertiary,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -235,13 +325,19 @@ MarkdownStyles _styles(BuildContext context) {
 }
 
 class _AgentText extends StatelessWidget {
-  const _AgentText({required this.text});
+  const _AgentText({required this.text, this.document = false});
 
   final String text;
 
+  /// Full width, as a page of a document, rather than kept off the right
+  /// where the user's bubbles sit.
+  final bool document;
+
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(4, 4, 24, 8),
+        padding: document
+            ? const EdgeInsets.fromLTRB(0, 2, 0, 8)
+            : const EdgeInsets.fromLTRB(4, 4, 24, 8),
         child: SelectableText.rich(
           TextSpan(children: buildMessageSpans(text, _styles(context))),
         ),
@@ -249,7 +345,11 @@ class _AgentText extends StatelessWidget {
 }
 
 class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.message, this.label});
+  const _UserBubble({
+    required this.message,
+    this.label,
+    this.document = false,
+  });
 
   final AgentMessage message;
 
@@ -257,21 +357,34 @@ class _UserBubble extends StatelessWidget {
   /// else's (a sub-agent's chat).
   final String? label;
 
+  /// The user's words as a paragraph of the document, full width under the
+  /// "You" label, instead of a bubble at the right.
+  final bool document;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
     return Align(
-      alignment: Alignment.centerRight,
+      key: Key(document ? 'studio-doc-user' : 'studio-user-bubble'),
+      alignment: document ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
-        margin: const EdgeInsets.fromLTRB(48, 8, 0, 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: scheme.primaryContainer,
-          borderRadius: BorderRadius.circular(20),
-        ),
+        width: document ? double.infinity : null,
+        margin: document
+            ? const EdgeInsets.only(bottom: 8)
+            : const EdgeInsets.fromLTRB(48, 8, 0, 8),
+        padding: document
+            ? EdgeInsets.zero
+            : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: document
+            ? null
+            : BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(20),
+              ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment:
+              document ? CrossAxisAlignment.start : CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
             if (label != null)
@@ -291,7 +404,8 @@ class _UserBubble extends StatelessWidget {
                 child: Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  alignment: WrapAlignment.end,
+                  alignment:
+                      document ? WrapAlignment.start : WrapAlignment.end,
                   children: [
                     for (final image in message.images)
                       ClipRRect(
@@ -319,10 +433,12 @@ class _UserBubble extends StatelessWidget {
             if (message.text.isNotEmpty)
               SelectableText(
                 message.text,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: scheme.onPrimaryContainer),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: document
+                          ? scheme.onSurface
+                          : scheme.onPrimaryContainer,
+                      height: document ? 1.4 : null,
+                    ),
               ),
           ],
         ),
@@ -333,14 +449,34 @@ class _UserBubble extends StatelessWidget {
 
 /// A sub-agent's first message: the task the main agent gave it.
 class _TaskBrief extends StatelessWidget {
-  const _TaskBrief({required this.subagent});
+  const _TaskBrief({required this.subagent, this.document = false});
 
   final StudioSubagent subagent;
+  final bool document;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    if (document) {
+      // The brief as the document's opening: its speaker, then the task.
+      return Column(
+        key: const Key('studio-doc-task-brief'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DocSpeaker(
+            label: 'Task from Main · ${_roleLabel(subagent.role)}',
+            user: false,
+          ),
+          SelectableText(
+            subagent.prompt,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: scheme.onSurface, height: 1.4),
+          ),
+          const SizedBox(height: 8),
+        ],
+      );
+    }
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
@@ -564,6 +700,7 @@ class _ToolChip extends StatefulWidget {
     required this.running,
     this.subagent,
     this.onOpenAgent,
+    this.dense = false,
   });
 
   final ToolCall call;
@@ -571,6 +708,10 @@ class _ToolChip extends StatefulWidget {
   final bool running;
   final StudioSubagent? subagent;
   final ValueChanged<String>? onOpenAgent;
+
+  /// A document's tool call: a compact line in the text, set off by a rule
+  /// at its left, rather than a filled chip.
+  final bool dense;
 
   @override
   State<_ToolChip> createState() => _ToolChipState();
@@ -623,31 +764,51 @@ class _ToolChipState extends State<_ToolChip> {
       status = Icon(Icons.check, size: 16, color: scheme.primary);
     }
     final isTask = widget.call.name == 'task';
+    final dense = widget.dense;
+    final radius = BorderRadius.circular(dense ? 8 : 16);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: EdgeInsets.symmetric(vertical: dense ? 1 : 2),
       child: Material(
-        color: isTask ? scheme.secondaryContainer.withValues(alpha: 0.55)
-            : scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
+        key: Key(dense
+            ? 'studio-doc-tool-${widget.call.id}'
+            : 'studio-tool-chip-${widget.call.id}'),
+        color: dense
+            ? Colors.transparent
+            : isTask
+                ? scheme.secondaryContainer.withValues(alpha: 0.55)
+                : scheme.surfaceContainerLow,
+        shape: dense
+            ? Border(
+                left: BorderSide(
+                  width: 2,
+                  color: isTask ? scheme.secondary : scheme.outlineVariant,
+                ),
+              )
+            : RoundedRectangleBorder(borderRadius: radius),
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: radius,
           onTap: () => setState(() => _open = !_open),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: dense
+                ? const EdgeInsets.fromLTRB(10, 5, 4, 5)
+                : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
                     Icon(_toolIcon(widget.call.name),
-                        size: 18, color: scheme.onSurfaceVariant),
-                    const SizedBox(width: 10),
+                        size: dense ? 16 : 18, color: scheme.onSurfaceVariant),
+                    SizedBox(width: dense ? 8 : 10),
                     Expanded(
                       child: Text(
                         _title(),
                         maxLines: _open ? 3 : 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium,
+                        style: dense
+                            ? theme.textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant)
+                            : theme.textTheme.bodyMedium,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -852,16 +1013,17 @@ class _Intro extends StatelessWidget {
 /// A turn where the user invoked a skill with `/name`: the skill's
 /// instructions went to the model, and the chat shows only which skill.
 class _SkillChip extends StatelessWidget {
-  const _SkillChip({required this.name});
+  const _SkillChip({required this.name, this.document = false});
 
   final String name;
+  final bool document;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     return Align(
-      alignment: Alignment.centerRight,
+      alignment: document ? Alignment.centerLeft : Alignment.centerRight,
       child: Padding(
         padding: const EdgeInsets.only(top: 8, bottom: 2),
         child: Container(
@@ -896,20 +1058,24 @@ class _QueuedBubble extends StatelessWidget {
     required this.text,
     required this.pictures,
     required this.onCancel,
+    this.document = false,
   });
 
   final String text;
   final int pictures;
   final VoidCallback onCancel;
+  final bool document;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     return Align(
-      alignment: Alignment.centerRight,
+      alignment: document ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
-        margin: const EdgeInsets.fromLTRB(48, 8, 0, 8),
+        margin: document
+            ? const EdgeInsets.only(bottom: 8)
+            : const EdgeInsets.fromLTRB(48, 8, 0, 8),
         padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHigh,

@@ -196,6 +196,37 @@ class _StudioSettingsPageState extends State<StudioSettingsPage> {
             onChanged: (v) => _update(config.copyWith(stream: v)),
           ),
           const Divider(height: 24),
+          Text('Look', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'How the conversation is drawn: chat bubbles, or a flowing '
+            'document with every turn full width under its speaker.',
+            style: muted,
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<StudioTranscriptStyle>(
+              key: const Key('studio-transcript-style'),
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                  value: StudioTranscriptStyle.bubbles,
+                  icon: Icon(Icons.chat_bubble_outline),
+                  label: Text('Bubbles'),
+                ),
+                ButtonSegment(
+                  value: StudioTranscriptStyle.document,
+                  icon: Icon(Icons.article_outlined),
+                  label: Text('Document'),
+                ),
+              ],
+              selected: {config.transcriptStyle},
+              onSelectionChanged: (picked) =>
+                  _update(config.copyWith(transcriptStyle: picked.first)),
+            ),
+          ),
+          const Divider(height: 32),
           Text('Agent', style: theme.textTheme.titleSmall),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
