@@ -270,7 +270,8 @@ const List<_SearchEntry> _searchIndex = [
     section: 'Providers',
     icon: Icons.calculate_outlined,
     keywords:
-        'token count tokenizer tiktoken openai anthropic claude bpe '
+        'token count tokenizer tiktoken openai anthropic claude bpe off '
+        'disable local estimate memory '
         'cl100k o200k context window encoding custom',
     builder: _tokenizerPage,
   ),
@@ -287,6 +288,20 @@ const List<_SearchEntry> _searchIndex = [
     icon: Icons.palette_outlined,
     keywords: 'material you dynamic color colour wallpaper palette',
     builder: _systemColoursPage,
+  ),
+  _SearchEntry(
+    title: 'Expressive theme',
+    section: 'Appearance',
+    icon: Icons.auto_awesome_outlined,
+    keywords: 'material 3 expressive m3 bold shapes rounded motion style',
+    builder: _expressivePage,
+  ),
+  _SearchEntry(
+    title: 'Palette style',
+    section: 'Appearance',
+    icon: Icons.gradient_outlined,
+    keywords: 'vibrant tonal muted colourful colorful scheme variant palette',
+    builder: _palettePage,
   ),
   _SearchEntry(
     title: 'App font',
@@ -480,6 +495,10 @@ Widget _themePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.theme);
 Widget _systemColoursPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.systemColours);
+Widget _expressivePage() =>
+    const AppearanceSettingsPage(highlight: SettingAnchor.expressive);
+Widget _palettePage() =>
+    const AppearanceSettingsPage(highlight: SettingAnchor.palette);
 Widget _fontPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.font);
 Widget _charactersFreeSizePage() => const BrowseAppearanceSettingsPage(

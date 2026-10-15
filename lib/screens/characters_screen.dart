@@ -42,7 +42,11 @@ enum CharacterSort {
 /// an avatar grid or a names list; import, create and multi-select live in the
 /// app bar.
 class CharactersScreen extends StatefulWidget {
-  const CharactersScreen({super.key});
+  const CharactersScreen({super.key, this.openImport = false});
+
+  /// Opens the import sheet as soon as the roster is on screen — the Home
+  /// screen's Import shortcut.
+  final bool openImport;
 
   @override
   State<CharactersScreen> createState() => _CharactersScreenState();
@@ -54,6 +58,16 @@ class _CharactersScreenState extends State<CharactersScreen> {
   final Map<String, String> _masonryFrameRefs = <String, String>{};
   String? _revealedCharacterId;
   String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.openImport) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showImportSheet();
+      });
+    }
+  }
   CharacterSort _sort = CharacterSort.recent;
   final Set<String> _tagFilter = <String>{};
   bool _selecting = false;

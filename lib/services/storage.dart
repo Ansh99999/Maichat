@@ -11,6 +11,7 @@ import '../models/discover.dart';
 import '../models/embedding.dart';
 import '../models/folder.dart';
 import '../models/gallery_image.dart';
+import '../models/home_layout.dart';
 import '../models/image_gen.dart';
 import '../models/studio.dart';
 import '../models/interface_preset.dart';
@@ -73,6 +74,7 @@ class Storage {
   static const _backupPrefsKey = 'backupPrefs';
   static const _backupsKey = 'backups';
   static const _imageRatiosKey = 'imageRatios';
+  static const _homeLayoutKey = 'homeLayout';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -373,6 +375,21 @@ class Storage {
 
   Future<void> saveViewPrefs(ViewPrefs prefs) async =>
       (await _prefs).setString(_viewPrefsKey, jsonEncode(prefs.toJson()));
+
+  /// How the Home screen is arranged. Its own small entry, written once when an
+  /// edit is finished — never per drag — and copied by a backup like any other.
+  Future<HomeLayout> loadHomeLayout() async {
+    final raw = (await _prefs).getString(_homeLayoutKey);
+    if (raw == null) return HomeLayout.defaults();
+    try {
+      return HomeLayout.fromJson(jsonDecode(raw));
+    } catch (_) {
+      return HomeLayout.defaults();
+    }
+  }
+
+  Future<void> saveHomeLayout(HomeLayout layout) async =>
+      (await _prefs).setString(_homeLayoutKey, jsonEncode(layout.toJson()));
 
   /// The user's saved chat-interface looks. Its own small entry, so saving a look
   /// never rewrites the conversations blob — and so a backup, which copies the

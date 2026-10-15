@@ -13,13 +13,14 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    // The Home dashboard is titled and prompts setup while unconfigured.
-    // A large app bar renders its title in both the collapsed and expanded
-    // slots, so more than one match is expected.
-    expect(find.text('Home'), findsWidgets);
-    expect(find.text('Open settings'), findsOneWidget);
+    // Home prompts setup while unconfigured: the banner above the grid, and
+    // the provider widget's own call to action.
+    expect(find.text('Connect a provider so characters can reply.'),
+        findsOneWidget);
+    expect(find.byTooltip('Home screen options'), findsOneWidget);
 
-    // Opening a fresh chat lands on the composer with a disabled send button.
+    // Opening a fresh chat (the dock's New chat) lands on the composer with a
+    // disabled send button.
     await tester.tap(find.text('New chat'));
     await tester.pumpAndSettle();
     final send = tester.widget<IconButton>(
@@ -36,11 +37,8 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Open settings'));
-    await tester.pumpAndSettle();
-
-    // The hub lists sections; providers live behind "Providers".
-    await tester.tap(find.text('Providers'));
+    // Home's setup banner goes straight to the Providers section.
+    await tester.tap(find.text('Set up'));
     await tester.pumpAndSettle();
 
     // No providers yet, so add one to reach the editor fields.
@@ -64,11 +62,11 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    // The configured provider shows as a status card on Home; tapping it opens
-    // settings, where the Providers page holds the editor.
-    await tester.tap(find.text('host.tld'));
+    // The configured provider shows in Home's provider widget; Providers is
+    // a drawer section of its own.
+    expect(find.text('host.tld'), findsWidgets);
+    await tester.tap(find.byTooltip('Menu'));
     await tester.pumpAndSettle();
-
     await tester.tap(find.text('Providers'));
     await tester.pumpAndSettle();
 
@@ -98,8 +96,7 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    // The restored thread shows up as a card under the recent-chats header.
-    expect(find.text('Recent chats'), findsOneWidget);
+    // The restored thread shows up in the default Recent chat widget.
     expect(find.text('Tides'), findsOneWidget);
     expect(find.text('hi'), findsOneWidget);
   });
@@ -140,7 +137,9 @@ void main() {
     await tester.pumpWidget(const MaiChatApp());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Open settings'));
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
 
     // Appearance controls live inside their own section now.

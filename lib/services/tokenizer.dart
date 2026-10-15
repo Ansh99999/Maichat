@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:collection';
+import 'dart:isolate';
 
 import 'package:tiktoken_tokenizer_gpt4o_o1/tiktoken_tokenizer_gpt4o_o1.dart';
 
@@ -8,10 +10,16 @@ import 'token_estimator.dart';
 /// BPE tokenizer (exact). Anthropic has no offline tokenizer for Claude 3+, so
 /// it uses the o200k BPE as a close local proxy (an exact figure is fetched from
 /// the count-tokens API in the message Info view when a key is present).
+///
+/// [none] switches local tokenizers off entirely: no BPE vocabulary is ever
+/// built or held (it is tens of megabytes and seconds of work on a phone), and
+/// every count is the [HeuristicTokenEstimator]'s estimate — which leans high,
+/// so the context budget stays on the safe side.
 enum TokenizerKind {
   openai('OpenAI (GPT)'),
   anthropic('Anthropic (Claude)'),
-  custom('Custom');
+  custom('Custom'),
+  none('Off (estimate only)');
 
   const TokenizerKind(this.label);
 
@@ -148,26 +156,82 @@ class AppTokenizer implements TokenEstimator {
     _cachedChars.clear();
   }
 
+  /// Lets go of every built vocabulary and remembered count — what switching
+  /// local tokenizers off is for, on a phone short of memory. A warm-up still
+  /// in flight finishes into the cache; the next [release] drops it.
+  static void release() {
+    _cache.clear();
+    clearCountCache();
+  }
+
   BpeEncoding activeEncoding() {
     final c = config();
     return switch (c.kind) {
       TokenizerKind.openai => encodingForOpenAiModel(model()),
       TokenizerKind.anthropic => BpeEncoding.o200k,
       TokenizerKind.custom => c.customEncoding,
+      // Not used for counting; named so the settings readout has something.
+      TokenizerKind.none => BpeEncoding.o200k,
     };
   }
 
   /// Whether the current configuration yields approximate counts (Anthropic has
-  /// no exact offline tokenizer) — for UI labeling.
-  bool get isApproximate => config().kind == TokenizerKind.anthropic;
+  /// no exact offline tokenizer; with tokenizers off everything is an estimate)
+  /// — for UI labeling.
+  bool get isApproximate =>
+      config().kind == TokenizerKind.anthropic ||
+      config().kind == TokenizerKind.none;
+
+  /// Whether a real BPE tokenizer is in use at all. False when local
+  /// tokenizers are switched off: nothing is built, warmed up or cached.
+  bool get usesBpe => config().kind != TokenizerKind.none;
 
   TiktokenEncoder _encoder(BpeEncoding e) =>
       _cache.putIfAbsent(e, () => Tiktoken.getEncoder(e.type));
 
+  /// Encoders being built on a background isolate, by encoding.
+  static final Map<BpeEncoding, Future<void>> _warming = {};
+
+  /// Builds [encoding]'s vocabulary on a background isolate and keeps it.
+  ///
+  /// Building o200k is ~200k map entries of work: a second on a desktop, several
+  /// on a phone. Built on the UI isolate at launch — which is where the first
+  /// count used to land — it held the very first frame of Home back for all of
+  /// it, and the app sat on its startup screen long after the store had been
+  /// read. While it is building, counts fall back to the heuristic estimate and
+  /// are not remembered, so nothing approximate outlives the warm-up.
+  static Future<void> warmUp(BpeEncoding encoding) {
+    if (_cache.containsKey(encoding)) return Future<void>.value();
+    return _warming.putIfAbsent(encoding, () async {
+      try {
+        final type = encoding.type;
+        // Spawned from the root zone, so its reply is delivered by the real
+        // event loop even when the caller sits in a test's fake-async zone.
+        final built = await Zone.root
+            .run(() => Isolate.run(() => Tiktoken.getEncoder(type)));
+        _cache.putIfAbsent(encoding, () => built);
+      } catch (_) {
+        // A platform that cannot spawn an isolate builds on first use instead.
+      } finally {
+        _warming.remove(encoding);
+      }
+    });
+  }
+
+  /// Whether [encoding] is ready to count without building anything.
+  static bool isWarm(BpeEncoding encoding) => _cache.containsKey(encoding);
+
   @override
   int estimate(String text) {
     if (text.isEmpty) return 0;
+    // Switched off: the heuristic, uncached — it is cheaper than the lookup.
+    if (!usesBpe) return _fallback.estimate(text);
     final encoding = activeEncoding();
+    // Mid warm-up the real encoder is moments away; building a second copy on
+    // this isolate would freeze the screen for exactly what the warm-up avoids.
+    if (_warming.containsKey(encoding) && !_cache.containsKey(encoding)) {
+      return _fallback.estimate(text);
+    }
     final memo = _counts.putIfAbsent(encoding, LinkedHashMap<String, int>.new);
     final cached = memo.remove(text);
     if (cached != null) {

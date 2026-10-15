@@ -151,6 +151,22 @@ bar or the overflow menu.
   `Conversation.copyAs` keeps fork/renumber from dropping a new per-chat field.
 - **`AppState.init()` must always finish** (timeout + catch, surfaces `loadError`,
   goes read-only on failure). A throw here = permanent startup spinner.
+- **Nothing heavy runs before Home's first frame.** The 4–5 s launch was mostly
+  the o200k tokenizer vocabulary (~1 s desktop AOT, seconds on a phone) being
+  built on the UI isolate by a microtask in `init()`'s `finally`, ahead of the
+  first frame. With `backgroundWarmUp` (set only by `main()` → `MaiChatApp`) it
+  is built by `AppTokenizer.warmUp` on an `Isolate.run` spawned from
+  `Zone.root`, counts fall back to the heuristic while it builds, and the
+  startup picture sweep (lists the folder, parses every Studio session) and an
+  owed scheduled backup wait `_deferredStartupWork`. `main()` opens the four
+  storage directories with one `.wait`, and `MaiChatApp` caches its two
+  `ThemeData`s per `Appearance` (`_ThemeCache`) — `MaterialApp` rebuilds on
+  every notify, a streamed reply notifies constantly. Tests leave the flag off:
+  an isolate's reply never arrives in a widget test's fake-async zone, and they
+  expect the sweep to have run when `init` returns. `TokenizerKind.none` (the
+  "Local tokenizers" switch in Settings ▸ Tokenizer) turns BPE off entirely:
+  nothing is warmed, `AppTokenizer.release()` frees the vocabularies, and every
+  count is the high-leaning heuristic (`isApproximate` is true).
 - **The thread is a `reverse: true` list, and that has consequences.** Its newest
   turn is anchored to the bottom and every older message is positioned relative to
   it, so a turn that grows moves the whole conversation above it. Two rules follow:
@@ -707,10 +723,45 @@ bar or the overflow menu.
   the Chats/Home lists (named after its root, previewing its freshest branch).
   A missing parent degrades to a root — no cascade delete, no dangling tree.
 
+- **Home screen (launcher):** `screens/home_screen.dart` is an Android-style
+  home: pages of a grid (3–8 × 4–10 cells, `kHomeMaxPages` pages) holding
+  widgets the user places. The model is `models/home_layout.dart`
+  (`HomeLayout`/`HomePage`/`HomeTile`, all geometry pure and tested in
+  `test/home_layout_test.dart`: `fits`, `add` (dropped spot → first free →
+  another page → a new page), `withGrid` (scales, then settles collisions,
+  overflowing onto new pages), `fromJson` (repairs: drops unknown kinds, clamps,
+  separates overlaps, re-ids duplicates)). It is its own small store entry,
+  `homeLayout`, written **once on Done** — edit mode works on a draft
+  (`_HomeScreenState._draft`); Back keeps it, "Discard changes" drops it. The
+  wallpaper and a gallery widget's pinned `image` are named in `_sweepAvatars`'
+  keep-list. Widgets live in `screens/home/widgets/*`, one `HomeWidgetSpec`
+  each (`screens/home/home_spec.dart`: title, icon, `minSpan`, `options` the
+  generic settings sheet renders, `build`), registered in `home_widgets.dart`.
+  **A widget never assumes a height**: tiles can be any span on any grid at any
+  font scale, so content goes through `HomeCard(builder:)`, which measures the
+  inner box (lines in it via `homeLineHeight`) and scales the rest down with
+  `HomeShrink` rather than overflow — `test/home_widget_sizes_test.dart` runs
+  every kind × 8 spans × the 3×4 and 8×10 cell sizes × ×1.0/×1.5 text. Choice
+  options store strings, so `HomeTile.integer` parses numeric text (the gallery
+  `count` silently stayed 1 before it did). Edit gestures are in
+  `home/home_grid.dart` (long-press-drag or select-then-drag to move, edge dots
+  to resize, a ghost shows the landing cell in red when it would collide);
+  sheets in `home/home_sheets.dart`; quick-open destinations and their icons in
+  `home/quick_targets.dart`; icon outlines (incl. the Expressive "flower"
+  cookie) in `home/home_icon_shape.dart`. The Studio is on the default first
+  page, has its own tertiary-tinted widget, and is a drawer destination.
+- **Expressive theme:** `Appearance.expressive` (+ `palette`, mapped to a
+  `DynamicSchemeVariant`) — `MaiChatApp._expressive` layers M3 Expressive over
+  the base theme in light and dark: superellipse shapes stepped by size,
+  emphasised type, 2024 progress/slider, iconed switch thumbs, pill buttons,
+  predictive-back transitions. Don't give a button theme a resolved
+  `textStyle` (`inherit: false`): it is lerped against the default and throws.
+
 ## Can't be verified from a headless host
 
 - **On-device gestures/touch** — verify drag/nudge on the user's phone. This now
-  includes the gallery's pinch-to-zoom ladder and the drag/resize/rotate of
+  includes the Home editor (long-press carry, edge-dot resize, the page swipe
+  staying out of the way of a drag), the gallery's pinch-to-zoom ladder and the drag/resize/rotate of
   pictures floating over a chat, and how smooth scrolling back through a chat
   *feels* while a reply streams (the widget tests pin down offsets and extents,
   not perceived smoothness).

@@ -15,6 +15,8 @@ class Appearance {
     this.mode = AppThemeMode.system,
     this.seedColor = kDefaultSeedColor,
     this.fontFamily,
+    this.expressive = false,
+    this.palette = AppPalette.tonal,
   });
 
   /// Prefer the platform's Material You palette over the custom [seedColor].
@@ -30,11 +32,22 @@ class Appearance {
   /// the platform default font.
   final String? fontFamily;
 
+  /// Material 3 Expressive: bolder type, rounder and larger shapes, livelier
+  /// surfaces and the newer component looks (wavy progress, iconed switches,
+  /// springier page transitions) — in light and dark alike. Off keeps the
+  /// calmer baseline Material 3 the app has always had.
+  final bool expressive;
+
+  /// How a palette is drawn out of the wallpaper or the seed colour.
+  final AppPalette palette;
+
   Appearance copyWith({
     bool? dynamicColor,
     AppThemeMode? mode,
     int? seedColor,
     Object? fontFamily = _unset,
+    bool? expressive,
+    AppPalette? palette,
   }) =>
       Appearance(
         dynamicColor: dynamicColor ?? this.dynamicColor,
@@ -43,6 +56,8 @@ class Appearance {
         fontFamily: identical(fontFamily, _unset)
             ? this.fontFamily
             : fontFamily as String?,
+        expressive: expressive ?? this.expressive,
+        palette: palette ?? this.palette,
       );
 
   // Sentinel so copyWith can tell "leave the font" from "clear it to null".
@@ -53,6 +68,10 @@ class Appearance {
         'mode': mode.name,
         'seedColor': seedColor,
         if (fontFamily != null) 'fontFamily': fontFamily,
+        // Written only when changed, so a store from before these existed and
+        // one that never touched them read — and compare — the same.
+        if (expressive) 'expressive': true,
+        if (palette != AppPalette.tonal) 'palette': palette.name,
       };
 
   factory Appearance.fromJson(Map<String, dynamic> json) => Appearance(
@@ -62,6 +81,8 @@ class Appearance {
         fontFamily: (json['fontFamily'] as String?)?.trim().isEmpty ?? true
             ? null
             : (json['fontFamily'] as String).trim(),
+        expressive: json['expressive'] as bool? ?? false,
+        palette: AppPalette.byName(json['palette'] as String?),
       );
 
   @override
@@ -70,10 +91,13 @@ class Appearance {
       other.dynamicColor == dynamicColor &&
       other.mode == mode &&
       other.seedColor == seedColor &&
-      other.fontFamily == fontFamily;
+      other.fontFamily == fontFamily &&
+      other.expressive == expressive &&
+      other.palette == palette;
 
   @override
-  int get hashCode => Object.hash(dynamicColor, mode, seedColor, fontFamily);
+  int get hashCode => Object.hash(
+      dynamicColor, mode, seedColor, fontFamily, expressive, palette);
 }
 
 /// Mirrors Flutter's ThemeMode without dragging the framework into the model
@@ -98,5 +122,36 @@ enum AppThemeMode {
       if (mode.name == name) return mode;
     }
     return AppThemeMode.system;
+  }
+}
+
+/// The ways a palette can be generated from one colour, after Material's own
+/// scheme variants. [MaiChatApp] maps each to a `DynamicSchemeVariant`.
+enum AppPalette {
+  /// Material's default: calm, the colour softened into tones.
+  tonal('Tonal', 'Calm and soft — Material\'s default'),
+
+  /// The colour at full strength, in light and dark alike.
+  vibrant('Vibrant', 'The colour at full strength'),
+
+  /// Neighbouring hues mixed in for a playful, Expressive feel.
+  expressive('Playful', 'Neighbouring hues mixed in'),
+
+  /// Stays faithful to the exact colour picked.
+  fidelity('Faithful', 'Keeps the exact colour'),
+
+  /// Greys only, the colour kept for a few accents.
+  neutral('Muted', 'Nearly grey, quiet accents');
+
+  const AppPalette(this.label, this.blurb);
+
+  final String label;
+  final String blurb;
+
+  static AppPalette byName(String? name) {
+    for (final p in values) {
+      if (p.name == name) return p;
+    }
+    return AppPalette.tonal;
   }
 }

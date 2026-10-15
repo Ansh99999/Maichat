@@ -280,7 +280,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(StartupScreen), findsNothing);
       expect(find.byType(LoadErrorCard), findsOneWidget);
-      expect(find.text('Home'), findsWidgets);
+      // Home itself is up behind the card: its menu and its options.
+      expect(find.byTooltip('Home screen options'), findsOneWidget);
     });
 
     testWidgets('the error card retries', (tester) async {

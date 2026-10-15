@@ -19,6 +19,7 @@ import '../models/embedding.dart';
 import '../models/floating_image.dart';
 import '../models/folder.dart';
 import '../models/gallery_image.dart';
+import '../models/home_layout.dart';
 import '../models/image_gen.dart';
 import '../models/interface_preset.dart';
 import '../models/agent_message.dart';
@@ -82,6 +83,7 @@ class AppState extends ChangeNotifier {
     Summarizer? summarizer,
     StudioStore? studio,
     this.loadTimeout = const Duration(seconds: 30),
+    this.backgroundWarmUp = false,
   }) : _storage = storage ?? Storage(),
        _client = client ?? ChatClient(),
        _imageClient = imageClient ?? ImageClient(),
@@ -112,6 +114,15 @@ class AppState extends ChangeNotifier {
   /// enough for a big store on a slow phone, short enough that the app is never
   /// simply stuck.
   final Duration loadTimeout;
+
+  /// Keep launch work off the first frames: build the tokenizer's vocabulary on
+  /// a background isolate, and hold the picture sweep and an owed backup back
+  /// by [_deferredStartupWork]. The app turns this on (see `main.dart`); tests
+  /// leave it off, since an isolate's reply never arrives inside a widget
+  /// test's fake-async zone and a test wants the sweep when `init` returns.
+  final bool backgroundWarmUp;
+
+  static const Duration _deferredStartupWork = Duration(seconds: 4);
 
   /// Where character pictures are kept. Resolved in `main()` before the first
   /// frame and handed in, so nothing here has to wait on a platform channel;
@@ -492,8 +503,14 @@ class AppState extends ChangeNotifier {
       // zone. Only schedule real cleanup when there is a store to sweep; a
       // no-store AppState needs no cross-zone task at all.
       if (_avatars != null && _writable) {
+        // On a device the sweep waits for the first screens to settle: it lists
+        // the pictures folder and parses every Studio session to know what to
+        // keep, which is nothing the user is waiting for.
         _startupAvatarSweep = Zone.root.run<Future<void>>(
-          _runStartupAvatarSweep,
+          () => backgroundWarmUp
+              ? Future<void>.delayed(_deferredStartupWork)
+                  .then((_) => _runStartupAvatarSweep())
+              : _runStartupAvatarSweep(),
         );
         unawaited(_startupAvatarSweep);
       } else {
@@ -503,21 +520,44 @@ class AppState extends ChangeNotifier {
       unawaited(checkForUpdates());
       // The schedule is checked here because there is no background worker: a
       // backup that is owed is taken the next time the app is opened. Returns at
-      // once when nothing is due, which is the normal case.
-      unawaited(runDueBackup());
+      // once when nothing is due, which is the normal case. When one is due it
+      // zips the pictures folder, so on a device it starts once the app is up
+      // rather than racing the first frames for the disk.
+      if (backgroundWarmUp) {
+        unawaited(Zone.root.run(() => Future<void>.delayed(
+              _deferredStartupWork,
+              () => runDueBackup(),
+            )));
+      } else {
+        unawaited(runDueBackup());
+      }
       // Building a BPE vocabulary is ~100k entries of work and the encoder cache
       // is static, so the first caller pays for the whole process. Left on the
       // build path it landed on whichever screen happened to ask first, as a
       // visible hitch. Pay it here instead, in a microtask — off init's await
       // chain, and no timer for a widget test to trip over.
-      scheduleMicrotask(() {
-        try {
-          _tokenizer.estimate('warm');
-        } catch (_) {
-          // The tokenizer already falls back to a heuristic on its own; a failed
-          // warm-up must not take the launch with it.
-        }
-      });
+      //
+      // On a device it is built on a background isolate instead: as a microtask
+      // it ran before Home's first frame and held the startup screen up for
+      // seconds. Widget tests keep the microtask — a real isolate's reply never
+      // arrives inside their fake-async zone.
+      if (!_tokenizer.usesBpe) {
+        // Local tokenizers are off: there is nothing to build.
+      } else if (backgroundWarmUp) {
+        final warm = Stopwatch()..start();
+        unawaited(AppTokenizer.warmUp(_tokenizer.activeEncoding()).whenComplete(
+          () => _logStartupPhase('tokenizer (background)', warm),
+        ));
+      } else {
+        scheduleMicrotask(() {
+          try {
+            _tokenizer.estimate('warm');
+          } catch (_) {
+            // The tokenizer already falls back to a heuristic on its own; a
+            // failed warm-up must not take the launch with it.
+          }
+        });
+      }
     }
   }
 
@@ -547,6 +587,7 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(await _storage.loadRegexRules());
     _viewPrefs = await _storage.loadViewPrefs();
+    _homeLayout = await _storage.loadHomeLayout();
     _interfacePresets
       ..clear()
       ..addAll(await _storage.loadInterfacePresets());
@@ -1810,6 +1851,11 @@ class AppState extends ChangeNotifier {
       ..._lorebooks.map((b) => b.thumbnail),
       ..._gallery.map((g) => g.image),
       ..._chatInterface.pictureRefs,
+      // The Home screen's wallpaper, and the picture a gallery widget was told
+      // to show, are referred to only from the home layout.
+      ?_homeLayout.wallpaper,
+      for (final p in _homeLayout.pages)
+        for (final t in p.tiles) ?t.str('image'),
       // A saved look holds its own background and participant-bar picture, and
       // is the only thing referring to them until it is applied.
       ..._interfacePresets.expand((p) => p.ui.pictureRefs),
@@ -3340,6 +3386,23 @@ class AppState extends ChangeNotifier {
   /// Puts a chat back on the character's own scenario.
   Future<void> clearChatScenario(String conversationId) =>
       setChatScenario(conversationId);
+
+  // --- Home screen -------------------------------------------------------
+
+  HomeLayout _homeLayout = HomeLayout.defaults();
+
+  /// How the Home screen is arranged: its grid, its pages, the widgets on them.
+  HomeLayout get homeLayout => _homeLayout;
+
+  /// Replaces the arrangement. The edit mode calls this once, on Done — a drag
+  /// is held in the editor, not written to the store cell by cell.
+  Future<void> setHomeLayout(HomeLayout next) async {
+    if (next == _homeLayout) return;
+    _homeLayout = next;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveHomeLayout(next);
+  }
 
   // --- Browse layout -------------------------------------------------------
 
@@ -5488,6 +5551,10 @@ class AppState extends ChangeNotifier {
   /// How the Studio talks to its model.
   StudioConfig get studioConfig => _studioConfig;
 
+  /// Where Studio sessions are kept, or null when the platform named no folder
+  /// (and in widget tests). The Home screen's Studio widget lists from it.
+  StudioStore? get studioStore => _studio;
+
   Future<void> updateStudioConfig(StudioConfig next) async {
     _studioConfig = next;
     notifyListeners();
@@ -6696,6 +6763,14 @@ class AppState extends ChangeNotifier {
   Future<void> updateTokenizerConfig(TokenizerConfig next) async {
     if (next == _tokenizerConfig) return;
     _tokenizerConfig = next;
+    if (next.kind == TokenizerKind.none) {
+      // Switched off: free the vocabularies now rather than at next launch.
+      AppTokenizer.release();
+    } else if (backgroundWarmUp) {
+      // Switched (back) on: build the new encoding off the UI thread, so the
+      // first count after the change is not a freeze.
+      unawaited(AppTokenizer.warmUp(_tokenizer.activeEncoding()));
+    }
     notifyListeners();
     if (!_writable) return;
     await _storage.saveTokenizerConfig(next);

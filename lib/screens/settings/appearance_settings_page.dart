@@ -65,6 +65,35 @@ class AppearanceSettingsPage extends StatelessWidget {
               ),
             ),
           ),
+          // Material 3 Expressive — the bolder shape, type and motion system,
+          // for light and dark alike.
+          SettingHighlight(
+            active: highlight == SettingAnchor.expressive,
+            child: SwitchListTile(
+              dense: true,
+              value: appearance.expressive,
+              onChanged: (value) => state.updateAppearance(
+                appearance.copyWith(expressive: value),
+              ),
+              secondary: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Expressive theme'),
+              subtitle: const Text(
+                'Material 3 Expressive: rounder shapes, bolder type, livelier '
+                'colour and motion',
+              ),
+            ),
+          ),
+          // Palette style — how the colours are drawn out of the wallpaper or
+          // the theme colour.
+          SettingHighlight(
+            active: highlight == SettingAnchor.palette,
+            child: _PaletteRow(
+              palette: appearance.palette,
+              onChanged: (palette) => state.updateAppearance(
+                appearance.copyWith(palette: palette),
+              ),
+            ),
+          ),
           // Theme colour — a swatch that opens the palette; dimmed while the
           // system palette is in charge.
           _ThemeColourRow(
@@ -228,6 +257,65 @@ class _ThemeColourRow extends StatelessWidget {
         ),
       ),
       onTap: enabled ? () => _openPalette(context) : null,
+    );
+  }
+}
+
+/// Tonal / Vibrant / Playful / Faithful / Muted, as a row of chips under a
+/// heading: each is a whole different scheme, so they are shown side by side
+/// rather than hidden in a menu.
+class _PaletteRow extends StatelessWidget {
+  const _PaletteRow({required this.palette, required this.onChanged});
+
+  final AppPalette palette;
+  final ValueChanged<AppPalette> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.gradient_outlined),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Palette style'),
+                    Text(
+                      palette.blurb,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.only(left: 40),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final p in AppPalette.values)
+                  ChoiceChip(
+                    label: Text(p.label),
+                    selected: p == palette,
+                    onSelected: (_) => onChanged(p),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

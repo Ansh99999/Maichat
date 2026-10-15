@@ -17,6 +17,7 @@ import '../screens/profile_screen.dart';
 import '../screens/providers/providers_screen.dart';
 import '../screens/section_screen.dart';
 import '../screens/settings_screen.dart';
+import '../screens/studio/studio_home_screen.dart';
 import 'character_avatar.dart';
 import 'brand_mark.dart';
 
@@ -223,6 +224,16 @@ class AppDrawer extends StatelessWidget {
             label: 'Characters',
             selected: selected == DrawerSection.characters,
             onTap: () => _goCharacters(context),
+          ),
+          // The Character Studio — the agent that drafts characters with you —
+          // is a destination of its own, not a button inside Characters.
+          _NavItem(
+            icon: Icons.auto_awesome_outlined,
+            label: 'Studio',
+            onTap: () {
+              Navigator.of(context).pop();
+              openCharacterStudio(context);
+            },
           ),
           _NavItem(
             icon: Icons.public_outlined,

@@ -67,7 +67,9 @@ class _TokenizerSettingsPageState extends State<TokenizerSettingsPage> {
           const _WhatIsATokenizer(),
           const SizedBox(height: 8),
           _label(context, 'COUNTER'),
-          _kindTile(context, state, config),
+          _localSwitch(context, state, config),
+          if (config.kind != TokenizerKind.none)
+            _kindTile(context, state, config),
           if (config.kind == TokenizerKind.custom)
             _encodingTile(context, state, config),
           const SizedBox(height: 16),
@@ -91,6 +93,42 @@ class _TokenizerSettingsPageState extends State<TokenizerSettingsPage> {
         ),
       );
 
+  /// The master switch. Off drops every local BPE vocabulary and counts with
+  /// the estimate; on goes back to whichever counter was in use before (the
+  /// last real kind is remembered in [_lastKind] for this visit, else OpenAI).
+  Widget _localSwitch(
+    BuildContext context,
+    AppState state,
+    TokenizerConfig config,
+  ) {
+    final on = config.kind != TokenizerKind.none;
+    return Card(
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: SwitchListTile(
+        secondary: const Icon(Icons.memory_outlined),
+        title: const Text('Local tokenizers'),
+        subtitle: Text(
+          on
+              ? 'Exact counts from a tokenizer kept on this device'
+              : 'Off — saves memory and launch time; counts are estimates',
+        ),
+        value: on,
+        onChanged: (value) {
+          if (!value) _lastKind = config.kind;
+          state.updateTokenizerConfig(config.copyWith(
+            kind: value ? (_lastKind ?? TokenizerKind.openai) : TokenizerKind.none,
+          ));
+          WidgetsBinding.instance.addPostFrameCallback((_) => _recount());
+        },
+      ),
+    );
+  }
+
+  /// The counter in use before the switch went off, so turning it back on
+  /// restores it.
+  TokenizerKind? _lastKind;
+
   Widget _kindTile(
     BuildContext context,
     AppState state,
@@ -103,6 +141,9 @@ class _TokenizerSettingsPageState extends State<TokenizerSettingsPage> {
             'Approximate offline (o200k). Exact counts appear in a message’s '
                 'Info when a Claude key is set.',
           TokenizerKind.custom => 'Uses the chosen BPE encoding everywhere.',
+          TokenizerKind.none =>
+            'No local tokenizer is loaded. Counts are a quick estimate that '
+                'runs a little high, so the context budget stays safe.',
         };
 
     return Card(
@@ -123,8 +164,10 @@ class _TokenizerSettingsPageState extends State<TokenizerSettingsPage> {
             WidgetsBinding.instance.addPostFrameCallback((_) => _recount());
           },
           items: [
+            // "Off" is the switch above, not a counter to choose.
             for (final kind in TokenizerKind.values)
-              DropdownMenuItem(value: kind, child: Text(kind.label)),
+              if (kind != TokenizerKind.none)
+                DropdownMenuItem(value: kind, child: Text(kind.label)),
           ],
         ),
       ),
@@ -197,7 +240,7 @@ class _TokenizerSettingsPageState extends State<TokenizerSettingsPage> {
                         ? 'Counting…'
                         : '${approximate ? '~' : ''}$count '
                             'token${count == 1 ? '' : 's'} · '
-                            '${state.activeTokenizerEncoding.id}',
+                            '${state.tokenizerConfig.kind == TokenizerKind.none ? 'estimate' : state.activeTokenizerEncoding.id}',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
