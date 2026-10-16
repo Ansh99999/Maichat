@@ -243,7 +243,9 @@ class HomeTileStatus extends InheritedWidget {
 
   @override
   bool updateShouldNotify(HomeTileStatus old) =>
-      old.selected != selected || old.lifted != lifted || old.editing != editing;
+      old.selected != selected ||
+      old.lifted != lifted ||
+      old.editing != editing;
 }
 
 /// The selection ring a surface shows on its own [shape], edge to edge.
@@ -255,12 +257,6 @@ BorderSide homeOutlineSide(BuildContext context) {
     return BorderSide(
       color: scheme.primary,
       width: 3,
-      strokeAlign: BorderSide.strokeAlignInside,
-    );
-  }
-  if (status.editing) {
-    return BorderSide(
-      color: scheme.outlineVariant,
       strokeAlign: BorderSide.strokeAlignInside,
     );
   }
@@ -295,13 +291,13 @@ class HomeOutlined extends StatelessWidget {
             : null,
       ),
       position: DecorationPosition.background,
-      child: side == BorderSide.none
-          ? child
-          : DecoratedBox(
-              position: DecorationPosition.foreground,
-              decoration: ShapeDecoration(shape: shape.copyWith(side: side)),
-              child: child,
-            ),
+      // Keep the same element structure when selection changes: inserting a
+      // wrapper here used to remount avatar/image and folder content.
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: ShapeDecoration(shape: shape.copyWith(side: side)),
+        child: child,
+      ),
     );
   }
 }
@@ -377,24 +373,27 @@ class HomeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final base = shape ??
+    final base =
+        shape ??
         RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(radius));
-    final status = HomeTileStatus.maybeOf(context);
-    final side = homeOutlineSide(context);
-    // The ring sits on the card's own edge: same shape, same rect.
-    final outline = base is OutlinedBorder && side != BorderSide.none
-        ? base.copyWith(side: side)
-        : base;
     final body = LayoutBuilder(
       builder: (context, c) {
         final pad = _paddingFor(c);
         final inner = Size(
-          c.hasBoundedWidth ? (c.maxWidth - pad.horizontal).clamp(0, double.infinity) : 0,
-          c.hasBoundedHeight ? (c.maxHeight - pad.vertical).clamp(0, double.infinity) : 0,
+          c.hasBoundedWidth
+              ? (c.maxWidth - pad.horizontal).clamp(0, double.infinity)
+              : 0,
+          c.hasBoundedHeight
+              ? (c.maxHeight - pad.vertical).clamp(0, double.infinity)
+              : 0,
         );
         var content = builder?.call(context, inner) ?? child!;
         if (fit && c.hasBoundedWidth && c.hasBoundedHeight) {
-          content = HomeShrink(size: inner, alignment: alignment, child: content);
+          content = HomeShrink(
+            size: inner,
+            alignment: alignment,
+            child: content,
+          );
         }
         return Padding(padding: pad, child: content);
       },
@@ -403,16 +402,50 @@ class HomeCard extends StatelessWidget {
       container: true,
       label: semanticLabel,
       button: onTap != null,
-      child: Material(
+      child: _HomeCardSurface(
+        shape: base,
         color: color ?? scheme.surfaceContainerHigh,
-        shape: outline,
-        elevation: status?.lifted ?? false ? 8 : 0,
-        shadowColor: scheme.shadow,
-        clipBehavior: clip ? Clip.antiAlias : Clip.none,
-        child: onTap == null
-            ? body
-            : InkWell(customBorder: outline, onTap: onTap, child: body),
+        clip: clip,
+        onTap: onTap,
+        child: body,
       ),
+    );
+  }
+}
+
+/// Only the lightweight surface listens to selection. Its content is retained
+/// as a child, so changing the ring cannot rerun measured widget layouts.
+class _HomeCardSurface extends StatelessWidget {
+  const _HomeCardSurface({
+    required this.shape,
+    required this.color,
+    required this.clip,
+    required this.onTap,
+    required this.child,
+  });
+
+  final ShapeBorder shape;
+  final Color color;
+  final bool clip;
+  final VoidCallback? onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final side = homeOutlineSide(context);
+    final status = HomeTileStatus.maybeOf(context);
+    final outline = shape is OutlinedBorder
+        ? (shape as OutlinedBorder).copyWith(side: side)
+        : shape;
+    return Material(
+      color: color,
+      shape: outline,
+      elevation: status?.lifted == true ? 8 : 0,
+      shadowColor: Theme.of(context).colorScheme.shadow,
+      clipBehavior: clip ? Clip.antiAlias : Clip.none,
+      child: onTap == null
+          ? child
+          : InkWell(customBorder: outline, onTap: onTap, child: child),
     );
   }
 }

@@ -35,8 +35,10 @@ class SearchSpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final persona =
-        homeWatch(context, (s) => s.defaultPersona).defaultPersona;
+    final persona = homeWatch(context, (s) {
+      final p = s.defaultPersona;
+      return p == null ? null : (p.id, p.avatar, p.displayName);
+    }).defaultPersona;
     final theme = Theme.of(context);
 
     // A search bar is 56 dp tall whatever cell it sits in (Material 3), centred

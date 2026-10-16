@@ -29,24 +29,24 @@ class CostSpec extends HomeWidgetSpec {
 
   @override
   List<HomeOption> options(HomeTile tile) => [
-        HomePickOption(
-          key: 'providerId',
-          label: 'Provider',
-          pick: HomePickKind.provider,
-          allowNone: true,
-          noneLabel: 'The active provider',
-        ),
-        const HomeChoiceOption(
-          key: 'period',
-          label: 'Period',
-          choices: {
-            'today': 'Today',
-            'week': 'This week',
-            'month': 'This month',
-            'all': 'All time',
-          },
-        ),
-      ];
+    HomePickOption(
+      key: 'providerId',
+      label: 'Provider',
+      pick: HomePickKind.provider,
+      allowNone: true,
+      noneLabel: 'The active provider',
+    ),
+    const HomeChoiceOption(
+      key: 'period',
+      label: 'Period',
+      choices: {
+        'today': 'Today',
+        'week': 'This week',
+        'month': 'This month',
+        'all': 'All time',
+      },
+    ),
+  ];
 
   @override
   String describe(BuildContext context, HomeTile tile) {
@@ -55,11 +55,11 @@ class CostSpec extends HomeWidgetSpec {
   }
 
   static String _periodLabel(String period) => switch (period) {
-        'today' => 'Today',
-        'week' => 'This week',
-        'all' => 'All time',
-        _ => 'This month',
-      };
+    'today' => 'Today',
+    'week' => 'This week',
+    'all' => 'All time',
+    _ => 'This month',
+  };
 
   static DateTime? _since(String period) {
     final now = DateTime.now();
@@ -80,15 +80,19 @@ class CostSpec extends HomeWidgetSpec {
     final state = homeWatch(context, (s) {
       final p = pick(s);
       if (p == null) return null;
-      final t = s.usage.totals(p.id, since: _since(period));
-      return [
+      final now = DateTime.now();
+      // A streaming reply can notify dozens of times per second. Checking a
+      // revision here is O(1); aggregate history only when the card rebuilds.
+      return (
+        s.usage,
+        s.usage.revision,
         p.id,
         p.displayName,
-        t.totalCost,
-        t.totalTokens,
-        t.requests,
-        for (final b in p.budgets) '${b.limit}${b.period}${b.metric}',
-      ].join('|');
+        p.budgets
+            .map((b) => '${b.id}:${b.model}:${b.limit}:${b.period}:${b.metric}')
+            .join('|'),
+        (now.year, now.month, now.day, now.hour, now.timeZoneOffset),
+      );
     });
     final provider = pick(state);
 
@@ -98,8 +102,10 @@ class CostSpec extends HomeWidgetSpec {
         onTap: tile.editing
             ? null
             : () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const ProvidersScreen()),
+                MaterialPageRoute<void>(
+                  builder: (_) => const ProvidersScreen(),
                 ),
+              ),
         alignment: Alignment.center,
         child: Text(
           'No provider yet',
@@ -119,24 +125,29 @@ class CostSpec extends HomeWidgetSpec {
       onTap: tile.editing
           ? null
           : () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ProviderEditScreen(providerId: provider.id),
-                ),
+              MaterialPageRoute<void>(
+                builder: (_) => ProviderEditScreen(providerId: provider.id),
               ),
+            ),
       builder: (context, inner) {
         final theme = Theme.of(context);
         final hasCost = totals.totalCost > 0;
         final spendText = hasCost
             ? '\$${totals.totalCost.toStringAsFixed(2)}'
-            : (totals.totalTokens > 0 ? '${_compact(totals.totalTokens)} tokens' : '—');
-        final labelStyle = theme.textTheme.labelMedium
-            ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
-        final bigStyle = (inner.height >= 64
-                ? theme.textTheme.headlineSmall
-                : theme.textTheme.titleLarge)
-            ?.copyWith(fontWeight: FontWeight.w700);
-        final smallStyle = theme.textTheme.bodySmall
-            ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+            : (totals.totalTokens > 0
+                  ? '${_compact(totals.totalTokens)} tokens'
+                  : '—');
+        final labelStyle = theme.textTheme.labelMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        );
+        final bigStyle =
+            (inner.height >= 64
+                    ? theme.textTheme.headlineSmall
+                    : theme.textTheme.titleLarge)
+                ?.copyWith(fontWeight: FontWeight.w700);
+        final smallStyle = theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        );
         var room = inner.height - homeLineHeight(context, bigStyle);
         bool take(double h) {
           if (room < h) return false;
@@ -144,7 +155,8 @@ class CostSpec extends HomeWidgetSpec {
           return true;
         }
 
-        final showBudget = budget != null &&
+        final showBudget =
+            budget != null &&
             budget.isSet &&
             take(homeLineHeight(context, theme.textTheme.labelSmall) + 18);
         final showLabel = take(homeLineHeight(context, labelStyle) + 2);
@@ -163,7 +175,12 @@ class CostSpec extends HomeWidgetSpec {
                   style: labelStyle,
                 ),
               ),
-            Text(spendText, maxLines: 1, overflow: TextOverflow.ellipsis, style: bigStyle),
+            Text(
+              spendText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: bigStyle,
+            ),
             if (showDetail)
               Padding(
                 padding: const EdgeInsets.only(top: 2),
@@ -244,7 +261,9 @@ class _BudgetBar extends StatelessWidget {
           child: LinearProgressIndicator(
             value: fraction,
             minHeight: 8,
-            color: exceeded ? theme.colorScheme.error : theme.colorScheme.primary,
+            color: exceeded
+                ? theme.colorScheme.error
+                : theme.colorScheme.primary,
             backgroundColor: theme.colorScheme.surfaceContainerHighest,
           ),
         ),
@@ -254,7 +273,9 @@ class _BudgetBar extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.labelSmall?.copyWith(
-            color: exceeded ? theme.colorScheme.error : theme.colorScheme.outline,
+            color: exceeded
+                ? theme.colorScheme.error
+                : theme.colorScheme.outline,
           ),
         ),
       ],

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart' hide Provider;
 
@@ -76,6 +77,84 @@ StudioTodo? _currentTodo(StudioSession s) {
   final total = s.todos.length;
   final done = s.todos.where((t) => t.status == StudioTodoStatus.completed).length;
   return (done: done, total: total);
+}
+
+// Snapshot scalar values: the session, character and sub-agents mutate in place.
+Object _sessionLabel(StudioSession s) => (
+      s.displayTitle,
+      s.workspace.character.id,
+      s.workspace.character.avatar,
+      s.workspace.character.displayName,
+    );
+
+/// Controller notifications also carry streaming transcript text that Home
+/// doesn't display. Subscribe only while visible and rebuild for selected fields.
+class _LiveSession extends StatefulWidget {
+  const _LiveSession({
+    required this.controller,
+    required this.select,
+    required this.builder,
+  });
+
+  final StudioController controller;
+  final List<Object?> Function(StudioController) select;
+  final WidgetBuilder builder;
+
+  @override
+  State<_LiveSession> createState() => _LiveSessionState();
+}
+
+class _LiveSessionState extends State<_LiveSession> {
+  ValueListenable<TickerModeData>? _mode;
+  StudioController? _listening;
+  List<Object?> _signature = const [];
+
+  void _changed() {
+    final next = widget.select(widget.controller);
+    if (listEquals(next, _signature)) return;
+    setState(() => _signature = next);
+  }
+
+  void _sync() {
+    final controller =
+        (_mode?.value.enabled ?? false) ? widget.controller : null;
+    if (identical(controller, _listening)) return;
+    _listening?.removeListener(_changed);
+    _listening = controller;
+    controller?.addListener(_changed);
+    // Catch up with mutations made while the kept-alive page was hidden.
+    if (controller != null) _changed();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final mode = TickerMode.getValuesNotifier(context);
+    if (!identical(mode, _mode)) {
+      _mode?.removeListener(_sync);
+      _mode = mode..addListener(_sync);
+    }
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_LiveSession old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  @override
+  void dispose() {
+    _mode?.removeListener(_sync);
+    _listening?.removeListener(_changed);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _signature = widget.select(widget.controller);
+    return widget.builder(context);
+  }
 }
 
 class _StudioIcon extends StatefulWidget {
@@ -475,7 +554,7 @@ class _OneLineRow extends StatelessWidget {
 
 /// A 2x2-ish span: the empty-state blurb/button, or the top session's
 /// detail — status chip, progress bar, current to-do, and a dot per
-/// sub-agent — kept live via a [ListenableBuilder] on its controller when
+/// sub-agent — kept live via a filtered subscription to its controller when
 /// one is open.
 class _DetailCard extends StatelessWidget {
   const _DetailCard({
@@ -601,9 +680,16 @@ class _DetailCard extends StatelessWidget {
 
     final running = StudioHub.instance.isRunning(top.id);
     if (controller == null) return detail(top, running, null);
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, _) =>
+    return _LiveSession(
+      controller: controller,
+      select: (c) => [
+        _sessionLabel(c.session),
+        c.busy,
+        _todoProgress(c.session),
+        _currentTodo(c.session)?.content,
+        for (final a in c.subagents) (a.description, a.status),
+      ],
+      builder: (context) =>
           detail(controller.session, controller.busy, controller),
     );
   }
@@ -767,9 +853,14 @@ class _SessionList extends StatelessWidget {
         if (controller == null) {
           return row(s, StudioHub.instance.isRunning(s.id));
         }
-        return ListenableBuilder(
-          listenable: controller,
-          builder: (context, _) => row(controller.session, controller.busy),
+        return _LiveSession(
+          controller: controller,
+          select: (c) => [
+            _sessionLabel(c.session),
+            c.busy,
+            _statusText(c.session, c.busy),
+          ],
+          builder: (context) => row(controller.session, controller.busy),
         );
       },
     );
@@ -784,6 +875,19 @@ class _OpsTimeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final controller = StudioHub.instance.find(session.id);
+    if (controller == null) return _timeline(context, session);
+    return _LiveSession(
+      controller: controller,
+      select: (c) => [
+        for (final op in c.session.ops.reversed.take(6))
+          (op.summary, op.reverted),
+      ],
+      builder: (context) => _timeline(context, controller.session),
+    );
+  }
+
+  Widget _timeline(BuildContext context, StudioSession session) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final ops = session.ops.reversed.take(6).toList();

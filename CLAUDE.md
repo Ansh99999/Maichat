@@ -749,10 +749,23 @@ bar or the overflow menu.
   over the tile; the grid never shrinks or moves in edit mode — fixed bar,
   banner and dots heights); moving while still held closes it and *carries*
   the tile in an overlay above the `PageView` (a ghost shows the landing cell,
-  red on collision; drop settles on a spring). While carrying, a second finger
+  red on collision; drop settles in a bounded 180 ms animation). While carrying, a second finger
   swiping (raw `Listener`, dx ≥ 48) or 450 ms at an edge turns the page; a
   quick-open dropped on another quick-open or an app folder merges
-  (`HomeLayout.mergeIntoFolder`). Resize handles only after the menu's Resize.
+  (`HomeLayout.mergeIntoFolder`). Tapping in edit mode selects and immediately
+  exposes resize handles; the action menu opens only on hold and has no Resize
+  action. Resize grips stay mounted during every preview frame and their hit
+  areas stay inside the tile and shrink on dense grids to leave the centre
+  draggable (two 44 dp grips overlap on an 8-column shortcut). Gesture
+  end/cancel callbacks only end the gesture
+  that actually started; keep the active pan recognizer mounted when hiding
+  its source. Movement is measured from the initial touch, not the last event.
+  Landing ghosts use 35% border opacity (selection is opaque). Only selected or
+  lifted surfaces have a ring; edit mode alone must not leave outlines behind.
+  Drag/settle frames notify an overlay listener, never rebuild Home/pages.
+  Reuse page widgets and tile content; stock `PageScrollPhysics` handles swipes.
+  Never use `identical` to guard record-valued animation cleanup (Dart does not
+  guarantee record identity): compare values or use an explicit generation.
   The selection ring is drawn by each widget on **its own shape**
   (`HomeTileStatus` → `HomeOutlined`/`homeOutlineSide`), never on a padded box
   around it — that is what "edge to edge" meant. Swipe smoothness: pages are
@@ -760,6 +773,13 @@ bar or the overflow menu.
   the showing page ticks (`TickerMode`), and widgets watch `AppState` through
   `homeWatch` with a **value-comparable** signature (a joined string or a
   record — never a `List`, which is never `==` and rebuilds every notify).
+  Studio live subscriptions and gallery shuffle timers also honor `TickerMode`;
+  disabling tickers alone does not stop timers or notifier subscriptions.
+  Studio snapshots compare displayed fields to ignore streamed transcript text.
+  Cost selectors use `UsageLedger.revision` plus ledger identity; don't aggregate
+  history inside a selector on every unrelated app notification.
+  `HomeOutlined` always retains its foreground wrapper, and `HomeCard` puts
+  status-dependent rendering in `_HomeCardSurface` with stable content children.
   Clocks share one `ClockTicker` (minute-aligned, paused with `TickerMode`);
   other zones come from `timezone` (pure Dart, the 10-year db, loaded on
   first use). Notes live in their own `homeNotes` entry, never in the layout;

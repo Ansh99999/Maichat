@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../models/gallery_image.dart';
@@ -149,11 +150,30 @@ class _GalleryGrid extends StatefulWidget {
 class _GalleryGridState extends State<_GalleryGrid> {
   late List<PageController> _controllers;
   Timer? _timer;
+  ValueListenable<TickerModeData>? _mode;
+  bool _enabled = false;
 
   @override
   void initState() {
     super.initState();
     _buildControllers();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final mode = TickerMode.getValuesNotifier(context);
+    if (!identical(mode, _mode)) {
+      _mode?.removeListener(_modeChanged);
+      _mode = mode..addListener(_modeChanged);
+      _modeChanged();
+    }
+  }
+
+  void _modeChanged() {
+    final enabled = _mode?.value.enabled ?? false;
+    if (enabled == _enabled) return;
+    _enabled = enabled;
     _maybeStartShuffle();
   }
 
@@ -170,7 +190,8 @@ class _GalleryGridState extends State<_GalleryGrid> {
 
   void _maybeStartShuffle() {
     _timer?.cancel();
-    if (!widget.shuffle || widget.pool.length < 2) return;
+    _timer = null;
+    if (!_enabled || !widget.shuffle || widget.pool.length < 2) return;
     _timer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (!mounted) return;
       for (final c in _controllers) {
@@ -200,6 +221,7 @@ class _GalleryGridState extends State<_GalleryGrid> {
 
   @override
   void dispose() {
+    _mode?.removeListener(_modeChanged);
     _timer?.cancel();
     for (final c in _controllers) {
       c.dispose();

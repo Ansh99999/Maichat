@@ -96,8 +96,11 @@ class _ClockListenerState extends State<ClockListener> {
   ValueListenable<TickerModeData>? _mode;
   bool _listening = false;
   bool _seconds = false;
+  int? _minute;
 
   void _tick() {
+    final minute = ClockTicker.instance.value.millisecondsSinceEpoch ~/ 60000;
+    if (!widget.seconds && minute == _minute) return;
     if (mounted) setState(() {});
   }
 
@@ -119,9 +122,10 @@ class _ClockListenerState extends State<ClockListener> {
   }
 
   void _modeChanged() {
+    final wasListening = _listening;
     _sync();
     // Back on screen: show the time as it is now, not as it was left.
-    if (_mode?.value.enabled ?? true) _tick();
+    if (_listening && !wasListening) setState(() {});
   }
 
   @override
@@ -150,8 +154,11 @@ class _ClockListenerState extends State<ClockListener> {
   }
 
   @override
-  Widget build(BuildContext context) =>
-      widget.builder(context, ClockTicker.clock());
+  Widget build(BuildContext context) {
+    final now = ClockTicker.clock();
+    _minute = now.millisecondsSinceEpoch ~/ 60000;
+    return widget.builder(context, now);
+  }
 }
 
 /// The IANA time-zone database, loaded the first time a clock needs a zone

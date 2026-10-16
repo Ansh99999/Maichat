@@ -14,10 +14,15 @@ import '../models/usage.dart';
 /// The in-memory ledger, owned by AppState and persisted as one JSON string.
 class UsageLedger {
   UsageLedger([Map<String, Map<String, Map<String, UsageBucket>>>? buckets])
-      : _buckets = buckets ?? {};
+    : _buckets = buckets ?? {};
 
   /// provider id → model → hour key → bucket.
   final Map<String, Map<String, Map<String, UsageBucket>>> _buckets;
+
+  /// Cheap invalidation for consumers that aggregate this history. Combined
+  /// with ledger identity, it avoids rescanning buckets on unrelated updates.
+  int _revision = 0;
+  int get revision => _revision;
 
   /// Hourly buckets are kept this long; older ones fold into a single daily
   /// bucket (stored at hour 00) so a long history stays small without losing the
@@ -59,6 +64,7 @@ class UsageLedger {
       costIn: cost?.input ?? 0,
       costOut: cost?.output ?? 0,
     );
+    _revision++;
   }
 
   /// Everything recorded for [providerId], optionally narrowed to one [model]
@@ -135,8 +141,10 @@ class UsageLedger {
         if (at == null) continue;
         final index = _sliceIndex(slices, at, granularity);
         if (index == null) continue;
-        out[index] =
-            (start: out[index].start, bucket: out[index].bucket.merge(bucket.value));
+        out[index] = (
+          start: out[index].start,
+          bucket: out[index].bucket.merge(bucket.value),
+        );
       }
     }
     return out;
@@ -150,14 +158,24 @@ class UsageLedger {
   ) {
     final t = anchor.toLocal();
     return switch (granularity) {
-      UsageGranularity.hourly =>
-        DateTime(t.year, t.month, t.day, t.hour).subtract(Duration(hours: back)),
-      UsageGranularity.daily =>
-        DateTime(t.year, t.month, t.day).subtract(Duration(days: back)),
+      UsageGranularity.hourly => DateTime(
+        t.year,
+        t.month,
+        t.day,
+        t.hour,
+      ).subtract(Duration(hours: back)),
+      UsageGranularity.daily => DateTime(
+        t.year,
+        t.month,
+        t.day,
+      ).subtract(Duration(days: back)),
       // Weeks start on Monday, which is what a "this week" total means to most
       // people and what ISO says.
-      UsageGranularity.weekly => DateTime(t.year, t.month, t.day)
-          .subtract(Duration(days: t.weekday - 1 + back * 7)),
+      UsageGranularity.weekly => DateTime(
+        t.year,
+        t.month,
+        t.day,
+      ).subtract(Duration(days: t.weekday - 1 + back * 7)),
       UsageGranularity.monthly => DateTime(t.year, t.month - back, 1),
     };
   }
@@ -205,12 +223,14 @@ class UsageLedger {
           if (at.isBefore(hourlyCutoff)) {
             final dayKey = hourKey(DateTime(at.year, at.month, at.day));
             if (dayKey != entry.key) changed = true;
-            folded[dayKey] =
-                (folded[dayKey] ?? const UsageBucket()).merge(entry.value);
+            folded[dayKey] = (folded[dayKey] ?? const UsageBucket()).merge(
+              entry.value,
+            );
             continue;
           }
-          folded[entry.key] =
-              (folded[entry.key] ?? const UsageBucket()).merge(entry.value);
+          folded[entry.key] = (folded[entry.key] ?? const UsageBucket()).merge(
+            entry.value,
+          );
         }
         if (changed) {
           hours
@@ -221,25 +241,35 @@ class UsageLedger {
       models.removeWhere((_, hours) => hours.isEmpty);
     }
     _buckets.removeWhere((_, models) => models.isEmpty);
+    // prune can also remove empty nested maps without setting changed.
+    _revision++;
     return changed;
   }
 
   /// Forgets everything recorded for [providerId].
-  bool forget(String providerId) => _buckets.remove(providerId) != null;
+  bool forget(String providerId) {
+    final removed = _buckets.remove(providerId) != null;
+    if (removed) _revision++;
+    return removed;
+  }
 
   /// Forgets everything, for the storage screen's "clear" action.
-  void clear() => _buckets.clear();
+  void clear() {
+    if (_buckets.isEmpty) return;
+    _buckets.clear();
+    _revision++;
+  }
 
   String encode() => jsonEncode(<String, dynamic>{
-        for (final provider in _buckets.entries)
-          provider.key: <String, dynamic>{
-            for (final model in provider.value.entries)
-              model.key: <String, dynamic>{
-                for (final hour in model.value.entries)
-                  hour.key: hour.value.toJson(),
-              },
+    for (final provider in _buckets.entries)
+      provider.key: <String, dynamic>{
+        for (final model in provider.value.entries)
+          model.key: <String, dynamic>{
+            for (final hour in model.value.entries)
+              hour.key: hour.value.toJson(),
           },
-      });
+      },
+  });
 
   /// Reads a stored ledger. Anything malformed is skipped rather than thrown:
   /// a corrupt usage entry must not be able to stop the app from starting, and

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
 
@@ -43,8 +42,13 @@ class _HomeScreenState extends State<HomeScreen>
   /// The layout being edited; null outside edit mode.
   HomeLayout? _draft;
 
-  /// The tile the menu is open on (edit mode).
+  /// The selected tile (resize handles are immediately available).
   String? _selectedId;
+
+  String? _menuId;
+  final ValueNotifier<int> _motion = ValueNotifier(0);
+  final ValueNotifier<int> _visiblePage = ValueNotifier(0);
+  final Map<String, (Object, Widget)> _pageCache = {};
 
   /// The tile showing its resize handles (edit mode).
   String? _resizingId;
@@ -65,37 +69,52 @@ class _HomeScreenState extends State<HomeScreen>
 
   bool get _editing => _draft != null;
 
-  /// The carried tile settling into its cell after the finger lifts: a short
-  /// critically damped spring from where it was let go to where it lands, so
-  /// a drop reads as a placement rather than a jump.
+  /// A bounded 180 ms placement animation with guaranteed completion; only
+  /// the overlay listens to its frames.
   late final AnimationController _settle;
 
   @override
   void initState() {
     super.initState();
-    _settle = AnimationController.unbounded(vsync: this)
-      ..addListener(() {
-        if (_landing != null) setState(() {});
-      });
+    _settle =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 180),
+        )..addListener(() {
+          if (_landing != null) _motion.value++;
+        });
   }
+
   ({Rect from, Rect to, HomeTile tile})? _landing;
 
   void _settleInto(Rect from, Rect to, HomeTile tile) {
-    _landing = (from: from, to: to, tile: tile);
-    _settle
-      ..value = 0
-      ..animateWith(SpringSimulation(
-        SpringDescription.withDampingRatio(mass: 1, stiffness: 900, ratio: 1),
-        0,
-        1,
-        0,
-      )).whenComplete(() {
-        if (mounted) setState(() => _landing = null);
-      });
+    final landing = (from: from, to: to, tile: tile);
+    _landing = landing;
+    // Only the overlay listens to the animation; every page stays intact.
+    _settle.forward(from: 0).orCancel.then((_) {
+      if (mounted && _landing == landing) {
+        setState(() => _landing = null);
+      }
+    }, onError: (Object _) {});
+  }
+
+  void _clearInteraction() {
+    _edgeTimer?.cancel();
+    _edgeTimer = null;
+    _otherFingers.clear();
+    _carryPointer = null;
+    _settle.stop();
+    _landing = null;
+    _carry = null;
+    _selectedId = null;
+    _resizingId = null;
+    _menuId = null;
   }
 
   @override
   void dispose() {
+    _motion.dispose();
+    _visiblePage.dispose();
     _settle.dispose();
     _edgeTimer?.cancel();
     _pages.dispose();
@@ -106,13 +125,18 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _startEditing({String? select}) {
     if (_editing) {
-      if (select != null) setState(() => _selectedId = select);
+      if (select != null) {
+        setState(() {
+          _selectedId = select;
+          _resizingId = select;
+        });
+      }
       return;
     }
     setState(() {
       _draft = context.read<AppState>().homeLayout;
       _selectedId = select;
-      _resizingId = null;
+      _resizingId = select;
     });
   }
 
@@ -120,20 +144,18 @@ class _HomeScreenState extends State<HomeScreen>
     final draft = _draft;
     if (draft == null) return;
     setState(() {
+      _clearInteraction();
       _draft = null;
-      _selectedId = null;
-      _resizingId = null;
     });
     await context.read<AppState>().setHomeLayout(draft);
   }
 
   void _discard() => setState(() {
-        _draft = null;
-        _selectedId = null;
-        _resizingId = null;
-        final pages = context.read<AppState>().homeLayout.pages.length;
-        if (_page >= pages) _jumpTo(pages - 1);
-      });
+    _clearInteraction();
+    _draft = null;
+    final pages = context.read<AppState>().homeLayout.pages.length;
+    if (_page >= pages) _jumpTo(pages - 1);
+  });
 
   void _setDraft(HomeLayout next) {
     setState(() {
@@ -150,6 +172,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _jumpTo(int page) {
     _page = page;
+    _visiblePage.value = page;
     if (_pages.hasClients) _pages.jumpToPage(page);
   }
 
@@ -169,18 +192,19 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _closeMenu() => setState(() {
-        _selectedId = null;
-        _resizingId = null;
-      });
+    _selectedId = null;
+    _resizingId = null;
+    _menuId = null;
+  });
 
   void _onTileTap(String id) {
     // A second finger landing on a tile while another is carried is paging,
     // not picking.
     if (!_editing || _carry != null) return;
     setState(() {
-      // A second tap on the open tile closes its menu.
-      _selectedId = _selectedId == id && _resizingId == null ? null : id;
-      _resizingId = null;
+      _selectedId = id;
+      _resizingId = id;
+      _menuId = null;
     });
   }
 
@@ -198,13 +222,16 @@ class _HomeScreenState extends State<HomeScreen>
     return box?.localToGlobal(Offset.zero) ?? Offset.zero;
   }
 
-  void _liftStart(
+  bool _liftStart(
     HomeTile tile,
     Offset global,
     Offset grab,
     HomeGridMetrics metrics,
   ) {
-    if (_carry != null || _landing != null) return;
+    if (_carry != null) return false;
+    // A new touch interrupts a settling tile immediately.
+    _settle.stop();
+    _landing = null;
     HapticFeedback.mediumImpact();
     if (!_editing) {
       _draft = context.read<AppState>().homeLayout;
@@ -221,22 +248,31 @@ class _HomeScreenState extends State<HomeScreen>
         moved: false,
       );
       _selectedId = tile.id;
-      _resizingId = null;
+      _resizingId = tile.id;
+      _menuId = tile.id;
     });
     _updateLanding();
+    return true;
   }
 
   void _liftMove(Offset global) {
     final carry = _carry;
     if (carry == null) return;
-    final moved = carry.moved || (global - carry.finger).distance > 8;
+    final wasMoving = carry.moved;
+    final moved = wasMoving || (global - carry.origin).distance > 8;
     carry
       ..finger = global
       ..moved = moved;
-    if (moved && _selectedId != null) _selectedId = null;
+    if (moved) {
+      _selectedId = null;
+      _resizingId = null;
+      _menuId = null;
+    }
     _updateLanding();
     _edgeHover(global);
-    setState(() {});
+    // Hide the source once; subsequent pointer frames update only the overlay.
+    if (moved != wasMoving) setState(() {});
+    _motion.value++;
   }
 
   /// Works out where the carried tile would land on the page now showing, and
@@ -246,7 +282,8 @@ class _HomeScreenState extends State<HomeScreen>
     final draft = _draft;
     if (carry == null || draft == null) return;
     final m = carry.metrics;
-    final topLeft = carry.finger - _gridOrigin() - carry.grab - Offset(m.gutter, m.gutter);
+    final topLeft =
+        carry.finger - _gridOrigin() - carry.grab - Offset(m.gutter, m.gutter);
     final cell = m.snap(topLeft, carry.tile.w, carry.tile.h);
     final page = _page.clamp(0, draft.pages.length - 1);
     final candidate = carry.tile.copyWith(x: cell.x, y: cell.y);
@@ -269,7 +306,8 @@ class _HomeScreenState extends State<HomeScreen>
       ..landing = candidate
       ..landingPage = page
       ..mergeWith = mergeWith
-      ..fits = mergeWith != null ||
+      ..fits =
+          mergeWith != null ||
           draft.remove(carry.tile.id).fits(page, candidate);
   }
 
@@ -291,7 +329,8 @@ class _HomeScreenState extends State<HomeScreen>
       var target = _page + dir;
       final current = _draft;
       if (current == null) return;
-      if (target >= current.pages.length && current.pages.length < kHomeMaxPages) {
+      if (target >= current.pages.length &&
+          current.pages.length < kHomeMaxPages) {
         // Off the last page: a new one, as a launcher does.
         _setDraft(current.addPage());
       }
@@ -338,16 +377,19 @@ class _HomeScreenState extends State<HomeScreen>
       m.surfaceFor(carry.tile).height,
     );
     final landed = next?.tileById(carry.tile.id);
-    final mergedInto =
-        carry.mergeWith == null ? null : next?.tileById(carry.mergeWith!);
+    final mergedInto = carry.mergeWith == null
+        ? null
+        : next?.tileById(carry.mergeWith!);
     final onPage = next == null
         ? carry.fromPage == _page
         : (landed != null && next.pageOf(landed.id) == _page) ||
-            mergedInto != null;
+              mergedInto != null;
     final target = mergedInto ?? landed ?? carry.tile;
     setState(() {
       _carry = null;
       _selectedId = null;
+      _resizingId = null;
+      _menuId = null;
     });
     if (next != null) _setDraft(next);
     if (onPage) {
@@ -386,30 +428,30 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  void _onPointerCancel(PointerCancelEvent event) {
+    _otherFingers.remove(event.pointer);
+    if (event.pointer != _carryPointer || _carry == null) return;
+    setState(_clearInteraction);
+  }
+
   // --- tile actions ---------------------------------------------------------
 
   Future<void> _onAction(HomeTile tile, HomeTileAction action) async {
     switch (action) {
       case HomeTileAction.edit:
-        setState(() => _selectedId = null);
+        _closeMenu();
         await _settings(tile);
-      case HomeTileAction.resize:
-        // The menu makes way for the handles.
-        setState(() {
-          _resizingId = tile.id;
-          _selectedId = null;
-        });
       case HomeTileAction.replace:
-        setState(() => _selectedId = null);
+        _closeMenu();
         await _replace(tile);
       case HomeTileAction.duplicate:
-        setState(() => _selectedId = null);
+        _closeMenu();
         _duplicate(tile);
       case HomeTileAction.move:
-        setState(() => _selectedId = null);
+        _closeMenu();
         await _moveToPage(tile);
       case HomeTileAction.remove:
-        setState(() => _selectedId = null);
+        _closeMenu();
         _delete(tile);
     }
   }
@@ -437,13 +479,13 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _settings(HomeTile tile) => showTileSettingsSheet(
-        context,
-        tile: tile,
-        onChanged: (next) {
-          final updated = _draft?.update(next);
-          if (updated != null) _setDraft(updated);
-        },
-      );
+    context,
+    tile: tile,
+    onChanged: (next) {
+      final updated = _draft?.update(next);
+      if (updated != null) _setDraft(updated);
+    },
+  );
 
   /// Puts a different widget where [tile] is, at the same size where that is
   /// big enough for it.
@@ -494,18 +536,20 @@ class _HomeScreenState extends State<HomeScreen>
     _setDraft(draft.remove(tile.id));
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text('Removed ${specFor(tile.kind).title}'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () {
-            final current = _draft;
-            if (current == null) return;
-            final back = current.put(page, tile);
-            if (back != null) _setDraft(back);
-          },
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Removed ${specFor(tile.kind).title}'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () {
+              final current = _draft;
+              if (current == null) return;
+              final back = current.put(page, tile);
+              if (back != null) _setDraft(back);
+            },
+          ),
         ),
-      ));
+      );
   }
 
   Future<void> _moveToPage(HomeTile tile) async {
@@ -560,8 +604,9 @@ class _HomeScreenState extends State<HomeScreen>
       return;
     }
     _setDraft(draft.addPage());
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _animateTo(draft.pages.length));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _animateTo(draft.pages.length),
+    );
   }
 
   Future<void> _removePage() async {
@@ -668,33 +713,33 @@ class _HomeScreenState extends State<HomeScreen>
                   SizedBox(
                     height: 64,
                     child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: _editing
-                        ? _EditBar(
-                            key: const ValueKey('edit-bar'),
-                            canRemovePage: layout.pages.length > 1,
-                            onDone: _finishEditing,
-                            onDiscard: _discard,
-                            onAdd: () => _addWidget(),
-                            onGrid: () => showGridSheet(
-                              context,
-                              layout: _draft!,
-                              onChanged: _setDraft,
+                      duration: const Duration(milliseconds: 200),
+                      child: _editing
+                          ? _EditBar(
+                              key: const ValueKey('edit-bar'),
+                              canRemovePage: layout.pages.length > 1,
+                              onDone: _finishEditing,
+                              onDiscard: _discard,
+                              onAdd: () => _addWidget(),
+                              onGrid: () => showGridSheet(
+                                context,
+                                layout: _draft!,
+                                onChanged: _setDraft,
+                              ),
+                              onStyle: () => showHomeStyleSheet(
+                                context,
+                                layout: _draft!,
+                                onChanged: _setDraft,
+                              ),
+                              onAddPage: _addPage,
+                              onRemovePage: _removePage,
+                              onReset: _reset,
+                            )
+                          : _TopBar(
+                              key: const ValueKey('top-bar'),
+                              onEdit: () => _startEditing(),
                             ),
-                            onStyle: () => showHomeStyleSheet(
-                              context,
-                              layout: _draft!,
-                              onChanged: _setDraft,
-                            ),
-                            onAddPage: _addPage,
-                            onRemovePage: _removePage,
-                            onReset: _reset,
-                          )
-                        : _TopBar(
-                            key: const ValueKey('top-bar'),
-                            onEdit: () => _startEditing(),
-                          ),
-                  ),
+                    ),
                   ),
                   if (loadError != null)
                     Padding(
@@ -738,93 +783,87 @@ class _HomeScreenState extends State<HomeScreen>
       size: size,
     );
     final carry = _carry;
-    final selected = _selectedId == null || carry?.moved == true
+    final selected = _menuId == null || carry?.moved == true
         ? null
-        : layout.tileById(_selectedId!);
-    final selectedOnPage = selected != null &&
+        : layout.tileById(_menuId!);
+    final selectedOnPage =
+        selected != null &&
         layout.pageOf(selected.id) == _page.clamp(0, layout.pages.length - 1);
     return Listener(
       onPointerDown: _onPointerDown,
       onPointerUp: _onPointerUp,
-      onPointerCancel: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          PageView.builder(
-            controller: _pages,
-            itemCount: layout.pages.length,
-            // The neighbouring pages are built and laid out before the swipe
-            // reaches them, so the first frame of a swipe is not a build.
-            allowImplicitScrolling: true,
-            // A tile being resized or carried keeps the page still; a second
-            // finger turns pages then (see _onPointerUp).
-            physics: _resizingId != null || carry != null
-                ? const NeverScrollableScrollPhysics()
-                : const HomePagePhysics(),
-            onPageChanged: (i) => setState(() {
-              _page = i;
-              if (carry == null) {
-                _selectedId = null;
-                _resizingId = null;
+          NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification.depth != 0) return false;
+              if (notification is ScrollStartNotification) {
+                _visiblePage.value = -1;
+              } else if (notification is ScrollEndNotification) {
+                _visiblePage.value = _page;
               }
-              _updateLanding();
-            }),
-            // Only the page showing ticks: clocks, the Studio's live dot and a
-            // shuffling gallery stop on a page that is off screen.
-            itemBuilder: (context, i) => TickerMode(
-              enabled: i == _page,
-              child: HomeGridPage(
-              key: ValueKey('home-page-${layout.pages[i].id}'),
-              layout: layout,
-              pageIndex: i,
-              metrics: metrics,
-              editing: _editing,
-              selectedId: _selectedId,
-              resizingId: _resizingId,
-              hiddenId: carry?.moved == true
-                  ? carry!.tile.id
-                  : _landing?.tile.id,
-              onTileTap: _onTileTap,
-              onLiftStart: (tile, global, grab) =>
-                  _liftStart(tile, global, grab, metrics),
-              onLiftMove: _liftMove,
-              onLiftEnd: _liftEnd,
-              onTapEmpty: (x, y) {
-                if (_selectedId != null || _resizingId != null) {
-                  _closeMenu();
-                  return;
+              return false;
+            },
+            child: PageView.builder(
+              controller: _pages,
+              itemCount: layout.pages.length,
+              // The neighbouring pages are built and laid out before the swipe
+              // reaches them, so the first frame of a swipe is not a build.
+              allowImplicitScrolling: true,
+              // A carried tile keeps the page still; a second finger turns
+              // pages then. Resize grips win their own gesture arena.
+              physics: carry != null
+                  ? const NeverScrollableScrollPhysics()
+                  : const PageScrollPhysics(),
+              onPageChanged: (i) => setState(() {
+                _page = i;
+                if (carry == null) {
+                  _selectedId = null;
+                  _resizingId = null;
+                  _menuId = null;
                 }
-                final probe = HomeTile(
-                  id: '\u0000tap',
-                  kind: HomeWidgetKind.quickOpen,
-                  x: x,
-                  y: y,
-                );
-                if (layout.fits(_page, probe)) _addWidget(at: (x: x, y: y));
-              },
-              onLongPressEmpty: () => _startEditing(),
-              onResize: _onResize,
-            ),
+                _updateLanding();
+              }),
+              // Only the page showing ticks: clocks, the Studio's live dot and a
+              // shuffling gallery stop on a page that is off screen.
+              itemBuilder: (context, i) => _cachedPage(layout, metrics, i),
             ),
           ),
-          // Where the carried tile would land, on the page now showing.
-          if (carry != null && carry.moved && carry.landing != null)
-            Positioned.fromRect(
-              rect: carry.mergeWith != null
-                  ? metrics.surfaceFor(layout.tileById(carry.mergeWith!)!)
-                  : metrics.surfaceFor(carry.landing!),
-              child: IgnorePointer(
-                child: HomeGhost(
-                  fits: carry.fits,
-                  merge: carry.mergeWith != null,
-                ),
+          // Time-dependent widgets resume after the page has stopped moving.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedBuilder(
+                animation: _motion,
+                builder: (context, _) {
+                  final moving = _carry;
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      if (moving != null &&
+                          moving.moved &&
+                          moving.landing != null)
+                        Positioned.fromRect(
+                          rect: moving.mergeWith != null
+                              ? metrics.surfaceFor(
+                                  layout.tileById(moving.mergeWith!)!,
+                                )
+                              : metrics.surfaceFor(moving.landing!),
+                          child: HomeGhost(
+                            fits: moving.fits,
+                            merge: moving.mergeWith != null,
+                          ),
+                        ),
+                      if (moving != null && moving.moved)
+                        _carried(context, layout, metrics, moving),
+                      if (_landing case final l?) _settling(context, layout, l),
+                    ],
+                  );
+                },
               ),
             ),
-          // The carried tile itself, above every page, following the finger.
-          if (carry != null && carry.moved)
-            _carried(context, layout, metrics, carry),
-          if (_landing case final l?)
-            _settling(context, layout, l),
+          ),
           if (selected != null && selectedOnPage && _editing)
             HomeTileMenu(
               key: ValueKey('home-menu-${selected.id}'),
@@ -834,7 +873,6 @@ class _HomeScreenState extends State<HomeScreen>
               actions: [
                 if (specFor(selected.kind).options(selected).isNotEmpty)
                   HomeTileAction.edit,
-                HomeTileAction.resize,
                 HomeTileAction.replace,
                 HomeTileAction.duplicate,
                 if (layout.pages.length > 1 ||
@@ -849,12 +887,72 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Widget _cachedPage(HomeLayout layout, HomeGridMetrics metrics, int i) {
+    final page = layout.pages[i];
+    String? onThisPage(String? id) =>
+        page.tiles.any((t) => t.id == id) ? id : null;
+    final selected = onThisPage(_selectedId);
+    final resizing = onThisPage(_resizingId);
+    final hidden = onThisPage(
+      _carry?.moved == true ? _carry!.tile.id : _landing?.tile.id,
+    );
+    final signature = (
+      layout,
+      metrics.size,
+      _editing,
+      selected,
+      resizing,
+      hidden,
+    );
+    _pageCache.removeWhere((id, _) => !layout.pages.any((p) => p.id == id));
+    final cached = _pageCache[page.id];
+    if (cached != null && cached.$1 == signature) return cached.$2;
+    final grid = HomeGridPage(
+      key: ValueKey('home-page-${page.id}'),
+      layout: layout,
+      pageIndex: i,
+      metrics: metrics,
+      editing: _editing,
+      selectedId: selected,
+      resizingId: resizing,
+      hiddenId: hidden,
+      onTileTap: _onTileTap,
+      onLiftStart: (tile, global, grab) =>
+          _liftStart(tile, global, grab, metrics),
+      onLiftMove: _liftMove,
+      onLiftEnd: _liftEnd,
+      onTapEmpty: (x, y) {
+        if (_selectedId != null || _resizingId != null) {
+          _closeMenu();
+          return;
+        }
+        final probe = HomeTile(
+          id: '\u0000tap',
+          kind: HomeWidgetKind.quickOpen,
+          x: x,
+          y: y,
+        );
+        if (layout.fits(i, probe)) _addWidget(at: (x: x, y: y));
+      },
+      onLongPressEmpty: () => _startEditing(),
+      onResize: _onResize,
+    );
+    final result = ValueListenableBuilder<int>(
+      valueListenable: _visiblePage,
+      child: grid,
+      builder: (_, visible, child) =>
+          TickerMode(enabled: visible == i, child: child!),
+    );
+    _pageCache[page.id] = (signature, result);
+    return result;
+  }
+
   Widget _settling(
     BuildContext context,
     HomeLayout layout,
     ({Rect from, Rect to, HomeTile tile}) l,
   ) {
-    final t = _settle.value;
+    final t = Curves.easeOutCubic.transform(_settle.value);
     final rect = Rect.lerp(l.from, l.to, t)!;
     return Positioned(
       left: rect.left,
@@ -871,14 +969,10 @@ class _HomeScreenState extends State<HomeScreen>
               selected: false,
               lifted: t < 0.6,
               editing: true,
-              child: specFor(l.tile.kind).build(
-                context,
-                HomeTileContext(
-                  tile: l.tile,
-                  size: l.from.size,
-                  layout: layout,
-                  editing: true,
-                ),
+              child: _CarryContent(
+                tile: l.tile,
+                size: l.from.size,
+                layout: layout,
               ),
             ),
           ),
@@ -908,20 +1002,53 @@ class _HomeScreenState extends State<HomeScreen>
               selected: false,
               lifted: true,
               editing: true,
-              child: specFor(carry.tile.kind).build(
-                context,
-                HomeTileContext(
-                  tile: carry.tile,
-                  size: surface.size,
-                  layout: layout,
-                  editing: true,
-                ),
+              child: _CarryContent(
+                tile: carry.tile,
+                size: surface.size,
+                layout: layout,
               ),
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// Position changes reuse this subtree. Widget content is laid out once per
+/// drag, rather than reconstructed for every pointer event.
+class _CarryContent extends StatefulWidget {
+  const _CarryContent({
+    required this.tile,
+    required this.size,
+    required this.layout,
+  });
+  final HomeTile tile;
+  final Size size;
+  final HomeLayout layout;
+  @override
+  State<_CarryContent> createState() => _CarryContentState();
+}
+
+class _CarryContentState extends State<_CarryContent> {
+  Widget? _content;
+  Object? _signature;
+  @override
+  Widget build(BuildContext context) {
+    final signature = (widget.tile, widget.size, widget.layout);
+    if (_signature != signature) {
+      _signature = signature;
+      final data = HomeTileContext(
+        tile: widget.tile,
+        size: widget.size,
+        layout: widget.layout,
+        editing: true,
+      );
+      _content = Builder(
+        builder: (context) => specFor(data.tile.kind).build(context, data),
+      );
+    }
+    return _content!;
   }
 }
 
@@ -934,7 +1061,8 @@ class _Carry {
     required this.finger,
     required this.metrics,
     required this.moved,
-  }) : landingPage = fromPage;
+  }) : origin = finger,
+       landingPage = fromPage;
 
   final HomeTile tile;
   final int fromPage;
@@ -942,6 +1070,7 @@ class _Carry {
   /// The finger's offset within the tile's surface.
   final Offset grab;
   Offset finger;
+  final Offset origin;
   final HomeGridMetrics metrics;
 
   /// Has the finger moved since the hold? Until it does, the menu shows.
@@ -1132,7 +1261,10 @@ class _PageDots extends StatelessWidget {
                 behavior: HitTestBehavior.opaque,
                 onTap: () => onTap(i),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 220),
                     curve: Curves.easeOutCubic,
@@ -1174,14 +1306,17 @@ class _SetupBanner extends StatelessWidget {
             Expanded(
               child: Text(
                 'Connect a provider so characters can reply.',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: scheme.onPrimaryContainer),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.onPrimaryContainer,
+                ),
               ),
             ),
             const SizedBox(width: 8),
             FilledButton(
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const ProvidersScreen()),
+                MaterialPageRoute<void>(
+                  builder: (_) => const ProvidersScreen(),
+                ),
               ),
               child: const Text('Set up'),
             ),

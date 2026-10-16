@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 /// What the tile menu offers.
 enum HomeTileAction {
   edit('Edit', Icons.tune_rounded),
-  resize('Resize', Icons.open_in_full_rounded),
   replace('Replace', Icons.swap_horiz_rounded),
   duplicate('Duplicate', Icons.content_copy_rounded),
   move('Move to…', Icons.drive_file_move_outline),
@@ -133,8 +132,9 @@ class _HomeTileMenuState extends State<HomeTileMenu>
                         widget.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelLarge
-                            ?.copyWith(color: scheme.onSurfaceVariant),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),

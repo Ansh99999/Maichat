@@ -6,6 +6,7 @@ import 'package:maichat/models/home_layout.dart';
 import 'package:maichat/screens/chats_screen.dart';
 import 'package:maichat/screens/home/home_grid.dart';
 import 'package:maichat/screens/home/home_menu.dart';
+import 'package:maichat/screens/home/home_spec.dart';
 import 'package:maichat/screens/home_screen.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:provider/provider.dart' hide Provider;
@@ -14,21 +15,24 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// A small layout the tests can reason about cell by cell: a 4×6 grid with a
 /// Chats shortcut at (0,0) and a provider widget at (0,2), 2×1.
 HomeLayout seedLayout() => HomeLayout(
-      columns: 4,
-      rows: 6,
-      pages: [
-        HomePage(id: 'p0', tiles: const [
-          HomeTile(
-            id: 'chats',
-            kind: HomeWidgetKind.quickOpen,
-            x: 0,
-            y: 0,
-            config: {'target': 'chats'},
-          ),
-          HomeTile(id: 'prov', kind: HomeWidgetKind.provider, x: 0, y: 2, w: 2),
-        ]),
+  columns: 4,
+  rows: 6,
+  pages: [
+    HomePage(
+      id: 'p0',
+      tiles: const [
+        HomeTile(
+          id: 'chats',
+          kind: HomeWidgetKind.quickOpen,
+          x: 0,
+          y: 0,
+          config: {'target': 'chats'},
+        ),
+        HomeTile(id: 'prov', kind: HomeWidgetKind.provider, x: 0, y: 2, w: 2),
       ],
-    );
+    ),
+  ],
+);
 
 Future<AppState> boot(WidgetTester tester, {HomeLayout? layout}) async {
   SharedPreferences.setMockInitialValues(<String, Object>{
@@ -40,10 +44,12 @@ Future<AppState> boot(WidgetTester tester, {HomeLayout? layout}) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 1080 / 412;
   addTearDown(tester.view.reset);
-  await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
-    value: state,
-    child: const MaterialApp(home: HomeScreen()),
-  ));
+  await tester.pumpWidget(
+    ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(home: HomeScreen()),
+    ),
+  );
   await tester.pumpAndSettle();
   return state;
 }
@@ -64,8 +70,9 @@ Size cellSize(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('a fresh install opens on the default home screen',
-      (tester) async {
+  testWidgets('a fresh install opens on the default home screen', (
+    tester,
+  ) async {
     await boot(tester);
     for (final t in HomeLayout.defaults().pages.first.tiles) {
       expect(tileFinder(t.id), findsOneWidget, reason: t.id);
@@ -74,37 +81,55 @@ void main() {
     expect(find.text('Studio'), findsWidgets);
   });
 
-  testWidgets('a tap outside edit mode does what the widget says',
-      (tester) async {
+  testWidgets('a tap outside edit mode does what the widget says', (
+    tester,
+  ) async {
     await boot(tester, layout: seedLayout());
     await tester.tap(tileFinder('chats'));
     await tester.pumpAndSettle();
     expect(find.byType(ChatsScreen), findsOneWidget);
   });
 
-  testWidgets('edit mode: a tap opens the tile menu instead of the tile',
-      (tester) async {
+  testWidgets('edit mode: a tap selects with immediate handles and no menu', (
+    tester,
+  ) async {
     await boot(tester, layout: seedLayout());
     await enterEdit(tester);
     expect(find.text('Done'), findsOneWidget);
     await tester.tap(tileFinder('chats'));
-    await tester.pumpAndSettle();
+    await tester.pump();
     expect(find.byType(ChatsScreen), findsNothing);
-    expect(find.byType(HomeTileMenu), findsOneWidget);
-    // Resize is a menu action now; the handles are not up until asked for.
-    expect(find.byKey(const ValueKey('home-handle-right')), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('home-menu-resize')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('home-handle-right')), findsOneWidget);
+    expect(find.byType(HomeTileMenu), findsNothing);
+    for (final edge in HomeEdge.values) {
+      expect(find.byKey(ValueKey('home-handle-${edge.name}')), findsOneWidget);
+    }
+    final selected = tester.widget<HomeTileStatus>(
+      find.descendant(
+        of: tileFinder('chats'),
+        matching: find.byType(HomeTileStatus),
+      ),
+    );
+    expect(selected.selected, isTrue);
+    expect(selected.lifted, isFalse);
   });
 
-  testWidgets('the menu is anchored at the tile and never shrinks the page',
-      (tester) async {
+  testWidgets('the menu is anchored at the tile and never shrinks the page', (
+    tester,
+  ) async {
     await boot(tester, layout: seedLayout());
     final before = tester.getRect(tileFinder('prov'));
     await tester.longPress(tileFinder('prov'));
     await tester.pumpAndSettle();
     expect(find.text('Done'), findsOneWidget);
+    for (final edge in HomeEdge.values) {
+      expect(find.byKey(ValueKey('home-handle-${edge.name}')), findsOneWidget);
+    }
+    expect(find.byKey(const ValueKey('home-menu-resize')), findsNothing);
+    expect(find.text('Resize'), findsNothing);
+    expect(
+      HomeTileAction.values.map((action) => action.name),
+      isNot(contains('resize')),
+    );
     final menu = tester.getRect(find.byType(HomeTileMenu));
     final tile = tester.getRect(tileFinder('prov'));
     // Pinned to the tile's left edge, just above or below it — never over it.
@@ -114,12 +139,14 @@ void main() {
     expect(tester.getRect(tileFinder('prov')).size, before.size);
   });
 
-  testWidgets('holding then moving closes the menu and carries the tile',
-      (tester) async {
+  testWidgets('holding then moving closes the menu and carries the tile', (
+    tester,
+  ) async {
     final state = await boot(tester, layout: seedLayout());
     final cell = cellSize(tester);
-    final gesture =
-        await tester.startGesture(tester.getCenter(tileFinder('chats')));
+    final gesture = await tester.startGesture(
+      tester.getCenter(tileFinder('chats')),
+    );
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.byType(HomeTileMenu), findsOneWidget);
     for (var i = 1; i <= 10; i++) {
@@ -155,8 +182,9 @@ void main() {
     final moved = state.homeLayout.tileById('chats')!;
     expect((moved.x, moved.y), (3, 4));
     final prefs = await SharedPreferences.getInstance();
-    final stored =
-        HomeLayout.fromJson(jsonDecode(prefs.getString('homeLayout')!));
+    final stored = HomeLayout.fromJson(
+      jsonDecode(prefs.getString('homeLayout')!),
+    );
     expect(stored.tileById('chats')!.x, 3);
   });
 
@@ -179,15 +207,22 @@ void main() {
     expect((t.x, t.y), (0, 0));
   });
 
-  testWidgets('a second finger swipes pages while the first carries a tile',
-      (tester) async {
-    final layout = HomeLayout(columns: 4, rows: 6, pages: [
-      seedLayout().pages.single,
-      const HomePage(id: 'p1'),
-    ]);
+  testWidgets('a second finger swipes pages while the first carries a tile', (
+    tester,
+  ) async {
+    final layout = HomeLayout(
+      columns: 4,
+      rows: 6,
+      pages: [
+        seedLayout().pages.single,
+        const HomePage(id: 'p1'),
+      ],
+    );
     final state = await boot(tester, layout: layout);
-    final hold =
-        await tester.startGesture(tester.getCenter(tileFinder('chats')), pointer: 1);
+    final hold = await tester.startGesture(
+      tester.getCenter(tileFinder('chats')),
+      pointer: 1,
+    );
     await tester.pump(const Duration(milliseconds: 600));
     final cell = cellSize(tester);
     await hold.moveBy(Offset(cell.width, cell.height));
@@ -209,26 +244,34 @@ void main() {
     expect(state.homeLayout.pageOf('chats'), 1);
   });
 
-  testWidgets('a shortcut dropped on a shortcut makes an app folder',
-      (tester) async {
-    final layout = HomeLayout(columns: 4, rows: 6, pages: [
-      HomePage(id: 'p0', tiles: const [
-        HomeTile(
-          id: 'a',
-          kind: HomeWidgetKind.quickOpen,
-          x: 0,
-          y: 0,
-          config: {'target': 'chats'},
+  testWidgets('a shortcut dropped on a shortcut makes an app folder', (
+    tester,
+  ) async {
+    final layout = HomeLayout(
+      columns: 4,
+      rows: 6,
+      pages: [
+        HomePage(
+          id: 'p0',
+          tiles: const [
+            HomeTile(
+              id: 'a',
+              kind: HomeWidgetKind.quickOpen,
+              x: 0,
+              y: 0,
+              config: {'target': 'chats'},
+            ),
+            HomeTile(
+              id: 'b',
+              kind: HomeWidgetKind.quickOpen,
+              x: 2,
+              y: 0,
+              config: {'target': 'gallery'},
+            ),
+          ],
         ),
-        HomeTile(
-          id: 'b',
-          kind: HomeWidgetKind.quickOpen,
-          x: 2,
-          y: 0,
-          config: {'target': 'gallery'},
-        ),
-      ]),
-    ]);
+      ],
+    );
     final state = await boot(tester, layout: layout);
     final from = tester.getCenter(find.byKey(const ValueKey('home-tile-b')));
     final to = tester.getCenter(find.byKey(const ValueKey('home-tile-a')));
@@ -253,8 +296,6 @@ void main() {
     await enterEdit(tester);
     await tester.tap(tileFinder('chats'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('home-menu-resize')));
-    await tester.pumpAndSettle();
     final cell = cellSize(tester);
     await tester.drag(
       find.byKey(const ValueKey('home-handle-right')),
@@ -269,7 +310,7 @@ void main() {
   });
 
   Future<void> removeFromMenu(WidgetTester tester, String id) async {
-    await tester.tap(tileFinder(id));
+    await tester.longPress(tileFinder(id));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('home-menu-remove')));
     await tester.pumpAndSettle();
@@ -298,12 +339,13 @@ void main() {
     expect(state.homeLayout.tileById('prov'), isNotNull);
   });
 
-  testWidgets('Back closes the menu, then leaves edit mode keeping changes',
-      (tester) async {
+  testWidgets('Back closes the menu, then leaves edit mode keeping changes', (
+    tester,
+  ) async {
     final state = await boot(tester, layout: seedLayout());
     await enterEdit(tester);
     await removeFromMenu(tester, 'prov');
-    await tester.tap(tileFinder('chats'));
+    await tester.longPress(tileFinder('chats'));
     await tester.pumpAndSettle();
     expect(find.byType(HomeTileMenu), findsOneWidget);
     final nav = tester.state<NavigatorState>(find.byType(Navigator));
@@ -349,10 +391,15 @@ void main() {
     expect(state.homeLayout, HomeLayout.defaults());
   });
 
-  testWidgets('every widget renders on a crowded, small home screen',
-      (tester) async {
+  testWidgets('every widget renders on a crowded, small home screen', (
+    tester,
+  ) async {
     // Each kind at its smallest and at a roomy span, on a 5×7 grid.
-    var layout = HomeLayout(columns: 5, rows: 7, pages: [const HomePage(id: 'a')]);
+    var layout = HomeLayout(
+      columns: 5,
+      rows: 7,
+      pages: [const HomePage(id: 'a')],
+    );
     for (final kind in HomeWidgetKind.values) {
       layout = layout.add(kind, span: (w: 1, h: 1))?.layout ?? layout;
     }

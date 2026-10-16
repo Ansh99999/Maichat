@@ -37,44 +37,30 @@ class HomeGridMetrics {
 
   /// The cell under [p], clamped into the grid.
   ({int x, int y}) cellAt(Offset p) => (
-        x: (p.dx / cellW).floor().clamp(0, columns - 1),
-        y: (p.dy / cellH).floor().clamp(0, rows - 1),
-      );
+    x: (p.dx / cellW).floor().clamp(0, columns - 1),
+    y: (p.dy / cellH).floor().clamp(0, rows - 1),
+  );
 
   /// The top-left cell a tile of [w] × [h] snaps to when its top-left corner is
   /// at [topLeft].
   ({int x, int y}) snap(Offset topLeft, int w, int h) => (
-        x: (topLeft.dx / cellW).round().clamp(0, columns - w),
-        y: (topLeft.dy / cellH).round().clamp(0, rows - h),
-      );
+    x: (topLeft.dx / cellW).round().clamp(0, columns - w),
+    y: (topLeft.dy / cellH).round().clamp(0, rows - h),
+  );
 }
 
 enum HomeEdge { left, top, right, bottom }
 
-/// Page physics for the home screen: a critically damped spring, stiff enough
-/// that a flick settles in ~250 ms with no wobble — Material 3 Expressive's
-/// "spatial default" motion, without the overshoot that read as a stutter.
-class HomePagePhysics extends PageScrollPhysics {
-  const HomePagePhysics({super.parent});
-
-  @override
-  HomePagePhysics applyTo(ScrollPhysics? ancestor) =>
-      HomePagePhysics(parent: buildParent(ancestor));
-
-  @override
-  SpringDescription get spring =>
-      SpringDescription.withDampingRatio(mass: 1, stiffness: 520, ratio: 1);
-}
-
 /// What the page tells the home screen when a finger picks a tile up.
-typedef HomeLiftStart = void Function(
-  HomeTile tile,
-  Offset global,
+typedef HomeLiftStart =
+    bool Function(
+      HomeTile tile,
+      Offset global,
 
-  /// Where in the tile's surface the finger is, so the tile does not jump to
-  /// put its corner under the finger.
-  Offset grab,
-);
+      /// Where in the tile's surface the finger is, so the tile does not jump to
+      /// put its corner under the finger.
+      Offset grab,
+    );
 
 /// One page of the Home grid: its tiles laid out cell by cell, and the gestures
 /// that select, pick up and resize them.
@@ -164,6 +150,14 @@ class _HomeGridPageState extends State<HomeGridPage>
     );
   }
 
+  @override
+  void didUpdateWidget(HomeGridPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.editing || widget.resizingId != oldWidget.resizingId) {
+      _resize = null;
+    }
+  }
+
   void _resizeUpdate(Offset delta) {
     final d = _resize;
     if (d == null) return;
@@ -178,13 +172,13 @@ class _HomeGridPageState extends State<HomeGridPage>
       HomeEdge.right => s.copyWith(w: (s.w + dx).clamp(min.w, cols - s.x)),
       HomeEdge.bottom => s.copyWith(h: (s.h + dy).clamp(min.h, rows - s.y)),
       HomeEdge.left => () {
-          final x = (s.x + dx).clamp(0, s.right - min.w);
-          return s.copyWith(x: x, w: s.right - x);
-        }(),
+        final x = (s.x + dx).clamp(0, s.right - min.w);
+        return s.copyWith(x: x, w: s.right - x);
+      }(),
       HomeEdge.top => () {
-          final y = (s.y + dy).clamp(0, s.bottom - min.h);
-          return s.copyWith(y: y, h: s.bottom - y);
-        }(),
+        final y = (s.y + dy).clamp(0, s.bottom - min.h);
+        return s.copyWith(y: y, h: s.bottom - y);
+      }(),
     };
     if (next == d.candidate) return;
     setState(() {
@@ -198,6 +192,10 @@ class _HomeGridPageState extends State<HomeGridPage>
     if (d == null) return;
     if (d.fits && d.candidate != d.start) widget.onResize(d.candidate);
     setState(() => _resize = null);
+  }
+
+  void _resizeCancel() {
+    if (_resize != null) setState(() => _resize = null);
   }
 
   @override
@@ -234,9 +232,7 @@ class _HomeGridPageState extends State<HomeGridPage>
           if (resize != null)
             Positioned.fromRect(
               rect: _m.surfaceFor(resize.candidate),
-              child: IgnorePointer(
-                child: HomeGhost(fits: resize.fits),
-              ),
+              child: IgnorePointer(child: HomeGhost(fits: resize.fits)),
             ),
           for (final tile in _page.tiles) _positioned(tile),
         ],
@@ -260,7 +256,7 @@ class _HomeGridPageState extends State<HomeGridPage>
         editing: widget.editing,
         selected: selected,
         hidden: widget.hiddenId == tile.id,
-        canDrag: selected && !resizing,
+        canDrag: selected || widget.hiddenId == tile.id,
         onTap: () => widget.onTileTap(tile.id),
         onLiftStart: (global, local) => widget.onLiftStart(
           tile,
@@ -269,15 +265,18 @@ class _HomeGridPageState extends State<HomeGridPage>
         ),
         onLiftMove: widget.onLiftMove,
         onLiftEnd: widget.onLiftEnd,
-        handles: resizing && resize == null
+        handles: resizing
             ? [
                 for (final edge in HomeEdge.values)
                   _Handle(
                     edge: edge,
                     gutter: _m.gutter,
-                    onStart: () => setState(() => _resize = _ResizeDrag(tile, edge)),
+                    frameSize: _m.rectFor(shown).size,
+                    onStart: () =>
+                        setState(() => _resize = _ResizeDrag(tile, edge)),
                     onUpdate: _resizeUpdate,
                     onEnd: _resizeEnd,
+                    onCancel: _resizeCancel,
                   ),
               ]
             : const [],
@@ -304,12 +303,12 @@ class HomeGhost extends StatelessWidget {
         : (fits ? scheme.primary : scheme.error);
     return DecoratedBox(
       decoration: ShapeDecoration(
-        color: color.withValues(alpha: merge ? 0.22 : 0.12),
+        color: color.withValues(alpha: merge ? 0.10 : 0.06),
         shape: RoundedSuperellipseBorder(
           borderRadius: BorderRadius.circular(HomeCard.radius),
           side: BorderSide(
-            color: color,
-            width: 2,
+            color: color.withValues(alpha: 0.35),
+            width: 1.5,
             strokeAlign: BorderSide.strokeAlignInside,
           ),
         ),
@@ -322,7 +321,7 @@ class HomeGhost extends StatelessWidget {
 /// launchers pick an icon up at about 400.
 class _LiftRecognizer extends LongPressGestureRecognizer {
   _LiftRecognizer({super.debugOwner})
-      : super(duration: const Duration(milliseconds: 380));
+    : super(duration: const Duration(milliseconds: 380));
 }
 
 /// A tile as drawn on the grid: the widget itself, its status (for the
@@ -333,7 +332,7 @@ class _LiftRecognizer extends LongPressGestureRecognizer {
 /// that starts outside edit mode switches the screen into it, and if this
 /// subtree changed shape the recognizer following the finger would be thrown
 /// away mid-gesture.
-class HomeTileFrame extends StatelessWidget {
+class HomeTileFrame extends StatefulWidget {
   const HomeTileFrame({
     super.key,
     required this.tile,
@@ -364,53 +363,112 @@ class HomeTileFrame extends StatelessWidget {
   final VoidCallback onTap;
 
   /// Global position, and position within this frame.
-  final void Function(Offset global, Offset local) onLiftStart;
+  final bool Function(Offset global, Offset local) onLiftStart;
   final ValueChanged<Offset> onLiftMove;
   final VoidCallback onLiftEnd;
   final List<Widget> handles;
 
   @override
+  State<HomeTileFrame> createState() => _HomeTileFrameState();
+}
+
+class _HomeTileFrameState extends State<HomeTileFrame> {
+  bool _longPressActive = false;
+  bool _panActive = false;
+  Widget? _body;
+  Object? _bodyKey;
+
+  void _endLongPress() {
+    if (!_longPressActive) return;
+    _longPressActive = false;
+    widget.onLiftEnd();
+  }
+
+  void _endPan() {
+    if (!_panActive) return;
+    _panActive = false;
+    widget.onLiftEnd();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final spec = specFor(tile.kind);
-    final body = spec.build(
-      context,
-      HomeTileContext(tile: tile, size: size, layout: layout, editing: editing),
+    final spec = specFor(widget.tile.kind);
+    // Keep content elements and paint layers intact while only interaction
+    // state changes. The Builder gives each spec its own dependency context.
+    final bodyKey = (
+      widget.tile,
+      widget.size,
+      widget.editing,
+      widget.layout.iconShape,
+      widget.layout.showLabels,
     );
+    if (_bodyKey != bodyKey) {
+      _bodyKey = bodyKey;
+      final tile = widget.tile;
+      final size = widget.size;
+      final layout = widget.layout;
+      final editing = widget.editing;
+      _body = Builder(
+        builder: (context) => spec.build(
+          context,
+          HomeTileContext(
+            tile: tile,
+            size: size,
+            layout: layout,
+            editing: editing,
+          ),
+        ),
+      );
+    }
+    final body = _body!;
     final gestures = <Type, GestureRecognizerFactory>{
       _LiftRecognizer: GestureRecognizerFactoryWithHandlers<_LiftRecognizer>(
         () => _LiftRecognizer(debugOwner: this),
         (r) => r
-          ..onLongPressStart =
-              ((d) => onLiftStart(d.globalPosition, d.localPosition))
-          ..onLongPressMoveUpdate = ((d) => onLiftMove(d.globalPosition))
-          ..onLongPressEnd = ((_) => onLiftEnd())
-          ..onLongPressCancel = onLiftEnd,
+          ..onLongPressStart = ((d) {
+            _longPressActive = widget.onLiftStart(
+              d.globalPosition,
+              d.localPosition,
+            );
+          })
+          ..onLongPressMoveUpdate = ((d) {
+            if (_longPressActive) widget.onLiftMove(d.globalPosition);
+          })
+          ..onLongPressEnd = ((_) => _endLongPress())
+          ..onLongPressCancel = _endLongPress,
       ),
-      if (editing)
+      if (widget.editing)
         TapGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-          () => TapGestureRecognizer(debugOwner: this),
-          (r) => r.onTap = onTap,
-        ),
-      if (canDrag)
+              () => TapGestureRecognizer(debugOwner: this),
+              (r) => r.onTap = widget.onTap,
+            ),
+      if (widget.canDrag || _panActive)
         PanGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
-          () => PanGestureRecognizer(debugOwner: this),
-          (r) => r
-            ..dragStartBehavior = DragStartBehavior.down
-            ..onStart = ((d) => onLiftStart(d.globalPosition, d.localPosition))
-            ..onUpdate = ((d) => onLiftMove(d.globalPosition))
-            ..onEnd = ((_) => onLiftEnd())
-            ..onCancel = onLiftEnd,
-        ),
+              () => PanGestureRecognizer(debugOwner: this),
+              (r) => r
+                ..dragStartBehavior = DragStartBehavior.down
+                ..onStart = ((d) {
+                  _panActive = widget.onLiftStart(
+                    d.globalPosition,
+                    d.localPosition,
+                  );
+                })
+                ..onUpdate = ((d) {
+                  if (_panActive) widget.onLiftMove(d.globalPosition);
+                })
+                ..onEnd = ((_) => _endPan())
+                ..onCancel = _endPan,
+            ),
     };
     return Semantics(
-      label: editing
-          ? '${spec.describe(context, tile)}, ${tile.w} by ${tile.h}'
+      label: widget.editing
+          ? '${spec.describe(context, widget.tile)}, ${widget.tile.w} by ${widget.tile.h}'
           : null,
-      selected: selected,
-      button: editing,
-      onTap: editing ? onTap : null,
+      selected: widget.selected,
+      button: widget.editing,
+      onTap: widget.editing ? widget.onTap : null,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -419,20 +477,20 @@ class HomeTileFrame extends StatelessWidget {
               gestures: gestures,
               // In edit mode the widget ignores the pointer, so the frame takes
               // touches itself; otherwise the widget's own ink comes first.
-              behavior: editing
+              behavior: widget.editing
                   ? HitTestBehavior.opaque
                   : HitTestBehavior.deferToChild,
               child: Padding(
-                padding: EdgeInsets.all(gutter),
+                padding: EdgeInsets.all(widget.gutter),
                 child: Opacity(
-                  opacity: hidden ? 0 : 1,
+                  opacity: widget.hidden ? 0 : 1,
                   child: IgnorePointer(
-                    ignoring: editing,
+                    ignoring: widget.editing,
                     child: RepaintBoundary(
                       child: HomeTileStatus(
-                        selected: selected,
+                        selected: widget.selected,
                         lifted: false,
-                        editing: editing,
+                        editing: widget.editing,
                         child: body,
                       ),
                     ),
@@ -441,7 +499,7 @@ class HomeTileFrame extends StatelessWidget {
               ),
             ),
           ),
-          ...handles,
+          ...widget.handles,
         ],
       ),
     );
@@ -454,16 +512,20 @@ class _Handle extends StatelessWidget {
   const _Handle({
     required this.edge,
     required this.gutter,
+    required this.frameSize,
     required this.onStart,
     required this.onUpdate,
     required this.onEnd,
+    required this.onCancel,
   });
 
   final HomeEdge edge;
   final double gutter;
+  final Size frameSize;
   final VoidCallback onStart;
   final ValueChanged<Offset> onUpdate;
   final VoidCallback onEnd;
+  final VoidCallback onCancel;
 
   static const double _hit = 44;
 
@@ -479,6 +541,10 @@ class _Handle extends StatelessWidget {
         border: Border.all(color: scheme.onPrimary, width: 2.5),
       ),
     );
+    // On dense grids two 44 dp grips would overlap the centre and turn a
+    // selected icon's move into a resize. Reserve the central 20% for moving.
+    final hitWidth = (frameSize.width * 0.4).clamp(12.0, _hit);
+    final hitHeight = (frameSize.height * 0.4).clamp(12.0, _hit);
     final grip = GestureDetector(
       key: ValueKey('home-handle-${edge.name}'),
       behavior: HitTestBehavior.opaque,
@@ -486,20 +552,48 @@ class _Handle extends StatelessWidget {
       onPanStart: (_) => onStart(),
       onPanUpdate: (d) => onUpdate(d.delta),
       onPanEnd: (_) => onEnd(),
-      onPanCancel: onEnd,
-      child: SizedBox(width: _hit, height: _hit, child: Center(child: dot)),
+      onPanCancel: onCancel,
+      child: SizedBox(
+        width: hitWidth,
+        height: hitHeight,
+        child: Align(
+          alignment: switch (edge) {
+            HomeEdge.left => Alignment.centerLeft,
+            HomeEdge.right => Alignment.centerRight,
+            HomeEdge.top => Alignment.topCenter,
+            HomeEdge.bottom => Alignment.bottomCenter,
+          },
+          child: dot,
+        ),
+      ),
     );
     // Centred on the surface's edge (the cell edge less the gutter).
-    final off = gutter - _hit / 2;
+    const off = 0.0;
     return switch (edge) {
       HomeEdge.left => Positioned(
-          left: off, top: 0, bottom: 0, child: Center(child: grip)),
+        left: off,
+        top: 0,
+        bottom: 0,
+        child: Center(child: grip),
+      ),
       HomeEdge.right => Positioned(
-          right: off, top: 0, bottom: 0, child: Center(child: grip)),
+        right: off,
+        top: 0,
+        bottom: 0,
+        child: Center(child: grip),
+      ),
       HomeEdge.top => Positioned(
-          top: off, left: 0, right: 0, child: Center(child: grip)),
+        top: off,
+        left: 0,
+        right: 0,
+        child: Center(child: grip),
+      ),
       HomeEdge.bottom => Positioned(
-          bottom: off, left: 0, right: 0, child: Center(child: grip)),
+        bottom: off,
+        left: 0,
+        right: 0,
+        child: Center(child: grip),
+      ),
     };
   }
 }

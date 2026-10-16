@@ -233,3 +233,47 @@ b) **App folders** (`HomeWidgetKind.appFolder`): a launcher folder of
   character folder, app folder, Studio v2. Menu is a 3-column icon grid;
   a 4x1 clock with zones shows them as chips beside the local time.
 - Not verifiable here: gesture feel and frame times on a Snapdragon 695.
+
+
+## Interaction repair — 2026-10-16
+
+User device feedback rejected menu-gated resize and reported broken resize,
+intermittent carry, stuck highlights, and worse frame pacing. The earlier
+checks did not exercise rendered intermediate gesture frames adequately.
+
+- Tap in edit mode selects and exposes handles immediately. Hold retains the
+  action menu; Resize is removed from that menu.
+- Keep grip recognizers mounted during preview and give their complete touch
+  targets space inside the parent hit-test area.
+- Own gesture completion per recognizer; rejected long presses cannot end a
+  pan, and active pans stay mounted when the source is hidden. Accumulate slow
+  movement from the original touch.
+- Bounded drop completion replaces record-identity guarded cleanup. Clear
+  carry, landing, selection, handles and menu on exit/discard.
+- Selection is opaque; landing border is 35%, fill 6%. Unselected editing tiles
+  carry no border.
+- Pointer and animation frames update only the overlay. Reuse page and widget
+  content elements, use standard page physics, and resume page clocks after
+  scrolling settles. Preserve the foreground decoration wrapper so changing
+  an icon's ring cannot remount its contents.
+- Regression coverage must pump after incremental pointer movement, repeat
+  drag/resize, verify cleanup, and check stable page/widget identity.
+- Device frame pacing still needs measurement on the user's phone; passing
+  widget tests does not establish Snapdragon 695 performance.
+
+- Additional activity fixes: hidden Studio widgets detach controller listeners;
+  visible Studio widgets compare displayed-field snapshots before rebuilding.
+  Gallery shuffle timers cancel while hidden. Minute clocks filter second
+  ticks, and search selects immutable persona fields. Cost widgets select a
+  ledger revision instead of aggregating cost history on every app notification.
+- Verified: 29 interaction tests, six activity/visibility tests, 19 cost/ledger
+  tests; final full suite 3,473 passed; analyzer clean. The carry-frame regression
+  observes zero stationary or carried-content rebuilds during incremental motion.
+  These checks do not establish on-device GPU frame times.
+
+- Final dense-grid regression exposed overlapping 44 dp resize hit areas on an
+  8-column shortcut: centre drags resized it instead. Cap grip touch areas at
+  40% of each cell dimension so the central 20% remains available for moving.
+  Regression failed before this change; all 29 interaction checks passed after.
+- Final release build succeeded; a 12-second isolated Xvfb launch completed
+  without a Dart exception (headless host EGL/ATK warnings were present).
