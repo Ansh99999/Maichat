@@ -756,7 +756,14 @@ bar or the overflow menu.
   exposes resize handles; the action menu opens only on hold and has no Resize
   action. Resize grips stay mounted during every preview frame and their hit
   areas stay inside the tile and shrink on dense grids to leave the centre
-  draggable (two 44 dp grips overlap on an 8-column shortcut). Gesture
+  draggable (two 44 dp grips overlap on an 8-column shortcut). Grips claim a
+  pointer on down with `EagerGestureRecognizer` and process global deltas through
+  a `Listener`; generic pan waits for twice the page's horizontal touch slop,
+  allowing slow horizontal resize to swipe the page instead. Home holds page
+  scrolling until that pointer releases/cancels, including exit cleanup. A
+  second grip cannot replace an active resize. Invalid overlapping previews
+  turn the grip dots red. Icons share these same resize handlers; growth needs
+  free neighboring cells (a completely packed bottom dock cannot grow). Gesture
   end/cancel callbacks only end the gesture
   that actually started; keep the active pan recognizer mounted when hiding
   its source. Movement is measured from the initial touch, not the last event.

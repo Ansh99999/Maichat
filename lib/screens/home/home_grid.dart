@@ -86,6 +86,7 @@ class HomeGridPage extends StatefulWidget {
     required this.onTapEmpty,
     required this.onLongPressEmpty,
     required this.onResize,
+    this.onResizePointerChanged,
   });
 
   final HomeLayout layout;
@@ -115,6 +116,10 @@ class HomeGridPage extends StatefulWidget {
 
   /// Asks for a resized tile to replace its old self; true when it was taken.
   final bool Function(HomeTile tile) onResize;
+
+  /// Reserves/releases a resize pointer. False rejects a conflicting touch.
+  /// Home holds page scrolling for the accepted pointer's lifetime.
+  final bool Function(int pointer, bool active)? onResizePointerChanged;
 
   @override
   State<HomeGridPage> createState() => _HomeGridPageState();
@@ -198,6 +203,16 @@ class _HomeGridPageState extends State<HomeGridPage>
     if (_resize != null) setState(() => _resize = null);
   }
 
+  bool _resizeStart(HomeTile tile, HomeEdge edge, int pointer) {
+    // A second finger on another grip must not replace the active resize.
+    if (_resize != null) return false;
+    if (widget.onResizePointerChanged?.call(pointer, true) == false) {
+      return false;
+    }
+    setState(() => _resize = _ResizeDrag(tile, edge));
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -272,11 +287,12 @@ class _HomeGridPageState extends State<HomeGridPage>
                     edge: edge,
                     gutter: _m.gutter,
                     frameSize: _m.rectFor(shown).size,
-                    onStart: () =>
-                        setState(() => _resize = _ResizeDrag(tile, edge)),
+                    blocked: resize?.fits == false,
+                    onStart: (pointer) => _resizeStart(tile, edge, pointer),
                     onUpdate: _resizeUpdate,
                     onEnd: _resizeEnd,
                     onCancel: _resizeCancel,
+                    onPointerChanged: widget.onResizePointerChanged,
                   ),
               ]
             : const [],
@@ -508,7 +524,7 @@ class _HomeTileFrameState extends State<HomeTileFrame> {
 
 /// A round grip on the middle of one edge, sitting on the outline; dragging it
 /// stretches the tile.
-class _Handle extends StatelessWidget {
+class _Handle extends StatefulWidget {
   const _Handle({
     required this.edge,
     required this.gutter,
@@ -517,17 +533,58 @@ class _Handle extends StatelessWidget {
     required this.onUpdate,
     required this.onEnd,
     required this.onCancel,
+    this.onPointerChanged,
+    this.blocked = false,
   });
 
   final HomeEdge edge;
   final double gutter;
   final Size frameSize;
-  final VoidCallback onStart;
+  final bool Function(int pointer) onStart;
   final ValueChanged<Offset> onUpdate;
   final VoidCallback onEnd;
   final VoidCallback onCancel;
+  final void Function(int pointer, bool active)? onPointerChanged;
+  final bool blocked;
+
+  @override
+  State<_Handle> createState() => _HandleState();
+}
+
+class _HandleState extends State<_Handle> {
+  int? _pointer;
+  Offset? _lastPosition;
 
   static const double _hit = 44;
+
+  void _down(PointerDownEvent event) {
+    if (!mounted || _pointer != null || !widget.onStart(event.pointer)) return;
+    _pointer = event.pointer;
+    _lastPosition = event.position;
+  }
+
+  void _move(PointerMoveEvent event) {
+    if (!mounted || event.pointer != _pointer) return;
+    // Global deltas stay correct when a left/top preview moves the grip itself.
+    final delta = event.position - _lastPosition!;
+    _lastPosition = event.position;
+    widget.onUpdate(delta);
+  }
+
+  void _end(PointerEvent event, {bool cancelled = false}) {
+    if (!mounted || event.pointer != _pointer) return;
+    _pointer = null;
+    _lastPosition = null;
+    try {
+      if (cancelled) {
+        widget.onCancel();
+      } else {
+        widget.onEnd();
+      }
+    } finally {
+      widget.onPointerChanged?.call(event.pointer, false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -536,40 +593,52 @@ class _Handle extends StatelessWidget {
       width: 18,
       height: 18,
       decoration: BoxDecoration(
-        color: scheme.primary,
+        color: widget.blocked ? scheme.error : scheme.primary,
         shape: BoxShape.circle,
         border: Border.all(color: scheme.onPrimary, width: 2.5),
       ),
     );
     // On dense grids two 44 dp grips would overlap the centre and turn a
     // selected icon's move into a resize. Reserve the central 20% for moving.
-    final hitWidth = (frameSize.width * 0.4).clamp(12.0, _hit);
-    final hitHeight = (frameSize.height * 0.4).clamp(12.0, _hit);
-    final grip = GestureDetector(
-      key: ValueKey('home-handle-${edge.name}'),
+    final hitWidth = (widget.frameSize.width * 0.4).clamp(12.0, _hit);
+    final hitHeight = (widget.frameSize.height * 0.4).clamp(12.0, _hit);
+    final grip = RawGestureDetector(
+      key: ValueKey('home-handle-${widget.edge.name}'),
       behavior: HitTestBehavior.opaque,
-      dragStartBehavior: DragStartBehavior.down,
-      onPanStart: (_) => onStart(),
-      onPanUpdate: (d) => onUpdate(d.delta),
-      onPanEnd: (_) => onEnd(),
-      onPanCancel: onCancel,
-      child: SizedBox(
-        width: hitWidth,
-        height: hitHeight,
-        child: Align(
-          alignment: switch (edge) {
-            HomeEdge.left => Alignment.centerLeft,
-            HomeEdge.right => Alignment.centerRight,
-            HomeEdge.top => Alignment.topCenter,
-            HomeEdge.bottom => Alignment.bottomCenter,
-          },
-          child: dot,
+      // A grip owns its pointer from down. A generic pan waits for more slop
+      // than PageView's horizontal drag, so slow horizontal resizes lost the
+      // arena to page swiping before their first update.
+      gestures: {
+        EagerGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<EagerGestureRecognizer>(
+              () => EagerGestureRecognizer(),
+              (_) {},
+            ),
+      },
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _down,
+        onPointerMove: _move,
+        onPointerUp: _end,
+        onPointerCancel: (event) => _end(event, cancelled: true),
+        child: SizedBox(
+          width: hitWidth,
+          height: hitHeight,
+          child: Align(
+            alignment: switch (widget.edge) {
+              HomeEdge.left => Alignment.centerLeft,
+              HomeEdge.right => Alignment.centerRight,
+              HomeEdge.top => Alignment.topCenter,
+              HomeEdge.bottom => Alignment.bottomCenter,
+            },
+            child: dot,
+          ),
         ),
       ),
     );
-    // Centred on the surface's edge (the cell edge less the gutter).
+    // Keep the complete hit targets inside the frame, including small icons.
     const off = 0.0;
-    return switch (edge) {
+    return switch (widget.edge) {
       HomeEdge.left => Positioned(
         left: off,
         top: 0,

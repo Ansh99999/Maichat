@@ -52,6 +52,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// The tile showing its resize handles (edit mode).
   String? _resizingId;
+  int? _resizePointer;
+  ScrollHoldController? _resizeHold;
 
   /// The tile being carried, if any.
   _Carry? _carry;
@@ -103,6 +105,9 @@ class _HomeScreenState extends State<HomeScreen>
     _edgeTimer = null;
     _otherFingers.clear();
     _carryPointer = null;
+    _resizePointer = null;
+    _resizeHold?.cancel();
+    _resizeHold = null;
     _settle.stop();
     _landing = null;
     _carry = null;
@@ -113,6 +118,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    _resizeHold?.cancel();
     _motion.dispose();
     _visiblePage.dispose();
     _settle.dispose();
@@ -124,6 +130,7 @@ class _HomeScreenState extends State<HomeScreen>
   // --- edit mode ------------------------------------------------------------
 
   void _startEditing({String? select}) {
+    if (_resizePointer != null) return;
     if (_editing) {
       if (select != null) {
         setState(() {
@@ -191,16 +198,19 @@ class _HomeScreenState extends State<HomeScreen>
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _closeMenu() => setState(() {
-    _selectedId = null;
-    _resizingId = null;
-    _menuId = null;
-  });
+  void _closeMenu() {
+    if (_resizePointer != null) return;
+    setState(() {
+      _selectedId = null;
+      _resizingId = null;
+      _menuId = null;
+    });
+  }
 
   void _onTileTap(String id) {
     // A second finger landing on a tile while another is carried is paging,
     // not picking.
-    if (!_editing || _carry != null) return;
+    if (!_editing || _carry != null || _resizePointer != null) return;
     setState(() {
       _selectedId = id;
       _resizingId = id;
@@ -212,6 +222,33 @@ class _HomeScreenState extends State<HomeScreen>
     final next = _draft?.update(tile);
     if (next == null) return false;
     _setDraft(next);
+    return true;
+  }
+
+  void _holdResizePage() {
+    if (_pages.hasClients) {
+      _resizeHold = _pages.position.hold(() => _resizeHold = null);
+    }
+  }
+
+  bool _onResizePointerChanged(int pointer, bool active) {
+    if (!mounted) return false;
+    if (active) {
+      if (_resizePointer != null || _carry != null) return false;
+      setState(() => _resizePointer = pointer);
+      _holdResizePage();
+      // Scrollable's own down/cancel handlers can replace the initial hold.
+      // Restore it after this event, before a snap animation gets another frame.
+      scheduleMicrotask(() {
+        if (mounted && _resizePointer == pointer) _holdResizePage();
+      });
+      return true;
+    }
+    // A removed grip or another finger cannot release the current owner's hold.
+    if (_resizePointer != pointer) return false;
+    _resizeHold?.cancel();
+    _resizeHold = null;
+    setState(() => _resizePointer = null);
     return true;
   }
 
@@ -228,7 +265,7 @@ class _HomeScreenState extends State<HomeScreen>
     Offset grab,
     HomeGridMetrics metrics,
   ) {
-    if (_carry != null) return false;
+    if (_carry != null || _resizePointer != null) return false;
     // A new touch interrupts a settling tile immediately.
     _settle.stop();
     _landing = null;
@@ -404,6 +441,7 @@ class _HomeScreenState extends State<HomeScreen>
   /// Raw pointers over the whole grid: a second finger's horizontal swipe
   /// turns the page while the first one holds a tile.
   void _onPointerDown(PointerDownEvent e) {
+    if (_resizePointer != null) return;
     if (_carry == null) {
       _carryPointer = e.pointer;
       return;
@@ -412,6 +450,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onPointerUp(PointerEvent e) {
+    _onResizePointerChanged(e.pointer, false);
     final start = _otherFingers.remove(e.pointer);
     if (start == null || _carry == null) return;
     final dx = e.position.dx - start.dx;
@@ -429,6 +468,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
+    _onResizePointerChanged(event.pointer, false);
     _otherFingers.remove(event.pointer);
     if (event.pointer != _carryPointer || _carry == null) return;
     setState(_clearInteraction);
@@ -813,8 +853,9 @@ class _HomeScreenState extends State<HomeScreen>
               // reaches them, so the first frame of a swipe is not a build.
               allowImplicitScrolling: true,
               // A carried tile keeps the page still; a second finger turns
-              // pages then. Resize grips win their own gesture arena.
-              physics: carry != null
+              // pages then. A grip reserves its pointer on down and holds
+              // scrolling until it is released or cancelled.
+              physics: carry != null || _resizePointer != null
                   ? const NeverScrollableScrollPhysics()
                   : const PageScrollPhysics(),
               onPageChanged: (i) => setState(() {
@@ -922,6 +963,7 @@ class _HomeScreenState extends State<HomeScreen>
       onLiftMove: _liftMove,
       onLiftEnd: _liftEnd,
       onTapEmpty: (x, y) {
+        if (_resizePointer != null) return;
         if (_selectedId != null || _resizingId != null) {
           _closeMenu();
           return;
@@ -936,6 +978,7 @@ class _HomeScreenState extends State<HomeScreen>
       },
       onLongPressEmpty: () => _startEditing(),
       onResize: _onResize,
+      onResizePointerChanged: _onResizePointerChanged,
     );
     final result = ValueListenableBuilder<int>(
       valueListenable: _visiblePage,

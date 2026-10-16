@@ -277,3 +277,26 @@ checks did not exercise rendered intermediate gesture frames adequately.
   Regression failed before this change; all 29 interaction checks passed after.
 - Final release build succeeded; a 12-second isolated Xvfb launch completed
   without a Dart exception (headless host EGL/ATK warnings were present).
+
+## Horizontal resize follow-up — 2026-10-16
+
+- Device feedback: horizontal resize swiped the page; app icons appeared
+  unresizable. The earlier large-movement checks missed gesture arbitration:
+  the grip's generic pan waits for twice the page's horizontal drag slop.
+  Scout confirmed this in the installed Flutter SDK. An already-started
+  reproduction moved the page to 0.015306 at only 26 px of horizontal travel
+  from the visible right grip, before pumping.
+- Grips now claim touches immediately with `EagerGestureRecognizer`, process
+  global pointer deltas, and hold page scrolling through release/cancel.
+  Root cleanup releases the hold even if the grip is removed. A second grip
+  cannot replace the current resize. This applies to every widget kind.
+- Collision previews color the dots red. Keep the layout's collision and
+  minimum size rules: growing icons in the packed default dock requires
+  moving them to free cells first.
+- Source review also caught selection changes from another finger releasing
+  the owning grip, and Scrollable replacing the initial hold during down/cancel.
+  Selection now stays fixed until release; updates ignore disposed grips,
+  releases check the pointer owner, and a microtask restores the scroll hold
+  after event dispatch before the next animation frame.
+- No post-fix touch tests run. Analyze and release compilation are the checks
+  for this follow-up; behavior on the user's Android device remains unverified.
