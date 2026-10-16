@@ -19,7 +19,7 @@ Status markers: `[ ]` todo · `[~]` in progress · `[x]` done (update as you go)
 - Done = `flutter analyze` clean + `flutter test` fully green (~2900 tests,
   ~10 min with `-j 2`). Gestures can't be verified here — say so.
 
-## 1. Page swipe stutter  `[ ]`
+## 1. Page swipe stutter  `[x]`
 
 Causes (in `lib/screens/home_screen.dart`, `home/home_grid.dart`):
 - Every page's tiles rebuild + relayout each frame of the swipe: tiles are built
@@ -43,7 +43,7 @@ Fixes:
   ~500)`) — Expressive "spatial" spring, critically damped (no overshoot jitter).
 - Pre-cache the next page's images (`precacheImage`) after first frame.
 
-## 2. Edit mode redesign  `[ ]`
+## 2. Edit mode redesign  `[x]`
 
 Approved by the user, replacing the bottom toolbar (which shrank the screen
 and showed tiles at 0.96 scale — "not approved"):
@@ -66,7 +66,7 @@ and showed tiles at 0.96 scale — "not approved"):
   a foreground on the tile's own clip — not on a separately padded/scaled box.
   The resize dots sit centred on the outline.
 
-## 3. Multi-finger cross-page move  `[ ]`
+## 3. Multi-finger cross-page move  `[x]`
 
 "Holding down on an app or widget, then swiping with a different finger should
 move it across pages." Implementation:
@@ -81,7 +81,7 @@ move it across pages." Implementation:
 - Implemented with a `Listener` (raw pointers) over the whole grid area so it
   does not fight the gesture arena; the lifted tile's position = pointer A.
 
-## 4. Fluid animation on low-end  `[ ]`
+## 4. Fluid animation on low-end  `[x]`
 
 - Only transform/opacity animations (no layout per frame): lift = `Transform`
   scale + elevation via a pre-rendered shadow; drag = `Transform.translate` in
@@ -92,7 +92,7 @@ move it across pages." Implementation:
 - `RepaintBoundary` everywhere a thing moves independently.
 - Avoid `AnimatedScale` per tile per state change during drags.
 
-## 5. Chat widgets — denser + customisable  `[ ]`
+## 5. Chat widgets — denser + customisable  `[x]`
 
 Problem: "majority of it just grey space". New `ChatPreviewCard`:
 - Content fills the card: preview lines computed from the real height (already
@@ -116,7 +116,7 @@ Problem: "majority of it just grey space". New `ChatPreviewCard`:
   decode at small bucket (avatars cache by size). Fade = `ShaderMask`/gradient
   `DecoratedBox`, cheap.
 
-## 6. Folders  `[ ]`
+## 6. Folders  `[x]`
 
 a) **Character folder widget** (`HomeWidgetKind.characterFolder`): the
    existing `Folder` model (characters + lorebooks, scenarios, presets,
@@ -138,7 +138,7 @@ b) **App folders** (`HomeWidgetKind.appFolder`): a launcher folder of
    folder" and the folder popup's "+". Dragging an icon out of the popup puts
    it back on the grid.
 
-## 7. New widgets  `[ ]`
+## 7. New widgets  `[x]`
 
 - **Clock** (`clock`): local time (+ date), and optional extra time zones.
   Options: `zones` (comma list of IANA names, picker over a bundled list),
@@ -211,3 +211,25 @@ b) **App folders** (`HomeWidgetKind.appFolder`): a launcher folder of
 10. Size matrix + tests for everything; screenshots for a visual check
     (throwaway script under test/screenshots/, not committed).
 11. Full suite, CLAUDE.md, commit, push `beta`.
+
+## Progress log
+
+- Shared pieces landed: `HomeTileStatus` / `HomeOutlined` / `homeOutlineSide`
+  (the selection ring drawn by each widget's own surface, edge to edge),
+  `homeWatch` (value-signature selects instead of watching all of AppState),
+  `HomeFontOption`, `HomeDependentOption`, `HomePickOption(multiple:)`,
+  `HomePickKind.folder|note|timezone`, `HomeNote` + `homeNotes` store,
+  `ClockTicker`/`ClockListener`/`HomeTimeZones` (timezone 0.11.2, 10-year db,
+  ~35 ms on first use), `HomeLayout.moveTo` / `mergeIntoFolder` /
+  `folderTargets`.
+- Grid rewrite: `home_grid.dart` (`HomeTileFrame` with a 380 ms lift
+  recognizer that survives the switch into edit mode, keep-alive pages,
+  RepaintBoundary per page and per tile, `HomePagePhysics` critically damped
+  spring), `home_menu.dart` (anchored tile menu), `home_screen.dart` (carry
+  overlay above the PageView, second-finger page swipe via raw `Listener`,
+  edge hover, merge into folder on drop, `TickerMode` per page, Back closes the
+  menu first).
+- Widgets landed: chat card (`chat_card_tile.dart`), clock, note + editor,
+  character folder, app folder, Studio v2. Menu is a 3-column icon grid;
+  a 4x1 clock with zones shows them as chips beside the local time.
+- Not verifiable here: gesture feel and frame times on a Snapdragon 695.

@@ -1,11 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart' hide Provider;
 
 import '../../../models/gallery_image.dart';
 import '../../../models/home_layout.dart';
-import '../../../state/app_state.dart';
 import '../../../widgets/avatar_image.dart';
 import '../../../widgets/picture_viewer.dart';
 import '../../../widgets/smooth_image.dart';
@@ -74,7 +72,18 @@ class GallerySpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final state = context.watch<AppState>();
+    final state = homeWatch(context, (s) {
+      final b = StringBuffer();
+      for (final g in s.gallery) {
+        b
+          ..write(g.id)
+          ..write(g.image)
+          ..write(g.starred ? '*' : '')
+          ..write(g.characterId)
+          ..write('|');
+      }
+      return b.toString();
+    });
     final count = tile.tile.integer('count', 1).clamp(1, 6);
     final fit = tile.tile.str('fit') == 'contain' ? BoxFit.contain : BoxFit.cover;
     final source = tile.tile.str('source') ?? 'all';

@@ -744,9 +744,27 @@ bar or the overflow menu.
   every kind × 8 spans × the 3×4 and 8×10 cell sizes × ×1.0/×1.5 text. Choice
   options store strings, so `HomeTile.integer` parses numeric text (the gallery
   `count` silently stayed 1 before it did). Edit gestures are in
-  `home/home_grid.dart` (long-press-drag or select-then-drag to move, edge dots
-  to resize, a ghost shows the landing cell in red when it would collide);
-  sheets in `home/home_sheets.dart`; quick-open destinations and their icons in
+  `home/home_grid.dart` + `home_screen.dart`: a 380 ms hold on a tile opens
+  `home/home_menu.dart`'s small menu beside the tile's top-left corner (never
+  over the tile; the grid never shrinks or moves in edit mode — fixed bar,
+  banner and dots heights); moving while still held closes it and *carries*
+  the tile in an overlay above the `PageView` (a ghost shows the landing cell,
+  red on collision; drop settles on a spring). While carrying, a second finger
+  swiping (raw `Listener`, dx ≥ 48) or 450 ms at an edge turns the page; a
+  quick-open dropped on another quick-open or an app folder merges
+  (`HomeLayout.mergeIntoFolder`). Resize handles only after the menu's Resize.
+  The selection ring is drawn by each widget on **its own shape**
+  (`HomeTileStatus` → `HomeOutlined`/`homeOutlineSide`), never on a padded box
+  around it — that is what "edge to edge" meant. Swipe smoothness: pages are
+  keep-alive, `RepaintBoundary`'d, pre-built (`allowImplicitScrolling`), only
+  the showing page ticks (`TickerMode`), and widgets watch `AppState` through
+  `homeWatch` with a **value-comparable** signature (a joined string or a
+  record — never a `List`, which is never `==` and rebuilds every notify).
+  Clocks share one `ClockTicker` (minute-aligned, paused with `TickerMode`);
+  other zones come from `timezone` (pure Dart, the 10-year db, loaded on
+  first use). Notes live in their own `homeNotes` entry, never in the layout;
+  `NoteEditorScreen` autosaves debounced. `HomeShrink` bounds width only —
+  nothing vertical-`Expanded` inside a `HomeCard`. Sheets are in `home/home_sheets.dart`; quick-open destinations and their icons in
   `home/quick_targets.dart`; icon outlines (incl. the Expressive "flower"
   cookie) in `home/home_icon_shape.dart`. The Studio is on the default first
   page, has its own tertiary-tinted widget, and is a drawer destination.

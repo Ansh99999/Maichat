@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/home_layout.dart';
 import 'package:maichat/screens/home/home_sheets.dart';
+import 'package:maichat/screens/home/home_widgets.dart';
 import 'package:maichat/state/app_state.dart';
 import 'package:provider/provider.dart' hide Provider;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -47,16 +48,15 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Add a widget'), findsOneWidget);
-      expect(find.text('Recent chat'), findsOneWidget);
-      expect(find.text('Pinned chat'), findsOneWidget);
-      expect(find.text('Quick open'), findsOneWidget);
-      expect(find.text('Studio'), findsOneWidget);
-      expect(find.text('Gallery'), findsOneWidget);
-      expect(find.text('Characters'), findsOneWidget);
-      expect(find.text('Provider'), findsOneWidget);
-      expect(find.text('Cost'), findsOneWidget);
-      expect(find.text('Search'), findsOneWidget);
-      expect(find.text('Featured'), findsOneWidget);
+      // Every kind, scrolling down the grouped list to reach it.
+      for (final kind in kHomeWidgetOrder) {
+        final title = find.text(specFor(kind).title);
+        await tester.scrollUntilVisible(title.first, 120,
+            scrollable: find.byType(Scrollable).last);
+        expect(title, findsWidgets, reason: kind.name);
+      }
+      // The Studio is up front, flagged.
+      expect(find.text('Featured'), findsWidgets);
     });
 
     testWidgets('picking quickOpen then Studio returns the target config',
@@ -69,6 +69,8 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
+      await tester.scrollUntilVisible(find.text('Quick open'), 120,
+          scrollable: find.byType(Scrollable).last);
       await tester.tap(find.text('Quick open'));
       await tester.pumpAndSettle();
       expect(find.text('Choose a shortcut'), findsOneWidget);

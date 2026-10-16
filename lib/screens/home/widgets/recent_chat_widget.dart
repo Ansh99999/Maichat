@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart' hide Provider;
 
 import '../../../models/home_layout.dart';
 import '../../../services/chat_graph.dart';
-import '../../../state/app_state.dart';
 import '../home_spec.dart';
 import 'chat_card_tile.dart';
 
@@ -28,8 +26,8 @@ class RecentChatSpec extends HomeWidgetSpec {
   ({int w, int h}) get minSpan => (w: 2, h: 1);
 
   @override
-  List<HomeOption> options(HomeTile tile) => const [
-        HomeStepperOption(
+  List<HomeOption> options(HomeTile tile) => [
+        const HomeStepperOption(
           key: 'index',
           label: 'Which chat',
           min: 1,
@@ -37,11 +35,7 @@ class RecentChatSpec extends HomeWidgetSpec {
           fallback: 1,
           help: '1 = latest, 2 = 2nd latest…',
         ),
-        HomeToggleOption(
-          key: 'showPreview',
-          label: 'Show preview',
-          fallback: true,
-        ),
+        ...chatCardOptions(),
       ];
 
   @override
@@ -58,9 +52,17 @@ class RecentChatSpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final state = context.watch<AppState>();
+    final state = homeWatch(
+      context,
+      // Which chats exist and when each moved — joined into a string, since
+      // a list never compares equal and would rebuild on every notify.
+      (s) => s.conversations
+          .where((c) => !c.isEmpty)
+          .map((c) => '${c.id}@${c.updatedAt.microsecondsSinceEpoch}'
+              '${c.pinned ? '*' : ''}')
+          .join('|'),
+    );
     final index = tile.tile.integer('index', 1).clamp(1, 5);
-    final showPreview = tile.tile.flag('showPreview', true);
     final chats = state.conversations.where((c) => !c.isEmpty).toList();
     final trees = collapseForks(chats);
     if (trees.length < index) {
@@ -72,7 +74,7 @@ class RecentChatSpec extends HomeWidgetSpec {
     return ChatPreviewCard(
       tree: trees[index - 1],
       editing: tile.editing,
-      showPreview: showPreview,
+      tile: tile.tile,
       compact: tile.compact,
     );
   }

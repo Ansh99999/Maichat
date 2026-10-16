@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../models/home_layout.dart';
@@ -7,6 +11,8 @@ import '../widgets/app_drawer.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/startup_screen.dart';
 import 'home/home_grid.dart';
+import 'home/home_menu.dart';
+import 'home/home_spec.dart';
 import 'home/home_sheets.dart';
 import 'home/home_widgets.dart';
 import 'providers/providers_screen.dart';
@@ -29,18 +35,69 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
   final PageController _pages = PageController();
   int _page = 0;
 
   /// The layout being edited; null outside edit mode.
   HomeLayout? _draft;
+
+  /// The tile the menu is open on (edit mode).
   String? _selectedId;
+
+  /// The tile showing its resize handles (edit mode).
+  String? _resizingId;
+
+  /// The tile being carried, if any.
+  _Carry? _carry;
+
+  /// The grid area's global top-left, for turning finger positions into cells.
+  final GlobalKey _gridKey = GlobalKey();
+
+  /// Pages flip when a carried tile is held at a screen edge.
+  Timer? _edgeTimer;
+
+  /// Fingers other than the one holding a tile, by pointer id, and where each
+  /// went down — a second finger swiping pages while the first one carries.
+  final Map<int, Offset> _otherFingers = <int, Offset>{};
+  int? _carryPointer;
 
   bool get _editing => _draft != null;
 
+  /// The carried tile settling into its cell after the finger lifts: a short
+  /// critically damped spring from where it was let go to where it lands, so
+  /// a drop reads as a placement rather than a jump.
+  late final AnimationController _settle;
+
+  @override
+  void initState() {
+    super.initState();
+    _settle = AnimationController.unbounded(vsync: this)
+      ..addListener(() {
+        if (_landing != null) setState(() {});
+      });
+  }
+  ({Rect from, Rect to, HomeTile tile})? _landing;
+
+  void _settleInto(Rect from, Rect to, HomeTile tile) {
+    _landing = (from: from, to: to, tile: tile);
+    _settle
+      ..value = 0
+      ..animateWith(SpringSimulation(
+        SpringDescription.withDampingRatio(mass: 1, stiffness: 900, ratio: 1),
+        0,
+        1,
+        0,
+      )).whenComplete(() {
+        if (mounted) setState(() => _landing = null);
+      });
+  }
+
   @override
   void dispose() {
+    _settle.dispose();
+    _edgeTimer?.cancel();
     _pages.dispose();
     super.dispose();
   }
@@ -48,10 +105,14 @@ class _HomeScreenState extends State<HomeScreen> {
   // --- edit mode ------------------------------------------------------------
 
   void _startEditing({String? select}) {
-    if (_editing) return;
+    if (_editing) {
+      if (select != null) setState(() => _selectedId = select);
+      return;
+    }
     setState(() {
       _draft = context.read<AppState>().homeLayout;
       _selectedId = select;
+      _resizingId = null;
     });
   }
 
@@ -61,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _draft = null;
       _selectedId = null;
+      _resizingId = null;
     });
     await context.read<AppState>().setHomeLayout(draft);
   }
@@ -68,6 +130,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _discard() => setState(() {
         _draft = null;
         _selectedId = null;
+        _resizingId = null;
         final pages = context.read<AppState>().homeLayout.pages.length;
         if (_page >= pages) _jumpTo(pages - 1);
       });
@@ -78,6 +141,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_selectedId != null && next.tileById(_selectedId!) == null) {
         _selectedId = null;
       }
+      if (_resizingId != null && next.tileById(_resizingId!) == null) {
+        _resizingId = null;
+      }
       if (_page >= next.pages.length) _jumpTo(next.pages.length - 1);
     });
   }
@@ -87,17 +153,265 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_pages.hasClients) _pages.jumpToPage(page);
   }
 
+  void _animateTo(int page) {
+    if (!_pages.hasClients) return;
+    _pages.animateToPage(
+      page,
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   void _toast(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  bool _onTileChanged(HomeTile tile) {
+  void _closeMenu() => setState(() {
+        _selectedId = null;
+        _resizingId = null;
+      });
+
+  void _onTileTap(String id) {
+    // A second finger landing on a tile while another is carried is paging,
+    // not picking.
+    if (!_editing || _carry != null) return;
+    setState(() {
+      // A second tap on the open tile closes its menu.
+      _selectedId = _selectedId == id && _resizingId == null ? null : id;
+      _resizingId = null;
+    });
+  }
+
+  bool _onResize(HomeTile tile) {
     final next = _draft?.update(tile);
     if (next == null) return false;
     _setDraft(next);
     return true;
+  }
+
+  // --- carrying -------------------------------------------------------------
+
+  Offset _gridOrigin() {
+    final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+    return box?.localToGlobal(Offset.zero) ?? Offset.zero;
+  }
+
+  void _liftStart(
+    HomeTile tile,
+    Offset global,
+    Offset grab,
+    HomeGridMetrics metrics,
+  ) {
+    if (_carry != null || _landing != null) return;
+    HapticFeedback.mediumImpact();
+    if (!_editing) {
+      _draft = context.read<AppState>().homeLayout;
+    }
+    final page = _draft!.pageOf(tile.id);
+    setState(() {
+      _carry = _Carry(
+        tile: tile,
+        fromPage: page,
+        grab: grab,
+        finger: global,
+        metrics: metrics,
+        // The menu opens on a hold; moving closes it.
+        moved: false,
+      );
+      _selectedId = tile.id;
+      _resizingId = null;
+    });
+    _updateLanding();
+  }
+
+  void _liftMove(Offset global) {
+    final carry = _carry;
+    if (carry == null) return;
+    final moved = carry.moved || (global - carry.finger).distance > 8;
+    carry
+      ..finger = global
+      ..moved = moved;
+    if (moved && _selectedId != null) _selectedId = null;
+    _updateLanding();
+    _edgeHover(global);
+    setState(() {});
+  }
+
+  /// Works out where the carried tile would land on the page now showing, and
+  /// whether that is onto another shortcut or folder (a merge).
+  void _updateLanding() {
+    final carry = _carry;
+    final draft = _draft;
+    if (carry == null || draft == null) return;
+    final m = carry.metrics;
+    final topLeft = carry.finger - _gridOrigin() - carry.grab - Offset(m.gutter, m.gutter);
+    final cell = m.snap(topLeft, carry.tile.w, carry.tile.h);
+    final page = _page.clamp(0, draft.pages.length - 1);
+    final candidate = carry.tile.copyWith(x: cell.x, y: cell.y);
+    String? mergeWith;
+    if (carry.tile.kind == HomeWidgetKind.quickOpen) {
+      final under = m.cellAt(carry.finger - _gridOrigin());
+      for (final t in draft.pages[page].tiles) {
+        if (t.id == carry.tile.id) continue;
+        if ((t.kind == HomeWidgetKind.quickOpen ||
+                t.kind == HomeWidgetKind.appFolder) &&
+            under.x >= t.x &&
+            under.x < t.right &&
+            under.y >= t.y &&
+            under.y < t.bottom) {
+          mergeWith = t.id;
+        }
+      }
+    }
+    carry
+      ..landing = candidate
+      ..landingPage = page
+      ..mergeWith = mergeWith
+      ..fits = mergeWith != null ||
+          draft.remove(carry.tile.id).fits(page, candidate);
+  }
+
+  /// Holding a carried tile at the left or right edge turns the page.
+  void _edgeHover(Offset global) {
+    final width = MediaQuery.sizeOf(context).width;
+    final draft = _draft;
+    if (draft == null) return;
+    final dir = global.dx < 28 ? -1 : (global.dx > width - 28 ? 1 : 0);
+    if (dir == 0) {
+      _edgeTimer?.cancel();
+      _edgeTimer = null;
+      return;
+    }
+    if (_edgeTimer != null) return;
+    _edgeTimer = Timer(const Duration(milliseconds: 450), () {
+      _edgeTimer = null;
+      if (_carry == null) return;
+      var target = _page + dir;
+      final current = _draft;
+      if (current == null) return;
+      if (target >= current.pages.length && current.pages.length < kHomeMaxPages) {
+        // Off the last page: a new one, as a launcher does.
+        _setDraft(current.addPage());
+      }
+      target = target.clamp(0, (_draft ?? current).pages.length - 1);
+      if (target != _page) {
+        _animateTo(target);
+        HapticFeedback.selectionClick();
+      }
+    });
+  }
+
+  void _liftEnd() {
+    final carry = _carry;
+    final draft = _draft;
+    _edgeTimer?.cancel();
+    _edgeTimer = null;
+    _otherFingers.clear();
+    if (carry == null || draft == null) return;
+    if (!carry.moved) {
+      // A hold without a move: the menu stays open on the tile.
+      setState(() => _carry = null);
+      return;
+    }
+    HomeLayout? next;
+    if (carry.mergeWith != null) {
+      next = draft.mergeIntoFolder(carry.tile.id, carry.mergeWith!);
+      if (next != null) HapticFeedback.lightImpact();
+    }
+    next ??= carry.landing == null
+        ? null
+        : draft.moveTo(
+            carry.tile.id,
+            carry.landingPage,
+            carry.landing!.x,
+            carry.landing!.y,
+          );
+    // Settle from where the finger let go to where the tile now lives (or
+    // back home, when the drop was refused).
+    final m = carry.metrics;
+    final from = Rect.fromLTWH(
+      carry.finger.dx - _gridOrigin().dx - carry.grab.dx,
+      carry.finger.dy - _gridOrigin().dy - carry.grab.dy,
+      m.surfaceFor(carry.tile).width,
+      m.surfaceFor(carry.tile).height,
+    );
+    final landed = next?.tileById(carry.tile.id);
+    final mergedInto =
+        carry.mergeWith == null ? null : next?.tileById(carry.mergeWith!);
+    final onPage = next == null
+        ? carry.fromPage == _page
+        : (landed != null && next.pageOf(landed.id) == _page) ||
+            mergedInto != null;
+    final target = mergedInto ?? landed ?? carry.tile;
+    setState(() {
+      _carry = null;
+      _selectedId = null;
+    });
+    if (next != null) _setDraft(next);
+    if (onPage) {
+      _settleInto(
+        from,
+        m.surfaceFor(target),
+        mergedInto != null ? carry.tile : target,
+      );
+    }
+  }
+
+  /// Raw pointers over the whole grid: a second finger's horizontal swipe
+  /// turns the page while the first one holds a tile.
+  void _onPointerDown(PointerDownEvent e) {
+    if (_carry == null) {
+      _carryPointer = e.pointer;
+      return;
+    }
+    if (e.pointer != _carryPointer) _otherFingers[e.pointer] = e.position;
+  }
+
+  void _onPointerUp(PointerEvent e) {
+    final start = _otherFingers.remove(e.pointer);
+    if (start == null || _carry == null) return;
+    final dx = e.position.dx - start.dx;
+    final draft = _draft;
+    if (draft == null || dx.abs() < 48) return;
+    var target = _page + (dx < 0 ? 1 : -1);
+    if (target >= draft.pages.length && draft.pages.length < kHomeMaxPages) {
+      _setDraft(draft.addPage());
+    }
+    target = target.clamp(0, (_draft ?? draft).pages.length - 1);
+    if (target != _page) {
+      _animateTo(target);
+      HapticFeedback.selectionClick();
+    }
+  }
+
+  // --- tile actions ---------------------------------------------------------
+
+  Future<void> _onAction(HomeTile tile, HomeTileAction action) async {
+    switch (action) {
+      case HomeTileAction.edit:
+        setState(() => _selectedId = null);
+        await _settings(tile);
+      case HomeTileAction.resize:
+        // The menu makes way for the handles.
+        setState(() {
+          _resizingId = tile.id;
+          _selectedId = null;
+        });
+      case HomeTileAction.replace:
+        setState(() => _selectedId = null);
+        await _replace(tile);
+      case HomeTileAction.duplicate:
+        setState(() => _selectedId = null);
+        _duplicate(tile);
+      case HomeTileAction.move:
+        setState(() => _selectedId = null);
+        await _moveToPage(tile);
+      case HomeTileAction.remove:
+        setState(() => _selectedId = null);
+        _delete(tile);
+    }
   }
 
   Future<void> _addWidget({({int x, int y})? at}) async {
@@ -116,13 +430,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _setDraft(result.layout);
-    setState(() => _selectedId = result.tile.id);
     if (result.page != _page) {
-      _pages.animateToPage(
-        result.page,
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOutCubic,
-      );
+      _animateTo(result.page);
       _toast('No room here, so it went on page ${result.page + 1}.');
     }
   }
@@ -173,8 +482,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _setDraft(result.layout);
-    setState(() => _selectedId = result.tile.id);
-    if (result.page != _page) _toast('The copy went on page ${result.page + 1}.');
+    if (result.page != _page) {
+      _toast('The copy went on page ${result.page + 1}.');
+    }
   }
 
   void _delete(HomeTile tile) {
@@ -212,7 +522,9 @@ class _HomeScreenState extends State<HomeScreen> {
             for (var i = 0; i < draft.pages.length; i++)
               ListTile(
                 leading: Icon(
-                  i == current ? Icons.radio_button_checked : Icons.radio_button_off,
+                  i == current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
                 ),
                 title: Text('Page ${i + 1}'),
                 enabled: i != current,
@@ -237,11 +549,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _setDraft(moved);
-    _pages.animateToPage(
-      target,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-    );
+    _animateTo(target);
   }
 
   void _addPage() {
@@ -252,14 +560,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _setDraft(draft.addPage());
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_pages.hasClients) return;
-      _pages.animateToPage(
-        draft.pages.length,
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOutCubic,
-      );
-    });
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _animateTo(draft.pages.length));
   }
 
   Future<void> _removePage() async {
@@ -319,19 +621,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    if (!state.ready) return const StartupScreen();
-    final layout = _draft ?? state.homeLayout;
-    final loadError = state.loadError;
+    // Only what this screen draws itself: a reply streaming into a chat, a
+    // usage tick or a gallery write must not rebuild every page mid-swipe.
+    // Each widget selects its own slice of the state.
+    final ready = context.select<AppState, bool>((s) => s.ready);
+    if (!ready) return const StartupScreen();
+    final stored = context.select<AppState, HomeLayout>((s) => s.homeLayout);
+    final loadError = context.select<AppState, String?>((s) => s.loadError);
+    final configured = context.select<AppState, bool>((s) => s.isConfigured);
+    final layout = _draft ?? stored;
     final scheme = Theme.of(context).colorScheme;
-    final showSetup = !_editing && !state.isConfigured;
-    final selected = _selectedId == null ? null : layout.tileById(_selectedId!);
+    // Shown in edit mode too: nothing above the grid may change size on the
+    // way into the editor, or every tile would move under the finger.
+    final showSetup = !configured;
 
     return PopScope(
       canPop: !_editing,
       onPopInvokedWithResult: (didPop, _) {
-        // Back leaves the editor and keeps what was done, as a launcher does.
-        if (!didPop && _editing) _finishEditing();
+        if (didPop || !_editing) return;
+        // Back closes the open menu first, then leaves the editor and keeps
+        // what was done, as a launcher does.
+        if (_selectedId != null || _resizingId != null) {
+          _closeMenu();
+        } else {
+          _finishEditing();
+        }
       },
       child: Scaffold(
         drawer: _editing ? null : const AppDrawer(selected: DrawerSection.home),
@@ -340,35 +654,48 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             if (layout.wallpaper != null)
               Positioned.fill(
-                child: _Wallpaper(
-                  image: layout.wallpaper!,
-                  dim: layout.wallpaperDim,
+                child: RepaintBoundary(
+                  child: _Wallpaper(
+                    image: layout.wallpaper!,
+                    dim: layout.wallpaperDim,
+                  ),
                 ),
               ),
             SafeArea(
               child: Column(
                 children: [
-                  _editing
-                      ? _EditBar(
-                          canRemovePage: layout.pages.length > 1,
-                          onDone: _finishEditing,
-                          onDiscard: _discard,
-                          onAdd: () => _addWidget(),
-                          onGrid: () => showGridSheet(
-                            context,
-                            layout: _draft!,
-                            onChanged: _setDraft,
+                  // One fixed height for both bars, for the same reason.
+                  SizedBox(
+                    height: 64,
+                    child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: _editing
+                        ? _EditBar(
+                            key: const ValueKey('edit-bar'),
+                            canRemovePage: layout.pages.length > 1,
+                            onDone: _finishEditing,
+                            onDiscard: _discard,
+                            onAdd: () => _addWidget(),
+                            onGrid: () => showGridSheet(
+                              context,
+                              layout: _draft!,
+                              onChanged: _setDraft,
+                            ),
+                            onStyle: () => showHomeStyleSheet(
+                              context,
+                              layout: _draft!,
+                              onChanged: _setDraft,
+                            ),
+                            onAddPage: _addPage,
+                            onRemovePage: _removePage,
+                            onReset: _reset,
+                          )
+                        : _TopBar(
+                            key: const ValueKey('top-bar'),
+                            onEdit: () => _startEditing(),
                           ),
-                          onStyle: () => showHomeStyleSheet(
-                            context,
-                            layout: _draft!,
-                            onChanged: _setDraft,
-                          ),
-                          onAddPage: _addPage,
-                          onRemovePage: _removePage,
-                          onReset: _reset,
-                        )
-                      : _TopBar(onEdit: () => _startEditing()),
+                  ),
+                  ),
                   if (loadError != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -383,39 +710,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: LayoutBuilder(
-                        builder: (context, box) {
-                          final metrics = HomeGridMetrics(
-                            columns: layout.columns,
-                            rows: layout.rows,
-                            size: box.biggest,
-                          );
-                          return PageView.builder(
-                            controller: _pages,
-                            itemCount: layout.pages.length,
-                            // Dragging a tile must not swipe the page under it.
-                            physics: _editing && _selectedId != null
-                                ? const NeverScrollableScrollPhysics()
-                                : const PageScrollPhysics(),
-                            onPageChanged: (i) => setState(() {
-                              _page = i;
-                              _selectedId = null;
-                            }),
-                            itemBuilder: (context, i) => HomeGridPage(
-                              key: ValueKey('home-page-${layout.pages[i].id}'),
-                              layout: layout,
-                              pageIndex: i,
-                              metrics: metrics,
-                              editing: _editing,
-                              selectedId: _selectedId,
-                              onSelect: (id) =>
-                                  setState(() => _selectedId = id),
-                              onChange: _onTileChanged,
-                              onTapEmpty: (x, y) =>
-                                  _addWidget(at: (x: x, y: y)),
-                              onEnterEdit: (id) => _startEditing(select: id),
-                            ),
-                          );
-                        },
+                        key: _gridKey,
+                        builder: (context, box) =>
+                            _grid(context, layout, box.biggest),
                       ),
                     ),
                   ),
@@ -423,28 +720,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     count: layout.pages.length,
                     current: _page.clamp(0, layout.pages.length - 1),
                     editing: _editing,
-                    onTap: (i) => _pages.animateToPage(
-                      i,
-                      duration: const Duration(milliseconds: 320),
-                      curve: Curves.easeOutCubic,
-                    ),
-                  ),
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOutCubic,
-                    child: _editing && selected != null
-                        ? _TileToolbar(
-                            label: specFor(selected.kind)
-                                .describe(context, selected),
-                            multiPage: layout.pages.length > 1 ||
-                                layout.pages.length < kHomeMaxPages,
-                            onSettings: () => _settings(selected),
-                            onReplace: () => _replace(selected),
-                            onDuplicate: () => _duplicate(selected),
-                            onMove: () => _moveToPage(selected),
-                            onDelete: () => _delete(selected),
-                          )
-                        : const SizedBox(width: double.infinity),
+                    onTap: _animateTo,
                   ),
                 ],
               ),
@@ -454,11 +730,232 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  Widget _grid(BuildContext context, HomeLayout layout, Size size) {
+    final metrics = HomeGridMetrics(
+      columns: layout.columns,
+      rows: layout.rows,
+      size: size,
+    );
+    final carry = _carry;
+    final selected = _selectedId == null || carry?.moved == true
+        ? null
+        : layout.tileById(_selectedId!);
+    final selectedOnPage = selected != null &&
+        layout.pageOf(selected.id) == _page.clamp(0, layout.pages.length - 1);
+    return Listener(
+      onPointerDown: _onPointerDown,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerUp,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          PageView.builder(
+            controller: _pages,
+            itemCount: layout.pages.length,
+            // The neighbouring pages are built and laid out before the swipe
+            // reaches them, so the first frame of a swipe is not a build.
+            allowImplicitScrolling: true,
+            // A tile being resized or carried keeps the page still; a second
+            // finger turns pages then (see _onPointerUp).
+            physics: _resizingId != null || carry != null
+                ? const NeverScrollableScrollPhysics()
+                : const HomePagePhysics(),
+            onPageChanged: (i) => setState(() {
+              _page = i;
+              if (carry == null) {
+                _selectedId = null;
+                _resizingId = null;
+              }
+              _updateLanding();
+            }),
+            // Only the page showing ticks: clocks, the Studio's live dot and a
+            // shuffling gallery stop on a page that is off screen.
+            itemBuilder: (context, i) => TickerMode(
+              enabled: i == _page,
+              child: HomeGridPage(
+              key: ValueKey('home-page-${layout.pages[i].id}'),
+              layout: layout,
+              pageIndex: i,
+              metrics: metrics,
+              editing: _editing,
+              selectedId: _selectedId,
+              resizingId: _resizingId,
+              hiddenId: carry?.moved == true
+                  ? carry!.tile.id
+                  : _landing?.tile.id,
+              onTileTap: _onTileTap,
+              onLiftStart: (tile, global, grab) =>
+                  _liftStart(tile, global, grab, metrics),
+              onLiftMove: _liftMove,
+              onLiftEnd: _liftEnd,
+              onTapEmpty: (x, y) {
+                if (_selectedId != null || _resizingId != null) {
+                  _closeMenu();
+                  return;
+                }
+                final probe = HomeTile(
+                  id: '\u0000tap',
+                  kind: HomeWidgetKind.quickOpen,
+                  x: x,
+                  y: y,
+                );
+                if (layout.fits(_page, probe)) _addWidget(at: (x: x, y: y));
+              },
+              onLongPressEmpty: () => _startEditing(),
+              onResize: _onResize,
+            ),
+            ),
+          ),
+          // Where the carried tile would land, on the page now showing.
+          if (carry != null && carry.moved && carry.landing != null)
+            Positioned.fromRect(
+              rect: carry.mergeWith != null
+                  ? metrics.surfaceFor(layout.tileById(carry.mergeWith!)!)
+                  : metrics.surfaceFor(carry.landing!),
+              child: IgnorePointer(
+                child: HomeGhost(
+                  fits: carry.fits,
+                  merge: carry.mergeWith != null,
+                ),
+              ),
+            ),
+          // The carried tile itself, above every page, following the finger.
+          if (carry != null && carry.moved)
+            _carried(context, layout, metrics, carry),
+          if (_landing case final l?)
+            _settling(context, layout, l),
+          if (selected != null && selectedOnPage && _editing)
+            HomeTileMenu(
+              key: ValueKey('home-menu-${selected.id}'),
+              anchor: metrics.surfaceFor(selected),
+              area: size,
+              title: specFor(selected.kind).describe(context, selected),
+              actions: [
+                if (specFor(selected.kind).options(selected).isNotEmpty)
+                  HomeTileAction.edit,
+                HomeTileAction.resize,
+                HomeTileAction.replace,
+                HomeTileAction.duplicate,
+                if (layout.pages.length > 1 ||
+                    layout.pages.length < kHomeMaxPages)
+                  HomeTileAction.move,
+                HomeTileAction.remove,
+              ],
+              onAction: (a) => _onAction(selected, a),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _settling(
+    BuildContext context,
+    HomeLayout layout,
+    ({Rect from, Rect to, HomeTile tile}) l,
+  ) {
+    final t = _settle.value;
+    final rect = Rect.lerp(l.from, l.to, t)!;
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: l.from.width,
+      height: l.from.height,
+      child: IgnorePointer(
+        child: RepaintBoundary(
+          child: Transform.scale(
+            alignment: Alignment.topLeft,
+            scaleX: rect.width / l.from.width * (1.05 - 0.05 * t),
+            scaleY: rect.height / l.from.height * (1.05 - 0.05 * t),
+            child: HomeTileStatus(
+              selected: false,
+              lifted: t < 0.6,
+              editing: true,
+              child: specFor(l.tile.kind).build(
+                context,
+                HomeTileContext(
+                  tile: l.tile,
+                  size: l.from.size,
+                  layout: layout,
+                  editing: true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _carried(
+    BuildContext context,
+    HomeLayout layout,
+    HomeGridMetrics metrics,
+    _Carry carry,
+  ) {
+    final surface = metrics.surfaceFor(carry.tile);
+    final topLeft = carry.finger - _gridOrigin() - carry.grab;
+    return Positioned(
+      left: topLeft.dx,
+      top: topLeft.dy,
+      width: surface.width,
+      height: surface.height,
+      child: IgnorePointer(
+        child: RepaintBoundary(
+          child: Transform.scale(
+            scale: 1.05,
+            child: HomeTileStatus(
+              selected: false,
+              lifted: true,
+              editing: true,
+              child: specFor(carry.tile.kind).build(
+                context,
+                HomeTileContext(
+                  tile: carry.tile,
+                  size: surface.size,
+                  layout: layout,
+                  editing: true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A tile on its way somewhere: where the finger is, where it would land.
+class _Carry {
+  _Carry({
+    required this.tile,
+    required this.fromPage,
+    required this.grab,
+    required this.finger,
+    required this.metrics,
+    required this.moved,
+  }) : landingPage = fromPage;
+
+  final HomeTile tile;
+  final int fromPage;
+
+  /// The finger's offset within the tile's surface.
+  final Offset grab;
+  Offset finger;
+  final HomeGridMetrics metrics;
+
+  /// Has the finger moved since the hold? Until it does, the menu shows.
+  bool moved;
+
+  HomeTile? landing;
+  int landingPage;
+  String? mergeWith;
+  bool fits = true;
 }
 
 /// Outside edit mode: the drawer button and a ⋮ menu, nothing else.
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.onEdit});
+  const _TopBar({super.key, required this.onEdit});
 
   final VoidCallback onEdit;
 
@@ -500,6 +997,7 @@ class _TopBar extends StatelessWidget {
 /// In edit mode: Done, and what can be done to the screen as a whole.
 class _EditBar extends StatelessWidget {
   const _EditBar({
+    super.key,
     required this.canRemovePage,
     required this.onDone,
     required this.onDiscard,
@@ -600,100 +1098,6 @@ class _EditBar extends StatelessWidget {
   }
 }
 
-/// The floating toolbar for the selected tile (Material 3 Expressive's
-/// floating toolbar: a pill of icon buttons above the navigation bar).
-class _TileToolbar extends StatelessWidget {
-  const _TileToolbar({
-    required this.label,
-    required this.multiPage,
-    required this.onSettings,
-    required this.onReplace,
-    required this.onDuplicate,
-    required this.onMove,
-    required this.onDelete,
-  });
-
-  final String label;
-  final bool multiPage;
-  final VoidCallback onSettings;
-  final VoidCallback onReplace;
-  final VoidCallback onDuplicate;
-  final VoidCallback onMove;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.labelLarge
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          Material(
-            color: scheme.primaryContainer,
-            shape: const StadiumBorder(),
-            elevation: 3,
-            shadowColor: scheme.shadow.withValues(alpha: 0.3),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: IconTheme(
-                data: IconThemeData(color: scheme.onPrimaryContainer),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Widget settings',
-                      icon: const Icon(Icons.tune_rounded),
-                      onPressed: onSettings,
-                    ),
-                    IconButton(
-                      tooltip: 'Replace',
-                      icon: const Icon(Icons.swap_horiz_rounded),
-                      onPressed: onReplace,
-                    ),
-                    IconButton(
-                      tooltip: 'Duplicate',
-                      icon: const Icon(Icons.content_copy_rounded),
-                      onPressed: onDuplicate,
-                    ),
-                    if (multiPage)
-                      IconButton(
-                        tooltip: 'Move to page',
-                        icon: const Icon(Icons.drive_file_move_outline),
-                        onPressed: onMove,
-                      ),
-                    IconButton(
-                      tooltip: 'Remove',
-                      icon: Icon(Icons.delete_outline_rounded,
-                          color: scheme.error),
-                      onPressed: onDelete,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Drag to move · pull a dot to resize',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// Which page is showing. Hidden with a single page outside edit mode.
 class _PageDots extends StatelessWidget {
   const _PageDots({
@@ -710,7 +1114,9 @@ class _PageDots extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (count <= 1 && !editing) return const SizedBox(height: 8);
+    // Always the same height, dots or not: the grid above must not change
+    // size on the way into edit mode.
+    if (count <= 1 && !editing) return const SizedBox(height: 28);
     final scheme = Theme.of(context).colorScheme;
     return SizedBox(
       height: 28,

@@ -98,7 +98,8 @@ void main() {
 
     // The restored thread shows up in the default Recent chat widget.
     expect(find.text('Tides'), findsOneWidget);
-    expect(find.text('hi'), findsOneWidget);
+    // The preview says who spoke ("You: hi").
+    expect(find.textContaining('hi'), findsWidgets);
   });
 
   testWidgets('a stored dark preference is applied on launch', (tester) async {

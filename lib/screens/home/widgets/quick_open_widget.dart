@@ -155,21 +155,24 @@ class _IconTileState extends State<_IconTile> {
                   scale: _pressed ? 0.9 : 1.0,
                   duration: const Duration(milliseconds: 160),
                   curve: Curves.easeOutBack,
-                  child: Container(
-                    width: side,
-                    height: side,
-                    decoration: ShapeDecoration(
-                      color: widget.studio
-                          ? scheme.tertiaryContainer
-                          : scheme.primaryContainer,
-                      shape: homeIconBorder(widget.shape, side),
-                    ),
-                    child: Icon(
-                      widget.icon,
-                      size: side * 0.45,
-                      color: widget.studio
-                          ? scheme.onTertiaryContainer
-                          : scheme.onPrimaryContainer,
+                  child: HomeOutlined(
+                    shape: homeIconBorder(widget.shape, side),
+                    child: Container(
+                      width: side,
+                      height: side,
+                      decoration: ShapeDecoration(
+                        color: widget.studio
+                            ? scheme.tertiaryContainer
+                            : scheme.primaryContainer,
+                        shape: homeIconBorder(widget.shape, side),
+                      ),
+                      child: Icon(
+                        widget.icon,
+                        size: side * 0.45,
+                        color: widget.studio
+                            ? scheme.onTertiaryContainer
+                            : scheme.onPrimaryContainer,
+                      ),
                     ),
                   ),
                 ),

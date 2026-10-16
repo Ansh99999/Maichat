@@ -46,11 +46,13 @@ class ProviderSpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final state = context.watch<AppState>();
     final providerId = tile.tile.str('providerId');
-    final provider = providerId == null
-        ? state.activeProvider
-        : state.providerById(providerId);
+    app_provider.Provider? pick(AppState s) =>
+        providerId == null ? s.activeProvider : s.providerById(providerId);
+    final provider = pick(homeWatch(context, (s) {
+      final p = pick(s);
+      return (p, p?.displayName, p?.model, p?.kind, p?.isConfigured);
+    }));
     return _ProviderCard(
       key: ValueKey('${tile.tile.id}-${provider?.id}'),
       provider: provider,

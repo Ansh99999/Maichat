@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'package:provider/provider.dart' hide Provider;
+
 import '../../models/home_layout.dart';
+import '../../state/app_state.dart';
 
 /// What a widget on the Home grid is told about where it is drawn.
 ///
@@ -110,15 +113,60 @@ class HomePickOption extends HomeOption {
     required this.pick,
     this.allowNone = true,
     this.noneLabel = 'None',
+    this.multiple = false,
     super.help,
   });
 
   final HomePickKind pick;
   final bool allowNone;
   final String noneLabel;
+
+  /// Pick several, stored comma-joined (config values are scalars only) —
+  /// the time zones of a clock, the shortcuts in an app folder.
+  final bool multiple;
 }
 
-enum HomePickKind { chat, provider, character, picture, target }
+enum HomePickKind {
+  chat,
+  provider,
+  character,
+  picture,
+  target,
+  folder,
+  note,
+  timezone,
+}
+
+/// A Google Fonts family (or none, for the app's own font), picked from the
+/// same searchable list the rest of the app uses.
+class HomeFontOption extends HomeOption {
+  const HomeFontOption({required super.key, required super.label, super.help});
+}
+
+/// A choice that only matters when another option has a given value: the
+/// sheet hides [option] unless `tile.config[whenKey]` is one of [whenValues]
+/// (or, with [whenValues] empty, is set at all).
+class HomeDependentOption extends HomeOption {
+  HomeDependentOption({
+    required this.option,
+    required this.whenKey,
+    this.whenValues = const [],
+    this.whenDefault,
+  }) : super(key: option.key, label: option.label, help: option.help);
+
+  final HomeOption option;
+  final String whenKey;
+  final List<String> whenValues;
+
+  /// What `whenKey` counts as when it is unset.
+  final String? whenDefault;
+
+  bool shows(HomeTile tile) {
+    final v = tile.config[whenKey]?.toString() ?? whenDefault;
+    if (whenValues.isEmpty) return v != null && v.isNotEmpty;
+    return whenValues.contains(v);
+  }
+}
 
 /// A free line of text (a custom label).
 class HomeTextOption extends HomeOption {
@@ -166,6 +214,96 @@ abstract class HomeWidgetSpec {
   Map<String, Object?> get initialConfig => const <String, Object?>{};
 
   Widget build(BuildContext context, HomeTileContext tile);
+}
+
+/// How the tile a widget is drawn in stands right now, for the widget's own
+/// surface to show: picked (the menu or the resize handles are on it), lifted
+/// (being carried), or the home screen is in edit mode.
+///
+/// The highlight is drawn by the widget's **visible surface** — a card, an icon,
+/// a pill — on its own shape, never as a box around the cell: an outline
+/// around the cell stood off the edges of anything smaller than its cell (an
+/// icon, a search bar), which looked careless. [HomeCard] does this itself;
+/// anything else wraps its surface in [HomeOutlined].
+class HomeTileStatus extends InheritedWidget {
+  const HomeTileStatus({
+    super.key,
+    required this.selected,
+    required this.lifted,
+    required this.editing,
+    required super.child,
+  });
+
+  final bool selected;
+  final bool lifted;
+  final bool editing;
+
+  static HomeTileStatus? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<HomeTileStatus>();
+
+  @override
+  bool updateShouldNotify(HomeTileStatus old) =>
+      old.selected != selected || old.lifted != lifted || old.editing != editing;
+}
+
+/// The selection ring a surface shows on its own [shape], edge to edge.
+BorderSide homeOutlineSide(BuildContext context) {
+  final status = HomeTileStatus.maybeOf(context);
+  final scheme = Theme.of(context).colorScheme;
+  if (status == null) return BorderSide.none;
+  if (status.selected || status.lifted) {
+    return BorderSide(
+      color: scheme.primary,
+      width: 3,
+      strokeAlign: BorderSide.strokeAlignInside,
+    );
+  }
+  if (status.editing) {
+    return BorderSide(
+      color: scheme.outlineVariant,
+      strokeAlign: BorderSide.strokeAlignInside,
+    );
+  }
+  return BorderSide.none;
+}
+
+/// Paints [homeOutlineSide] over [child] on exactly [shape] — for a widget
+/// whose visible surface is not a [HomeCard] (an app icon, a pill). While the
+/// tile is carried it also casts the lifted shadow.
+class HomeOutlined extends StatelessWidget {
+  const HomeOutlined({super.key, required this.shape, required this.child});
+
+  final OutlinedBorder shape;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final side = homeOutlineSide(context);
+    final lifted = HomeTileStatus.maybeOf(context)?.lifted ?? false;
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        shape: shape,
+        shadows: lifted
+            ? [
+                BoxShadow(
+                  color: scheme.shadow.withValues(alpha: 0.28),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+            : null,
+      ),
+      position: DecorationPosition.background,
+      child: side == BorderSide.none
+          ? child
+          : DecoratedBox(
+              position: DecorationPosition.foreground,
+              decoration: ShapeDecoration(shape: shape.copyWith(side: side)),
+              child: child,
+            ),
+    );
+  }
 }
 
 /// The shared surface most widgets sit on: a soft, rounded container in the
@@ -239,8 +377,14 @@ class HomeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final outline = shape ??
+    final base = shape ??
         RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(radius));
+    final status = HomeTileStatus.maybeOf(context);
+    final side = homeOutlineSide(context);
+    // The ring sits on the card's own edge: same shape, same rect.
+    final outline = base is OutlinedBorder && side != BorderSide.none
+        ? base.copyWith(side: side)
+        : base;
     final body = LayoutBuilder(
       builder: (context, c) {
         final pad = _paddingFor(c);
@@ -262,6 +406,8 @@ class HomeCard extends StatelessWidget {
       child: Material(
         color: color ?? scheme.surfaceContainerHigh,
         shape: outline,
+        elevation: status?.lifted ?? false ? 8 : 0,
+        shadowColor: scheme.shadow,
         clipBehavior: clip ? Clip.antiAlias : Clip.none,
         child: onTap == null
             ? body
@@ -311,4 +457,20 @@ class HomeShrink extends StatelessWidget {
 double homeLineHeight(BuildContext context, TextStyle? style) {
   final size = style?.fontSize ?? 14;
   return MediaQuery.textScalerOf(context).scale(size) * (style?.height ?? 1.25);
+}
+
+/// Rebuilds the calling widget only when [signature] changes, then hands back
+/// the state to read from.
+///
+/// `context.watch<AppState>()` rebuilt every tile on every notify — a reply
+/// streaming into a chat notifies many times a second, and a home screen of
+/// widgets all rebuilding under a page swipe is a stutter. A widget names the
+/// few values it actually draws (a record, a string, a number: something that
+/// compares by value), and only a change to those rebuilds it.
+AppState homeWatch(
+  BuildContext context,
+  Object? Function(AppState state) signature,
+) {
+  context.select<AppState, Object?>(signature);
+  return context.read<AppState>();
 }

@@ -35,8 +35,8 @@ class SearchSpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final state = context.watch<AppState>();
-    final persona = state.defaultPersona;
+    final persona =
+        homeWatch(context, (s) => s.defaultPersona).defaultPersona;
     final theme = Theme.of(context);
 
     // A search bar is 56 dp tall whatever cell it sits in (Material 3), centred
@@ -60,7 +60,7 @@ class SearchSpec extends HomeWidgetSpec {
       label: 'Search chats and characters',
       child: Material(
         color: theme.colorScheme.surfaceContainerHighest,
-        shape: const StadiumBorder(),
+        shape: StadiumBorder(side: homeOutlineSide(context)),
         child: InkWell(
           customBorder: const StadiumBorder(),
           onTap: tile.editing

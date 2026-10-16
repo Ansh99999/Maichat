@@ -12,6 +12,7 @@ import '../models/embedding.dart';
 import '../models/folder.dart';
 import '../models/gallery_image.dart';
 import '../models/home_layout.dart';
+import '../models/home_note.dart';
 import '../models/image_gen.dart';
 import '../models/studio.dart';
 import '../models/interface_preset.dart';
@@ -75,6 +76,7 @@ class Storage {
   static const _backupsKey = 'backups';
   static const _imageRatiosKey = 'imageRatios';
   static const _homeLayoutKey = 'homeLayout';
+  static const _homeNotesKey = 'homeNotes';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -390,6 +392,27 @@ class Storage {
 
   Future<void> saveHomeLayout(HomeLayout layout) async =>
       (await _prefs).setString(_homeLayoutKey, jsonEncode(layout.toJson()));
+
+  /// The Home screen's notes, by id. Their own entry — see [HomeNote].
+  Future<List<HomeNote>> loadHomeNotes() async {
+    final raw = (await _prefs).getString(_homeNotesKey);
+    if (raw == null) return const [];
+    try {
+      final json = jsonDecode(raw);
+      if (json is List) {
+        return [for (final n in json) ?HomeNote.fromJson(n)];
+      }
+    } catch (_) {
+      // Defaults beat a startup failure, as everywhere else here.
+    }
+    return const [];
+  }
+
+  Future<void> saveHomeNotes(List<HomeNote> notes) async =>
+      (await _prefs).setString(
+        _homeNotesKey,
+        jsonEncode([for (final n in notes) n.toJson()]),
+      );
 
   /// The user's saved chat-interface looks. Its own small entry, so saving a look
   /// never rewrites the conversations blob — and so a backup, which copies the

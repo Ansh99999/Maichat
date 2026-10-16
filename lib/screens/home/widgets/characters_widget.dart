@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart' hide Provider;
 
 import '../../../models/character.dart';
 import '../../../models/home_layout.dart';
@@ -60,7 +59,17 @@ class CharactersSpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final state = context.watch<AppState>();
+    final state = homeWatch(context, (s) {
+      final b = StringBuffer();
+      for (final c in s.characters) {
+        b.write('${c.id}:${c.avatar}:${c.starred}:${c.name}|');
+      }
+      for (final c in s.conversations) {
+        b.write(c.memberIds.join(','));
+        b.write(';');
+      }
+      return b.toString();
+    });
     final source = tile.tile.str('source') ?? 'recent';
     final tapAction = tile.tile.str('tapAction') ?? 'chat';
     final showNames = tile.tile.flag('names', false);

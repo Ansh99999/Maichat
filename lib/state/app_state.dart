@@ -20,6 +20,7 @@ import '../models/floating_image.dart';
 import '../models/folder.dart';
 import '../models/gallery_image.dart';
 import '../models/home_layout.dart';
+import '../models/home_note.dart';
 import '../models/image_gen.dart';
 import '../models/interface_preset.dart';
 import '../models/agent_message.dart';
@@ -588,6 +589,9 @@ class AppState extends ChangeNotifier {
       ..addAll(await _storage.loadRegexRules());
     _viewPrefs = await _storage.loadViewPrefs();
     _homeLayout = await _storage.loadHomeLayout();
+    _homeNotes
+      ..clear()
+      ..addAll(await _storage.loadHomeNotes());
     _interfacePresets
       ..clear()
       ..addAll(await _storage.loadInterfacePresets());
@@ -5550,6 +5554,45 @@ class AppState extends ChangeNotifier {
 
   /// How the Studio talks to its model.
   StudioConfig get studioConfig => _studioConfig;
+
+  final List<HomeNote> _homeNotes = <HomeNote>[];
+
+  /// The Home screen's notes, newest edit first.
+  List<HomeNote> get homeNotes =>
+      List.unmodifiable([..._homeNotes]
+        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)));
+
+  HomeNote? homeNoteById(String? id) {
+    if (id == null) return null;
+    for (final n in _homeNotes) {
+      if (n.id == id) return n;
+    }
+    return null;
+  }
+
+  /// Adds or replaces [note]. The editor calls this when typing pauses and when
+  /// it closes — never per keystroke.
+  Future<void> saveHomeNote(HomeNote note) async {
+    final i = _homeNotes.indexWhere((n) => n.id == note.id);
+    if (i >= 0) {
+      if (_homeNotes[i] == note) return;
+      _homeNotes[i] = note;
+    } else {
+      _homeNotes.add(note);
+    }
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveHomeNotes(_homeNotes);
+  }
+
+  Future<void> deleteHomeNote(String id) async {
+    final before = _homeNotes.length;
+    _homeNotes.removeWhere((n) => n.id == id);
+    if (_homeNotes.length == before) return;
+    notifyListeners();
+    if (!_writable) return;
+    await _storage.saveHomeNotes(_homeNotes);
+  }
 
   /// Where Studio sessions are kept, or null when the platform named no folder
   /// (and in widget tests). The Home screen's Studio widget lists from it.

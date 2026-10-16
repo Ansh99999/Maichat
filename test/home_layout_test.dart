@@ -350,4 +350,51 @@ void main() {
       expect(t.withConfig('z', 'v').str('z'), 'v');
     });
   });
+
+  group('moveTo and folders', () {
+    test('moveTo carries a tile across pages', () {
+      final l = grid(4, 6, [
+        [tile('a', 0, 0)],
+        [],
+      ]);
+      final moved = l.moveTo('a', 1, 3, 5)!;
+      expect(moved.pageOf('a'), 1);
+      expect((moved.tileById('a')!.x, moved.tileById('a')!.y), (3, 5));
+      expectValid(moved);
+      expect(l.moveTo('a', 5, 0, 0), isNull);
+    });
+
+    test('two shortcuts merge into a folder where the target was', () {
+      final l = grid(4, 6, [
+        [
+          tile('a', 0, 0).withConfig('target', 'chats'),
+          tile('b', 2, 0).withConfig('target', 'gallery'),
+        ],
+      ]);
+      final merged = l.mergeIntoFolder('b', 'a')!;
+      final f = merged.tileById('a')!;
+      expect(f.kind, HomeWidgetKind.appFolder);
+      expect((f.x, f.y), (0, 0));
+      expect(HomeLayout.folderTargets(f), ['chats', 'gallery']);
+      expect(merged.tileById('b'), isNull);
+      // A third joins the folder, once.
+      final more = merged
+          .put(0, tile('c', 3, 3).withConfig('target', 'studio'))!
+          .mergeIntoFolder('c', 'a')!;
+      expect(HomeLayout.folderTargets(more.tileById('a')!),
+          ['chats', 'gallery', 'studio']);
+    });
+
+    test('only shortcuts merge, and never into themselves', () {
+      final l = grid(4, 6, [
+        [
+          tile('a', 0, 0),
+          const HomeTile(id: 'w', kind: HomeWidgetKind.clock, x: 1, y: 1, w: 2, h: 2),
+        ],
+      ]);
+      expect(l.mergeIntoFolder('a', 'a'), isNull);
+      expect(l.mergeIntoFolder('a', 'w'), isNull);
+      expect(l.mergeIntoFolder('w', 'a'), isNull);
+    });
+  });
 }

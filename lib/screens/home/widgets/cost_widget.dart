@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart' hide Provider;
 
 import '../../../models/budget.dart';
 import '../../../models/home_layout.dart';
@@ -74,12 +73,24 @@ class CostSpec extends HomeWidgetSpec {
 
   @override
   Widget build(BuildContext context, HomeTileContext tile) {
-    final state = context.watch<AppState>();
     final providerId = tile.tile.str('providerId');
     final period = tile.tile.str('period') ?? 'month';
-    final provider = providerId == null
-        ? state.activeProvider
-        : state.providerById(providerId);
+    app_provider.Provider? pick(AppState s) =>
+        providerId == null ? s.activeProvider : s.providerById(providerId);
+    final state = homeWatch(context, (s) {
+      final p = pick(s);
+      if (p == null) return null;
+      final t = s.usage.totals(p.id, since: _since(period));
+      return [
+        p.id,
+        p.displayName,
+        t.totalCost,
+        t.totalTokens,
+        t.requests,
+        for (final b in p.budgets) '${b.limit}${b.period}${b.metric}',
+      ].join('|');
+    });
+    final provider = pick(state);
 
     if (provider == null) {
       return HomeCard(

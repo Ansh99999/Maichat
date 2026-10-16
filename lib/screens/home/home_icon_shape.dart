@@ -8,7 +8,8 @@ import '../../models/home_layout.dart';
 ///
 /// Shared by the quick-open widget and the style sheet's preview, so what is
 /// picked is exactly what is drawn.
-ShapeBorder homeIconBorder(HomeIconShape shape, double side) => switch (shape) {
+OutlinedBorder homeIconBorder(HomeIconShape shape, double side) =>
+    switch (shape) {
       HomeIconShape.circle => const CircleBorder(),
       HomeIconShape.squircle => RoundedSuperellipseBorder(
           borderRadius: BorderRadius.circular(side * 0.38),

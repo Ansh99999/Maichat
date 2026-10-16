@@ -39,7 +39,19 @@ enum HomeWidgetKind {
   studio(refW: 2, refH: 2),
 
   /// A search bar over chats and characters, like the one on a phone's home.
-  search(refW: 4, refH: 1);
+  search(refW: 4, refH: 1),
+
+  /// The time here, and in any other time zones chosen.
+  clock(refW: 2, refH: 2),
+
+  /// A note, written on the home screen and opened full-screen to edit.
+  note(refW: 2, refH: 2),
+
+  /// One of the user's character folders (characters, lorebooks, scenarios…).
+  characterFolder(refW: 1, refH: 1),
+
+  /// A launcher folder of quick-open shortcuts.
+  appFolder(refW: 1, refH: 1);
 
   const HomeWidgetKind({required this.refW, required this.refH});
 
@@ -602,6 +614,56 @@ class HomeLayout {
     final tile = make(0, 0);
     return (layout: grown.put(grown.pages.length - 1, tile)!, page: grown.pages.length - 1, tile: tile);
   }
+
+  /// Puts tile [id] on [page] at ([x], [y]) — from any page. Null when it does
+  /// not fit there.
+  HomeLayout? moveTo(String id, int page, int x, int y) {
+    final tile = tileById(id);
+    if (tile == null || page < 0 || page >= pages.length) return null;
+    return put(page, tile.copyWith(x: x, y: y));
+  }
+
+  /// Drops quick-open tile [draggedId] onto [targetId], Android-style: two
+  /// shortcuts become an app folder where the target was; a shortcut dropped
+  /// on a folder joins it. Null when the two cannot merge.
+  HomeLayout? mergeIntoFolder(String draggedId, String targetId) {
+    final dragged = tileById(draggedId);
+    final target = tileById(targetId);
+    if (dragged == null || target == null || draggedId == targetId) return null;
+    if (dragged.kind != HomeWidgetKind.quickOpen) return null;
+    final add = dragged.str('target') ?? QuickTarget.chats.name;
+    final page = pageOf(targetId);
+    final HomeTile merged;
+    switch (target.kind) {
+      case HomeWidgetKind.quickOpen:
+        final first = target.str('target') ?? QuickTarget.chats.name;
+        merged = HomeTile(
+          id: target.id,
+          kind: HomeWidgetKind.appFolder,
+          x: target.x,
+          y: target.y,
+          w: target.w,
+          h: target.h,
+          config: {
+            'name': 'Folder',
+            'targets': [first, if (add != first) add].join(','),
+          },
+        );
+      case HomeWidgetKind.appFolder:
+        final targets = folderTargets(target);
+        if (!targets.contains(add)) targets.add(add);
+        merged = target.withConfig('targets', targets.join(','));
+      default:
+        return null;
+    }
+    return remove(draggedId).put(page, merged);
+  }
+
+  /// The shortcuts in an app folder, in order.
+  static List<String> folderTargets(HomeTile folder) => [
+        for (final t in (folder.str('targets') ?? '').split(','))
+          if (t.trim().isNotEmpty) t.trim(),
+      ];
 
   /// Every tile except [id].
   HomeLayout remove(String id) => _withPages([

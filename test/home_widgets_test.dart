@@ -238,7 +238,7 @@ void main() {
       await tester.pump();
 
       expect(find.text('Latest chat'), findsOneWidget);
-      expect(find.textContaining('Hello there'), findsNothing); // c1 default preview
+      expect(find.textContaining('Hello there'), findsOneWidget);
       await tester.tap(find.text('Latest chat'));
       await tester.pumpAndSettle();
       expect(find.byType(ChatScreen), findsOneWidget);

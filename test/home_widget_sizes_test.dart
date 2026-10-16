@@ -27,6 +27,13 @@ void main() {
             '"model":"some-very-long-model-name-2026"}],"activeId":"p"}',
     'flutter.gallery':
         '[{"id":"g","image":"https://example.invalid/a.png","title":"A"}]',
+    'flutter.folders':
+        '[{"id":"f1","name":"A folder with a rather long name","characterIds":["c1"]}]',
+    'flutter.homeNotes':
+        '[{"id":"n1","title":"A note with a long title to test wrapping",'
+            '"body":"Some body text that is long enough to wrap across '
+            'several lines when the tile is small.",'
+            '"updatedAt":"2026-01-01T00:00:00.000"}]',
   };
 
   // Cell sizes (width, height): a 3×4 grid and an 8×10 grid on a phone,

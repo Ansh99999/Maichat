@@ -16,6 +16,9 @@ import '../../widgets/avatar_image.dart';
 import '../../widgets/character_avatar.dart';
 import '../chats_screen.dart' show relativeTime;
 import '../gallery/gallery_picker_sheet.dart';
+import '../presets/preset_pickers.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'clock_ticker.dart';
 import 'home_icon_shape.dart';
 import 'home_spec.dart';
 import 'home_widgets.dart';
@@ -107,13 +110,53 @@ class _AddWidgetSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget heading(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
+          child: Text(
+            text,
+            style: theme.textTheme.labelLarge
+                ?.copyWith(color: theme.colorScheme.primary),
+          ),
+        );
+    final groups = <String, List<HomeWidgetKind>>{
+      'Featured': [HomeWidgetKind.studio],
+      'Chats & people': [
+        HomeWidgetKind.recentChat,
+        HomeWidgetKind.pinnedChat,
+        HomeWidgetKind.characters,
+        HomeWidgetKind.characterFolder,
+      ],
+      'Shortcuts': [
+        HomeWidgetKind.quickOpen,
+        HomeWidgetKind.appFolder,
+        HomeWidgetKind.search,
+      ],
+      'Everyday': [
+        HomeWidgetKind.clock,
+        HomeWidgetKind.note,
+        HomeWidgetKind.gallery,
+      ],
+      'Providers': [HomeWidgetKind.provider, HomeWidgetKind.cost],
+    };
+    final listed = {for (final g in groups.values) ...g};
     return _SheetFrame(
       title: 'Add a widget',
       children: [
-        for (final kind in kHomeWidgetOrder) ...[
-          _WidgetKindCard(kind: kind),
-          const SizedBox(height: 10),
+        for (final entry in groups.entries) ...[
+          heading(entry.key),
+          for (final kind in entry.value)
+            if (kHomeWidgetOrder.contains(kind)) ...[
+              _WidgetKindCard(kind: kind),
+              const SizedBox(height: 10),
+            ],
         ],
+        // Anything registered but not grouped yet still shows.
+        for (final kind in kHomeWidgetOrder)
+          if (!listed.contains(kind)) ...[
+            _WidgetKindCard(kind: kind),
+            const SizedBox(height: 10),
+          ],
       ],
     );
   }
@@ -133,6 +176,31 @@ class _WidgetKindCard extends StatelessWidget {
         kind: kind,
         config: {...spec.initialConfig, 'target': target.name},
       ));
+      return;
+    }
+    if (kind == HomeWidgetKind.characterFolder) {
+      // A folder widget is only worth adding with a folder in it.
+      final state = context.read<AppState>();
+      if (state.folders.isEmpty) {
+        Navigator.of(context).pop((kind: kind, config: spec.initialConfig));
+        return;
+      }
+      final id = await showSearchPicker(
+        context: context,
+        title: 'Which folder?',
+        entries: [
+          for (final f in state.folders)
+            PickerEntry(
+              id: f.id,
+              title: f.displayName,
+              subtitle: '${f.characterIds.length} '
+                  '${f.characterIds.length == 1 ? 'character' : 'characters'}',
+            ),
+        ],
+      );
+      if (id == null || !context.mounted) return;
+      Navigator.of(context)
+          .pop((kind: kind, config: {...spec.initialConfig, 'folderId': id}));
       return;
     }
     Navigator.of(context).pop((kind: kind, config: spec.initialConfig));
@@ -426,10 +494,106 @@ class _TileSettingsSheetState extends State<_TileSettingsSheet> {
         final ref = await showGalleryPickerSheet(context);
         if (ref != null) _set(option.key, ref);
       case HomePickKind.target:
+        if (option.multiple) {
+          final current = (_tile.str(option.key) ?? '')
+              .split(',')
+              .where((t) => t.isNotEmpty)
+              .toList();
+          final target = await showQuickTargetPicker(context);
+          if (target != null && !current.contains(target.name)) {
+            _set(option.key, [...current, target.name].join(','));
+          }
+          return;
+        }
         final current = QuickTarget.byName(_tile.str(option.key));
         final target = await showQuickTargetPicker(context, current: current);
         if (target != null) _set(option.key, target.name);
+      case HomePickKind.folder:
+        final state = context.read<AppState>();
+        final chosen = await showSearchPicker(
+          context: context,
+          title: 'Choose a folder',
+          selectedId: _tile.str(option.key),
+          entries: [
+            for (final f in state.folders)
+              PickerEntry(
+                id: f.id,
+                title: f.displayName,
+                subtitle: '${f.characterIds.length} '
+                    '${f.characterIds.length == 1 ? 'character' : 'characters'}',
+              ),
+          ],
+        );
+        if (chosen != null) _set(option.key, chosen);
+      case HomePickKind.note:
+        final state = context.read<AppState>();
+        final chosen = await showSearchPicker(
+          context: context,
+          title: 'Choose a note',
+          selectedId: _tile.str(option.key),
+          entries: [
+            for (final n in state.homeNotes)
+              PickerEntry(
+                id: n.id,
+                title: n.heading.isEmpty ? 'Empty note' : n.heading,
+                subtitle: relativeTime(n.updatedAt),
+              ),
+          ],
+        );
+        if (chosen != null) _set(option.key, chosen);
+      case HomePickKind.timezone:
+        final current = (_tile.str(option.key) ?? '')
+            .split(',')
+            .where((t) => t.isNotEmpty)
+            .toList();
+        final now = DateTime.now();
+        final chosen = await showSearchPicker(
+          context: context,
+          title: 'Add a time zone',
+          entries: [
+            for (final z in HomeTimeZones.names())
+              if (!current.contains(z))
+                PickerEntry(
+                  id: z,
+                  title: HomeTimeZones.cityOf(z),
+                  subtitle: '$z · ${HomeTimeZones.abbreviation(z, now) ?? ''}',
+                ),
+          ],
+        );
+        if (chosen != null && !current.contains(chosen)) {
+          _set(option.key, [...current, chosen].join(','));
+        }
     }
+  }
+
+  /// Removes one entry from a multiple pick.
+  void _removeFrom(String key, String value) {
+    final rest = (_tile.str(key) ?? '')
+        .split(',')
+        .where((t) => t.isNotEmpty && t != value)
+        .toList();
+    _set(key, rest.isEmpty ? null : rest.join(','));
+  }
+
+  Future<void> _pickFont(HomeFontOption option) async {
+    final families = GoogleFonts.asMap().keys.toList()..sort();
+    const system = '__system__';
+    final chosen = await showSearchPicker(
+      context: context,
+      title: option.label,
+      selectedId: _tile.str(option.key) ?? system,
+      allowCustom: true,
+      entries: [
+        const PickerEntry(
+          id: system,
+          title: 'Same as the app',
+          subtitle: 'The app font',
+        ),
+        for (final f in families) PickerEntry(id: f, title: f),
+      ],
+    );
+    if (chosen == null) return;
+    _set(option.key, chosen == system || chosen.trim().isEmpty ? null : chosen);
   }
 
   @override
@@ -451,10 +615,21 @@ class _TileSettingsSheetState extends State<_TileSettingsSheet> {
             ),
           )
         else
-          for (final option in options) ...[
+          for (final dep in options)
+            if (dep is! HomeDependentOption || dep.shows(_tile))
+              ..._optionRow(dep is HomeDependentOption ? dep.option : dep),
+      ],
+    );
+  }
+
+  List<Widget> _optionRow(HomeOption option) => [
             _OptionTile(
               option: option,
               tile: _tile,
+              onRemove: (v) => _removeFrom(option.key, v),
+              onFontTap: () {
+                if (option is HomeFontOption) _pickFont(option);
+              },
               onChoice: (v) => _set(option.key, v),
               onToggle: (v) => _set(option.key, v),
               onStep: (v) => _set(option.key, v),
@@ -464,10 +639,7 @@ class _TileSettingsSheetState extends State<_TileSettingsSheet> {
               },
             ),
             const SizedBox(height: 16),
-          ],
-      ],
-    );
-  }
+          ];
 }
 
 /// Marks "the sheet was dismissed without a choice" from the pickers below,
@@ -513,6 +685,8 @@ class _OptionTile extends StatelessWidget {
     required this.onStep,
     required this.onText,
     required this.onPickTap,
+    required this.onFontTap,
+    required this.onRemove,
   });
 
   final HomeOption option;
@@ -522,6 +696,10 @@ class _OptionTile extends StatelessWidget {
   final ValueChanged<int> onStep;
   final ValueChanged<String> onText;
   final VoidCallback onPickTap;
+  final VoidCallback onFontTap;
+
+  /// Removes one value from a multiple pick.
+  final ValueChanged<String> onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -631,24 +809,158 @@ class _OptionTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             labelBlock(),
-            TextField(
-              controller: TextEditingController(text: tile.str(option.key) ?? '')
-                ..selection = TextSelection.collapsed(
-                  offset: (tile.str(option.key) ?? '').length,
-                ),
-              decoration: InputDecoration(
-                hintText: hint,
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
+            _OptionTextField(
+              initial: tile.str(option.key) ?? '',
+              hint: hint,
               onChanged: onText,
             ),
           ],
         );
 
+      case HomePickOption pick when pick.multiple:
+        return _MultiPickTile(
+          option: pick,
+          tile: tile,
+          onAdd: onPickTap,
+          onRemove: onRemove,
+        );
+
       case HomePickOption pick:
         return _PickOptionTile(option: pick, tile: tile, onTap: onPickTap);
+
+      case HomeFontOption():
+        final family = tile.str(option.key);
+        TextStyle? preview;
+        if (family != null) {
+          try {
+            preview = GoogleFonts.getFont(family);
+          } catch (_) {}
+        }
+        return ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.font_download_outlined),
+          title: Text(option.label),
+          subtitle: Text(family ?? 'Same as the app', style: preview),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: onFontTap,
+        );
+
+      case HomeDependentOption(option: final inner):
+        return _OptionTile(
+          option: inner,
+          tile: tile,
+          onChoice: onChoice,
+          onToggle: onToggle,
+          onStep: onStep,
+          onText: onText,
+          onPickTap: onPickTap,
+          onFontTap: onFontTap,
+          onRemove: onRemove,
+        );
     }
+  }
+}
+
+/// A text option's field. Stateful so its controller outlives the sheet's
+/// rebuilds — one made in `build` would reset the caret on every keystroke.
+class _OptionTextField extends StatefulWidget {
+  const _OptionTextField({
+    required this.initial,
+    required this.hint,
+    required this.onChanged,
+  });
+
+  final String initial;
+  final String hint;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_OptionTextField> createState() => _OptionTextFieldState();
+}
+
+class _OptionTextFieldState extends State<_OptionTextField> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TextField(
+        controller: _controller,
+        decoration: InputDecoration(
+          hintText: widget.hint,
+          border: const OutlineInputBorder(),
+          isDense: true,
+        ),
+        onChanged: widget.onChanged,
+      );
+}
+
+/// Several picks (time zones, shortcuts) as removable chips plus an Add chip.
+class _MultiPickTile extends StatelessWidget {
+  const _MultiPickTile({
+    required this.option,
+    required this.tile,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  final HomePickOption option;
+  final HomeTile tile;
+  final VoidCallback onAdd;
+  final ValueChanged<String> onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final values =
+        (tile.str(option.key) ?? '').split(',').where((v) => v.isNotEmpty);
+    String label(String v) => switch (option.pick) {
+          HomePickKind.timezone => HomeTimeZones.cityOf(v),
+          HomePickKind.target => quickTargetInfo(QuickTarget.byName(v)).label,
+          _ => v,
+        };
+    IconData? icon(String v) => option.pick == HomePickKind.target
+        ? quickTargetInfo(QuickTarget.byName(v)).icon
+        : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(option.label, style: theme.textTheme.titleSmall),
+        if (option.help != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              option.help!,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final v in values)
+              InputChip(
+                avatar: icon(v) == null ? null : Icon(icon(v), size: 18),
+                label: Text(label(v)),
+                onDeleted: () => onRemove(v),
+                deleteButtonTooltipMessage: 'Remove ${label(v)}',
+              ),
+            ActionChip(
+              avatar: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Add'),
+              onPressed: onAdd,
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }
 
@@ -705,6 +1017,23 @@ class _PickOptionTile extends StatelessWidget {
         final info = quickTargetInfo(target);
         current = info.label;
         leading = Icon(info.icon);
+      case HomePickKind.folder:
+        if (value != null) {
+          current = state.folderById(value)?.displayName ??
+              'A folder that no longer exists';
+        }
+        leading = const Icon(Icons.folder_outlined);
+      case HomePickKind.note:
+        if (value != null) {
+          final note = state.homeNoteById(value);
+          current = note == null
+              ? 'A note that no longer exists'
+              : (note.heading.isEmpty ? 'Empty note' : note.heading);
+        }
+        leading = const Icon(Icons.sticky_note_2_outlined);
+      case HomePickKind.timezone:
+        if (value != null) current = HomeTimeZones.cityOf(value);
+        leading = const Icon(Icons.public_rounded);
     }
 
     return ListTile(

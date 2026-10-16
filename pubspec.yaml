@@ -63,6 +63,7 @@ dependencies:
   # Real BPE token counting (OpenAI cl100k/o200k). Pure Dart, offline, synchronous
   # — no platform channels, so no AGP-9 native-plugin concern.
   tiktoken_tokenizer_gpt4o_o1: 1.2.1
+  timezone: 0.11.2
   # A real browsing context, for the one thing a plain HTTP client cannot do:
   # pass a Cloudflare check. Only Discover's JannyAI download uses it, and only
   # after a challenge is served. Android/iOS only — the desktop builds have no

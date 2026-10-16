@@ -30,43 +30,59 @@ class HomeGridMetrics {
   Rect rectFor(HomeTile t) =>
       Rect.fromLTWH(t.x * cellW, t.y * cellH, t.w * cellW, t.h * cellH);
 
+  /// Where the tile's own surface is drawn: its cells less the gutter. The
+  /// selection ring, the lifted copy and the landing ghost all use exactly this
+  /// rect, so nothing stands off the widget's edge.
+  Rect surfaceFor(HomeTile t) => rectFor(t).deflate(gutter);
+
   /// The cell under [p], clamped into the grid.
   ({int x, int y}) cellAt(Offset p) => (
         x: (p.dx / cellW).floor().clamp(0, columns - 1),
         y: (p.dy / cellH).floor().clamp(0, rows - 1),
       );
+
+  /// The top-left cell a tile of [w] × [h] snaps to when its top-left corner is
+  /// at [topLeft].
+  ({int x, int y}) snap(Offset topLeft, int w, int h) => (
+        x: (topLeft.dx / cellW).round().clamp(0, columns - w),
+        y: (topLeft.dy / cellH).round().clamp(0, rows - h),
+      );
 }
 
-enum _Edge { left, top, right, bottom }
+enum HomeEdge { left, top, right, bottom }
 
-/// What a finger on a tile is doing in edit mode: carrying it, or pulling one
-/// of its edges.
-class _Drag {
-  _Drag.move(this.start)
-      : edge = null,
-        candidate = start;
-  _Drag.resize(this.start, _Edge this.edge) : candidate = start;
+/// Page physics for the home screen: a critically damped spring, stiff enough
+/// that a flick settles in ~250 ms with no wobble — Material 3 Expressive's
+/// "spatial default" motion, without the overshoot that read as a stutter.
+class HomePagePhysics extends PageScrollPhysics {
+  const HomePagePhysics({super.parent});
 
-  final HomeTile start;
+  @override
+  HomePagePhysics applyTo(ScrollPhysics? ancestor) =>
+      HomePagePhysics(parent: buildParent(ancestor));
 
-  /// Null while moving.
-  final _Edge? edge;
-
-  /// How far the finger has gone since the drag started.
-  Offset offset = Offset.zero;
-
-  /// Where the tile would land if the finger lifted now.
-  HomeTile candidate;
-
-  bool fits = true;
+  @override
+  SpringDescription get spring =>
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 520, ratio: 1);
 }
 
-/// One page of the Home grid: its tiles, laid out cell by cell, and — in edit
-/// mode — the gestures that select, carry and resize them.
+/// What the page tells the home screen when a finger picks a tile up.
+typedef HomeLiftStart = void Function(
+  HomeTile tile,
+  Offset global,
+
+  /// Where in the tile's surface the finger is, so the tile does not jump to
+  /// put its corner under the finger.
+  Offset grab,
+);
+
+/// One page of the Home grid: its tiles laid out cell by cell, and the gestures
+/// that select, pick up and resize them.
 ///
-/// The page never writes the layout itself. A finished move or resize is
-/// offered to [onChange], which answers whether it was taken; a refused one
-/// springs back.
+/// Picking up is reported to the home screen ([onLiftStart] …), which draws the
+/// carried tile above every page — so a second finger can swipe pages while
+/// the first one holds it. The page only hides the tile that is being carried.
+/// Resizing stays inside the page.
 class HomeGridPage extends StatefulWidget {
   const HomeGridPage({
     super.key,
@@ -75,10 +91,15 @@ class HomeGridPage extends StatefulWidget {
     required this.metrics,
     required this.editing,
     required this.selectedId,
-    required this.onSelect,
-    required this.onChange,
+    required this.resizingId,
+    required this.hiddenId,
+    required this.onTileTap,
+    required this.onLiftStart,
+    required this.onLiftMove,
+    required this.onLiftEnd,
     required this.onTapEmpty,
-    required this.onEnterEdit,
+    required this.onLongPressEmpty,
+    required this.onResize,
   });
 
   final HomeLayout layout;
@@ -87,24 +108,50 @@ class HomeGridPage extends StatefulWidget {
   final bool editing;
   final String? selectedId;
 
-  /// A tile was tapped in edit mode (or empty space, with null).
-  final ValueChanged<String?> onSelect;
+  /// The tile showing resize handles, if any.
+  final String? resizingId;
 
-  /// Asks for [tile] to replace its old self; true when it was taken.
-  final bool Function(HomeTile tile) onChange;
+  /// The tile being carried: drawn by the home screen, so hidden here.
+  final String? hiddenId;
 
-  /// An empty cell was tapped in edit mode.
+  /// A tile tapped in edit mode.
+  final ValueChanged<String> onTileTap;
+
+  final HomeLiftStart onLiftStart;
+  final ValueChanged<Offset> onLiftMove;
+  final VoidCallback onLiftEnd;
+
+  /// Empty space tapped in edit mode, at that cell.
   final void Function(int x, int y) onTapEmpty;
 
-  /// A long press outside edit mode: on a tile (its id) or on empty space.
-  final ValueChanged<String?> onEnterEdit;
+  /// Empty space held down.
+  final VoidCallback onLongPressEmpty;
+
+  /// Asks for a resized tile to replace its old self; true when it was taken.
+  final bool Function(HomeTile tile) onResize;
 
   @override
   State<HomeGridPage> createState() => _HomeGridPageState();
 }
 
-class _HomeGridPageState extends State<HomeGridPage> {
-  _Drag? _drag;
+class _ResizeDrag {
+  _ResizeDrag(this.start, this.edge) : candidate = start;
+  final HomeTile start;
+  final HomeEdge edge;
+  Offset offset = Offset.zero;
+  HomeTile candidate;
+  bool fits = true;
+}
+
+class _HomeGridPageState extends State<HomeGridPage>
+    with AutomaticKeepAliveClientMixin {
+  _ResizeDrag? _resize;
+
+  // Kept alive: a page that slid off screen is not rebuilt (and its pictures
+  // not decoded again) on the way back, and a tile picked up on it keeps its
+  // gesture while a second finger swipes to another page.
+  @override
+  bool get wantKeepAlive => true;
 
   HomePage get _page => widget.layout.pages[widget.pageIndex];
   HomeGridMetrics get _m => widget.metrics;
@@ -117,10 +164,8 @@ class _HomeGridPageState extends State<HomeGridPage> {
     );
   }
 
-  void _begin(_Drag drag) => setState(() => _drag = drag);
-
-  void _update(Offset delta) {
-    final d = _drag;
+  void _resizeUpdate(Offset delta) {
+    final d = _resize;
     if (d == null) return;
     d.offset += delta;
     final cols = widget.layout.columns;
@@ -129,173 +174,181 @@ class _HomeGridPageState extends State<HomeGridPage> {
     final dy = (d.offset.dy / _m.cellH).round();
     final s = d.start;
     final min = _minSpan(s);
-    final HomeTile next;
-    switch (d.edge) {
-      case null:
-        next = s.copyWith(
-          x: (s.x + dx).clamp(0, cols - s.w),
-          y: (s.y + dy).clamp(0, rows - s.h),
-        );
-      case _Edge.right:
-        next = s.copyWith(w: (s.w + dx).clamp(min.w, cols - s.x));
-      case _Edge.bottom:
-        next = s.copyWith(h: (s.h + dy).clamp(min.h, rows - s.y));
-      case _Edge.left:
-        final x = (s.x + dx).clamp(0, s.right - min.w);
-        next = s.copyWith(x: x, w: s.right - x);
-      case _Edge.top:
-        final y = (s.y + dy).clamp(0, s.bottom - min.h);
-        next = s.copyWith(y: y, h: s.bottom - y);
-    }
+    final HomeTile next = switch (d.edge) {
+      HomeEdge.right => s.copyWith(w: (s.w + dx).clamp(min.w, cols - s.x)),
+      HomeEdge.bottom => s.copyWith(h: (s.h + dy).clamp(min.h, rows - s.y)),
+      HomeEdge.left => () {
+          final x = (s.x + dx).clamp(0, s.right - min.w);
+          return s.copyWith(x: x, w: s.right - x);
+        }(),
+      HomeEdge.top => () {
+          final y = (s.y + dy).clamp(0, s.bottom - min.h);
+          return s.copyWith(y: y, h: s.bottom - y);
+        }(),
+    };
+    if (next == d.candidate) return;
     setState(() {
       d.candidate = next;
       d.fits = widget.layout.fits(widget.pageIndex, next);
     });
   }
 
-  void _end() {
-    final d = _drag;
+  void _resizeEnd() {
+    final d = _resize;
     if (d == null) return;
-    if (d.fits && d.candidate != d.start) widget.onChange(d.candidate);
-    setState(() => _drag = null);
+    if (d.fits && d.candidate != d.start) widget.onResize(d.candidate);
+    setState(() => _resize = null);
   }
-
-  void _cancel() => setState(() => _drag = null);
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final scheme = Theme.of(context).colorScheme;
-    final tiles = _page.tiles;
-    final drag = _drag;
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        // Empty space: a long press opens the editor (as on a launcher);
-        // in edit mode a tap on an empty cell offers a widget there.
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onLongPress: widget.editing ? null : () => widget.onEnterEdit(null),
-            onTapUp: widget.editing
-                ? (details) {
-                    if (widget.selectedId != null) {
-                      widget.onSelect(null);
-                      return;
-                    }
-                    final cell = _m.cellAt(details.localPosition);
-                    final probe = HomeTile(
-                      id: '\u0000tap',
-                      kind: HomeWidgetKind.quickOpen,
-                      x: cell.x,
-                      y: cell.y,
-                    );
-                    if (widget.layout.fits(widget.pageIndex, probe)) {
+    final resize = _resize;
+    return RepaintBoundary(
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Empty space: hold to edit (as on a launcher); in edit mode a tap on
+          // an empty cell offers a widget there.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onLongPress: widget.onLongPressEmpty,
+              onTapUp: widget.editing
+                  ? (details) {
+                      final cell = _m.cellAt(details.localPosition);
                       widget.onTapEmpty(cell.x, cell.y);
                     }
-                  }
-                : null,
-            child: widget.editing
-                ? CustomPaint(
-                    painter: _CellDots(
-                      metrics: _m,
-                      color: scheme.outlineVariant,
-                    ),
-                  )
-                : const SizedBox.expand(),
-          ),
-        ),
-        // Where a carried or stretched tile would land.
-        if (drag != null)
-          Positioned.fromRect(
-            rect: _m.rectFor(drag.candidate).deflate(_m.gutter),
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: ShapeDecoration(
-                  color: (drag.fits ? scheme.primary : scheme.error)
-                      .withValues(alpha: 0.12),
-                  shape: RoundedSuperellipseBorder(
-                    borderRadius: BorderRadius.circular(HomeCard.radius),
-                    side: BorderSide(
-                      color: drag.fits ? scheme.primary : scheme.error,
-                      width: 2,
-                    ),
-                  ),
-                ),
-              ),
+                  : null,
+              child: widget.editing
+                  ? CustomPaint(
+                      painter: _CellDots(
+                        metrics: _m,
+                        color: scheme.outlineVariant,
+                      ),
+                    )
+                  : const SizedBox.expand(),
             ),
           ),
-        for (final tile in tiles) _positioned(context, tile),
-      ],
+          if (resize != null)
+            Positioned.fromRect(
+              rect: _m.surfaceFor(resize.candidate),
+              child: IgnorePointer(
+                child: HomeGhost(fits: resize.fits),
+              ),
+            ),
+          for (final tile in _page.tiles) _positioned(tile),
+        ],
+      ),
     );
   }
 
-  Widget _positioned(BuildContext context, HomeTile tile) {
-    final drag = _drag?.start.id == tile.id ? _drag : null;
-    var rect = _m.rectFor(tile);
-    if (drag != null) {
-      rect = drag.edge == null
-          ? rect.shift(drag.offset)
-          : _m.rectFor(drag.candidate);
-    }
+  Widget _positioned(HomeTile tile) {
+    final resize = _resize?.start.id == tile.id ? _resize : null;
+    final shown = resize?.candidate ?? tile;
     final selected = widget.editing && widget.selectedId == tile.id;
-    final inner = rect.deflate(_m.gutter);
+    final resizing = widget.editing && widget.resizingId == tile.id;
     return Positioned.fromRect(
       key: ValueKey('home-tile-${tile.id}'),
-      rect: rect,
-      child: _TileFrame(
-        tile: tile,
+      rect: _m.rectFor(shown),
+      child: HomeTileFrame(
+        tile: shown,
         layout: widget.layout,
-        size: inner.size,
+        size: _m.surfaceFor(shown).size,
         gutter: _m.gutter,
         editing: widget.editing,
         selected: selected,
-        lifted: drag != null && drag.edge == null,
-        onTap: widget.editing ? () => widget.onSelect(tile.id) : null,
-        onLongPressStart: () {
-          if (!widget.editing) widget.onEnterEdit(tile.id);
-          widget.onSelect(tile.id);
-          _begin(_Drag.move(tile));
-        },
-        onLongPressMove: (offsetFromOrigin) {
-          final d = _drag;
-          if (d == null) return;
-          _update(offsetFromOrigin - d.offset);
-        },
-        onLongPressEnd: _end,
-        onPanStart: selected ? () => _begin(_Drag.move(tile)) : null,
-        onPanUpdate: selected ? _update : null,
-        onPanEnd: selected ? _end : null,
-        onPanCancel: selected ? _cancel : null,
-        onEdgeStart: (edge) => _begin(_Drag.resize(tile, edge)),
-        onEdgeUpdate: _update,
-        onEdgeEnd: _end,
+        hidden: widget.hiddenId == tile.id,
+        canDrag: selected && !resizing,
+        onTap: () => widget.onTileTap(tile.id),
+        onLiftStart: (global, local) => widget.onLiftStart(
+          tile,
+          global,
+          local - Offset(_m.gutter, _m.gutter),
+        ),
+        onLiftMove: widget.onLiftMove,
+        onLiftEnd: widget.onLiftEnd,
+        handles: resizing && resize == null
+            ? [
+                for (final edge in HomeEdge.values)
+                  _Handle(
+                    edge: edge,
+                    gutter: _m.gutter,
+                    onStart: () => setState(() => _resize = _ResizeDrag(tile, edge)),
+                    onUpdate: _resizeUpdate,
+                    onEnd: _resizeEnd,
+                  ),
+              ]
+            : const [],
       ),
     );
   }
 }
 
-/// A tile as drawn on the grid: the widget itself, and in edit mode the
-/// outline, the lift while carried, and the four edge handles when selected.
-class _TileFrame extends StatelessWidget {
-  const _TileFrame({
+/// Where a carried or stretched tile would land: a soft fill on the exact
+/// surface rect, red when it would not fit.
+class HomeGhost extends StatelessWidget {
+  const HomeGhost({super.key, required this.fits, this.merge = false});
+
+  final bool fits;
+
+  /// Dropping here makes (or joins) a folder.
+  final bool merge;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = merge
+        ? scheme.tertiary
+        : (fits ? scheme.primary : scheme.error);
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        color: color.withValues(alpha: merge ? 0.22 : 0.12),
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(HomeCard.radius),
+          side: BorderSide(
+            color: color,
+            width: 2,
+            strokeAlign: BorderSide.strokeAlignInside,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A long press that fires a little sooner than the framework's 500 ms —
+/// launchers pick an icon up at about 400.
+class _LiftRecognizer extends LongPressGestureRecognizer {
+  _LiftRecognizer({super.debugOwner})
+      : super(duration: const Duration(milliseconds: 380));
+}
+
+/// A tile as drawn on the grid: the widget itself, its status (for the
+/// widget's own surface to draw the selection ring on its own shape), and the
+/// gestures that pick it up.
+///
+/// The tree here is the same in and out of edit mode on purpose: a long press
+/// that starts outside edit mode switches the screen into it, and if this
+/// subtree changed shape the recognizer following the finger would be thrown
+/// away mid-gesture.
+class HomeTileFrame extends StatelessWidget {
+  const HomeTileFrame({
+    super.key,
     required this.tile,
     required this.layout,
     required this.size,
     required this.gutter,
     required this.editing,
     required this.selected,
-    required this.lifted,
+    required this.hidden,
+    required this.canDrag,
     required this.onTap,
-    required this.onLongPressStart,
-    required this.onLongPressMove,
-    required this.onLongPressEnd,
-    required this.onPanStart,
-    required this.onPanUpdate,
-    required this.onPanEnd,
-    required this.onPanCancel,
-    required this.onEdgeStart,
-    required this.onEdgeUpdate,
-    required this.onEdgeEnd,
+    required this.onLiftStart,
+    required this.onLiftMove,
+    required this.onLiftEnd,
+    this.handles = const [],
   });
 
   final HomeTile tile;
@@ -304,124 +357,99 @@ class _TileFrame extends StatelessWidget {
   final double gutter;
   final bool editing;
   final bool selected;
-  final bool lifted;
-  final VoidCallback? onTap;
-  final VoidCallback onLongPressStart;
-  final ValueChanged<Offset> onLongPressMove;
-  final VoidCallback onLongPressEnd;
-  final VoidCallback? onPanStart;
-  final ValueChanged<Offset>? onPanUpdate;
-  final VoidCallback? onPanEnd;
-  final VoidCallback? onPanCancel;
-  final ValueChanged<_Edge> onEdgeStart;
-  final ValueChanged<Offset> onEdgeUpdate;
-  final VoidCallback onEdgeEnd;
+  final bool hidden;
+
+  /// A selected tile moves on a plain drag; others need a long press.
+  final bool canDrag;
+  final VoidCallback onTap;
+
+  /// Global position, and position within this frame.
+  final void Function(Offset global, Offset local) onLiftStart;
+  final ValueChanged<Offset> onLiftMove;
+  final VoidCallback onLiftEnd;
+  final List<Widget> handles;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final spec = specFor(tile.kind);
-    Widget body = spec.build(
+    final body = spec.build(
       context,
       HomeTileContext(tile: tile, size: size, layout: layout, editing: editing),
     );
-    if (editing) body = IgnorePointer(child: body);
-    final shape = RoundedSuperellipseBorder(
-      borderRadius: BorderRadius.circular(HomeCard.radius),
-      side: selected
-          ? BorderSide(color: scheme.primary, width: 2.5)
-          : BorderSide(color: scheme.outlineVariant, width: 1),
-    );
+    final gestures = <Type, GestureRecognizerFactory>{
+      _LiftRecognizer: GestureRecognizerFactoryWithHandlers<_LiftRecognizer>(
+        () => _LiftRecognizer(debugOwner: this),
+        (r) => r
+          ..onLongPressStart =
+              ((d) => onLiftStart(d.globalPosition, d.localPosition))
+          ..onLongPressMoveUpdate = ((d) => onLiftMove(d.globalPosition))
+          ..onLongPressEnd = ((_) => onLiftEnd())
+          ..onLongPressCancel = onLiftEnd,
+      ),
+      if (editing)
+        TapGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+          () => TapGestureRecognizer(debugOwner: this),
+          (r) => r.onTap = onTap,
+        ),
+      if (canDrag)
+        PanGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
+          () => PanGestureRecognizer(debugOwner: this),
+          (r) => r
+            ..dragStartBehavior = DragStartBehavior.down
+            ..onStart = ((d) => onLiftStart(d.globalPosition, d.localPosition))
+            ..onUpdate = ((d) => onLiftMove(d.globalPosition))
+            ..onEnd = ((_) => onLiftEnd())
+            ..onCancel = onLiftEnd,
+        ),
+    };
     return Semantics(
-      label: editing ? '${spec.describe(context, tile)}, ${tile.w} by ${tile.h}' : null,
+      label: editing
+          ? '${spec.describe(context, tile)}, ${tile.w} by ${tile.h}'
+          : null,
       selected: selected,
       button: editing,
-      onTap: onTap,
+      onTap: editing ? onTap : null,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           Positioned.fill(
-            child: GestureDetector(
-              // In edit mode the widget ignores the pointer, so the frame has
-              // to take touches itself; otherwise the widget's own ink wins.
+            child: RawGestureDetector(
+              gestures: gestures,
+              // In edit mode the widget ignores the pointer, so the frame takes
+              // touches itself; otherwise the widget's own ink comes first.
               behavior: editing
                   ? HitTestBehavior.opaque
                   : HitTestBehavior.deferToChild,
-              // Offsets count from where the finger went down, so the slop a
-              // drag needs before it starts is not lost from the move.
-              dragStartBehavior: DragStartBehavior.down,
-              onTap: onTap,
-              onLongPressStart: (_) => onLongPressStart(),
-              onLongPressMoveUpdate: (d) => onLongPressMove(d.offsetFromOrigin),
-              onLongPressEnd: (_) => onLongPressEnd(),
-              onPanStart: onPanStart == null ? null : (_) => onPanStart!(),
-              onPanUpdate:
-                  onPanUpdate == null ? null : (d) => onPanUpdate!(d.delta),
-              onPanEnd: onPanEnd == null ? null : (_) => onPanEnd!(),
-              onPanCancel: onPanCancel,
               child: Padding(
                 padding: EdgeInsets.all(gutter),
-                child: AnimatedScale(
-                  scale: lifted ? 1.04 : (editing ? 0.96 : 1),
-                  duration: const Duration(milliseconds: 160),
-                  curve: Curves.easeOutBack,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Edit mode sets every tile on a faint slot, so icons
-                      // and cards alike read as things that can be picked up.
-                      if (editing)
-                        DecoratedBox(
-                          decoration: ShapeDecoration(
-                            color: scheme.surfaceContainerHighest
-                                .withValues(alpha: 0.5),
-                            shape: RoundedSuperellipseBorder(
-                              borderRadius:
-                                  BorderRadius.circular(HomeCard.radius),
-                            ),
-                          ),
-                        ),
-                      body,
-                      if (editing && (selected || lifted))
-                        IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: ShapeDecoration(
-                              shape: shape,
-                              shadows: lifted
-                                  ? [
-                                      BoxShadow(
-                                        color: scheme.shadow
-                                            .withValues(alpha: 0.25),
-                                        blurRadius: 18,
-                                        offset: const Offset(0, 6),
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                          ),
-                        ),
-                    ],
+                child: Opacity(
+                  opacity: hidden ? 0 : 1,
+                  child: IgnorePointer(
+                    ignoring: editing,
+                    child: RepaintBoundary(
+                      child: HomeTileStatus(
+                        selected: selected,
+                        lifted: false,
+                        editing: editing,
+                        child: body,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-          if (selected && !lifted)
-            for (final edge in _Edge.values)
-              _Handle(
-                edge: edge,
-                gutter: gutter,
-                onStart: () => onEdgeStart(edge),
-                onUpdate: onEdgeUpdate,
-                onEnd: onEdgeEnd,
-              ),
+          ...handles,
         ],
       ),
     );
   }
 }
 
-/// A round grip on the middle of one edge; dragging it stretches the tile.
+/// A round grip on the middle of one edge, sitting on the outline; dragging it
+/// stretches the tile.
 class _Handle extends StatelessWidget {
   const _Handle({
     required this.edge,
@@ -431,7 +459,7 @@ class _Handle extends StatelessWidget {
     required this.onEnd,
   });
 
-  final _Edge edge;
+  final HomeEdge edge;
   final double gutter;
   final VoidCallback onStart;
   final ValueChanged<Offset> onUpdate;
@@ -443,12 +471,12 @@ class _Handle extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dot = Container(
-      width: 16,
-      height: 16,
+      width: 18,
+      height: 18,
       decoration: BoxDecoration(
         color: scheme.primary,
         shape: BoxShape.circle,
-        border: Border.all(color: scheme.onPrimary, width: 2),
+        border: Border.all(color: scheme.onPrimary, width: 2.5),
       ),
     );
     final grip = GestureDetector(
@@ -458,17 +486,19 @@ class _Handle extends StatelessWidget {
       onPanStart: (_) => onStart(),
       onPanUpdate: (d) => onUpdate(d.delta),
       onPanEnd: (_) => onEnd(),
+      onPanCancel: onEnd,
       child: SizedBox(width: _hit, height: _hit, child: Center(child: dot)),
     );
+    // Centred on the surface's edge (the cell edge less the gutter).
     final off = gutter - _hit / 2;
     return switch (edge) {
-      _Edge.left => Positioned(
+      HomeEdge.left => Positioned(
           left: off, top: 0, bottom: 0, child: Center(child: grip)),
-      _Edge.right => Positioned(
+      HomeEdge.right => Positioned(
           right: off, top: 0, bottom: 0, child: Center(child: grip)),
-      _Edge.top => Positioned(
+      HomeEdge.top => Positioned(
           top: off, left: 0, right: 0, child: Center(child: grip)),
-      _Edge.bottom => Positioned(
+      HomeEdge.bottom => Positioned(
           bottom: off, left: 0, right: 0, child: Center(child: grip)),
     };
   }
