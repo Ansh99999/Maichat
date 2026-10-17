@@ -1206,7 +1206,7 @@ void main() {
     final character = Character(id: 'aria', name: 'Aria', firstMes: 'Hello.');
     await state.addCharacter(character);
     state.startChatWithCharacter(character);
-    // A real, decodable picture — 1x1 base64, floated by reference.
+    // A real, decodable picture — 256x256 base64, floated by reference.
     await state.floatPictureRef(state.active.id, _png);
     await pumpChat(tester, state);
     await tester.pump();
@@ -1357,9 +1357,15 @@ void main() {
   });
 }
 
-/// 1x1 PNGs, for the tests that need a picture that really decodes.
-const _png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNg'
-    'AAIAAAUAAen63NgAAAAASUVORK5CYII=';
+/// A transparent 256x256 PNG, large enough to fill the 180/200px float layouts.
+const _png = 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAABFUlEQVR42u3B'
+    'MQEAAADCoPVP7WsIoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAMB'
+    'PAAB2ClDBAAAAABJRU5ErkJggg==';
 
 /// Counts how many times it is painted — a stand-in for "the chat behind the
 /// float", used to prove a drag does not repaint it.
