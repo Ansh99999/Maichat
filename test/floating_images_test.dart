@@ -1358,8 +1358,8 @@ void main() {
 }
 
 /// 1x1 PNGs, for the tests that need a picture that really decodes.
-const _png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8'
-    'z8DAwAAABQABg1z0GwAAAABJRU5ErkJggg==';
+const _png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNg'
+    'AAIAAAUAAen63NgAAAAASUVORK5CYII=';
 
 /// Counts how many times it is painted — a stand-in for "the chat behind the
 /// float", used to prove a drag does not repaint it.
