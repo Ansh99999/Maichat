@@ -13,6 +13,8 @@ the code are the source of truth — verify file:line claims before relying on t
 
 ## Build & verify (works in a fresh container/Codespace)
 
+@.claude/CLAUDE.md
+
 - `flutter pub get`, then `flutter analyze` must be **clean** and `flutter test`
   must be **fully green** before anything is considered done. The suite is large
   (800+ tests) and is the real safety net — there is usually **no physical device
