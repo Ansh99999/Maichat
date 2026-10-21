@@ -10,6 +10,7 @@ import 'custom_agents.dart';
 import 'image_tools.dart';
 import 'knowledge_tools.dart';
 import 'library_tools.dart';
+import 'preset_tools.dart';
 import 'runtime_tools.dart';
 import 'skill_tools.dart';
 import 'studio_knowledge.dart';
@@ -450,14 +451,15 @@ final StudioTool getDraftTool = StudioTool(
     name: 'get_draft',
     description: 'Reads the draft being built: every character field in full '
         'with token counts, the lorebooks and their entries, the scenarios and '
-        'the documents. Call this before editing anything you have not just '
+        'the documents and selected generation preset (native JSON). Call '
+        'this before editing anything you have not just '
         'written yourself.',
     parameters: {
       'type': 'object',
       'properties': {
         'section': {
           'type': 'string',
-          'enum': ['all', 'character', 'lorebooks', 'documents'],
+          'enum': ['all', 'character', 'lorebooks', 'documents', 'preset'],
           'description': 'Only this part of the draft. Defaults to all.',
         },
       },
@@ -482,7 +484,9 @@ final StudioTool getDraftTool = StudioTool(
         ...partsWithPrefix(ctx.ws, 'entry:'),
       ]);
     }
+    if (all || section == 'preset') ctx.markSeen(['preset']);
     return StudioToolResult.json({
+      if (all || section == 'preset') 'preset': ctx.ws.preset?.toJson(),
       if (all || section == 'character')
         'character': describeCharacter(ctx.character, ctx.services),
       if (all || section == 'lorebooks')
@@ -1516,7 +1520,11 @@ final StudioTool todoWriteTool = StudioTool(
   },
 );
 
-const List<String> _readTools = ['get_draft', 'read_document'];
+const List<String> _readTools = [
+  'get_draft',
+  'read_document',
+  ...kPresetReadToolNames,
+];
 
 /// Every tool, by name.
 final Map<String, StudioTool> kStudioTools = {
@@ -1548,6 +1556,7 @@ final Map<String, StudioTool> kStudioTools = {
     ...kImageTools,
     ...kWorkbenchTools,
     ...kLibraryTools,
+    ...kPresetTools,
   ])
     t.name: t,
 };
@@ -1560,6 +1569,7 @@ List<StudioTool> studioToolsFor(String agent, {bool subAgents = true}) {
   final names = switch (agent) {
     'writer' => [
         ..._readTools,
+        ...kPresetEditToolNames,
         'set_fields',
         'edit_field',
         'add_greeting',

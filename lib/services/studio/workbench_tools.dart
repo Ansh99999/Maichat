@@ -483,7 +483,8 @@ final StudioTool playtestTool = StudioTool(
   const ToolSpec(
     name: 'playtest',
     description: 'Chats with the draft as a user would, through the real chat '
-        'prompt (the user\'s preset, persona and model, the draft\'s '
+        'prompt (the loaded draft preset, or the user\'s usual preset, '
+        'the user\'s persona and active model, the draft\'s '
         'lorebooks), and returns what the character said. Each message is '
         'sent in turn, after the chosen greeting. Use it to hear the voice, '
         'check that lore triggers, and catch the card breaking character.\n\n'
@@ -583,6 +584,12 @@ final StudioTool playtestTool = StudioTool(
       fresh = true;
     }
     final earlier = test.sendable;
+    // Another agent can load or edit the shared preset while this call waits
+    // for replies. Report the selection this test actually started with.
+    final selectedPreset = ctx.ws.preset;
+    final presetInfo = selectedPreset == null
+        ? null
+        : {'id': selectedPreset.id, 'name': selectedPreset.displayName};
     List<String> replies;
     try {
       replies = await ctx.services.playtest(
@@ -617,6 +624,7 @@ final StudioTool playtestTool = StudioTool(
     }
     return StudioToolResult.json({
       'playtest_id': test.id,
+      'preset': presetInfo,
       'transcript': [
         for (var i = 0; i < turns.length; i++) ...[
           {'user': turns[i]},

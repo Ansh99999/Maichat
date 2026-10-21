@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'prompt_block.dart';
 
 /// How much of the editor is exposed.
@@ -203,7 +205,11 @@ class Preset {
         raw: Map<String, dynamic>.from(raw),
       );
 
-  // PLACEHOLDER_JSON
+  /// An independent working copy, including nested imported metadata.
+  Preset clone() => Preset.fromJson(
+        jsonDecode(jsonEncode(toJson())) as Map<String, dynamic>,
+      );
+
   /// Our own persistence shape (a superset of every import format), so nothing
   /// is lost across app restarts.
   Map<String, dynamic> toJson() => {
@@ -247,7 +253,7 @@ class Preset {
   factory Preset.fromJson(Map<String, dynamic> json) {
     List<PromptBlock> blocks() {
       final list = json['prompts'];
-      if (list is List && list.isNotEmpty) {
+      if (list is List) {
         return list
             .whereType<Map<String, dynamic>>()
             .map(PromptBlock.fromJson)
@@ -258,7 +264,7 @@ class Preset {
 
     List<PromptOrderEntry> order() {
       final list = json['promptOrder'];
-      if (list is List && list.isNotEmpty) {
+      if (list is List) {
         return list
             .whereType<Map<String, dynamic>>()
             .map(PromptOrderEntry.fromJson)

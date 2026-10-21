@@ -182,6 +182,11 @@ class _SaveCard extends StatelessWidget {
           : 'Adds $name to your library, with its lorebooks.';
     }
 
+    final preset = session.workspace.preset;
+    final detail = !saved && preset != null
+        ? '$body Also saves the generation preset "${preset.displayName}".'
+        : body;
+
     final background = saved
         ? scheme.surfaceContainer
         : scheme.primaryContainer;
@@ -225,7 +230,7 @@ class _SaveCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              running ? 'Saving waits until the Studio finishes.' : body,
+              running ? 'Saving waits until the Studio finishes.' : detail,
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: foreground,
                 height: 1.45,
@@ -345,6 +350,7 @@ class _ChangeRow extends StatelessWidget {
     if (tool.contains('avatar')) return Icons.palette_outlined;
     if (tool.contains('greeting')) return Icons.waving_hand_outlined;
     if (tool.contains('scenario')) return Icons.theaters_outlined;
+    if (tool.contains('preset')) return Icons.tune;
     return Icons.auto_awesome;
   }
 }

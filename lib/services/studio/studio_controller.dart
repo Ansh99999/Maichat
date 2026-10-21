@@ -10,6 +10,7 @@ import '../../models/gallery_image.dart';
 import '../../models/lorebook.dart';
 import '../../models/message.dart';
 import '../../models/message_image.dart';
+import '../../models/preset.dart';
 import '../../models/scenario.dart';
 import '../../models/studio.dart';
 import '../../models/usage.dart';
@@ -22,6 +23,7 @@ import '../model_context.dart';
 import 'agent_runner.dart';
 import 'image_tools.dart';
 import 'library_tools.dart';
+import 'preset_tools.dart';
 import 'studio_discover.dart';
 import 'studio_images.dart';
 import 'custom_agents.dart';
@@ -77,6 +79,7 @@ class StudioApplyResult {
     required this.documents,
     required this.documentsSkipped,
     this.folderName,
+    this.presetName,
   });
 
   final String characterName;
@@ -86,6 +89,7 @@ class StudioApplyResult {
   /// Documents left out because embeddings are off.
   final int documentsSkipped;
   final String? folderName;
+  final String? presetName;
 }
 
 /// One open Studio session: runs its agent, keeps the session saved as it
@@ -1358,7 +1362,8 @@ class StudioController extends ChangeNotifier {
 
   /// Writes the draft into the library: the character (in place, when the
   /// session was opened from one or applied before), every lorebook by id, the
-  /// documents when embeddings are on, and — with [bundleFolder] — a folder
+  /// documents when embeddings are on, the selected generation preset by id,
+  /// and — with [bundleFolder] — a folder
   /// holding all of it.
   Future<StudioApplyResult> apply({bool bundleFolder = false}) async {
     final ws = session.workspace.clone();
@@ -1371,6 +1376,7 @@ class StudioController extends ChangeNotifier {
       await state.saveLorebook(book);
     }
     await state.saveCharacter(character);
+    if (ws.preset != null) await state.savePreset(ws.preset!);
 
     var documents = 0;
     var skipped = 0;
@@ -1426,6 +1432,11 @@ class StudioController extends ChangeNotifier {
       addAll(folder.characterIds, [character.id]);
       addAll(folder.lorebookIds, ws.lorebooks.map((b) => b.id));
       addAll(folder.documentIds, documentIds);
+      if (ws.preset != null) {
+        addAll(folder.presetIds, [ws.preset!.id]);
+        folder.defaultPresetId = ws.preset!.id;
+        folder.presetOverrides.remove(ws.preset!.id);
+      }
       await state.saveFolder(folder);
       session.folderId = folder.id;
       folderName = folder.name;
@@ -1442,6 +1453,7 @@ class StudioController extends ChangeNotifier {
       documents: documents,
       documentsSkipped: skipped,
       folderName: folderName,
+      presetName: ws.preset?.displayName,
     );
   }
 
@@ -1498,6 +1510,11 @@ String describeCall(ToolCall call) {
 
   return switch (call.name) {
     'get_draft' => 'Read the draft',
+    'list_presets' => 'Looked through generation presets',
+    'get_preset' => 'Read a generation preset',
+    'load_preset' => 'Loaded a generation preset into the draft',
+    'update_preset' => 'Edited the draft preset',
+    'clear_preset' => 'Cleared the draft preset',
     'set_fields' => 'Set ${a.keys.map((k) => k.replaceAll('_', ' ')).join(', ')}',
     'edit_field' => 'Edited ${quoted(a['field']).replaceAll('_', ' ')}',
     'add_greeting' => 'Added a greeting',
@@ -1588,6 +1605,7 @@ class _AppStudioServices
         StudioPictureServices,
         StudioPromptSizer,
         StudioLibraryServices,
+        StudioPresetServices,
         StudioDiscoverServices {
   _AppStudioServices(this.controller);
 
@@ -1604,6 +1622,9 @@ class _AppStudioServices
 
   @override
   List<Lorebook> get libraryLorebooks => _state.lorebooks;
+
+  @override
+  List<Preset> get libraryPresets => _state.presets;
 
   @override
   List<Scenario> get libraryScenarios => _state.scenarios;
@@ -1666,6 +1687,7 @@ class _AppStudioServices
     return _state
         .playtestCharacter(
           character: character,
+          preset: controller.session.workspace.preset,
           lorebooks: lorebooks,
           userTurns: userTurns,
           greetingIndex: greetingIndex,
@@ -1689,6 +1711,7 @@ class _AppStudioServices
   }) {
     final size = _state.playtestPromptSize(
       character: character,
+      preset: controller.session.workspace.preset,
       lorebooks: lorebooks,
       greetingIndex: greetingIndex,
     );

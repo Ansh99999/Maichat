@@ -2,6 +2,7 @@ import '../../models/studio.dart';
 import 'image_tools.dart';
 import 'knowledge_tools.dart';
 import 'library_tools.dart';
+import 'preset_tools.dart';
 import 'runtime_tools.dart';
 import 'skill_tools.dart';
 import 'studio_memory.dart';
@@ -23,6 +24,7 @@ const Map<String, (String, List<String>)> kStudioToolGroups = {
       'read_document',
       'list_library',
       'read_library_item',
+      ...kPresetReadToolNames,
       ...kLibraryReadToolNames,
     ],
   ),
@@ -35,6 +37,7 @@ const Map<String, (String, List<String>)> kStudioToolGroups = {
     ['set_fields', 'edit_field', 'add_greeting', 'remove_greeting'],
   ),
   'scenarios': ('Scenarios', ['upsert_scenario', 'delete_scenario']),
+  'presets': ('Generation presets', kPresetEditToolNames),
   'lore': (
     'Lorebooks',
     [

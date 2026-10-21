@@ -1,6 +1,7 @@
 import '../../models/character.dart';
 import '../../models/conversation.dart';
 import '../../models/lorebook.dart';
+import '../../models/preset.dart';
 import '../../models/studio.dart';
 import '../../models/studio_revisions.dart';
 import '../../state/app_state.dart';
@@ -19,7 +20,10 @@ import 'studio_controller.dart';
 ///   hand, or a rewind) is what the next reply is written from — and a copy,
 ///   so nothing the chat does (its own per-chat definitions, an avatar pool)
 ///   writes into the draft behind the Studio's back.
-class StudioPlayground implements ChatHost {
+/// - **Which preset it uses:** the workspace's generation preset, copied at
+///   the same draft version. Changes and rewinds reach the next reply; an
+///   explicit per-chat override still wins over the host's preset.
+class StudioPlayground implements ChatHost, ChatPresetHost {
   StudioPlayground(this.controller) {
     controller.addListener(_onController);
   }
@@ -36,6 +40,7 @@ class StudioPlayground implements ChatHost {
 
   /// The copy of the draft the chats see, and which version it was taken at.
   Character? _character;
+  Preset? _preset;
   final Map<String, Lorebook> _books = <String, Lorebook>{};
   int _version = -1;
   StudioWorkspace? _workspace;
@@ -95,6 +100,7 @@ class StudioPlayground implements ChatHost {
     _workspace = ws;
     final copy = ws.character.clone();
     _character = copy;
+    _preset = ws.preset?.clone();
     _books
       ..clear()
       ..addEntries(ws.lorebooks.map((b) => MapEntry(b.id, b.copyWith())));
@@ -104,6 +110,12 @@ class StudioPlayground implements ChatHost {
     for (final p in session.playtests) {
       p.chat.systemPrompt = persona;
     }
+  }
+
+  @override
+  Preset? get preset {
+    _refresh();
+    return _preset;
   }
 
   @override

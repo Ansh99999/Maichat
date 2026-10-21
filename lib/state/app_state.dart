@@ -68,7 +68,7 @@ import '../services/usage_ledger.dart';
 import '../services/world_info.dart';
 import 'chat_host.dart';
 
-export 'chat_host.dart' show ChatHost, kHostedChatPrefix;
+export 'chat_host.dart' show ChatHost, ChatPresetHost, kHostedChatPrefix;
 
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
@@ -1176,11 +1176,14 @@ class AppState extends ChangeNotifier {
   }
 
   /// The preset a conversation runs under: its own chat-specific override, then
-  /// its referenced preset, then the app default.
-  Preset? presetFor(Conversation conversation) =>
-      conversation.presetOverride ??
-      presetById(conversation.presetId) ??
-      presetById(_defaultPresetId);
+  /// its host's live draft preset, its referenced preset, then the app default.
+  Preset? presetFor(Conversation conversation) {
+    final host = _hostOf(conversation);
+    return conversation.presetOverride ??
+        (host is ChatPresetHost ? (host as ChatPresetHost).preset : null) ??
+        presetById(conversation.presetId) ??
+        presetById(_defaultPresetId);
+  }
 
   Preset? get defaultPreset => presetById(_defaultPresetId);
   String? get defaultPresetId => _defaultPresetId;
@@ -5744,9 +5747,12 @@ class AppState extends ChangeNotifier {
   /// turn since) and replaces the greeting — how a Playground chat or an
   /// agent's continued playtest carries on. [scenario] is a situation for this
   /// test alone, laid over the card's own as a chat's scenario would be.
+  /// [preset] is a Studio working copy; when absent the usual chat preset
+  /// applies. It is copied onto the throwaway chat, never into the library.
   /// [onText] hears the reply so far as it streams, reasoning split off.
   Future<List<String>> playtestCharacter({
     required Character character,
+    Preset? preset,
     List<Lorebook> lorebooks = const <Lorebook>[],
     required List<String> userTurns,
     int greetingIndex = 0,
@@ -5757,6 +5763,7 @@ class AppState extends ChangeNotifier {
   }) async {
     final conversation = _playtestConversation(
       character: character,
+      preset: preset,
       lorebooks: lorebooks,
       greetingIndex: greetingIndex,
       transcript: transcript,
@@ -5821,20 +5828,23 @@ class AppState extends ChangeNotifier {
   /// reply — the preset, persona, card, lore and greeting, assembled through
   /// [_assemble] exactly as a playtest sends it — beside the context the
   /// preset allows. Nothing is sent. Null when no provider is set up.
+  /// Uses [preset] when supplied, just like [playtestCharacter].
   ({int tokens, int context, List<PromptSection> sections})? playtestPromptSize({
     required Character character,
+    Preset? preset,
     List<Lorebook> lorebooks = const <Lorebook>[],
     int greetingIndex = 0,
     String userTurn = 'Hello.',
   }) {
     final conversation = _playtestConversation(
       character: character,
+      preset: preset,
       lorebooks: lorebooks,
       greetingIndex: greetingIndex,
     );
     conversation.messages.add(ChatMessage(role: 'user', content: userTurn));
-    final preset = presetFor(conversation);
-    if (_resolveProvider(preset, conversation: conversation) == null) return null;
+    final selected = presetFor(conversation);
+    if (_resolveProvider(selected, conversation: conversation) == null) return null;
     final assembled = _assemble(conversation);
     return (
       tokens: assembled.totalTokens,
@@ -5848,6 +5858,7 @@ class AppState extends ChangeNotifier {
   /// or on [transcript], when a playtest carries on.
   Conversation _playtestConversation({
     required Character character,
+    Preset? preset,
     required List<Lorebook> lorebooks,
     int greetingIndex = 0,
     List<ChatMessage>? transcript,
@@ -5855,18 +5866,19 @@ class AppState extends ChangeNotifier {
   }) {
     final now = DateTime.now();
     final greetings = character.greetings;
-    final conversation = Conversation(
+    // Seed the same persona and folder defaults as a Playground chat, so the
+    // agent's test and prompt measurement use the connection the user plays on.
+    final conversation = newChatWith(
+      character,
       id: 'studio-playtest-${now.microsecondsSinceEpoch}',
-      title: 'Playtest',
-      messages: <ChatMessage>[],
-      updatedAt: now,
-      characterId: character.id,
-      characterName: character.displayName,
-      overrideDefinitions: true,
-      characterOverrides: {character.id: character},
-      lorebookOverrides: {for (final b in lorebooks) b.id: b},
-      scenarioOverride: scenario.trim(),
-    );
+    )
+      ..title = 'Playtest'
+      ..messages.clear()
+      ..overrideDefinitions = true
+      ..characterOverrides.addAll({character.id: character})
+      ..lorebookOverrides.addAll({for (final b in lorebooks) b.id: b})
+      ..scenarioOverride = scenario.trim()
+      ..presetOverride = preset?.clone();
     final persona = impersonationFor(conversation);
     final userName = persona?.displayName ?? 'User';
     String resolve(String text) => Character.resolveMacros(

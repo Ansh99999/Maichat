@@ -101,6 +101,9 @@ Map<String, String> partFingerprints(StudioWorkspace ws) {
     out['doc:${d.id}'] = jsonEncode([d.name, d.text]);
   }
   out['notes'] = ws.notes;
+  // Keep the selection itself as a part even when empty, so clearing it also
+  // protects against a stale agent restoring the previously loaded preset.
+  out['preset'] = jsonEncode(ws.preset?.toJson());
   return out;
 }
 
@@ -149,6 +152,8 @@ String describePart(StudioWorkspace ws, String key) {
       return d == null ? 'that document' : 'document "${d.name}"';
     case 'notes':
       return 'the notes';
+    case 'preset':
+      return 'the generation preset';
   }
   return key;
 }

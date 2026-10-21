@@ -9,10 +9,10 @@ import '../../state/app_state.dart';
 import '../chat_export.dart';
 import '../chat_import.dart';
 import '../chat_screen.dart';
-import '../presets/chat_preset_panel.dart';
 import '../settings/chat_behaviour_page.dart';
 import '../settings/chat_interface_settings_page.dart';
 import '../settings/setting_anchors.dart';
+import 'draft/draft_preset_tab.dart';
 import 'shell/liquid_panel.dart';
 
 /// The Playground: the app's own chat screen, on a chat with the draft.
@@ -49,9 +49,9 @@ class StudioPlaygroundView extends StatelessWidget {
   }
 }
 
-/// The Playground's sidebar. Across the top, symbols only: the chat's preset,
-/// the provider, group chats and the Chat Interface — each opening exactly what
-/// the chat's own sidebar opens. Under a hairline with a + (a new chat with
+/// The Playground's sidebar. Across the top, symbols only: the Studio's preset,
+/// then the provider, group chats and Chat Interface from the chat's own
+/// sidebar. Under a hairline with a + (a new chat with
 /// the draft), the chats had with it, newest first: the user's and the agents'
 /// playtests alike. A long press pours out what can be done with one.
 class PlaygroundDrawer extends StatefulWidget {
@@ -66,7 +66,7 @@ class PlaygroundDrawer extends StatefulWidget {
 class _PlaygroundDrawerState extends State<PlaygroundDrawer> {
   StudioPlayground get _playground => widget.controller.playground;
 
-  /// Whether the preset panel has the drawer, as in the chat's own sidebar.
+  /// Whether the Studio's draft preset has the drawer.
   bool _presets = false;
 
   /// The chat whose options are poured out, and where it was pressed.
@@ -169,13 +169,44 @@ class _PlaygroundDrawerState extends State<PlaygroundDrawer> {
           child: KeyedSubtree(
             key: ValueKey<bool>(_presets),
             child: _presets
-                ? ChatPresetPanel(onBack: () => setState(() => _presets = false))
+                ? _presetPanel(context)
                 : _menu(context),
           ),
         ),
       ),
     );
   }
+
+  Widget _presetPanel(BuildContext context) => Column(
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(4, 8, 12, 4),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Back',
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => setState(() => _presets = false),
+            ),
+            Expanded(
+              child: Text(
+                'Studio preset',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+      Expanded(
+        child: ListenableBuilder(
+          listenable: widget.controller,
+          builder: (_, _) => DraftPresetTab(controller: widget.controller),
+        ),
+      ),
+    ],
+  );
 
   Widget _menu(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;

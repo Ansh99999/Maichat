@@ -40,6 +40,16 @@ Future<void> showStudioApplyFlow(
                   ? 'Replaces ${c.displayName} in your library with this draft.'
                   : 'Adds ${c.displayName} to your characters.',
             ),
+            if (ws.preset case final preset?) ...[
+              const SizedBox(height: 8),
+              Text(
+                state.presetById(preset.id) != null
+                    ? 'Replaces preset "${preset.displayName}" in your shared '
+                          'library with the Studio copy.'
+                    : 'Adds preset "${preset.displayName}" to your shared '
+                          'library.',
+              ),
+            ],
             if (ws.lorebooks.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(
@@ -63,9 +73,11 @@ Future<void> showStudioApplyFlow(
               value: folder,
               onChanged: (v) => setDialog(() => folder = v ?? false),
               title: const Text('Bundle into a folder'),
-              subtitle: const Text(
-                'The character, its lorebooks and '
-                'documents, together.',
+              subtitle: Text(
+                ws.preset == null
+                    ? 'The character, its lorebooks and documents, together.'
+                    : 'The character, its preset, lorebooks and documents, '
+                          'together.',
               ),
             ),
           ],
@@ -89,6 +101,7 @@ Future<void> showStudioApplyFlow(
     final result = await controller.apply(bundleFolder: folder);
     final parts = <String>[
       'Saved ${result.characterName}',
+      if (result.presetName != null) 'preset "${result.presetName}"',
       if (result.lorebooks > 0)
         '${result.lorebooks} lorebook${result.lorebooks == 1 ? '' : 's'}',
       if (result.documents > 0)

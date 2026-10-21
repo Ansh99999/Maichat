@@ -18,6 +18,7 @@ import 'conversation.dart';
 import 'lorebook.dart';
 import 'message.dart';
 import 'message_image.dart';
+import 'preset.dart';
 import 'studio_agent_type.dart';
 import 'studio_revisions.dart';
 import 'usage.dart';
@@ -58,7 +59,8 @@ class StudioDocument {
 }
 
 /// Everything a session is building: one character, the lorebooks that go with
-/// it, any embedding documents — and the session's [notes], the agents' (and
+/// it, any embedding documents, an optional generation [preset] — and the
+/// session's [notes], the agents' (and
 /// the user's) working notes, which are part of the draft so a rewind covers
 /// them, but are never applied to the library.
 ///
@@ -71,12 +73,17 @@ class StudioWorkspace {
     List<Lorebook>? lorebooks,
     List<StudioDocument>? documents,
     this.notes = '',
+    this.preset,
   })  : lorebooks = lorebooks ?? <Lorebook>[],
         documents = documents ?? <StudioDocument>[];
 
   Character character;
   final List<Lorebook> lorebooks;
   final List<StudioDocument> documents;
+
+  /// The generation preset being edited and played with. Null follows the
+  /// app's usual preset; a selected copy reaches the library only on Apply.
+  Preset? preset;
 
   /// Free-form markdown: research, findings, decisions, open questions — the
   /// session's writing area. Read and written by every agent (`read_notes`,
@@ -103,6 +110,7 @@ class StudioWorkspace {
         'lorebooks': [for (final b in lorebooks) b.toJson()],
         'documents': [for (final d in documents) d.toJson()],
         if (notes.isNotEmpty) 'notes': notes,
+        if (preset != null) 'preset': preset!.toJson(),
       };
 
   factory StudioWorkspace.fromJson(Map<String, dynamic> json) => StudioWorkspace(
@@ -122,6 +130,9 @@ class StudioWorkspace {
               if (d is Map) StudioDocument.fromJson(Map<String, dynamic>.from(d)),
         ],
         notes: json['notes'] as String? ?? '',
+        preset: json['preset'] is Map
+            ? Preset.fromJson(Map<String, dynamic>.from(json['preset'] as Map))
+            : null,
       );
 
   /// A deep copy, through JSON — the same shape a session is saved in, so a

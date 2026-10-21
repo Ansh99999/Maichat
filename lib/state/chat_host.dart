@@ -1,8 +1,15 @@
 import '../models/character.dart';
 import '../models/conversation.dart';
 import '../models/lorebook.dart';
+import '../models/preset.dart';
 
 export '../models/conversation.dart' show kHostedChatPrefix;
+
+/// A host that supplies a live generation preset beside its character draft.
+/// Other chat hosts continue to use the chat's bound preset or app default.
+abstract interface class ChatPresetHost {
+  Preset? get preset;
+}
 
 /// A place outside the app's chat list that keeps chats of its own and shows
 /// them in the real chat screen — the Character Studio's Playground.

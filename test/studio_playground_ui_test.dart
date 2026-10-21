@@ -5,10 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
 import 'package:maichat/models/chat_interface.dart';
+import 'package:maichat/models/preset.dart';
 import 'package:maichat/models/studio.dart';
 import 'package:maichat/models/studio_revisions.dart';
 import 'package:maichat/screens/chat_screen.dart';
-import 'package:maichat/screens/presets/chat_preset_panel.dart';
+import 'package:maichat/screens/studio/draft/draft_preset_tab.dart';
 import 'package:maichat/screens/studio/shell/area_capsule.dart';
 import 'package:maichat/screens/studio/studio_draft_view.dart';
 import 'package:maichat/screens/studio/studio_screen.dart';
@@ -248,10 +249,23 @@ void main() {
         findsOneWidget);
     expect(find.descendant(of: mineRow, matching: find.byKey(const Key('playground-agent-mark'))),
         findsNothing);
-    // The preset symbol opens the chat's own preset panel, in the drawer.
+    // The preset symbol opens the Studio copy in the drawer; selection does
+    // not bind a separate chat preset or write back to the shared library.
+    await state.savePreset(Preset(id: 'studio-voice', name: 'Studio Voice'));
     await tester.tap(find.byKey(const Key('playground-preset')));
     await tester.pumpAndSettle();
-    expect(find.byType(ChatPresetPanel), findsOneWidget);
+    expect(find.byType(DraftPresetTab), findsOneWidget);
+    expect(find.text('Studio preset'), findsOneWidget);
+    await tester.tap(find.text('Choose preset'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Studio Voice'));
+    await tester.pumpAndSettle();
+    expect(session.workspace.preset?.id, 'studio-voice');
+    expect(
+      identical(session.workspace.preset, state.presetById('studio-voice')),
+      isFalse,
+    );
+    expect(state.presetFor(state.active)?.id, 'studio-voice');
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
     expect(symbols, findsOneWidget);

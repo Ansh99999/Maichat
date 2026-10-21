@@ -341,6 +341,8 @@ void main() {
       expect(names('critic'), [
         'get_draft',
         'read_document',
+        'list_presets',
+        'get_preset',
         'playtest',
         // Reading the library and Discover changes nothing.
         'list_library',

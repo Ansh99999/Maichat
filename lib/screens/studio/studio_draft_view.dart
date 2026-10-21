@@ -10,9 +10,10 @@ import 'draft/draft_embeddings_tab.dart';
 import 'draft/draft_images_tab.dart';
 import 'draft/draft_lorebook_tab.dart';
 import 'draft/draft_notes_tab.dart';
+import 'draft/draft_preset_tab.dart';
 import 'draft/draft_scenarios_tab.dart';
 
-/// The draft as it stands, under browser-style tabs: Character, Images,
+/// The draft as it stands, under browser-style tabs: Character, Preset, Images,
 /// Lorebook, Embeddings, Documents, Scenarios — and Notes, the session's
 /// writing area, which is never applied. The Character tab opens with the
 /// character's picture and identity, laid out by the picture's shape; every
@@ -34,15 +35,20 @@ class StudioDraftView extends StatelessWidget {
     // The tabs themselves are built once; each page listens for itself, so a
     // streaming agent repaints the page in view without rebuilding the strip.
     Widget page(Widget Function() build) => ActiveListenableBuilder(
-          listenable: controller,
-          builder: (_) => build(),
-        );
+      listenable: controller,
+      builder: (_) => build(),
+    );
     return ChromeTabbedPages(
       tabs: [
         ChromeTab(
           label: 'Character',
           icon: Icons.person_outline,
           page: page(() => DraftCharacterTab(controller: controller)),
+        ),
+        ChromeTab(
+          label: 'Preset',
+          icon: Icons.tune,
+          page: page(() => DraftPresetTab(controller: controller)),
         ),
         ChromeTab(
           label: 'Images',

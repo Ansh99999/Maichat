@@ -481,7 +481,8 @@ bar or the overflow menu.
     `thoughtSignature` is echoed and a made-up id never sent back.
     `test/agent_client_test.dart` pins every dialect's bytes.
   - Model: `models/studio.dart` — a `StudioSession` is a **draft**
-    (`StudioWorkspace`: character, lorebooks by id, documents) plus transcript,
+    (`StudioWorkspace`: character, lorebooks by id, documents, optional
+    generation preset) plus transcript,
     `StudioOp`s (whole-workspace snapshot taken in the same synchronous step as
     the change via `StudioSession.edit`, capped at `kStudioSnapshotLimit`;
     rewind is *to a point*), `StudioSubagent`s (own transcript, timing, tokens,
@@ -611,6 +612,19 @@ bar or the overflow menu.
     fakes without them still compile. Replaces are stale-guarded over the
     whole character and rewindable; documents and notes are always kept.
     Critics get the reads only.
+  - **Generation presets** (`preset_tools.dart`): `list_presets`, `get_preset`,
+    `load_preset`, `update_preset`, `clear_preset`. Loading keeps an independent
+    working copy in `StudioWorkspace.preset`; `as_copy` gives it a new id.
+    Sampling and prompt edits are snapshotted, persisted and rewindable, with
+    stale-write protection over the `preset` part. Apply upserts the selected
+    preset and a bundled folder uses it as its default; the app default is
+    unchanged. Both agent playtests and `count_tokens` prompt sizing pass the
+    working copy through the real assembly path. The Playground's optional
+    `ChatPresetHost` supplies a live copy at the current draft version, below
+    an explicit per-chat override. Its drawer and the Draft's Preset tab share
+    `DraftPresetTab`; hand edits use the reusable preset editor with Save/Cancel
+    and never write the library. `Preset.clone` also isolates nested imported
+    metadata; native empty prompt arrays stay empty through persistence.
   - AppState owns only `studioConfig` (own provider/model, like the image
     studio), `streamAgentTurn` (budget + key rotation + ledger, own client,
     never touches `_streaming`), `wireImagesFor`, and `playtestCharacter`
