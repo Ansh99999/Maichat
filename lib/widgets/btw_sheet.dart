@@ -9,10 +9,8 @@ import 'message_markdown.dart';
 
 /// Asks a `/btw` side question: given the [BtwRun] to register its cancel on
 /// and where to report the answer so far, resolves to the whole answer.
-typedef BtwAsk = Future<String> Function(
-  BtwRun run,
-  void Function(String text) onProgress,
-);
+typedef BtwAsk =
+    Future<String> Function(BtwRun run, void Function(String text) onProgress);
 
 /// The `/btw` sheet: the question, its answer as it is written, and a note
 /// that none of it is kept. It slides up over the conversation, which it
@@ -23,20 +21,27 @@ Future<void> showBtwSheet(
   BuildContext context, {
   required String question,
   required BtwAsk ask,
-}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      useSafeArea: true,
-      builder: (_) => BtwSheet(question: question, ask: ask),
-    );
+  bool actionsEnabled = false,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  useSafeArea: true,
+  builder: (_) =>
+      BtwSheet(question: question, ask: ask, actionsEnabled: actionsEnabled),
+);
 
 class BtwSheet extends StatefulWidget {
-  const BtwSheet({super.key, required this.question, required this.ask});
+  const BtwSheet({
+    super.key,
+    required this.question,
+    required this.ask,
+    this.actionsEnabled = false,
+  });
 
   final String question;
   final BtwAsk ask;
+  final bool actionsEnabled;
 
   @override
   State<BtwSheet> createState() => _BtwSheetState();
@@ -105,16 +110,20 @@ class _BtwSheetState extends State<BtwSheet> {
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: _answer));
     if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
-      content: Text('Answer copied'),
-      behavior: SnackBarBehavior.floating,
-    ));
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Answer copied'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   MarkdownStyles _styles(ThemeData theme) {
     final scheme = theme.colorScheme;
-    final base = (theme.textTheme.bodyLarge ?? const TextStyle())
-        .copyWith(color: scheme.onSurface, height: 1.45);
+    final base = (theme.textTheme.bodyLarge ?? const TextStyle()).copyWith(
+      color: scheme.onSurface,
+      height: 1.45,
+    );
     return MarkdownStyles(
       base: base,
       emphasis: scheme.onSurface,
@@ -129,8 +138,9 @@ class _BtwSheetState extends State<BtwSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final muted =
-        theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+    );
     final maxHeight = MediaQuery.sizeOf(context).height * 0.85;
 
     final Widget answer;
@@ -145,8 +155,9 @@ class _BtwSheetState extends State<BtwSheet> {
         ),
         child: Text(
           _error!,
-          style: theme.textTheme.bodyMedium
-              ?.copyWith(color: scheme.onErrorContainer),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: scheme.onErrorContainer,
+          ),
         ),
       );
     } else if (_answer.isEmpty) {
@@ -205,13 +216,17 @@ class _BtwSheetState extends State<BtwSheet> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.tips_and_updates_outlined,
-                      size: 16, color: scheme.onTertiaryContainer),
+                  Icon(
+                    Icons.tips_and_updates_outlined,
+                    size: 16,
+                    color: scheme.onTertiaryContainer,
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     'By the way',
-                    style: theme.textTheme.labelLarge
-                        ?.copyWith(color: scheme.onTertiaryContainer),
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: scheme.onTertiaryContainer,
+                    ),
                   ),
                 ],
               ),
@@ -237,10 +252,20 @@ class _BtwSheetState extends State<BtwSheet> {
             const SizedBox(height: 16),
             Row(
               children: [
-                Icon(Icons.visibility_off_outlined,
-                    size: 16, color: scheme.onSurfaceVariant),
+                Icon(
+                  Icons.visibility_off_outlined,
+                  size: 16,
+                  color: scheme.onSurfaceVariant,
+                ),
                 const SizedBox(width: 6),
-                Expanded(child: Text('Not added to the conversation', style: muted)),
+                Expanded(
+                  child: Text(
+                    widget.actionsEnabled
+                        ? 'Answer stays outside the story. Tool changes are saved.'
+                        : 'Not added to the conversation',
+                    style: muted,
+                  ),
+                ),
                 if (_done && _error == null && _answer.isNotEmpty)
                   IconButton(
                     tooltip: 'Copy answer',

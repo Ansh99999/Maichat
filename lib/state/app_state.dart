@@ -67,11 +67,28 @@ import '../services/update_service.dart';
 import '../services/usage_ledger.dart';
 import '../services/world_info.dart';
 import 'chat_host.dart';
+import '../models/chat_tool.dart';
+import '../services/chat_tools/runtime.dart';
+import '../services/chat_tools/definitions.dart';
 
 export 'chat_host.dart' show ChatHost, ChatPresetHost, kHostedChatPrefix;
 
+part 'chat_tools_state.dart';
+
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
+  void _notifyChatTools({bool stateChanged = true}) {
+    if (stateChanged) _toolProjectionCache.clear();
+    notifyListeners();
+  }
+
+  final Map<String, ({String signature, ChatToolProjection projection})>
+  _toolProjectionCache = {};
+  ChatToolConfig _chatTools = const ChatToolConfig();
+  final Map<String, List<String>> _chatToolRequests = {};
+  AgentClient? _chatToolClient;
+  void Function()? _cancelChatToolRun;
+  final Set<String> _chatToolWriting = {};
   AppState({
     Storage? storage,
     ChatClient? client,
@@ -88,6 +105,7 @@ class AppState extends ChangeNotifier {
   }) : _storage = storage ?? Storage(),
        _client = client ?? ChatClient(),
        _imageClient = imageClient ?? ImageClient(),
+       _chatToolImageClientFactory = (() => imageClient ?? ImageClient()),
        _updateService = updateService ?? UpdateService(),
        _drive = drive ?? DriveClient(),
        _summarizer = summarizer ?? Summarizer() {
@@ -105,6 +123,8 @@ class AppState extends ChangeNotifier {
   final Storage _storage;
   final ChatClient _client;
   final ImageClient _imageClient;
+  final ImageClient Function() _chatToolImageClientFactory;
+  final Set<ImageClient> _chatToolImageClients = {};
   final UpdateService _updateService;
 
   /// How Google Drive is talked to. Injectable so the backup tests can point the
@@ -509,8 +529,9 @@ class AppState extends ChangeNotifier {
         // keep, which is nothing the user is waiting for.
         _startupAvatarSweep = Zone.root.run<Future<void>>(
           () => backgroundWarmUp
-              ? Future<void>.delayed(_deferredStartupWork)
-                  .then((_) => _runStartupAvatarSweep())
+              ? Future<void>.delayed(
+                  _deferredStartupWork,
+                ).then((_) => _runStartupAvatarSweep())
               : _runStartupAvatarSweep(),
         );
         unawaited(_startupAvatarSweep);
@@ -525,10 +546,14 @@ class AppState extends ChangeNotifier {
       // zips the pictures folder, so on a device it starts once the app is up
       // rather than racing the first frames for the disk.
       if (backgroundWarmUp) {
-        unawaited(Zone.root.run(() => Future<void>.delayed(
+        unawaited(
+          Zone.root.run(
+            () => Future<void>.delayed(
               _deferredStartupWork,
               () => runDueBackup(),
-            )));
+            ),
+          ),
+        );
       } else {
         unawaited(runDueBackup());
       }
@@ -546,9 +571,11 @@ class AppState extends ChangeNotifier {
         // Local tokenizers are off: there is nothing to build.
       } else if (backgroundWarmUp) {
         final warm = Stopwatch()..start();
-        unawaited(AppTokenizer.warmUp(_tokenizer.activeEncoding()).whenComplete(
-          () => _logStartupPhase('tokenizer (background)', warm),
-        ));
+        unawaited(
+          AppTokenizer.warmUp(_tokenizer.activeEncoding()).whenComplete(
+            () => _logStartupPhase('tokenizer (background)', warm),
+          ),
+        );
       } else {
         scheduleMicrotask(() {
           try {
@@ -572,6 +599,7 @@ class AppState extends ChangeNotifier {
     _activeProviderId = providerState.activeId;
     _appearance = await _storage.loadAppearance();
     _chatInterface = await _storage.loadChatInterface();
+    _chatTools = await _storage.loadChatTools();
     _characters
       ..clear()
       ..addAll(await _storage.loadCharacters());
@@ -873,6 +901,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> selectProvider(String id) async {
+    if (_chatToolClient != null) stop();
     if (_activeProviderId == id) return;
     _activeProviderId = id;
     notifyListeners();
@@ -1695,8 +1724,11 @@ class AppState extends ChangeNotifier {
   void chooseDefaultAvatar(String characterId, String ref) {
     final trimmed = ref.trim();
     if (trimmed.isEmpty) return;
-    if (_editHostedCharacter(characterId, 'Changed the portrait',
-        (c) => _wear(c, trimmed))) {
+    if (_editHostedCharacter(
+      characterId,
+      'Changed the portrait',
+      (c) => _wear(c, trimmed),
+    )) {
       return;
     }
     final character = characterById(characterId);
@@ -1850,8 +1882,9 @@ class AppState extends ChangeNotifier {
     // every sweep would let two sweeps interleave (a reopened app's startup
     // sweep beside the last one's) where they otherwise run one after another.
     final studio = _studio;
-    final studioRefs =
-        studio == null ? const <String>[] : await studio.pictureRefs();
+    final studioRefs = studio == null
+        ? const <String>[]
+        : await studio.pictureRefs();
     await store.sweep([
       ..._characters.map((c) => c.avatar),
       ..._characters.expand((c) => c.avatars),
@@ -3096,7 +3129,8 @@ class AppState extends ChangeNotifier {
     return newId;
   }
 
-  List<String> _folderList(Folder folder, FolderItemKind kind) => switch (kind) {
+  List<String> _folderList(Folder folder, FolderItemKind kind) =>
+      switch (kind) {
         FolderItemKind.character => folder.characterIds,
         FolderItemKind.lorebook => folder.lorebookIds,
         FolderItemKind.scenario => folder.scenarioIds,
@@ -3157,12 +3191,15 @@ class AppState extends ChangeNotifier {
   /// The folder's presets/providers/lorebooks in folder order, overrides
   /// applied, dropping any whose referenced item is gone — the "Folder …" half
   /// of the split lists the chat-time pickers draw.
-  List<Preset> folderPresets(Folder folder) =>
-      [for (final id in folder.presetIds) ?folderPreset(folder, id)];
-  List<Provider> folderProviders(Folder folder) =>
-      [for (final id in folder.providerIds) ?providerById(id)];
-  List<Lorebook> folderLorebooks(Folder folder) =>
-      [for (final id in folder.lorebookIds) ?folderLorebook(folder, id)];
+  List<Preset> folderPresets(Folder folder) => [
+    for (final id in folder.presetIds) ?folderPreset(folder, id),
+  ];
+  List<Provider> folderProviders(Folder folder) => [
+    for (final id in folder.providerIds) ?providerById(id),
+  ];
+  List<Lorebook> folderLorebooks(Folder folder) => [
+    for (final id in folder.lorebookIds) ?folderLorebook(folder, id),
+  ];
 
   /// The provider [conversation] runs on: a per-chat override wins over the
   /// app-global active provider, so a foldered chat can use the folder's
@@ -3175,12 +3212,12 @@ class AppState extends ChangeNotifier {
   Future<void> setConversationProvider(
     String conversationId,
     String? providerId,
-  ) =>
-      _editConversation(
-        conversationId,
-        (c) => c.providerOverride =
-            (providerId == null || providerId.isEmpty) ? null : providerId,
-      );
+  ) => _editConversation(
+    conversationId,
+    (c) => c.providerOverride = (providerId == null || providerId.isEmpty)
+        ? null
+        : providerId,
+  );
 
   // --- Regex rules ---------------------------------------------------------
   //
@@ -3316,8 +3353,15 @@ class AppState extends ChangeNotifier {
         continue;
       }
       any = true;
-      hash = Object.hash(hash, i, r.find, r.replace, r.macroMode,
-          Object.hashAll(r.placement), Object.hashAll(r.trimStrings));
+      hash = Object.hash(
+        hash,
+        i,
+        r.find,
+        r.replace,
+        r.macroMode,
+        Object.hashAll(r.placement),
+        Object.hashAll(r.trimStrings),
+      );
     }
     return any ? hash : null;
   }
@@ -3329,22 +3373,29 @@ class AppState extends ChangeNotifier {
   /// and depth is left unset — a cosmetic rewrite runs wherever the message is
   /// shown regardless of how far back it has scrolled.
   String Function(String text, {required bool isUser})? regexDisplayTransform(
-      Conversation? conversation) {
+    Conversation? conversation,
+  ) {
     final rules = _activeRegexRules;
-    final userWork =
-        RegexEngine.hasWork(rules, target: RegexTarget.userInput, isDisplay: true);
-    final aiWork =
-        RegexEngine.hasWork(rules, target: RegexTarget.aiOutput, isDisplay: true);
+    final userWork = RegexEngine.hasWork(
+      rules,
+      target: RegexTarget.userInput,
+      isDisplay: true,
+    );
+    final aiWork = RegexEngine.hasWork(
+      rules,
+      target: RegexTarget.aiOutput,
+      isDisplay: true,
+    );
     if (!userWork && !aiWork) return null;
     final names = _regexNames(conversation);
     return (String text, {required bool isUser}) => RegexEngine.apply(
-          rules,
-          text,
-          target: isUser ? RegexTarget.userInput : RegexTarget.aiOutput,
-          isDisplay: true,
-          userName: names.user,
-          charName: names.char,
-        );
+      rules,
+      text,
+      target: isUser ? RegexTarget.userInput : RegexTarget.aiOutput,
+      isDisplay: true,
+      userName: names.user,
+      charName: names.char,
+    );
   }
 
   /// Applies the prompt-only rules to one history [message] as the prompt is
@@ -3357,7 +3408,9 @@ class AppState extends ChangeNotifier {
     required String charName,
     required List<RegexRule> rules,
   }) {
-    final target = message.isUser ? RegexTarget.userInput : RegexTarget.aiOutput;
+    final target = message.isUser
+        ? RegexTarget.userInput
+        : RegexTarget.aiOutput;
     final next = RegexEngine.apply(
       rules,
       message.content,
@@ -4233,6 +4286,7 @@ class AppState extends ChangeNotifier {
     String? conversationId,
     String? characterId,
     List<MessageImage> references = const <MessageImage>[],
+    ImageClient? client,
   }) async {
     final config = _imageGen;
     if (!config.isReady) {
@@ -4243,7 +4297,7 @@ class AppState extends ChangeNotifier {
     final conversation = conversationId == null
         ? null
         : _conversationById(conversationId);
-    final result = await _imageClient.generate(
+    final result = await (client ?? _imageClient).generate(
       config: config,
       prompt: config.composePrompt(prompt),
       references: _referenceBytes(references),
@@ -4568,7 +4622,8 @@ class AppState extends ChangeNotifier {
   /// chat's own choice leads.
   List<String> avatarPoolIn(Conversation? conversation, String characterId) {
     // A hosted chat's character is the host's (the draft), and so is its pool.
-    final roster = _hostOf(conversation)?.character(characterId) ??
+    final roster =
+        _hostOf(conversation)?.character(characterId) ??
         characterById(characterId);
     final override = conversation?.overrideDefinitions == true
         ? conversation?.characterOverrides[characterId]
@@ -4613,8 +4668,9 @@ class AppState extends ChangeNotifier {
   Future<void> addAvatarToPool(String characterId, String ref) async {
     final trimmed = ref.trim();
     if (trimmed.isEmpty) return;
-    if (_editHostedCharacter(characterId, 'Added a picture to the avatars',
-        (c) {
+    if (_editHostedCharacter(characterId, 'Added a picture to the avatars', (
+      c,
+    ) {
       if (isAvatarOf(c, trimmed)) return false;
       _addToPool(c, trimmed);
       return true;
@@ -4661,8 +4717,11 @@ class AppState extends ChangeNotifier {
   /// Takes [ref] back out of [character]'s pool.
   Future<void> removeAvatarFromPool(String characterId, String ref) async {
     final refs = <String>{ref.trim()};
-    if (_editHostedCharacter(characterId, 'Took a picture out of the avatars',
-        (c) => _dropAvatarRefs(c, refs))) {
+    if (_editHostedCharacter(
+      characterId,
+      'Took a picture out of the avatars',
+      (c) => _dropAvatarRefs(c, refs),
+    )) {
       return;
     }
     final character = characterById(characterId);
@@ -4682,8 +4741,11 @@ class AppState extends ChangeNotifier {
   }) async {
     final trimmed = ref.trim();
     if (trimmed.isEmpty) return;
-    if (_editHostedCharacter(characterId, 'Changed the portrait',
-        (c) => _wear(c, trimmed))) {
+    if (_editHostedCharacter(
+      characterId,
+      'Changed the portrait',
+      (c) => _wear(c, trimmed),
+    )) {
       return;
     }
     final character = characterById(characterId);
@@ -5178,8 +5240,10 @@ class AppState extends ChangeNotifier {
         : null;
     // Permanent user-input regex rewrites the turn as it is stored (the chat
     // title and the empty check above stay on what was actually typed).
-    final storedPrompt =
-        applyRegexToUserInput(prompt, conversation: conversation);
+    final storedPrompt = applyRegexToUserInput(
+      prompt,
+      conversation: conversation,
+    );
     conversation.messages.add(
       ChatMessage(
         role: 'user',
@@ -5378,6 +5442,14 @@ class AppState extends ChangeNotifier {
     void Function(String text)? onProgress,
   }) async {
     final chat = conversation ?? active;
+    if (chatToolConfigFor(chat).enabled) {
+      return _askAsideWithTools(
+        question,
+        chat,
+        run: run,
+        onProgress: onProgress,
+      );
+    }
     final preset = presetFor(chat);
     final base = _resolveProvider(preset, conversation: chat);
     if (base == null) {
@@ -5387,7 +5459,8 @@ class AppState extends ChangeNotifier {
     if (blocked != null) throw ChatApiException(describeBudgetBlock(blocked));
 
     // The turn a reply is streaming into is the last one, and only half there.
-    final generating = _streaming &&
+    final generating =
+        _streaming &&
         !_writingForUser &&
         identical(chat, active) &&
         chat.messages.isNotEmpty &&
@@ -5561,9 +5634,9 @@ class AppState extends ChangeNotifier {
   final List<HomeNote> _homeNotes = <HomeNote>[];
 
   /// The Home screen's notes, newest edit first.
-  List<HomeNote> get homeNotes =>
-      List.unmodifiable([..._homeNotes]
-        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)));
+  List<HomeNote> get homeNotes => List.unmodifiable(
+    [..._homeNotes]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
+  );
 
   HomeNote? homeNoteById(String? id) {
     if (id == null) return null;
@@ -5621,7 +5694,9 @@ class AppState extends ChangeNotifier {
     base ??= _resolveProvider(defaultPreset);
     if (base == null) return null;
     final model = _studioConfig.model.trim();
-    return model.isEmpty || model == base.model ? base : base.copyWith(model: model);
+    return model.isEmpty || model == base.model
+        ? base
+        : base.copyWith(model: model);
   }
 
   /// One metered agent turn for the Studio over [client] (which the caller owns,
@@ -5675,14 +5750,16 @@ class AppState extends ChangeNotifier {
       for (final m in messages) {
         input += _tokenizer.estimate(m.text) + _perMessageOverhead;
       }
-      final usage = reported ??
+      final usage =
+          reported ??
           TokenUsage(
             inputTokens: ok || written.isNotEmpty ? input : 0,
             outputTokens: _tokenizer.estimate(written.toString()),
             estimated: true,
           );
       recordUsage(base, base.model, usage);
-      final price = base.priceOf(base.model)
+      final price = base
+          .priceOf(base.model)
           ?.costOf(usage.inputTokens, usage.outputTokens);
       onSpend?.call(usage, (price?.input ?? 0) + (price?.output ?? 0));
       await _persistUsage();
@@ -5795,7 +5872,9 @@ class AppState extends ChangeNotifier {
           params: assembled.params,
         )) {
           raw.write(delta.text);
-          if (delta.usage != null) reported = _mergeUsage(reported, delta.usage!);
+          if (delta.usage != null) {
+            reported = _mergeUsage(reported, delta.usage!);
+          }
           if (onText != null && delta.text.isNotEmpty) {
             onText(splitReasoning(raw.toString(), tags).text);
           }
@@ -5829,7 +5908,8 @@ class AppState extends ChangeNotifier {
   /// [_assemble] exactly as a playtest sends it — beside the context the
   /// preset allows. Nothing is sent. Null when no provider is set up.
   /// Uses [preset] when supplied, just like [playtestCharacter].
-  ({int tokens, int context, List<PromptSection> sections})? playtestPromptSize({
+  ({int tokens, int context, List<PromptSection> sections})?
+  playtestPromptSize({
     required Character character,
     Preset? preset,
     List<Lorebook> lorebooks = const <Lorebook>[],
@@ -5844,7 +5924,9 @@ class AppState extends ChangeNotifier {
     );
     conversation.messages.add(ChatMessage(role: 'user', content: userTurn));
     final selected = presetFor(conversation);
-    if (_resolveProvider(selected, conversation: conversation) == null) return null;
+    if (_resolveProvider(selected, conversation: conversation) == null) {
+      return null;
+    }
     final assembled = _assemble(conversation);
     return (
       tokens: assembled.totalTokens,
@@ -5868,36 +5950,43 @@ class AppState extends ChangeNotifier {
     final greetings = character.greetings;
     // Seed the same persona and folder defaults as a Playground chat, so the
     // agent's test and prompt measurement use the connection the user plays on.
-    final conversation = newChatWith(
-      character,
-      id: 'studio-playtest-${now.microsecondsSinceEpoch}',
-    )
-      ..title = 'Playtest'
-      ..messages.clear()
-      ..overrideDefinitions = true
-      ..characterOverrides.addAll({character.id: character})
-      ..lorebookOverrides.addAll({for (final b in lorebooks) b.id: b})
-      ..scenarioOverride = scenario.trim()
-      ..presetOverride = preset?.clone();
+    final conversation =
+        newChatWith(
+            character,
+            id: 'studio-playtest-${now.microsecondsSinceEpoch}',
+          )
+          ..title = 'Playtest'
+          ..messages.clear()
+          ..overrideDefinitions = true
+          ..characterOverrides.addAll({character.id: character})
+          ..lorebookOverrides.addAll({for (final b in lorebooks) b.id: b})
+          ..scenarioOverride = scenario.trim()
+          ..presetOverride = preset?.clone();
     final persona = impersonationFor(conversation);
     final userName = persona?.displayName ?? 'User';
     String resolve(String text) => Character.resolveMacros(
-          text,
-          charName: character.displayName,
-          userName: userName,
-        );
+      text,
+      charName: character.displayName,
+      userName: userName,
+    );
     if (transcript != null) {
       for (final m in transcript) {
-        conversation.messages.add(ChatMessage(
-          role: m.role,
-          content: m.role == 'assistant' ? resolve(m.content) : m.content,
-        ));
+        conversation.messages.add(
+          ChatMessage(
+            role: m.role,
+            content: m.role == 'assistant' ? resolve(m.content) : m.content,
+          ),
+        );
       }
     } else if (greetings.isNotEmpty) {
-      conversation.messages.add(ChatMessage(
-        role: 'assistant',
-        content: resolve(greetings[greetingIndex.clamp(0, greetings.length - 1)]),
-      ));
+      conversation.messages.add(
+        ChatMessage(
+          role: 'assistant',
+          content: resolve(
+            greetings[greetingIndex.clamp(0, greetings.length - 1)],
+          ),
+        ),
+      );
     }
     return conversation;
   }
@@ -5996,6 +6085,18 @@ class AppState extends ChangeNotifier {
     bool nudgeNewReply = false,
     Character? responder,
   }) async {
+    if (chatToolConfigFor(conversation).enabled ||
+        chatToolProjection(
+          conversation,
+        ).values.keys.any((key) => key.startsWith('injection:'))) {
+      return _generateWithTools(
+        conversation,
+        swipeInto: swipeInto,
+        continueAt: continueAt,
+        nudgeNewReply: nudgeNewReply,
+        responder: responder,
+      );
+    }
     final preset = presetFor(conversation);
     final base = _resolveProvider(preset, conversation: conversation);
     if (base == null) return;
@@ -6064,6 +6165,7 @@ class AppState extends ChangeNotifier {
       conversation,
       historyEnd: target,
       responder: speaker,
+      commitMacroEffects: true,
     );
     final history = _wirePayload(
       assembled.messages,
@@ -6176,7 +6278,8 @@ class AppState extends ChangeNotifier {
         _replaceAt(
           conversation,
           target,
-          content: prefix +
+          content:
+              prefix +
               applyRegexToOutput(
                 answer,
                 target: RegexTarget.aiOutput,
@@ -6226,7 +6329,8 @@ class AppState extends ChangeNotifier {
           _replaceAt(
             conversation,
             target,
-            content: prefix +
+            content:
+                prefix +
                 applyRegexToOutput(
                   answer,
                   target: RegexTarget.aiOutput,
@@ -6420,6 +6524,7 @@ class AppState extends ChangeNotifier {
     int index,
     String content,
   ) async {
+    _toolProjectionCache.clear();
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
     final conversation = _conversationById(conversationId);
@@ -6436,6 +6541,7 @@ class AppState extends ChangeNotifier {
   /// Removes the message at [index] — the "delete turn" action. Ignored while
   /// the active conversation is streaming, to avoid racing the in-flight reply.
   Future<void> deleteMessage(String conversationId, int index) async {
+    _toolProjectionCache.clear();
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
     if (_streaming && _activeOrNull()?.id == conversation.id) return;
@@ -6489,7 +6595,8 @@ class AppState extends ChangeNotifier {
     ];
     final host = _hostOf(source);
     final fork = source.copyAs(
-      id: '${host == null ? '' : kHostedChatPrefix}'
+      id:
+          '${host == null ? '' : kHostedChatPrefix}'
           '${DateTime.now().microsecondsSinceEpoch}',
       // Branches are named after the tree's root rather than piling up
       // "(fork) (fork)" suffixes: the graph already says where each split, and
@@ -6537,9 +6644,7 @@ class AppState extends ChangeNotifier {
     final rootId = rootIdOf(pool, source.id);
     final root = _conversationById(rootId) ?? source;
     final inTree = pool
-        .where(
-          (c) => c.id != rootId && rootIdOf(pool, c.id) == rootId,
-        )
+        .where((c) => c.id != rootId && rootIdOf(pool, c.id) == rootId)
         .length;
     return '${root.title} · Branch ${inTree + 1}';
   }
@@ -6579,6 +6684,7 @@ class AppState extends ChangeNotifier {
     int index,
     int swipeIndex,
   ) async {
+    _toolProjectionCache.clear();
     if (_streaming) return;
     final conversation = _conversationById(conversationId);
     if (conversation == null) return;
@@ -6803,7 +6909,13 @@ class AppState extends ChangeNotifier {
 
   static const int _perMessageOverhead = 4; // mirrors PromptBuilder
   int _cost(ChatMessage m) =>
-      _tokenizer.estimate(m.content) + _perMessageOverhead;
+      _tokenizer.estimate(m.content) +
+      _perMessageOverhead +
+      (m.toolRun == null
+          ? 0
+          : _tokenizer.estimate(
+              jsonEncode(m.toolRun!.history.map((v) => v.toJson()).toList()),
+            ));
 
   /// The app-wide tokenizer choice (OpenAI / Anthropic / Custom).
   TokenizerConfig get tokenizerConfig => _tokenizerConfig;
@@ -6866,10 +6978,28 @@ class AppState extends ChangeNotifier {
   /// about what the app transmits can be checked against the actual bytes
   /// instead of an approximation. Null when no provider is configured.
   String? requestPreview(AssembledPrompt assembled) {
+    final saved = _chatToolRequests[assembled.toolRunId];
+    if (saved != null && saved.isNotEmpty) {
+      return [
+        for (var i = 0; i < saved.length; i++) 'Request ${i + 1}\n${saved[i]}',
+      ].join('\n\n');
+    }
     final conversation = _activeOrNull() ?? active;
     final preset = presetFor(conversation);
     final provider = _resolveProvider(preset, conversation: conversation);
     if (provider == null) return null;
+    if (chatToolConfigFor(conversation).enabled) {
+      return AgentWireRequest(
+        provider: provider,
+        messages: _chatToolPayload(assembled.messages, provider),
+        tools: _availableChatTools(conversation).map((d) => d.spec).toList(),
+        params: AgentParams(
+          stream: assembled.params.stream,
+          generation: assembled.params,
+          requireToolCompletion: true,
+        ),
+      ).preview();
+    }
     return _client.requestPreview(
       _applyKey(provider),
       assembled.messages,
@@ -6886,9 +7016,11 @@ class AppState extends ChangeNotifier {
     Conversation conversation, {
     int? historyEnd,
     Character? responder,
+    bool commitMacroEffects = false,
   }) {
     final preset = presetFor(conversation);
-    final model = _resolveProvider(preset, conversation: conversation)?.model ?? '';
+    final model =
+        _resolveProvider(preset, conversation: conversation)?.model ?? '';
 
     final considered = historyEnd == null
         ? conversation.messages
@@ -6896,8 +7028,30 @@ class AppState extends ChangeNotifier {
               .take(historyEnd.clamp(0, conversation.messages.length))
               .toList();
     // Failure notices are display-only, so they never go back to the model.
+    final staleRuns = chatToolProjection(
+      conversation,
+      historyEnd: historyEnd,
+    ).staleRuns;
     final priorTurns = considered
         .where((m) => !m.error)
+        .map((m) {
+          if (staleRuns.contains(m.toolRun?.id)) {
+            return m.copyWith(
+              clearToolRun: true,
+              content:
+                  '[Earlier outcome changed; recorded tool effects are stale.]\n${m.content}',
+            );
+          }
+          if (!chatToolConfigFor(conversation).enabled && m.toolRun != null) {
+            return m.copyWith(
+              clearToolRun: true,
+              content:
+                  '[Recorded tool results]\n'
+                  '${jsonEncode(m.toolRun!.history.where((v) => v.role == AgentRole.tool).map((v) => {'tool': v.toolName, 'result': v.text}).toList())}\n${m.content}',
+            );
+          }
+          return m;
+        })
         .toList(growable: false);
 
     // A preset's {{input}} is the latest user turn in the considered window.
@@ -6927,7 +7081,20 @@ class AppState extends ChangeNotifier {
         : impersonation.userPersona(
             charName: character?.displayName ?? 'the character',
           );
-    final maxContext = _effectiveMaxContext(preset, model);
+    final toolReserve = chatToolConfigFor(conversation).enabled
+        ? _tokenizer.estimate(
+                jsonEncode(
+                  _availableChatTools(
+                    conversation,
+                  ).map((d) => d.spec.parameters).toList(),
+                ),
+              ) +
+              256
+        : 0;
+    final maxContext = max(
+      256,
+      _effectiveMaxContext(preset, model) - toolReserve,
+    );
 
     // Which of the three scenarios this turn runs under, resolved once here so
     // the marker block, the fallbacks below and the inspectors all agree.
@@ -6965,7 +7132,11 @@ class AppState extends ChangeNotifier {
     void addPrefix(String label, String content) {
       final trimmed = content.trim();
       if (trimmed.isEmpty) return;
-      final m = ChatMessage(role: 'system', content: trimmed);
+      final m = ChatMessage(
+        role: 'system',
+        content: trimmed,
+        promptProtected: true,
+      );
       prefix.add(m);
       sections.add(
         PromptSection(
@@ -6997,12 +7168,20 @@ class AppState extends ChangeNotifier {
     // when no prompt-only rule targets a message role, so the common case (no
     // regex, or only permanent/display rules) copies nothing.
     final promptRules = _activeRegexRules;
-    final promptRegexNeeded = RegexEngine.hasWork(promptRules,
-            target: RegexTarget.userInput, isPrompt: true) ||
-        RegexEngine.hasWork(promptRules,
-            target: RegexTarget.aiOutput, isPrompt: true);
+    final promptRegexNeeded =
+        RegexEngine.hasWork(
+          promptRules,
+          target: RegexTarget.userInput,
+          isPrompt: true,
+        ) ||
+        RegexEngine.hasWork(
+          promptRules,
+          target: RegexTarget.aiOutput,
+          isPrompt: true,
+        );
     if (promptRegexNeeded) {
-      final charName = character?.displayName ?? conversation.characterName ?? '';
+      final charName =
+          character?.displayName ?? conversation.characterName ?? '';
       final count = history.length;
       history = [
         for (var i = 0; i < count; i++)
@@ -7030,6 +7209,27 @@ class AppState extends ChangeNotifier {
 
     List<ChatMessage> messages;
     var params = const GenParams();
+    final toolState = chatToolProjection(
+      conversation,
+      historyEnd: historyEnd,
+    ).values;
+    if (chatToolConfigFor(conversation).enabled) {
+      addPrefix(
+        'Chat tools',
+        'Use the available function tools for dice and tracker changes. '
+            'Tool results are authoritative. Current trackers: '
+            '${jsonEncode({for (final e in toolState.entries)
+              if (e.key.startsWith('tracker:')) e.key: e.value})}',
+      );
+    }
+    final corrections = <({String text, int depth})>[
+      for (final entry in toolState.entries)
+        if (entry.key.startsWith('injection:') && entry.value is Map)
+          (
+            text: '[OOC correction: ${(entry.value as Map)['text']}]',
+            depth: ((entry.value as Map)['depth'] as num?)?.toInt() ?? 0,
+          ),
+    ];
 
     // The running summary, when enabled, feeds both the {{summary}} macro and the
     // auto-injection fallback (used when the preset places no {{summary}}).
@@ -7048,8 +7248,10 @@ class AppState extends ChangeNotifier {
         userName: userName,
         persona: persona,
         variables: MacroVariables(
-          local: conversation.variables,
-          global: _globalVars,
+          local: commitMacroEffects
+              ? conversation.variables
+              : Map.of(conversation.variables),
+          global: commitMacroEffects ? _globalVars : Map.of(_globalVars),
         ),
         input: input,
         lore: lore,
@@ -7061,6 +7263,7 @@ class AppState extends ChangeNotifier {
         scenario: scenario,
         hintText: hintText,
         hintDepth: responseHintDepth,
+        controlInjections: corrections,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently
@@ -7175,6 +7378,7 @@ class AppState extends ChangeNotifier {
       ChatMessage? hintMessage;
       if (hintText.isNotEmpty) {
         hintMessage = ChatMessage(
+          promptProtected: true,
           role: 'user',
           content: PromptBuilder.wrapResponseHint(hintText),
         );
@@ -7183,6 +7387,25 @@ class AppState extends ChangeNotifier {
           withHint.length,
         );
         withHint.insert(at, hintMessage);
+      }
+      for (final control in corrections) {
+        final at = (history.length - control.depth).clamp(0, history.length);
+        final position =
+            hintMessage != null && control.depth == responseHintDepth
+            ? withHint.indexOf(hintMessage)
+            : at == history.length
+            ? withHint.length
+            : withHint.indexOf(history[at]);
+        final instruction = ChatMessage(role: 'user', content: control.text);
+        withHint.insert(position, instruction);
+        sections.add(
+          PromptSection(
+            label: 'OOC correction (depth ${control.depth})',
+            role: 'user',
+            tokens: _cost(instruction),
+            messageCount: 1,
+          ),
+        );
       }
       messages = <ChatMessage>[...prefix, ...withHint];
       if (history.isNotEmpty) {
@@ -7217,7 +7440,7 @@ class AppState extends ChangeNotifier {
       params: params,
       sections: sections,
       totalTokens: total,
-      maxContext: maxContext,
+      maxContext: maxContext + toolReserve,
     );
   }
 
@@ -7399,7 +7622,21 @@ class AppState extends ChangeNotifier {
         conversation.isGroup && !isUser && safe < conversation.messages.length
         ? characterFor(conversation, conversation.messages[safe].speakerId)
         : null;
-    return _assemble(conversation, historyEnd: end, responder: responder);
+    final assembled = _assemble(
+      conversation,
+      historyEnd: end,
+      responder: responder,
+    );
+    return AssembledPrompt(
+      messages: assembled.messages,
+      params: assembled.params,
+      sections: assembled.sections,
+      totalTokens: assembled.totalTokens,
+      maxContext: assembled.maxContext,
+      toolRunId: !isUser && safe < conversation.messages.length
+          ? conversation.messages[safe].toolRun?.id
+          : null,
+    );
   }
 
   /// The speaker label a group turn is prefixed with on the wire ("Name: …").
@@ -7566,6 +7803,10 @@ class AppState extends ChangeNotifier {
     if (!_streaming) return;
     _stopRequested = true;
     _client.cancel();
+    _cancelChatToolRun?.call();
+    if (_chatToolClient != null) {
+      _chatToolClient!.cancel();
+    }
   }
 
   /// Lists models for [provider], or the active provider when omitted.
@@ -7649,6 +7890,11 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _client.cancel();
+    _cancelChatToolRun?.call();
+    _chatToolClient?.cancel();
+    for (final client in _chatToolImageClients.toList()) {
+      client.cancel();
+    }
     _floatPersist?.cancel();
     _imageRatioPersist?.cancel();
     _defaultAvatarSaveTimer?.cancel();
@@ -7668,6 +7914,7 @@ class AssembledPrompt {
     required this.sections,
     required this.totalTokens,
     required this.maxContext,
+    this.toolRunId,
   });
 
   final List<ChatMessage> messages;
@@ -7675,4 +7922,5 @@ class AssembledPrompt {
   final List<PromptSection> sections;
   final int totalTokens;
   final int maxContext;
+  final String? toolRunId;
 }

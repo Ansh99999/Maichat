@@ -173,8 +173,7 @@ class ChatClient {
           WireFormat.anthropic => {'x-api-key': key},
           WireFormat.gemini => {'x-goog-api-key': key},
           WireFormat.openaiChat ||
-          WireFormat.openaiResponses =>
-            {'Authorization': 'Bearer $key'},
+          WireFormat.openaiResponses => {'Authorization': 'Bearer $key'},
         },
       if (provider.claudeCodeHeaders) ..._claudeCodeHeaders,
       ...provider.customHeaders,
@@ -195,6 +194,29 @@ class ChatClient {
   /// With [elideImages] the base64 of every attachment is replaced by a note
   /// about its size. That is only for [requestPreview] — the preview is copyable
   /// and ends up in bug reports, and a megabyte of base64 makes it useless.
+  /// Sampling fields shared by normal chat and structured chat-tool requests.
+  static Map<String, dynamic> generationFields(
+    Provider provider,
+    GenParams params,
+  ) {
+    final fields = Map<String, dynamic>.from(
+      ChatClient()._body(provider, const <ChatMessage>[], params) as Map,
+    );
+    for (final key in [
+      'messages',
+      'contents',
+      'input',
+      'system',
+      'instructions',
+      'systemInstruction',
+    ]) {
+      fields.remove(key);
+    }
+    // Executing actions from several alternative candidates would duplicate effects.
+    fields.remove('n');
+    return fields;
+  }
+
   Object _body(
     Provider provider,
     List<ChatMessage> history,
@@ -215,10 +237,12 @@ class ChatClient {
           .trim();
       final contents = history
           .where((m) => m.role != 'system')
-          .map((m) => {
-                'role': m.role == 'assistant' ? 'model' : 'user',
-                'parts': geminiParts(m),
-              })
+          .map(
+            (m) => {
+              'role': m.role == 'assistant' ? 'model' : 'user',
+              'parts': geminiParts(m),
+            },
+          )
           .toList(growable: false);
       final gen = <String, dynamic>{
         if (params.temperature != null) 'temperature': params.temperature,
@@ -233,7 +257,8 @@ class ChatClient {
         if (params.thinking)
           'thinkingConfig': <String, dynamic>{
             'includeThoughts': true,
-            if (params.thinkingBudget > 0) 'thinkingBudget': params.thinkingBudget,
+            if (params.thinkingBudget > 0)
+              'thinkingBudget': params.thinkingBudget,
           },
       };
       return {
@@ -241,7 +266,7 @@ class ChatClient {
         if (system.isNotEmpty)
           'systemInstruction': {
             'parts': [
-              {'text': system}
+              {'text': system},
             ],
           },
         if (gen.isNotEmpty) 'generationConfig': gen,
@@ -266,8 +291,9 @@ class ChatClient {
       // top_k alongside it), so those are dropped instead of sent and refused.
       Map<String, dynamic>? thinking;
       if (params.thinking) {
-        final budget =
-            params.thinkingBudget > 1024 ? params.thinkingBudget : 1024;
+        final budget = params.thinkingBudget > 1024
+            ? params.thinkingBudget
+            : 1024;
         if (maxTokens <= budget) maxTokens = budget + 1024;
         thinking = {'type': 'enabled', 'budget_tokens': budget};
       }
@@ -299,21 +325,22 @@ class ChatClient {
           .trim();
       final input = history
           .where((m) => m.role != 'system')
-          .map((m) => {
-                'role': m.role,
-                'content': [
-                  {
-                    // The content type is named from the speaker's side; a host
-                    // rejects `input_text` on an assistant turn and vice versa.
-                    'type':
-                        m.role == 'assistant' ? 'output_text' : 'input_text',
-                    'text': m.content,
-                  },
-                  // The Responses API names an attachment `input_image` and takes
-                  // the address (or data URL) flat rather than in an object.
-                  for (final image in m.images) ?_responsesImage(image),
-                ],
-              })
+          .map(
+            (m) => {
+              'role': m.role,
+              'content': [
+                {
+                  // The content type is named from the speaker's side; a host
+                  // rejects `input_text` on an assistant turn and vice versa.
+                  'type': m.role == 'assistant' ? 'output_text' : 'input_text',
+                  'text': m.content,
+                },
+                // The Responses API names an attachment `input_image` and takes
+                // the address (or data URL) flat rather than in an object.
+                for (final image in m.images) ?_responsesImage(image),
+              ],
+            },
+          )
           .toList(growable: false);
       return {
         'model': model,
@@ -356,7 +383,8 @@ class ChatClient {
       if (params.thinking && params.thinkingBudget > 0)
         'reasoning': <String, dynamic>{
           'max_tokens': params.thinkingBudget,
-          if (params.reasoningEffort.isNotEmpty) 'effort': params.reasoningEffort,
+          if (params.reasoningEffort.isNotEmpty)
+            'effort': params.reasoningEffort,
         },
     };
   }
@@ -374,8 +402,9 @@ class ChatClient {
     final headers = _headers(provider, stream: params.stream)
       // Never put a credential on the clipboard.
       ..updateAll((key, value) => _isSecretHeader(key) ? '<redacted>' : value);
-    final body = const JsonEncoder.withIndent('  ')
-        .convert(_body(provider, history, params, elideImages: true));
+    final body = const JsonEncoder.withIndent(
+      '  ',
+    ).convert(_body(provider, history, params, elideImages: true));
     return 'POST $uri\n'
         '${headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
         '$body';
@@ -425,37 +454,33 @@ class ChatClient {
   /// picture, so a picture that only lives online is left out rather than sent
   /// as something the host will reject.
   static List<Map<String, dynamic>> geminiParts(ChatMessage m) => [
-        {'text': m.content},
-        for (final image in m.images)
-          if (!image.isUrl && image.hasData)
-            {
-              'inlineData': <String, dynamic>{
-                'mimeType': image.mime,
-                'data': image.data,
-              },
-            },
-      ];
+    {'text': m.content},
+    for (final image in m.images)
+      if (!image.isUrl && image.hasData)
+        {
+          'inlineData': <String, dynamic>{
+            'mimeType': image.mime,
+            'data': image.data,
+          },
+        },
+  ];
 
   /// One Responses-API `input_image` part, or null when there is nothing to send.
   static Map<String, dynamic>? _responsesImage(MessageImage image) {
     final url = image.isUrl
         ? image.ref.trim()
         : (image.hasData ? 'data:${image.mime};base64,${image.data}' : null);
-    return url == null
-        ? null
-        : {'type': 'input_image', 'image_url': url};
+    return url == null ? null : {'type': 'input_image', 'image_url': url};
   }
 
   /// [history] with every attachment's base64 replaced by a note about its size
   /// — see [_body]'s `elideImages`.
   static List<ChatMessage> elideImageData(List<ChatMessage> history) => [
-        for (final m in history)
-          m.images.isEmpty
-              ? m
-              : m.copyWith(
-                  images: [for (final i in m.images) i.elided()],
-                ),
-      ];
+    for (final m in history)
+      m.images.isEmpty
+          ? m
+          : m.copyWith(images: [for (final i in m.images) i.elided()]),
+  ];
 
   /// Whether a header carries a credential and so must never reach the request
   /// preview (which is copyable, and ends up on clipboards and in bug reports).
@@ -492,8 +517,8 @@ class ChatClient {
     final input = (raw['prompt_tokens'] ?? raw['input_tokens']) as num?;
     final output = (raw['completion_tokens'] ?? raw['output_tokens']) as num?;
     if (input == null && output == null) return null;
-    final outputDetails = raw['completion_tokens_details'] ??
-        raw['output_tokens_details'];
+    final outputDetails =
+        raw['completion_tokens_details'] ?? raw['output_tokens_details'];
     final inputDetails =
         raw['prompt_tokens_details'] ?? raw['input_tokens_details'];
     return TokenUsage(
@@ -524,8 +549,7 @@ class ChatClient {
       // Thinking is billed as output but reported beside it, not inside it.
       outputTokens: (output?.toInt() ?? 0) + (thoughts?.toInt() ?? 0),
       reasoningTokens: thoughts?.toInt() ?? 0,
-      cachedTokens:
-          (raw['cachedContentTokenCount'] as num?)?.toInt() ?? 0,
+      cachedTokens: (raw['cachedContentTokenCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -540,7 +564,7 @@ class ChatClient {
         final uri = endpoint(
           provider.baseUrl,
           '/models/${Uri.encodeComponent(provider.model.trim())}'
-              '${stream ? ':streamGenerateContent' : ':generateContent'}',
+          '${stream ? ':streamGenerateContent' : ':generateContent'}',
           preferHttp: http,
         );
         return stream ? uri.replace(queryParameters: {'alt': 'sse'}) : uri;
@@ -549,7 +573,11 @@ class ChatClient {
       case WireFormat.openaiResponses:
         return endpoint(provider.baseUrl, '/responses', preferHttp: http);
       case WireFormat.openaiChat:
-        return endpoint(provider.baseUrl, '/chat/completions', preferHttp: http);
+        return endpoint(
+          provider.baseUrl,
+          '/chat/completions',
+          preferHttp: http,
+        );
     }
   }
 
@@ -798,7 +826,7 @@ class ChatClient {
         message: models.isEmpty
             ? 'Key accepted, though the host listed no models.'
             : 'Key works — ${models.length} '
-                'model${models.length == 1 ? '' : 's'} available.',
+                  'model${models.length == 1 ? '' : 's'} available.',
       );
     } on ChatApiException catch (e) {
       stopwatch.stop();
@@ -838,12 +866,8 @@ class ChatClient {
   /// A delta with [usage] attached, when there is any to attach.
   static ChatDelta _withUsage(ChatDelta delta, TokenUsage? usage) =>
       usage == null
-          ? delta
-          : ChatDelta(
-              text: delta.text,
-              reasoning: delta.reasoning,
-              usage: usage,
-            );
+      ? delta
+      : ChatDelta(text: delta.text, reasoning: delta.reasoning, usage: usage);
 
   /// Fetches selectable model ids from the provider's `/models` endpoint.
   Future<List<String>> listModels(Provider provider) async {
@@ -854,10 +878,9 @@ class ChatClient {
     );
     final gemini = provider.wire == WireFormat.gemini;
     try {
-      final response =
-          await http.get(uri, headers: _headers(provider)).timeout(
-                const Duration(seconds: 30),
-              );
+      final response = await http
+          .get(uri, headers: _headers(provider))
+          .timeout(const Duration(seconds: 30));
       if (response.statusCode != 200) {
         throw ChatApiException(
           describeFailure(response.statusCode, response.body),
@@ -997,7 +1020,9 @@ class ChatClient {
   /// has ended ([stop]) alongside anything to append. Anthropic ends with a
   /// `message_stop` event rather than OpenAI's `[DONE]` sentinel, and extended
   /// thinking arrives as `thinking_delta` events ahead of the text ones.
-  static ({ChatDelta? delta, bool stop}) _extractAnthropicDelta(String payload) {
+  static ({ChatDelta? delta, bool stop}) _extractAnthropicDelta(
+    String payload,
+  ) {
     try {
       final json = jsonDecode(payload);
       if (json is! Map<String, dynamic>) return (delta: null, stop: false);
@@ -1053,7 +1078,9 @@ class ChatClient {
   /// One event from the Responses API stream. Unlike the chat dialect every
   /// event is typed, so text, thinking, completion and failure are told apart by
   /// name rather than by which field happens to be present.
-  static ({ChatDelta? delta, bool stop}) _extractResponsesDelta(String payload) {
+  static ({ChatDelta? delta, bool stop}) _extractResponsesDelta(
+    String payload,
+  ) {
     try {
       final json = jsonDecode(payload);
       if (json is! Map<String, dynamic>) return (delta: null, stop: false);
@@ -1072,10 +1099,7 @@ class ChatClient {
         );
       }
       if (type == 'response.output_text.delta' && json['delta'] is String) {
-        return (
-          delta: ChatDelta(text: json['delta'] as String),
-          stop: false,
-        );
+        return (delta: ChatDelta(text: json['delta'] as String), stop: false);
       }
       // Reasoning summaries are the only thinking the API exposes; the raw
       // chain is never sent.

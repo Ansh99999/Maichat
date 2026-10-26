@@ -6,6 +6,7 @@ import '../models/appearance.dart';
 import '../models/backup.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
+import '../models/chat_tool.dart';
 import '../models/conversation.dart';
 import '../models/discover.dart';
 import '../models/embedding.dart';
@@ -84,6 +85,22 @@ class Storage {
   static const _usageKey = 'usage';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
+
+  Future<ChatToolConfig> loadChatTools() async {
+    final raw = (await _prefs).getString('chatTools');
+    if (raw == null) return const ChatToolConfig();
+    final json = jsonDecode(raw);
+    return ChatToolConfig.fromJson(Map<String, dynamic>.from(json as Map));
+  }
+
+  Future<void> saveChatTools(ChatToolConfig config) async {
+    if (!await (await _prefs).setString(
+      'chatTools',
+      jsonEncode(config.toJson()),
+    )) {
+      throw StateError('Could not save tool settings.');
+    }
+  }
 
   /// Loads the configured providers. If none are stored yet, a legacy
   /// single-provider [AppSettings] entry (from before multi-provider support)
@@ -207,11 +224,13 @@ class Storage {
     return <Conversation>[];
   }
 
-  Future<void> saveConversations(List<Conversation> conversations) async =>
-      (await _prefs).setString(
-        _conversationsKey,
-        jsonEncode(conversations.map((c) => c.toJson()).toList()),
-      );
+  Future<void> saveConversations(List<Conversation> conversations) async {
+    final saved = await (await _prefs).setString(
+      _conversationsKey,
+      jsonEncode(conversations.map((c) => c.toJson()).toList()),
+    );
+    if (!saved) throw StateError('Could not save conversations.');
+  }
 
   Future<String?> loadActiveId() async => (await _prefs).getString(_activeKey);
 

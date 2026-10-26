@@ -17,6 +17,11 @@ learned this / do not regress this" layer underneath it.
 - [prompt-wire-and-storage.md](prompt-wire-and-storage.md) — the
   one-leading-`system`-message wire rule (verify at the wire), the base64-in-prefs
   OOM story + `prefs_repair`, pictures-are-files, and render-cost facts.
+- [chat-tool-calling-research.md](chat-tool-calling-research.md) — installed
+  SillyTavern tool-calling source research, latest local MaiChat reuse baseline,
+  user-created tools/settings design, staged integration and verification limits.
+- [chat-tool-calling-plan.md](chat-tool-calling-plan.md) — authorized points 1–5,
+  implementation ownership, delivered behavior and verification results.
 - [discover-source-contracts.md](discover-source-contracts.md) — reverse-engineered
   API contracts for every Discover source, the Cloudflare-clearance replay, and
   what can't be verified from the dev host.

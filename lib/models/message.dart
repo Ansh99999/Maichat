@@ -1,4 +1,5 @@
 import 'message_image.dart';
+import 'chat_tool.dart';
 
 /// One generated alternative for a turn — the unit the swipe control selects
 /// between.
@@ -12,6 +13,7 @@ class MessageVariant {
     this.reasoning = '',
     this.thinkingMs,
     this.error = false,
+    this.toolRun,
   });
 
   final String content;
@@ -25,33 +27,42 @@ class MessageVariant {
 
   /// Set when this variant holds a failure notice rather than model output.
   final bool error;
+  final ChatToolRun? toolRun;
 
   MessageVariant copyWith({
     String? content,
     String? reasoning,
     int? thinkingMs,
     bool? error,
-  }) =>
-      MessageVariant(
-        content: content ?? this.content,
-        reasoning: reasoning ?? this.reasoning,
-        thinkingMs: thinkingMs ?? this.thinkingMs,
-        error: error ?? this.error,
-      );
+    ChatToolRun? toolRun,
+    bool clearToolRun = false,
+  }) => MessageVariant(
+    content: content ?? this.content,
+    reasoning: reasoning ?? this.reasoning,
+    thinkingMs: thinkingMs ?? this.thinkingMs,
+    error: error ?? this.error,
+    toolRun: clearToolRun ? null : (toolRun ?? this.toolRun),
+  );
 
   Map<String, dynamic> toJson() => {
-        'content': content,
-        if (reasoning.isNotEmpty) 'reasoning': reasoning,
-        if (thinkingMs != null) 'thinkingMs': thinkingMs,
-        if (error) 'error': true,
-      };
+    'content': content,
+    if (reasoning.isNotEmpty) 'reasoning': reasoning,
+    if (thinkingMs != null) 'thinkingMs': thinkingMs,
+    if (error) 'error': true,
+    if (toolRun != null) 'toolRun': toolRun!.toJson(),
+  };
 
   factory MessageVariant.fromJson(Map<String, dynamic> json) => MessageVariant(
-        content: json['content'] as String? ?? '',
-        reasoning: json['reasoning'] as String? ?? '',
-        thinkingMs: (json['thinkingMs'] as num?)?.toInt(),
-        error: json['error'] as bool? ?? false,
-      );
+    content: json['content'] as String? ?? '',
+    reasoning: json['reasoning'] as String? ?? '',
+    thinkingMs: (json['thinkingMs'] as num?)?.toInt(),
+    error: json['error'] as bool? ?? false,
+    toolRun: json['toolRun'] is Map
+        ? ChatToolRun.fromJson(
+            Map<String, dynamic>.from(json['toolRun'] as Map),
+          )
+        : null,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -59,10 +70,12 @@ class MessageVariant {
       other.content == content &&
       other.reasoning == reasoning &&
       other.thinkingMs == thinkingMs &&
-      other.error == error;
+      other.error == error &&
+      other.toolRun == toolRun;
 
   @override
-  int get hashCode => Object.hash(content, reasoning, thinkingMs, error);
+  int get hashCode =>
+      Object.hash(content, reasoning, thinkingMs, error, toolRun);
 }
 
 /// A single turn in a conversation.
@@ -75,6 +88,7 @@ class MessageVariant {
 class ChatMessage {
   ChatMessage({
     required this.role,
+    this.promptProtected = false,
     String content = '',
     bool error = false,
     String reasoning = '',
@@ -84,27 +98,32 @@ class ChatMessage {
     this.speakerId,
     this.speakerName,
     List<MessageImage>? images,
-  })  : images = List<MessageImage>.unmodifiable(
-          images ?? const <MessageImage>[],
-        ),
-        swipes = List<MessageVariant>.unmodifiable(
-          swipes == null || swipes.isEmpty
-              ? <MessageVariant>[
-                  MessageVariant(
-                    content: content,
-                    reasoning: reasoning,
-                    thinkingMs: thinkingMs,
-                    error: error,
-                  ),
-                ]
-              : swipes,
-        ),
-        swipeIndex = swipes == null || swipes.isEmpty
-            ? 0
-            : swipeIndex.clamp(0, swipes.length - 1);
+    ChatToolRun? toolRun,
+  }) : images = List<MessageImage>.unmodifiable(
+         images ?? const <MessageImage>[],
+       ),
+       swipes = List<MessageVariant>.unmodifiable(
+         swipes == null || swipes.isEmpty
+             ? <MessageVariant>[
+                 MessageVariant(
+                   content: content,
+                   reasoning: reasoning,
+                   thinkingMs: thinkingMs,
+                   error: error,
+                   toolRun: toolRun,
+                 ),
+               ]
+             : swipes,
+       ),
+       swipeIndex = swipes == null || swipes.isEmpty
+           ? 0
+           : swipeIndex.clamp(0, swipes.length - 1);
 
   /// Either `user` or `assistant`.
   final String role;
+
+  /// Transient prompt assembly marker: fixed instructions are never trimmed as history.
+  final bool promptProtected;
 
   /// Pictures attached to this turn, in the order they were added. They belong
   /// to the *turn* rather than to a variant: regenerating a reply produces new
@@ -112,7 +131,7 @@ class ChatMessage {
   /// Empty for the overwhelming majority of messages.
   final List<MessageImage> images;
 
-  bool get hasImages => images.isNotEmpty;
+  bool get hasImages => visibleImages.isNotEmpty;
 
   /// In a group chat, which participant *said* this turn — its [Character.id]
   /// and a denormalised display name (kept so a turn still labels right if the
@@ -135,6 +154,8 @@ class ChatMessage {
   String get reasoning => active.reasoning;
   int? get thinkingMs => active.thinkingMs;
   bool get error => active.error;
+  ChatToolRun? get toolRun => active.toolRun;
+  List<MessageImage> get visibleImages => [...images, ...?toolRun?.images];
 
   bool get isUser => role == 'user';
 
@@ -156,15 +177,20 @@ class ChatMessage {
     Object? speakerId = _unset,
     Object? speakerName = _unset,
     List<MessageImage>? images,
+    ChatToolRun? toolRun,
+    bool clearToolRun = false,
   }) {
     final next = active.copyWith(
       content: content,
       error: error,
       reasoning: reasoning,
       thinkingMs: thinkingMs,
+      toolRun: toolRun,
+      clearToolRun: clearToolRun,
     );
     return ChatMessage(
       role: role,
+      promptProtected: promptProtected,
       swipes: <MessageVariant>[...swipes]..[swipeIndex] = next,
       swipeIndex: swipeIndex,
       images: images ?? this.images,
@@ -184,26 +210,28 @@ class ChatMessage {
   /// the current one are no-ops.
   ChatMessage withSwipe(int index) =>
       index == swipeIndex || index < 0 || index >= swipes.length
-          ? this
-          : ChatMessage(
-              role: role,
-              swipes: swipes.toList(),
-              swipeIndex: index,
-              images: images,
-              speakerId: speakerId,
-              speakerName: speakerName,
-            );
+      ? this
+      : ChatMessage(
+          role: role,
+          promptProtected: promptProtected,
+          swipes: swipes.toList(),
+          swipeIndex: index,
+          images: images,
+          speakerId: speakerId,
+          speakerName: speakerName,
+        );
 
   /// Appends [variant] and selects it — the regenerate path, which keeps the
   /// reply it replaced as a swipe.
   ChatMessage addSwipe(MessageVariant variant) => ChatMessage(
-        role: role,
-        swipes: <MessageVariant>[...swipes, variant],
-        swipeIndex: swipes.length,
-        images: images,
-        speakerId: speakerId,
-        speakerName: speakerName,
-      );
+    role: role,
+    promptProtected: promptProtected,
+    swipes: <MessageVariant>[...swipes, variant],
+    swipeIndex: swipes.length,
+    images: images,
+    speakerId: speakerId,
+    speakerName: speakerName,
+  );
 
   /// Drops the variant at [index], selecting the one before it. A turn always
   /// keeps at least one variant, so this is a no-op on a single-swipe turn —
@@ -216,6 +244,7 @@ class ChatMessage {
         : (swipeIndex == index ? index - 1 : swipeIndex);
     return ChatMessage(
       role: role,
+      promptProtected: promptProtected,
       swipes: rest,
       swipeIndex: selected.clamp(0, rest.length - 1),
       images: images,
@@ -228,26 +257,26 @@ class ChatMessage {
   /// only cares about the current text, still finds it), with the alternatives
   /// alongside it only when there are any.
   Map<String, dynamic> toJson() => {
-        'role': role,
-        'content': content,
-        if (error) 'error': true,
-        if (reasoning.isNotEmpty) 'reasoning': reasoning,
-        if (thinkingMs != null) 'thinkingMs': thinkingMs,
-        if (speakerId != null) 'speakerId': speakerId,
-        if (speakerName != null) 'speakerName': speakerName,
-        if (images.isNotEmpty)
-          'images': images.map((i) => i.toJson()).toList(),
-        if (hasSwipes) 'swipes': swipes.map((s) => s.toJson()).toList(),
-        if (hasSwipes) 'swipeIndex': swipeIndex,
-      };
+    'role': role,
+    'content': content,
+    if (error) 'error': true,
+    if (reasoning.isNotEmpty) 'reasoning': reasoning,
+    if (thinkingMs != null) 'thinkingMs': thinkingMs,
+    if (toolRun != null) 'toolRun': toolRun!.toJson(),
+    if (speakerId != null) 'speakerId': speakerId,
+    if (speakerName != null) 'speakerName': speakerName,
+    if (images.isNotEmpty) 'images': images.map((i) => i.toJson()).toList(),
+    if (hasSwipes) 'swipes': swipes.map((s) => s.toJson()).toList(),
+    if (hasSwipes) 'swipeIndex': swipeIndex,
+  };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final raw = json['swipes'];
     final swipes = raw is List
         ? raw
-            .whereType<Map<String, dynamic>>()
-            .map(MessageVariant.fromJson)
-            .toList()
+              .whereType<Map<String, dynamic>>()
+              .map(MessageVariant.fromJson)
+              .toList()
         : const <MessageVariant>[];
     final pictures = json['images'];
     return ChatMessage(
@@ -256,6 +285,11 @@ class ChatMessage {
       error: json['error'] as bool? ?? false,
       reasoning: json['reasoning'] as String? ?? '',
       thinkingMs: (json['thinkingMs'] as num?)?.toInt(),
+      toolRun: json['toolRun'] is Map
+          ? ChatToolRun.fromJson(
+              Map<String, dynamic>.from(json['toolRun'] as Map),
+            )
+          : null,
       speakerId: (json['speakerId'] as String?)?.trim().isEmpty ?? true
           ? null
           : (json['speakerId'] as String).trim(),
@@ -264,10 +298,10 @@ class ChatMessage {
           : (json['speakerName'] as String).trim(),
       images: pictures is List
           ? pictures
-              .whereType<Map<String, dynamic>>()
-              .map(MessageImage.fromJson)
-              .where((i) => i.ref.isNotEmpty)
-              .toList()
+                .whereType<Map<String, dynamic>>()
+                .map(MessageImage.fromJson)
+                .where((i) => i.ref.isNotEmpty)
+                .toList()
           : null,
       swipes: swipes.isEmpty ? null : swipes,
       swipeIndex: (json['swipeIndex'] as num?)?.toInt() ?? 0,
@@ -331,11 +365,15 @@ class ChatMessage {
 List<ChatMessage> mergeSameRole(List<ChatMessage> input) {
   final out = <ChatMessage>[];
   for (final message in input) {
-    if (out.isNotEmpty && out.last.role == message.role) {
+    if (out.isNotEmpty &&
+        out.last.role == message.role &&
+        out.last.toolRun == null &&
+        message.toolRun == null) {
       out[out.length - 1] = ChatMessage(
         role: message.role,
         content: '${out.last.content}\n\n${message.content}',
         images: <MessageImage>[...out.last.images, ...message.images],
+        promptProtected: out.last.promptProtected || message.promptProtected,
       );
     } else {
       out.add(message);

@@ -5,6 +5,7 @@ import 'lorebook.dart';
 import 'message.dart';
 import 'preset.dart';
 import 'summary.dart';
+import 'chat_tool.dart';
 
 /// The [Conversation.groupResponder] value meaning "a random member replies to
 /// each send". Any other non-null value is a member's [Character.id]; null means
@@ -52,15 +53,20 @@ class Conversation {
     this.parentId,
     this.forkIndex,
     List<String>? documentIds,
-  })  : characterOverrides =
-            characterOverrides ?? <String, Character>{},
-        avatarOverrides = avatarOverrides ?? <String, String>{},
-        floatingImages = floatingImages ?? <FloatingImage>[],
-        variables = variables ?? <String, String>{},
-        lorebookIds = lorebookIds ?? <String>[],
-        participantIds = participantIds ?? <String>[],
-        documentIds = documentIds ?? <String>[],
-        lorebookOverrides = lorebookOverrides ?? <String, Lorebook>{};
+    this.chatToolConfig,
+    List<Map<String, dynamic>>? chatToolControls,
+  }) : characterOverrides = characterOverrides ?? <String, Character>{},
+       avatarOverrides = avatarOverrides ?? <String, String>{},
+       floatingImages = floatingImages ?? <FloatingImage>[],
+       variables = variables ?? <String, String>{},
+       lorebookIds = lorebookIds ?? <String>[],
+       participantIds = participantIds ?? <String>[],
+       documentIds = documentIds ?? <String>[],
+       lorebookOverrides = lorebookOverrides ?? <String, Lorebook>{},
+       chatToolControls = chatToolControls ?? <Map<String, dynamic>>[];
+
+  ChatToolConfig? chatToolConfig;
+  final List<Map<String, dynamic>> chatToolControls;
 
   final String id;
   String title;
@@ -232,11 +238,11 @@ class Conversation {
   }
 
   factory Conversation.empty() => Conversation(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        title: 'New chat',
-        messages: <ChatMessage>[],
-        updatedAt: DateTime.now(),
-      );
+    id: DateTime.now().microsecondsSinceEpoch.toString(),
+    title: 'New chat',
+    messages: <ChatMessage>[],
+    updatedAt: DateTime.now(),
+  );
 
   bool get isEmpty => messages.isEmpty;
 
@@ -244,20 +250,25 @@ class Conversation {
   /// for it, wherever the thread is stored (the app's list, or a Studio
   /// session's Playground).
   Iterable<String> get pictureRefs => [
-        backgroundImage ?? '',
-        ...characterOverrides.values.map((o) => o.avatar),
-        ...characterOverrides.values.expand((o) => o.avatars),
-        ...avatarOverrides.values,
-        // A chat with its own copy of the interface has its own copy of
-        // whatever pictures that copy names.
-        ...?interfaceOverride?.pictureRefs,
-        // A float can carry a picture the gallery never held (an avatar off an
-        // imported card), and it is on screen right now.
-        ...floatingImages.map((f) => f.imageRef),
-        // A picture sent in a message is part of the transcript: it has to
-        // outlive the gallery record it may have been picked from.
-        ...messages.expand((m) => m.images.map((i) => i.ref)),
-      ];
+    backgroundImage ?? '',
+    ...characterOverrides.values.map((o) => o.avatar),
+    ...characterOverrides.values.expand((o) => o.avatars),
+    ...avatarOverrides.values,
+    // A chat with its own copy of the interface has its own copy of
+    // whatever pictures that copy names.
+    ...?interfaceOverride?.pictureRefs,
+    // A float can carry a picture the gallery never held (an avatar off an
+    // imported card), and it is on screen right now.
+    ...floatingImages.map((f) => f.imageRef),
+    // A picture sent in a message is part of the transcript: it has to
+    // outlive the gallery record it may have been picked from.
+    ...messages.expand((m) => m.images.map((i) => i.ref)),
+    ...messages.expand(
+      (m) => m.swipes.expand(
+        (v) => v.toolRun?.images.map((i) => i.ref) ?? const <String>[],
+      ),
+    ),
+  ];
 
   /// A copy under a new [id], carrying every per-chat setting across — used for
   /// forking a thread and for renumbering an imported one. Everything mutable is
@@ -273,48 +284,47 @@ class Conversation {
     String? title,
     List<ChatMessage>? messages,
     DateTime? updatedAt,
-  }) =>
-      Conversation(
-        id: id,
-        title: title ?? this.title,
-        messages: messages ?? this.messages.toList(),
-        updatedAt: updatedAt ?? this.updatedAt,
-        characterId: characterId,
-        characterName: characterName,
-        systemPrompt: systemPrompt,
-        impersonateId: impersonateId,
-        impersonateName: impersonateName,
-        presetId: presetId,
-        presetOverride: presetOverride == null
-            ? null
-            : Preset.fromJson(presetOverride!.toJson()),
-        folderId: folderId,
-        providerOverride: providerOverride,
-        scenarioId: scenarioId,
-        scenarioOverride: scenarioOverride,
-        backgroundImage: backgroundImage,
-        backgroundOpacity: backgroundOpacity,
-        interfaceOverride: interfaceOverride == null
-            ? null
-            : ChatInterface.fromJson(interfaceOverride!.toJson()),
-        overrideDefinitions: overrideDefinitions,
-        groupResponder: groupResponder,
-        characterOverrides: characterOverrides.map(
-          (charId, character) => MapEntry(charId, character.clone()),
-        ),
-        avatarOverrides: Map<String, String>.of(avatarOverrides),
-        floatingImages: floatingImages.map((f) => f.copyWith()).toList(),
-        variables: Map<String, String>.of(variables),
-        lorebookIds: lorebookIds.toList(),
-        participantIds: participantIds.toList(),
-        lorebookOverrides: lorebookOverrides.map(
-          (id, book) => MapEntry(id, Lorebook.fromJson(book.toJson())),
-        ),
-        summary: summary?.clone(),
-        pinned: pinned,
-        embedRecall: embedRecall,
-        documentIds: documentIds.toList(),
-      );
+  }) => Conversation(
+    id: id,
+    title: title ?? this.title,
+    messages: messages ?? this.messages.toList(),
+    updatedAt: updatedAt ?? this.updatedAt,
+    characterId: characterId,
+    characterName: characterName,
+    systemPrompt: systemPrompt,
+    impersonateId: impersonateId,
+    impersonateName: impersonateName,
+    presetId: presetId,
+    presetOverride: presetOverride == null
+        ? null
+        : Preset.fromJson(presetOverride!.toJson()),
+    folderId: folderId,
+    providerOverride: providerOverride,
+    scenarioId: scenarioId,
+    scenarioOverride: scenarioOverride,
+    backgroundImage: backgroundImage,
+    backgroundOpacity: backgroundOpacity,
+    interfaceOverride: interfaceOverride == null
+        ? null
+        : ChatInterface.fromJson(interfaceOverride!.toJson()),
+    overrideDefinitions: overrideDefinitions,
+    groupResponder: groupResponder,
+    characterOverrides: characterOverrides.map(
+      (charId, character) => MapEntry(charId, character.clone()),
+    ),
+    avatarOverrides: Map<String, String>.of(avatarOverrides),
+    floatingImages: floatingImages.map((f) => f.copyWith()).toList(),
+    variables: Map<String, String>.of(variables),
+    lorebookIds: lorebookIds.toList(),
+    participantIds: participantIds.toList(),
+    lorebookOverrides: lorebookOverrides.map(
+      (id, book) => MapEntry(id, Lorebook.fromJson(book.toJson())),
+    ),
+    summary: summary?.clone(),
+    pinned: pinned,
+    embedRecall: embedRecall,
+    documentIds: documentIds.toList(),
+  );
 
   /// Whether this thread is bound to a saved character.
   bool get hasCharacter => characterId != null;
@@ -327,130 +337,141 @@ class Conversation {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'updatedAt': updatedAt.toIso8601String(),
-        if (characterId != null) 'characterId': characterId,
-        if (characterName != null) 'characterName': characterName,
-        if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
-        if (impersonateId != null) 'impersonateId': impersonateId,
-        if (impersonateName != null) 'impersonateName': impersonateName,
-        if (presetId != null) 'presetId': presetId,
-        if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
-        if (folderId != null) 'folderId': folderId,
-        if (providerOverride != null) 'providerOverride': providerOverride,
-        if (scenarioId != null) 'scenarioId': scenarioId,
-        if (scenarioOverride.trim().isNotEmpty)
-          'scenarioOverride': scenarioOverride,
-        if (backgroundImage != null && backgroundImage!.isNotEmpty)
-          'backgroundImage': backgroundImage,
-        if (backgroundOpacity != 1) 'backgroundOpacity': backgroundOpacity,
-        if (interfaceOverride != null)
-          'interfaceOverride': interfaceOverride!.toJson(),
-        if (overrideDefinitions) 'overrideDefinitions': true,
-        if (groupResponder != null) 'groupResponder': groupResponder,
-        if (characterOverrides.isNotEmpty)
-          'characterOverrides': characterOverrides.map(
-            (id, character) => MapEntry(id, character.toJson()),
-          ),
-        if (avatarOverrides.isNotEmpty) 'avatarOverrides': avatarOverrides,
-        // Floating pictures are deliberately NOT written to disk: they live only
-        // in memory for the session and vanish when the app is fully closed.
-        // This removes the whole-store re-save that used to fire every time a
-        // picture was placed (the "placing it" hitch).
-        if (variables.isNotEmpty) 'variables': variables,
-        if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
-        if (participantIds.isNotEmpty) 'participantIds': participantIds,
-        if (lorebookOverrides.isNotEmpty)
-          'lorebookOverrides': lorebookOverrides.map(
-            (id, book) => MapEntry(id, book.toJson()),
-          ),
-        if (summary != null) 'summary': summary!.toJson(),
-        if (pinned) 'pinned': true,
-        if (embedRecall) 'embedRecall': true,
-        if (documentIds.isNotEmpty) 'documentIds': documentIds,
-        if (parentId != null) 'parentId': parentId,
-        if (forkIndex != null) 'forkIndex': forkIndex,
-        'messages': messages.map((m) => m.toJson()).toList(),
-      };
+    'id': id,
+    'title': title,
+    'updatedAt': updatedAt.toIso8601String(),
+    if (characterId != null) 'characterId': characterId,
+    if (characterName != null) 'characterName': characterName,
+    if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
+    if (impersonateId != null) 'impersonateId': impersonateId,
+    if (impersonateName != null) 'impersonateName': impersonateName,
+    if (presetId != null) 'presetId': presetId,
+    if (presetOverride != null) 'presetOverride': presetOverride!.toJson(),
+    if (folderId != null) 'folderId': folderId,
+    if (providerOverride != null) 'providerOverride': providerOverride,
+    if (scenarioId != null) 'scenarioId': scenarioId,
+    if (scenarioOverride.trim().isNotEmpty)
+      'scenarioOverride': scenarioOverride,
+    if (backgroundImage != null && backgroundImage!.isNotEmpty)
+      'backgroundImage': backgroundImage,
+    if (backgroundOpacity != 1) 'backgroundOpacity': backgroundOpacity,
+    if (interfaceOverride != null)
+      'interfaceOverride': interfaceOverride!.toJson(),
+    if (overrideDefinitions) 'overrideDefinitions': true,
+    if (groupResponder != null) 'groupResponder': groupResponder,
+    if (characterOverrides.isNotEmpty)
+      'characterOverrides': characterOverrides.map(
+        (id, character) => MapEntry(id, character.toJson()),
+      ),
+    if (avatarOverrides.isNotEmpty) 'avatarOverrides': avatarOverrides,
+    // Floating pictures are deliberately NOT written to disk: they live only
+    // in memory for the session and vanish when the app is fully closed.
+    // This removes the whole-store re-save that used to fire every time a
+    // picture was placed (the "placing it" hitch).
+    if (variables.isNotEmpty) 'variables': variables,
+    if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
+    if (participantIds.isNotEmpty) 'participantIds': participantIds,
+    if (lorebookOverrides.isNotEmpty)
+      'lorebookOverrides': lorebookOverrides.map(
+        (id, book) => MapEntry(id, book.toJson()),
+      ),
+    if (summary != null) 'summary': summary!.toJson(),
+    if (pinned) 'pinned': true,
+    if (embedRecall) 'embedRecall': true,
+    if (documentIds.isNotEmpty) 'documentIds': documentIds,
+    if (parentId != null) 'parentId': parentId,
+    if (forkIndex != null) 'forkIndex': forkIndex,
+    if (chatToolConfig != null) 'chatToolConfig': chatToolConfig!.toJson(),
+    if (chatToolControls.isNotEmpty) 'chatToolControls': chatToolControls,
+    'messages': messages.map((m) => m.toJson()).toList(),
+  };
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
-        id: json['id'] as String? ??
-            DateTime.now().microsecondsSinceEpoch.toString(),
-        title: json['title'] as String? ?? 'New chat',
-        updatedAt:
-            DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
-                DateTime.now(),
-        characterId: json['characterId'] as String?,
-        characterName: json['characterName'] as String?,
-        systemPrompt: json['systemPrompt'] as String? ?? '',
-        impersonateId: json['impersonateId'] as String?,
-        impersonateName: json['impersonateName'] as String?,
-        presetId: json['presetId'] as String?,
-        presetOverride: json['presetOverride'] is Map<String, dynamic>
-            ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)
-            : null,
-        folderId: (json['folderId'] as String?)?.trim().isEmpty ?? true
-            ? null
-            : (json['folderId'] as String).trim(),
-        providerOverride:
-            (json['providerOverride'] as String?)?.trim().isEmpty ?? true
-                ? null
-                : (json['providerOverride'] as String).trim(),
-        scenarioId: (json['scenarioId'] as String?)?.trim().isEmpty ?? true
-            ? null
-            : (json['scenarioId'] as String).trim(),
-        scenarioOverride: json['scenarioOverride'] as String? ?? '',
-        backgroundImage: (json['backgroundImage'] as String?)?.trim(),
-        backgroundOpacity:
-            ((json['backgroundOpacity'] as num?)?.toDouble() ?? 1)
-                .clamp(0, 1)
-                .toDouble(),
-        interfaceOverride: json['interfaceOverride'] is Map<String, dynamic>
-            ? ChatInterface.fromJson(
-                json['interfaceOverride'] as Map<String, dynamic>)
-            : null,
-        overrideDefinitions: json['overrideDefinitions'] as bool? ?? false,
-        groupResponder: (json['groupResponder'] as String?)?.trim().isEmpty ?? true
-            ? null
-            : (json['groupResponder'] as String).trim(),
-        characterOverrides: _characterMap(json['characterOverrides']),
-        avatarOverrides: _refMap(json['avatarOverrides']),
-        floatingImages: (json['floatingImages'] as List?)
-            ?.whereType<Map<String, dynamic>>()
-            .map(FloatingImage.fromJson)
-            .where((f) => f.imageId.isNotEmpty)
-            .toList(),
-        variables: (json['variables'] as Map?)?.map(
-          (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
-        ),
-        lorebookIds: (json['lorebookIds'] as List?)
-            ?.map((e) => e.toString())
-            .where((s) => s.isNotEmpty)
-            .toList(),
-        participantIds: (json['participantIds'] as List?)
-            ?.map((e) => e.toString())
-            .where((s) => s.isNotEmpty)
-            .toList(),
-        lorebookOverrides: _lorebookMap(json['lorebookOverrides']),
-        summary: json['summary'] is Map<String, dynamic>
-            ? ChatSummary.fromJson(json['summary'] as Map<String, dynamic>)
-            : null,
-        pinned: json['pinned'] as bool? ?? false,
-        embedRecall: json['embedRecall'] as bool? ?? false,
-        parentId: (json['parentId'] as String?)?.trim().isEmpty ?? true
-            ? null
-            : (json['parentId'] as String).trim(),
-        forkIndex: (json['forkIndex'] as num?)?.toInt(),
-        documentIds: (json['documentIds'] as List?)
-            ?.map((e) => e.toString())
-            .where((s) => s.isNotEmpty)
-            .toList(),
-        messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
-            .whereType<Map<String, dynamic>>()
-            .map(ChatMessage.fromJson)
-            .toList(),
-      );
+    id:
+        json['id'] as String? ??
+        DateTime.now().microsecondsSinceEpoch.toString(),
+    title: json['title'] as String? ?? 'New chat',
+    updatedAt:
+        DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime.now(),
+    characterId: json['characterId'] as String?,
+    characterName: json['characterName'] as String?,
+    systemPrompt: json['systemPrompt'] as String? ?? '',
+    impersonateId: json['impersonateId'] as String?,
+    impersonateName: json['impersonateName'] as String?,
+    presetId: json['presetId'] as String?,
+    presetOverride: json['presetOverride'] is Map<String, dynamic>
+        ? Preset.fromJson(json['presetOverride'] as Map<String, dynamic>)
+        : null,
+    folderId: (json['folderId'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (json['folderId'] as String).trim(),
+    providerOverride:
+        (json['providerOverride'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (json['providerOverride'] as String).trim(),
+    scenarioId: (json['scenarioId'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (json['scenarioId'] as String).trim(),
+    scenarioOverride: json['scenarioOverride'] as String? ?? '',
+    backgroundImage: (json['backgroundImage'] as String?)?.trim(),
+    backgroundOpacity: ((json['backgroundOpacity'] as num?)?.toDouble() ?? 1)
+        .clamp(0, 1)
+        .toDouble(),
+    interfaceOverride: json['interfaceOverride'] is Map<String, dynamic>
+        ? ChatInterface.fromJson(
+            json['interfaceOverride'] as Map<String, dynamic>,
+          )
+        : null,
+    overrideDefinitions: json['overrideDefinitions'] as bool? ?? false,
+    groupResponder: (json['groupResponder'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (json['groupResponder'] as String).trim(),
+    characterOverrides: _characterMap(json['characterOverrides']),
+    avatarOverrides: _refMap(json['avatarOverrides']),
+    floatingImages: (json['floatingImages'] as List?)
+        ?.whereType<Map<String, dynamic>>()
+        .map(FloatingImage.fromJson)
+        .where((f) => f.imageId.isNotEmpty)
+        .toList(),
+    variables: (json['variables'] as Map?)?.map(
+      (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+    ),
+    lorebookIds: (json['lorebookIds'] as List?)
+        ?.map((e) => e.toString())
+        .where((s) => s.isNotEmpty)
+        .toList(),
+    participantIds: (json['participantIds'] as List?)
+        ?.map((e) => e.toString())
+        .where((s) => s.isNotEmpty)
+        .toList(),
+    lorebookOverrides: _lorebookMap(json['lorebookOverrides']),
+    summary: json['summary'] is Map<String, dynamic>
+        ? ChatSummary.fromJson(json['summary'] as Map<String, dynamic>)
+        : null,
+    pinned: json['pinned'] as bool? ?? false,
+    embedRecall: json['embedRecall'] as bool? ?? false,
+    parentId: (json['parentId'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (json['parentId'] as String).trim(),
+    forkIndex: (json['forkIndex'] as num?)?.toInt(),
+    chatToolConfig: json['chatToolConfig'] is Map
+        ? ChatToolConfig.fromJson(
+            Map<String, dynamic>.from(json['chatToolConfig'] as Map),
+          )
+        : null,
+    chatToolControls: (json['chatToolControls'] as List?)
+        ?.whereType<Map>()
+        .map((v) => Map<String, dynamic>.from(v))
+        .toList(),
+    documentIds: (json['documentIds'] as List?)
+        ?.map((e) => e.toString())
+        .where((s) => s.isNotEmpty)
+        .toList(),
+    messages: (json['messages'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(ChatMessage.fromJson)
+        .toList(),
+  );
 
   /// Reads the per-chat character definitions, skipping anything that is not a
   /// card. Null (rather than an empty map) when there are none, so the

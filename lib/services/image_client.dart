@@ -49,6 +49,28 @@ class ImageResult {
 /// Failures are [ChatApiException], the same type (and the same wording) the chat
 /// client raises, so every error path in the app reads alike.
 class ImageClient {
+  final Set<http.Client> _active = {};
+  bool _cancelled = false;
+
+  void cancel() {
+    _cancelled = true;
+    for (final client in _active.toList()) {
+      client.close();
+    }
+  }
+
+  Future<T> _request<T>(Future<T> Function(http.Client client) send) async {
+    if (_cancelled) throw ChatApiException('Image request cancelled.');
+    final client = http.Client();
+    _active.add(client);
+    try {
+      return await send(client);
+    } finally {
+      _active.remove(client);
+      client.close();
+    }
+  }
+
   /// Generates pictures for [prompt] under [config].
   ///
   /// [prompt] is used verbatim — the caller composes it (see
@@ -58,6 +80,7 @@ class ImageClient {
     required String prompt,
     List<ImageReference> references = const <ImageReference>[],
   }) async {
+    _cancelled = false;
     if (prompt.trim().isEmpty) {
       throw ChatApiException('Type what the picture should show.');
     }
@@ -118,7 +141,9 @@ class ImageClient {
   }
 
   Future<ImageResult> _openAiGenerate(
-      ImageGenConfig config, String prompt) async {
+    ImageGenConfig config,
+    String prompt,
+  ) async {
     final body = <String, dynamic>{
       'model': config.model.trim(),
       'prompt': prompt,
@@ -128,13 +153,15 @@ class ImageClient {
     };
     final http.Response response;
     try {
-      response = await http
-          .post(
-            uriFor(config),
-            headers: _headers(config),
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(minutes: 3));
+      response = await _request(
+        (client) => client
+            .post(
+              uriFor(config),
+              headers: _headers(config),
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(minutes: 3)),
+      );
     } catch (e) {
       throw ChatApiException(ChatClient.describeTransport(e));
     }
@@ -159,18 +186,24 @@ class ImageClient {
     if (config.quality.isNotEmpty) request.fields['quality'] = config.quality;
     for (var i = 0; i < references.length; i++) {
       final reference = references[i];
-      request.files.add(http.MultipartFile.fromBytes(
-        // `image[]` is what accepts more than one; a single-image host reads it
-        // as `image` all the same.
-        'image[]',
-        reference.bytes,
-        filename: 'reference-$i.${reference.mime.split('/').last}',
-      ));
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          // `image[]` is what accepts more than one; a single-image host reads it
+          // as `image` all the same.
+          'image[]',
+          reference.bytes,
+          filename: 'reference-$i.${reference.mime.split('/').last}',
+        ),
+      );
     }
     final http.Response response;
     try {
-      final streamed = await request.send().timeout(const Duration(minutes: 3));
-      response = await http.Response.fromStream(streamed);
+      response = await _request((client) async {
+        final streamed = await client
+            .send(request)
+            .timeout(const Duration(minutes: 3));
+        return http.Response.fromStream(streamed);
+      });
     } catch (e) {
       throw ChatApiException(ChatClient.describeTransport(e));
     }
@@ -180,7 +213,8 @@ class ImageClient {
   ImageResult _readOpenAi(http.Response response) {
     if (response.statusCode != 200) {
       throw ChatApiException(
-          ChatClient.describeFailure(response.statusCode, response.body));
+        ChatClient.describeFailure(response.statusCode, response.body),
+      );
     }
     final decoded = _decode(response.body);
     final data = decoded['data'];
@@ -217,8 +251,9 @@ class ImageClient {
       final uri = Uri.tryParse(url);
       if (uri == null) continue;
       try {
-        final response =
-            await http.get(uri).timeout(const Duration(seconds: 90));
+        final response = await _request(
+          (client) => client.get(uri).timeout(const Duration(seconds: 90)),
+        );
         if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
           fetched.add(response.bodyBytes);
         }
@@ -267,25 +302,28 @@ class ImageClient {
       if (config.systemPrompt.trim().isNotEmpty)
         'systemInstruction': {
           'parts': [
-            {'text': config.systemPrompt.trim()}
+            {'text': config.systemPrompt.trim()},
           ],
         },
     };
     final http.Response response;
     try {
-      response = await http
-          .post(
-            uriFor(config),
-            headers: _headers(config),
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(minutes: 3));
+      response = await _request(
+        (client) => client
+            .post(
+              uriFor(config),
+              headers: _headers(config),
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(minutes: 3)),
+      );
     } catch (e) {
       throw ChatApiException(ChatClient.describeTransport(e));
     }
     if (response.statusCode != 200) {
       throw ChatApiException(
-          ChatClient.describeFailure(response.statusCode, response.body));
+        ChatClient.describeFailure(response.statusCode, response.body),
+      );
     }
     final decoded = _decode(response.body);
     final images = <Uint8List>[];
@@ -306,7 +344,9 @@ class ImageClient {
           }
           continue;
         }
-        if (part['text'] is String) text.writeln((part['text'] as String).trim());
+        if (part['text'] is String) {
+          text.writeln((part['text'] as String).trim());
+        }
       }
     }
 
@@ -330,9 +370,11 @@ class ImageClient {
     }
     if (images.isEmpty) {
       final said = text.toString().trim();
-      throw ChatApiException(said.isEmpty
-          ? 'The model returned no picture.'
-          : 'The model returned no picture:\n$said');
+      throw ChatApiException(
+        said.isEmpty
+            ? 'The model returned no picture.'
+            : 'The model returned no picture:\n$said',
+      );
     }
     return ImageResult(images: images, text: text.toString().trim());
   }

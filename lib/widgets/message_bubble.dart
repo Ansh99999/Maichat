@@ -177,14 +177,16 @@ class MessageBubble extends StatelessWidget {
       bubbleColor = ui.botBubbleColor != null
           ? Color(ui.botBubbleColor!)
           : scheme.surfaceContainerHighest;
-      textColor =
-          ui.botTextColor != null ? Color(ui.botTextColor!) : scheme.onSurface;
+      textColor = ui.botTextColor != null
+          ? Color(ui.botTextColor!)
+          : scheme.onSurface;
     }
 
     final showCaret = pending && message.content.isEmpty;
     var avatar = style.show ? _avatar(context, isUser, style) : null;
-    final crossAxis =
-        side.isLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
+    final crossAxis = side.isLeft
+        ? CrossAxisAlignment.start
+        : CrossAxisAlignment.end;
 
     // The action bar is suppressed for a still-streaming caret-only turn
     // (nothing to act on yet) and whenever no dispatcher is wired (the preview).
@@ -193,8 +195,8 @@ class MessageBubble extends StatelessWidget {
     final actionsBar = _isEditing
         ? _editBar(context, isUser)
         : showCaret
-            ? null
-            : _actionsBar(context, isUser);
+        ? null
+        : _actionsBar(context, isUser);
     var placement = ui.actionBarPlacement;
     // Fall back to below-message when the chosen anchor isn't available.
     if (placement == ActionBarPlacement.besideAvatar &&
@@ -286,7 +288,7 @@ class MessageBubble extends StatelessWidget {
         children: [body, _swipeBar(context, textColor)],
       );
     }
-// APPEND-BUILD
+    // APPEND-BUILD
 
     // The name is drawn in a band spanning the whole row, so its alignment reads
     // against the *screen* ("Right" = the right edge of the chat) rather than
@@ -296,18 +298,18 @@ class MessageBubble extends StatelessWidget {
     final Widget? band = nameW == null
         ? null
         : (actionsBar != null && placement == ActionBarPlacement.oppositeName)
-            ? _oppositeNameBand(nameW, actionsBar, nameStyle.align)
-            : Align(alignment: nameStyle.align.alignment, child: nameW);
+        ? _oppositeNameBand(nameW, actionsBar, nameStyle.align)
+        : Align(alignment: nameStyle.align.alignment, child: nameW);
 
     // Keeps a band's slot in the layout without drawing it, so an overlaid or
     // nudged label never makes the turn jump or run into its neighbour.
     Widget reserved(Widget child) => Visibility(
-          visible: false,
-          maintainSize: true,
-          maintainAnimation: true,
-          maintainState: true,
-          child: child,
-        );
+      visible: false,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      child: child,
+    );
 
     final nameAbove = nameStyle.position == NamePosition.above;
 
@@ -323,7 +325,8 @@ class MessageBubble extends StatelessWidget {
     final hasAvatar = band != null && avatar != null;
     final belowAvatar = hasAvatar && !nameAbove;
     final inColumn = belowAvatar && ui.textPlacement == TextPlacement.below;
-    final anchorToAvatar = belowAvatar &&
+    final anchorToAvatar =
+        belowAvatar &&
         (ui.textPlacement == TextPlacement.beside ||
             (inColumn && nameStyle.isNudged));
 
@@ -333,7 +336,9 @@ class MessageBubble extends StatelessWidget {
       final Widget inner;
       switch (ui.textPlacement) {
         case TextPlacement.around:
-          inner = bubbleUnit(_bubble(content(leading: avatarUnit), bubbleColor));
+          inner = bubbleUnit(
+            _bubble(content(leading: avatarUnit), bubbleColor),
+          );
         case TextPlacement.below:
           inner = Column(
             mainAxisSize: MainAxisSize.min,
@@ -389,8 +394,9 @@ class MessageBubble extends StatelessWidget {
       return inner;
     }
 
-    final sideAlignment =
-        side.isLeft ? Alignment.centerLeft : Alignment.centerRight;
+    final sideAlignment = side.isLeft
+        ? Alignment.centerLeft
+        : Alignment.centerRight;
 
     // Place the name band. A label already sitting in the message column is done;
     // everything else is laid out around the assembled turn.
@@ -425,14 +431,15 @@ class MessageBubble extends StatelessWidget {
         // The band is the *last* child so it paints over the message;
         // [verticalDirection] is what puts it above or below.
         Column stacked(Widget bandSlot) => Column(
-              mainAxisSize: MainAxisSize.min,
-              // Stretch so both the band and the message get the full row width
-              // to align themselves within.
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              verticalDirection:
-                  nameAbove ? VerticalDirection.up : VerticalDirection.down,
-              children: [messageRow, bandSlot],
-            );
+          mainAxisSize: MainAxisSize.min,
+          // Stretch so both the band and the message get the full row width
+          // to align themselves within.
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          verticalDirection: nameAbove
+              ? VerticalDirection.up
+              : VerticalDirection.down,
+          children: [messageRow, bandSlot],
+        );
 
         if (!nameStyle.isNudged) {
           outer = stacked(band);
@@ -468,7 +475,9 @@ class MessageBubble extends StatelessWidget {
           horizontal: 12,
         ),
         constraints: BoxConstraints(
-          maxWidth: ui.contentWidth.maxWidthFor(MediaQuery.sizeOf(context).width),
+          maxWidth: ui.contentWidth.maxWidthFor(
+            MediaQuery.sizeOf(context).width,
+          ),
         ),
         child: GestureDetector(
           // A long press on a turn being edited belongs to the editor's own
@@ -476,9 +485,9 @@ class MessageBubble extends StatelessWidget {
           onLongPress: _isEditing
               ? null
               : (onLongPress ??
-                  (message.content.isEmpty
-                      ? null
-                      : () => _copy(context, _displayContent))),
+                    (message.content.isEmpty
+                        ? null
+                        : () => _copy(context, _displayContent))),
           child: _swipeGestures(outer),
         ),
       ),
@@ -511,10 +520,10 @@ class MessageBubble extends StatelessWidget {
   /// overflow menu — the split is configured in Chat Interface settings.
   Widget? _actionsBar(BuildContext context, bool isUser) {
     if (onAction == null || !ui.messageActionsEnabled) return null;
-    final inline =
-        ui.inlineActions.where((a) => a.appliesTo(isUser)).toList();
-    final overflow =
-        ui.overflowActions.where((a) => a.appliesTo(isUser)).toList();
+    final inline = ui.inlineActions.where((a) => a.appliesTo(isUser)).toList();
+    final overflow = ui.overflowActions
+        .where((a) => a.appliesTo(isUser))
+        .toList();
     if (inline.isEmpty && overflow.isEmpty) return null;
 
     final scheme = Theme.of(context).colorScheme;
@@ -532,8 +541,7 @@ class MessageBubble extends StatelessWidget {
               iconSize: 17,
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
-              constraints:
-                  const BoxConstraints(minWidth: 32, minHeight: 32),
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               color: a == MessageAction.delete ? scheme.error : color,
               onPressed: disabled(a) ? null : () => onAction!(a),
               icon: Icon(a.icon),
@@ -553,10 +561,13 @@ class MessageBubble extends StatelessWidget {
                     enabled: !disabled(a),
                     child: Row(
                       children: [
-                        Icon(a.icon,
-                            size: 18,
-                            color:
-                                a == MessageAction.delete ? scheme.error : null),
+                        Icon(
+                          a.icon,
+                          size: 18,
+                          color: a == MessageAction.delete
+                              ? scheme.error
+                              : null,
+                        ),
                         const SizedBox(width: 12),
                         Text(a.label),
                       ],
@@ -582,27 +593,41 @@ class MessageBubble extends StatelessWidget {
   /// this turn's real bar has, whatever the reader has configured into it.
   Widget _editBar(BuildContext context, bool isUser) {
     final scheme = Theme.of(context).colorScheme;
-    Widget button(Key key, String tooltip, IconData icon, Color color,
-            VoidCallback? onPressed) =>
-        IconButton(
-          key: key,
-          tooltip: tooltip,
-          iconSize: 17,
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          color: color,
-          onPressed: onPressed,
-          icon: Icon(icon),
-        );
+    Widget button(
+      Key key,
+      String tooltip,
+      IconData icon,
+      Color color,
+      VoidCallback? onPressed,
+    ) => IconButton(
+      key: key,
+      tooltip: tooltip,
+      iconSize: 17,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      color: color,
+      onPressed: onPressed,
+      icon: Icon(icon),
+    );
 
     final Widget bar = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        button(const Key('edit-cancel'), 'Cancel', Icons.close,
-            scheme.onSurfaceVariant, onEditCancel),
-        button(const Key('edit-save'), 'Save', Icons.check, scheme.primary,
-            onEditSave),
+        button(
+          const Key('edit-cancel'),
+          'Cancel',
+          Icons.close,
+          scheme.onSurfaceVariant,
+          onEditCancel,
+        ),
+        button(
+          const Key('edit-save'),
+          'Save',
+          Icons.check,
+          scheme.primary,
+          onEditSave,
+        ),
       ],
     );
 
@@ -670,16 +695,15 @@ class MessageBubble extends StatelessWidget {
     final size = (ui.fontSize * 0.82).clamp(10.0, 18.0);
 
     Widget arrow(IconData icon, String tooltip, int? target) => IconButton(
-          tooltip: tooltip,
-          iconSize: size + 6,
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 28, minHeight: 24),
-          color: faded,
-          onPressed:
-              live && target != null ? () => onSwipe!(target) : null,
-          icon: Icon(icon),
-        );
+      tooltip: tooltip,
+      iconSize: size + 6,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 24),
+      color: faded,
+      onPressed: live && target != null ? () => onSwipe!(target) : null,
+      icon: Icon(icon),
+    );
 
     return Padding(
       padding: const EdgeInsets.only(top: 2),
@@ -717,7 +741,7 @@ class MessageBubble extends StatelessWidget {
   Widget _nameLabel(BuildContext context, bool isUser) {
     final name = isUser
         ? (userPersona?.displayName ??
-            (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim()))
+              (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim()))
         : (character?.displayName ?? 'Assistant');
     final ns = ui.nameFor(isUser);
     final theme = Theme.of(context);
@@ -759,7 +783,9 @@ class MessageBubble extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
             border: Border.all(
-                color: scheme.primary.withValues(alpha: 0.7), width: 1),
+              color: scheme.primary.withValues(alpha: 0.7),
+              width: 1,
+            ),
             borderRadius: BorderRadius.circular(6),
             color: scheme.primary.withValues(alpha: 0.06),
           ),
@@ -777,7 +803,7 @@ class MessageBubble extends StatelessWidget {
 
     return label;
   }
-// APPEND-HELPERS
+  // APPEND-HELPERS
 
   /// This role's avatar: the character's picture for a bot turn that has one,
   /// otherwise a generic person/bot glyph. In [interactive] mode it wears a
@@ -860,8 +886,11 @@ class MessageBubble extends StatelessWidget {
                   shape: BoxShape.circle,
                   border: Border.all(color: scheme.onPrimary, width: 2),
                 ),
-                child: Icon(Icons.open_in_full,
-                    size: 10, color: scheme.onPrimary),
+                child: Icon(
+                  Icons.open_in_full,
+                  size: 10,
+                  color: scheme.onPrimary,
+                ),
               ),
             ),
           ),
@@ -874,8 +903,12 @@ class MessageBubble extends StatelessWidget {
   /// otherwise selectable text rendered as markdown (when enabled). When
   /// [leading] is set (the "around" placement) the avatar is dropped inline so
   /// the text wraps around it.
-  Widget _text(ColorScheme scheme, Color color, bool showCaret,
-      {Widget? leading}) {
+  Widget _text(
+    ColorScheme scheme,
+    Color color,
+    bool showCaret, {
+    Widget? leading,
+  }) {
     if (showCaret) {
       final spinner = SizedBox(
         height: 16,
@@ -890,11 +923,7 @@ class MessageBubble extends StatelessWidget {
             : Row(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  leading,
-                  const SizedBox(width: 10),
-                  spinner,
-                ],
+                children: [leading, const SizedBox(width: 10), spinner],
               ),
       );
     }
@@ -913,8 +942,9 @@ class MessageBubble extends StatelessWidget {
           content,
           HtmlMessageStyle(
             base: color,
-            emphasis:
-                ui.emphasisColor != null ? Color(ui.emphasisColor!) : color,
+            emphasis: ui.emphasisColor != null
+                ? Color(ui.emphasisColor!)
+                : color,
             quote: ui.quoteColor != null ? Color(ui.quoteColor!) : color,
             codeBackground: scheme.surfaceContainerLowest,
             codeForeground: scheme.onSurface,
@@ -930,7 +960,11 @@ class MessageBubble extends StatelessWidget {
       return Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [leading, const SizedBox(width: 10), Flexible(child: html)],
+        children: [
+          leading,
+          const SizedBox(width: 10),
+          Flexible(child: html),
+        ],
       );
     }
 
@@ -1006,7 +1040,11 @@ class MessageBubble extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [leading, const SizedBox(width: 10), Flexible(child: field)],
+      children: [
+        leading,
+        const SizedBox(width: 10),
+        Flexible(child: field),
+      ],
     );
   }
 
@@ -1019,39 +1057,42 @@ class MessageBubble extends StatelessWidget {
   Widget _attachments(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
-    final single = message.images.length == 1;
+    final single = message.visibleImages.length == 1;
     final double side = single ? 232 : 96;
 
     Widget broken() => Container(
-          width: side,
-          height: side * 0.75,
-          alignment: Alignment.center,
-          color: scheme.surfaceContainerHighest,
-          child: Icon(Icons.broken_image_outlined, color: scheme.outline),
-        );
+      width: side,
+      height: side * 0.75,
+      alignment: Alignment.center,
+      color: scheme.surfaceContainerHighest,
+      child: Icon(Icons.broken_image_outlined, color: scheme.outline),
+    );
 
     Widget tile(int index) {
-      final image = message.images[index];
-      final provider =
-          avatarImage(image.ref, displaySize: side, devicePixelRatio: dpr);
+      final image = message.visibleImages[index];
+      final provider = avatarImage(
+        image.ref,
+        displaySize: side,
+        devicePixelRatio: dpr,
+      );
       final Widget picture = provider == null
           ? broken()
           : single
-              // Its own proportions, capped so a phone screenshot does not fill
-              // the thread.
-              ? SmoothImage(
-                  image: provider,
-                  width: side,
-                  fit: BoxFit.fitWidth,
-                  errorBuilder: (_, _, _) => broken(),
-                )
-              : SmoothImage(
-                  image: provider,
-                  width: side,
-                  height: side,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => broken(),
-                );
+          // Its own proportions, capped so a phone screenshot does not fill
+          // the thread.
+          ? SmoothImage(
+              image: provider,
+              width: side,
+              fit: BoxFit.fitWidth,
+              errorBuilder: (_, _, _) => broken(),
+            )
+          : SmoothImage(
+              image: provider,
+              width: side,
+              height: side,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => broken(),
+            );
       final framed = ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: picture,
@@ -1069,7 +1110,9 @@ class MessageBubble extends StatelessWidget {
     return Wrap(
       spacing: 6,
       runSpacing: 6,
-      children: [for (var i = 0; i < message.images.length; i++) tile(i)],
+      children: [
+        for (var i = 0; i < message.visibleImages.length; i++) tile(i),
+      ],
     );
   }
 
@@ -1315,7 +1358,8 @@ class _NameUnderAvatarState extends State<_NameUnderAvatar> {
     final body = widget.buildBody(
       _MeasureSize(onChange: _onSize, child: widget.avatar),
     );
-    final anchor = (_avatarHeight ?? widget.fallbackHeight) +
+    final anchor =
+        (_avatarHeight ?? widget.fallbackHeight) +
         widget.avatarOffsetY +
         widget.gap;
     return Stack(
@@ -1326,7 +1370,10 @@ class _NameUnderAvatarState extends State<_NameUnderAvatar> {
           Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [SizedBox(height: anchor), widget.reservedBand],
+            children: [
+              SizedBox(height: anchor),
+              widget.reservedBand,
+            ],
           ),
         Positioned(
           top: anchor + widget.nudge.dy,
@@ -1352,7 +1399,9 @@ class _MeasureSize extends SingleChildRenderObjectWidget {
 
   @override
   void updateRenderObject(
-      BuildContext context, _RenderMeasureSize renderObject) {
+    BuildContext context,
+    _RenderMeasureSize renderObject,
+  ) {
     renderObject.onChange = onChange;
   }
 }
@@ -1427,10 +1476,12 @@ class _GenericAvatar extends StatelessWidget {
         height: size,
         color: scheme.secondaryContainer,
         alignment: Alignment.center,
-        child: Icon(icon, size: size * 0.55, color: scheme.onSecondaryContainer),
+        child: Icon(
+          icon,
+          size: size * 0.55,
+          color: scheme.onSecondaryContainer,
+        ),
       ),
     );
   }
 }
-
-

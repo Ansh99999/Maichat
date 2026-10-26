@@ -22,6 +22,7 @@ import '../state/app_state.dart';
 import '../widgets/avatar_image.dart';
 import '../widgets/avatar_swipe_sheet.dart';
 import '../widgets/btw_sheet.dart';
+import '../widgets/chat_tool_results.dart';
 import '../widgets/character_avatar.dart';
 import '../widgets/floating_images_layer.dart';
 import '../widgets/interface_preset_sheet.dart';
@@ -100,16 +101,18 @@ class ChatScreenHost {
 /// The chat's provider & model picker — the sheet "Provider & model" opens in
 /// the chat sidebar, and the Studio Playground's provider symbol.
 void showChatProviderSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => _QuickSettingsSheet(onManage: () {
-        Navigator.of(context).pop();
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
-        );
-      }),
-    );
+  context: context,
+  showDragHandle: true,
+  isScrollControlled: true,
+  builder: (_) => _QuickSettingsSheet(
+    onManage: () {
+      Navigator.of(context).pop();
+      Navigator.of(
+        context,
+      ).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen()));
+    },
+  ),
+);
 
 class _ChatScreenState extends State<ChatScreen> {
   final _ComposerController _input = _ComposerController();
@@ -282,11 +285,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// to shrink; a box grown by typing overlays the thread and leaves the reserve
   /// alone.
   void _measureComposerDock() {
-    final box = _composerDockKey.currentContext?.findRenderObject() as RenderBox?;
+    final box =
+        _composerDockKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
     final height = box.size.height;
     if ((height - _composerDockHeight).abs() <= 0.5) return;
-    final resting = _composerDockHeight == 0 ||
+    final resting =
+        _composerDockHeight == 0 ||
         _input.text.isEmpty ||
         height < _composerDockHeight;
     if (resting) {
@@ -398,16 +403,19 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _input.clear();
     final conversation = state.active;
-    unawaited(showBtwSheet(
-      context,
-      question: question,
-      ask: (run, onProgress) => state.askAside(
-        question,
-        conversation: conversation,
-        run: run,
-        onProgress: onProgress,
+    unawaited(
+      showBtwSheet(
+        context,
+        question: question,
+        actionsEnabled: state.chatToolConfigFor(conversation).enabled,
+        ask: (run, onProgress) => state.askAside(
+          question,
+          conversation: conversation,
+          run: run,
+          onProgress: onProgress,
+        ),
       ),
-    ));
+    );
   }
 
   /// Picks a picture out of the app's own gallery for the next send.
@@ -418,8 +426,9 @@ class _ChatScreenState extends State<ChatScreen> {
       characterId: state.active.characterId,
     );
     if (ref == null || !mounted) return;
-    setState(() => _attachments
-        .add(MessageImage(ref: ref, mime: mimeForRef(ref))));
+    setState(
+      () => _attachments.add(MessageImage(ref: ref, mime: mimeForRef(ref))),
+    );
   }
 
   /// Picks pictures off the device for the next send. The bytes are written into
@@ -456,32 +465,33 @@ class _ChatScreenState extends State<ChatScreen> {
   /// are made. [prompt] seeds the prompt box, which is how a message's "Generate
   /// image" action hands its own text over.
   void _openImageStudio({String prompt = ''}) => showImageStudio(
-        context,
-        conversationId: context.read<AppState>().active.id,
-        prompt: prompt,
-      );
+    context,
+    conversationId: context.read<AppState>().active.id,
+    prompt: prompt,
+  );
 
-  void _openSettings() => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
-      );
+  void _openSettings() => Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen()));
 
   void _openSection(String title, IconData icon) => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-            builder: (_) => SectionScreen(title: title, icon: icon)),
-      );
+    MaterialPageRoute<void>(
+      builder: (_) => SectionScreen(title: title, icon: icon),
+    ),
+  );
 
   /// The fork tree this chat belongs to. Selecting a branch there pops back
   /// here, and this screen already rebuilds off the active chat, so it shows
   /// the branch that was picked.
   void _openChatGraph(String conversationId) => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ChatGraphScreen(conversationId: conversationId),
-        ),
-      );
+    MaterialPageRoute<void>(
+      builder: (_) => ChatGraphScreen(conversationId: conversationId),
+    ),
+  );
 
-  void _openCharacters() => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const CharactersScreen()),
-      );
+  void _openCharacters() => Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => const CharactersScreen()));
 
   /// Back to the landing Home screen (the first route).
   void _goHome() => Navigator.of(context).popUntil((route) => route.isFirst);
@@ -489,9 +499,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Home first, then open the full Chats list, so Back is predictable.
   void _goChats() {
     _goHome();
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const ChatsScreen()),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ChatsScreen()));
   }
 
   void _openQuickSettings() => showChatProviderSheet(context);
@@ -500,10 +510,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// the characters taking part. Replaces the old rename-only dialog — renaming
   /// is now the first field on that screen.
   void _editChat(AppState state) => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ChatSettingsScreen(conversationId: state.active.id),
-        ),
-      );
+    MaterialPageRoute<void>(
+      builder: (_) => ChatSettingsScreen(conversationId: state.active.id),
+    ),
+  );
 
   /// Hands the thread to the export flow, which offers the shapes and then the
   /// file / clipboard chooser.
@@ -574,11 +584,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.only(left: 16, right: 16, bottom: 16 + keyboard),
-      ));
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.only(left: 16, right: 16, bottom: 16 + keyboard),
+        ),
+      );
   }
 
   /// Returns to the newest message. The list is reversed, so "the end" is
@@ -675,7 +687,7 @@ class _ChatScreenState extends State<ChatScreen> {
       selection: TextSelection.collapsed(offset: text.length),
     );
   }
-// APPEND-MARKER-1
+  // APPEND-MARKER-1
 
   @override
   Widget build(BuildContext context) {
@@ -770,8 +782,9 @@ class _ChatScreenState extends State<ChatScreen> {
     // height measured, and only it reserves room at the thread's bottom.
     final floatingComposer = ui.composerStyle == ComposerStyle.expressive;
     if (floatingComposer) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _measureComposerDock());
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _measureComposerDock(),
+      );
     }
 
     return Scaffold(
@@ -790,22 +803,24 @@ class _ChatScreenState extends State<ChatScreen> {
       onDrawerChanged: (opened) {
         if (opened) FocusManager.instance.primaryFocus?.unfocus();
       },
-      drawer: widget.host?.drawer(context) ?? _ChatDrawer(
-        onProfile: _goHome,
-        onCharacters: _openCharacters,
-        onChats: _goChats,
-        onGallery: () => openChatGallery(context, conversation.id),
-        onEditChat: () => _editChat(state),
-        onChatGraph: () => _openChatGraph(conversation.id),
-        onProviderModel: _openQuickSettings,
-        onSettings: _openSettings,
-        onImageGen: _openImageStudio,
-        onExport: () => _exportChat(state),
-        onRestart: () => _restartChat(state),
-        onDelete: () => _deleteChat(state),
-        onNotifications: () =>
-            _openSection('Notifications', Icons.notifications_outlined),
-      ),
+      drawer:
+          widget.host?.drawer(context) ??
+          _ChatDrawer(
+            onProfile: _goHome,
+            onCharacters: _openCharacters,
+            onChats: _goChats,
+            onGallery: () => openChatGallery(context, conversation.id),
+            onEditChat: () => _editChat(state),
+            onChatGraph: () => _openChatGraph(conversation.id),
+            onProviderModel: _openQuickSettings,
+            onSettings: _openSettings,
+            onImageGen: _openImageStudio,
+            onExport: () => _exportChat(state),
+            onRestart: () => _restartChat(state),
+            onDelete: () => _deleteChat(state),
+            onNotifications: () =>
+                _openSection('Notifications', Icons.notifications_outlined),
+          ),
       body: Stack(
         children: [
           // This chat's own picture, behind everything and behind nothing else's.
@@ -889,8 +904,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// screen up — and everything to lose: it lurched the conversation on every
   /// frame of the keyboard's rise. Lifting one small, already-boundaried layer is
   /// a re-composite, not a screenful of relayout.
-  Widget _chatBody(AppState state, Conversation conversation, ChatInterface ui,
-      double topInset, bool floatingComposer) {
+  Widget _chatBody(
+    AppState state,
+    Conversation conversation,
+    ChatInterface ui,
+    double topInset,
+    bool floatingComposer,
+  ) {
     // Sits at the bottom-right of the thread, just above the composer, and only
     // while scrolled well up. For the floating composer it clears the dock.
     final jumpButton = Positioned(
@@ -909,10 +929,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     final thread = conversation.isEmpty
-        ? _EmptyState(
-            configured: state.isConfigured,
-            onSettings: _openSettings,
-          )
+        ? _EmptyState(configured: state.isConfigured, onSettings: _openSettings)
         : Stack(
             children: [
               // The thread is its own retained layer, so moving a floating picture
@@ -1028,17 +1045,33 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _messageList(Conversation conversation, AppState state, double top,
-      {double bottom = 8}) {
+  Widget _messageList(
+    Conversation conversation,
+    AppState state,
+    double top, {
+    double bottom = 8,
+  }) {
     final ui = state.interfaceFor(conversation);
-    final character = state.characterFor(conversation, conversation.characterId);
+    final character = state.characterFor(
+      conversation,
+      conversation.characterId,
+    );
     final persona = state.impersonationFor(conversation);
     // A cosmetic (display-only) regex pass, when any rule wants one. Null lets
     // every bubble draw its stored text directly. The fingerprint rides in each
     // bubble's cache signature so editing a rule refreshes the thread.
     final regexDisplay = state.regexDisplayTransform(conversation);
-    final regexToken = regexDisplay == null ? null : state.regexDisplaySignature;
-    return ListView.builder(
+    final regexToken = regexDisplay == null
+        ? null
+        : state.regexDisplaySignature;
+    final toolConfig = state.chatToolConfigFor(conversation);
+    final toolProjection = state.chatToolProjection(conversation);
+    final hiddenTools = state
+        .chatToolDefinitionsFor(conversation)
+        .where((d) => d.hidden)
+        .map((d) => d.name)
+        .toSet();
+    final list = ListView.builder(
       controller: _scroll,
       // Reversed so the newest turn sits at the bottom (offset 0) and the list
       // builds outward from it. A forward list jumped to its bottom forces
@@ -1080,15 +1113,16 @@ class _ChatScreenState extends State<ChatScreen> {
             : character;
         final userSpeaker =
             conversation.isGroup && message.isUser && message.speakerId != null
-                ? (state.characterFor(conversation, message.speakerId) ?? persona)
-                : persona;
+            ? (state.characterFor(conversation, message.speakerId) ?? persona)
+            : persona;
         // The picture each side wears *in this thread*, resolved in the one
         // place that decides it. Read here rather than inside the bubble so a
         // per-chat choice cannot be honoured here and forgotten elsewhere — and
         // so it is part of what tells this bubble apart from the one already
         // built below.
-        final avatarOverride =
-            speaker == null ? null : state.avatarRefFor(conversation, speaker);
+        final avatarOverride = speaker == null
+            ? null
+            : state.avatarRefFor(conversation, speaker);
         final userAvatarOverride = userSpeaker == null
             ? null
             : state.avatarRefFor(conversation, userSpeaker);
@@ -1109,6 +1143,9 @@ class _ChatScreenState extends State<ChatScreen> {
           pending,
           state.streaming,
           regexToken,
+          toolConfig.trackerPlacement,
+          hiddenTools.join('|'),
+          toolProjection.staleRuns.contains(message.toolRun?.id),
         ];
         final cached = editing ? null : _bubbles[msgIndex];
         if (cached != null && listEquals(cached.signature, signature)) {
@@ -1126,7 +1163,7 @@ class _ChatScreenState extends State<ChatScreen> {
               _openAvatar(state, conversation, isUser ? userSpeaker : speaker),
           onImageTap: (at) => showPictureViewer(
             context,
-            refs: [for (final image in message.images) image.ref],
+            refs: [for (final image in message.visibleImages) image.ref],
             index: at,
           ),
           pending: pending,
@@ -1143,11 +1180,43 @@ class _ChatScreenState extends State<ChatScreen> {
               : () => _showMessageActions(state, conversation, msgIndex),
           displayTransform: regexDisplay,
         );
-        if (editing) return bubble;
+        final decorated = message.toolRun == null
+            ? bubble
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  bubble,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: ChatToolResults(
+                      run: message.toolRun!,
+                      hiddenTools: hiddenTools,
+                      stale: toolProjection.staleRuns.contains(
+                        message.toolRun!.id,
+                      ),
+                      showTrackers: toolConfig.trackerPlacement == 'message',
+                    ),
+                  ),
+                ],
+              );
+        if (editing) return decorated;
         if (_bubbles.length >= _bubbleCacheMax) _bubbles.clear();
-        _bubbles[msgIndex] = _CachedBubble(signature, bubble);
-        return bubble;
+        _bubbles[msgIndex] = _CachedBubble(signature, decorated);
+        return decorated;
       },
+    );
+    if (toolConfig.trackerPlacement != 'pinned') return list;
+    return Column(
+      children: [
+        ChatTrackerPanel(
+          values: {
+            for (final e in toolProjection.values.entries)
+              if (e.key.startsWith('tracker:')) e.key.substring(8): e.value,
+          },
+        ),
+        Expanded(child: list),
+      ],
     );
   }
 
@@ -1156,9 +1225,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// becomes ✕/✓.
   void _startEditing(Conversation conversation, int index) {
     if (index < 0 || index >= conversation.messages.length) return;
-    _edit.value = TextEditingValue(
-      text: conversation.messages[index].content,
-    );
+    _edit.value = TextEditingValue(text: conversation.messages[index].content);
     setState(() => _editingIndex = index);
   }
 
@@ -1170,7 +1237,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Commits what was typed and leaves the editor.
   Future<void> _saveEdit(
-      AppState state, Conversation conversation, int index) async {
+    AppState state,
+    Conversation conversation,
+    int index,
+  ) async {
     final text = _edit.text;
     _stopEditing();
     await state.editMessage(conversation.id, index, text);
@@ -1208,7 +1278,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _deleteMessage(state, conversation, index);
       case MessageAction.copy:
         Clipboard.setData(
-            ClipboardData(text: conversation.messages[index].content));
+          ClipboardData(text: conversation.messages[index].content),
+        );
         _toast('Copied');
       case MessageAction.fork:
         _forkFrom(state, conversation, index);
@@ -1250,9 +1321,9 @@ class _ChatScreenState extends State<ChatScreen> {
           span <= 1
               ? 'This message will be removed permanently.'
               : 'There ${span - 1 == 1 ? 'is' : 'are'} ${span - 1} '
-                  '${span - 1 == 1 ? 'message' : 'messages'} after this one. '
-                  'Delete this message on its own, or everything from here to '
-                  'the end of the chat?',
+                    '${span - 1 == 1 ? 'message' : 'messages'} after this one. '
+                    'Delete this message on its own, or everything from here to '
+                    'the end of the chat?',
         ),
         actions: [
           TextButton(
@@ -1272,8 +1343,9 @@ class _ChatScreenState extends State<ChatScreen> {
               backgroundColor: scheme.error,
               foregroundColor: scheme.onError,
             ),
-            onPressed: () => Navigator.of(dialog).pop(
-                span > 1 ? _DeleteScope.fromHere : _DeleteScope.thisMessage),
+            onPressed: () => Navigator.of(
+              dialog,
+            ).pop(span > 1 ? _DeleteScope.fromHere : _DeleteScope.thisMessage),
             child: Text(span > 1 ? 'Delete $span' : 'Delete'),
           ),
         ],
@@ -1288,14 +1360,20 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _forkFrom(
-      AppState state, Conversation conversation, int index) async {    await state.forkConversation(conversation.id, index);
+    AppState state,
+    Conversation conversation,
+    int index,
+  ) async {
+    await state.forkConversation(conversation.id, index);
     if (!mounted) return;
     // The fork joins this chat's tree rather than becoming a separate row in the
     // lists, so the toast points at where it can be found. A hosted chat's
     // branch is a chat of the host's, listed in its sidebar.
-    _toast(widget.host == null
-        ? 'Branched — see Chat Graph'
-        : 'Branched — it is in the chat list');
+    _toast(
+      widget.host == null
+          ? 'Branched — see Chat Graph'
+          : 'Branched — it is in the chat list',
+    );
     _stickToLatest();
   }
 
@@ -1381,8 +1459,10 @@ class _ChatScreenState extends State<ChatScreen> {
             ListTile(
               leading: const Icon(Icons.auto_awesome_outlined),
               title: const Text('Generate image'),
-              subtitle: const Text('Open the studio with this message as the '
-                  'prompt'),
+              subtitle: const Text(
+                'Open the studio with this message as the '
+                'prompt',
+              ),
               onTap: () {
                 Navigator.of(sheet).pop();
                 _openImageStudio(prompt: message.content);
@@ -1391,13 +1471,17 @@ class _ChatScreenState extends State<ChatScreen> {
             ListTile(
               leading: const Icon(Icons.call_split),
               title: const Text('Branch from here'),
-              subtitle: const Text('Carry on differently, in this chat\'s graph'),
+              subtitle: const Text(
+                'Carry on differently, in this chat\'s graph',
+              ),
               onTap: () async {
                 Navigator.of(sheet).pop();
                 await state.forkConversation(conversation.id, index);
-                _toast(widget.host == null
-                    ? 'Branched — see Chat Graph'
-                    : 'Branched — it is in the chat list');
+                _toast(
+                  widget.host == null
+                      ? 'Branched — see Chat Graph'
+                      : 'Branched — it is in the chat list',
+                );
                 _scrollToEnd();
               },
             ),
@@ -1421,8 +1505,10 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
             ListTile(
-              leading: Icon(Icons.delete_outline,
-                  color: Theme.of(sheet).colorScheme.error),
+              leading: Icon(
+                Icons.delete_outline,
+                color: Theme.of(sheet).colorScheme.error,
+              ),
               title: const Text('Delete'),
               enabled: !state.streaming,
               onTap: () {
@@ -1447,11 +1533,13 @@ class _ChatScreenState extends State<ChatScreen> {
     // frame the composer builds so a settings change takes effect at once; the
     // controller keeps the last builder between keystrokes (buildTextSpan runs
     // without a parent rebuild), which is the same value, so nothing flickers.
-    final live = ui.composerStyle == ComposerStyle.expressive &&
+    final live =
+        ui.composerStyle == ComposerStyle.expressive &&
         ui.composerLiveFormatting &&
         ui.markdown;
-    _input.styleBuilder =
-        live ? (base) => _composerMarkdownStyles(ui, scheme, base) : null;
+    _input.styleBuilder = live
+        ? (base) => _composerMarkdownStyles(ui, scheme, base)
+        : null;
 
     // The expressive composer ditches the flat surface-and-divider slab the legacy
     // send bar sits on: its rounded box and the panels that rise out of it float
@@ -1464,7 +1552,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final attachIsTop = expressive && _showAttachBar;
     final hintIsTop = expressive && !_showAttachBar && hintOpen;
     final opsIsTop = expressive && !_showAttachBar && !hintOpen && _showOps;
-    final panelAboveBox = expressive && (_showAttachBar || hintOpen || _showOps);
+    final panelAboveBox =
+        expressive && (_showAttachBar || hintOpen || _showOps);
     return Container(
       padding: expressive
           ? const EdgeInsets.fromLTRB(8, 6, 8, 10)
@@ -1566,96 +1655,102 @@ class _ChatScreenState extends State<ChatScreen> {
                         padding: expressive
                             ? const EdgeInsets.fromLTRB(6, 4, 6, 4)
                             : const EdgeInsets.only(bottom: 6, right: 4),
-                      // Seven symbols is more than a narrow phone can fit at a
-                      // full 48dp touch target each, and a Row that overflows
-                      // simply clips whatever hangs off the end. Anchored to the
-                      // right (`reverse`), so the tools keep their places under
-                      // the ⋯ and it is the far end that can be slid into view
-                      // rather than lost.
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        reverse: true,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Asking for a turn: kept together, and to the left
-                            // of the tools so those stay exactly where they have
-                            // always been.
-                            _TurnActions(
-                              busy: state.streaming,
-                              canContinue:
-                                  state.continuableIndex(conversation) != null,
-                              canRespond: state.canRespondAgain(conversation),
-                              onContinue: () => _continueReply(state),
-                              onRespondAgain: () => _respondAgain(state),
-                              onWriteForMe: () => _writeForMe(state),
-                            ),
-                            // Two families of action, told apart by a hairline
-                            // rather than by guesswork.
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              child: SizedBox(
-                                height: 24,
-                                child: VerticalDivider(
-                                  width: 1,
-                                  thickness: 1,
-                                  color: scheme.outlineVariant,
+                        // Seven symbols is more than a narrow phone can fit at a
+                        // full 48dp touch target each, and a Row that overflows
+                        // simply clips whatever hangs off the end. Anchored to the
+                        // right (`reverse`), so the tools keep their places under
+                        // the ⋯ and it is the far end that can be slid into view
+                        // rather than lost.
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          reverse: true,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Asking for a turn: kept together, and to the left
+                              // of the tools so those stay exactly where they have
+                              // always been.
+                              _TurnActions(
+                                busy: state.streaming,
+                                canContinue:
+                                    state.continuableIndex(conversation) !=
+                                    null,
+                                canRespond: state.canRespondAgain(conversation),
+                                onContinue: () => _continueReply(state),
+                                onRespondAgain: () => _respondAgain(state),
+                                onWriteForMe: () => _writeForMe(state),
+                              ),
+                              // Two families of action, told apart by a hairline
+                              // rather than by guesswork.
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                ),
+                                child: SizedBox(
+                                  height: 24,
+                                  child: VerticalDivider(
+                                    width: 1,
+                                    thickness: 1,
+                                    color: scheme.outlineVariant,
+                                  ),
                                 ),
                               ),
-                            ),
-                            // Steering for the next reply. Placed at the left of
-                            // the tools rather than the right: the strip is
-                            // anchored to the ⋯ button, so growing it leftwards
-                            // leaves every symbol that was already here exactly
-                            // where the thumb learned to find it.
-                            if (state.responseHintEnabled)
+                              // Steering for the next reply. Placed at the left of
+                              // the tools rather than the right: the strip is
+                              // anchored to the ⋯ button, so growing it leftwards
+                              // leaves every symbol that was already here exactly
+                              // where the thumb learned to find it.
+                              if (state.responseHintEnabled)
+                                IconButton(
+                                  key: const Key('composer-hint-button'),
+                                  tooltip: 'Response hint',
+                                  isSelected: _showHintBar,
+                                  onPressed: () => setState(() {
+                                    _showHintBar = !_showHintBar;
+                                    if (!_showHintBar) _flushHint();
+                                  }),
+                                  // Lit when something is typed, so a closed box
+                                  // still says the next reply is being steered.
+                                  icon: Icon(
+                                    _hintActive
+                                        ? Icons.tips_and_updates
+                                        : Icons.tips_and_updates_outlined,
+                                  ),
+                                ),
                               IconButton(
-                                key: const Key('composer-hint-button'),
-                                tooltip: 'Response hint',
-                                isSelected: _showHintBar,
-                                onPressed: () => setState(() {
-                                  _showHintBar = !_showHintBar;
-                                  if (!_showHintBar) _flushHint();
-                                }),
-                                // Lit when something is typed, so a closed box
-                                // still says the next reply is being steered.
-                                icon: Icon(_hintActive
-                                    ? Icons.tips_and_updates
-                                    : Icons.tips_and_updates_outlined),
+                                key: const Key('composer-image-button'),
+                                tooltip: 'Send a picture',
+                                isSelected: _showAttachBar,
+                                onPressed: () => setState(
+                                  () => _showAttachBar = !_showAttachBar,
+                                ),
+                                icon: const Icon(Icons.image_outlined),
                               ),
-                            IconButton(
-                              key: const Key('composer-image-button'),
-                              tooltip: 'Send a picture',
-                              isSelected: _showAttachBar,
-                              onPressed: () => setState(
-                                  () => _showAttachBar = !_showAttachBar),
-                              icon: const Icon(Icons.image_outlined),
-                            ),
-                            IconButton(
-                              key: const Key('composer-imagegen-button'),
-                              tooltip: 'Image studio',
-                              onPressed: () => _openImageStudio(),
-                              icon: const Icon(Icons.auto_awesome_outlined),
-                            ),
-                            if (groupEnabled)
                               IconButton(
-                                key: const Key('composer-group-button'),
-                                tooltip: conversation.isGroup
-                                    ? 'Group participants'
-                                    : 'Start a group chat',
-                                isSelected: _showGroupBar,
-                                onPressed: () => _toggleGroupBar(state),
-                                icon: const Icon(Icons.groups_outlined),
+                                key: const Key('composer-imagegen-button'),
+                                tooltip: 'Image studio',
+                                onPressed: () => _openImageStudio(),
+                                icon: const Icon(Icons.auto_awesome_outlined),
                               ),
-                            // A host's own symbols (the Studio's way back to
-                            // its areas), nearest the ⋯ that opened them.
-                            for (final action
-                                in widget.host?.composerActions ??
-                                    const <WidgetBuilder>[])
-                              action(context),
-                          ],
+                              if (groupEnabled)
+                                IconButton(
+                                  key: const Key('composer-group-button'),
+                                  tooltip: conversation.isGroup
+                                      ? 'Group participants'
+                                      : 'Start a group chat',
+                                  isSelected: _showGroupBar,
+                                  onPressed: () => _toggleGroupBar(state),
+                                  icon: const Icon(Icons.groups_outlined),
+                                ),
+                              // A host's own symbols (the Studio's way back to
+                              // its areas), nearest the ⋯ that opened them.
+                              for (final action
+                                  in widget.host?.composerActions ??
+                                      const <WidgetBuilder>[])
+                                action(context),
+                            ],
+                          ),
                         ),
-                      ),
                       ),
                     ),
                   ),
@@ -1696,8 +1791,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ? 'Message'
                   : 'Message as ${persona.displayName}',
               isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
             ),
           ),
         ),
@@ -1728,9 +1825,14 @@ class _ChatScreenState extends State<ChatScreen> {
   /// of the box; the box then squares off its own top corners so it merges into
   /// the single rounded shape the panels form above it.
   Widget _expressiveComposerBox(
-      AppState state, ChatInterface ui, Character? persona, bool panelAbove) {
+    AppState state,
+    ChatInterface ui,
+    Character? persona,
+    bool panelAbove,
+  ) {
     final scheme = Theme.of(context).colorScheme;
-    final personaName = persona?.displayName ??
+    final personaName =
+        persona?.displayName ??
         (ui.userName.trim().isEmpty ? 'You' : ui.userName.trim());
     const rounded = Radius.circular(28);
     final topRadius = panelAbove ? Radius.zero : rounded;
@@ -1752,8 +1854,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case ComposerBackground.color:
         if (ui.composerBackgroundColor != null) {
           background = ColoredBox(
-            color:
-                Color(ui.composerBackgroundColor!).withValues(alpha: opacity),
+            color: Color(
+              ui.composerBackgroundColor!,
+            ).withValues(alpha: opacity),
           );
         }
       case ComposerBackground.image:
@@ -1919,12 +2022,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-
   /// built to match how the same text renders in a bubble (see
   /// [MessageBubble]'s inline renderer) so what is typed previews as what will
   /// be shown. [base] is the field's own resolved text style.
   MarkdownStyles _composerMarkdownStyles(
-      ChatInterface ui, ColorScheme scheme, TextStyle base) {
+    ChatInterface ui,
+    ColorScheme scheme,
+    TextStyle base,
+  ) {
     final color = base.color ?? scheme.onSurface;
     return MarkdownStyles(
       base: base,
@@ -1976,7 +2081,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final character = choice.character!;
     final ok = await _confirm(
       title: 'Impersonate?',
-      body: 'Do you want to impersonate ${character.displayName}? Your messages '
+      body:
+          'Do you want to impersonate ${character.displayName}? Your messages '
           'will be sent as this character.',
       action: 'Impersonate',
     );
@@ -2056,10 +2162,15 @@ class _ComposerController extends TextEditingController {
   }) {
     final build = styleBuilder;
     final composing =
-        withComposing && value.isComposingRangeValid && !value.composing.isCollapsed;
+        withComposing &&
+        value.isComposingRangeValid &&
+        !value.composing.isCollapsed;
     if (build == null || text.isEmpty || composing) {
-      return super
-          .buildTextSpan(context: context, style: style, withComposing: withComposing);
+      return super.buildTextSpan(
+        context: context,
+        style: style,
+        withComposing: withComposing,
+      );
     }
     final base = style ?? const TextStyle();
     return TextSpan(
@@ -2301,16 +2412,19 @@ class _HintBar extends StatelessWidget {
                 hintText: 'Guide the next reply…',
                 isDense: true,
                 border: border,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 // Where the hint lands, as the field's own helper line — so it
                 // lines up under the words it belongs to without a layout of its
                 // own, and the box does not change height when the depth does.
                 helperText: depth == 0
                     ? 'Just before the reply'
                     : '$depth ${depth == 1 ? 'message' : 'messages'} back',
-                helperStyle: theme.textTheme.bodySmall
-                    ?.copyWith(color: faded.withValues(alpha: 0.8)),
+                helperStyle: theme.textTheme.bodySmall?.copyWith(
+                  color: faded.withValues(alpha: 0.8),
+                ),
               ),
             ),
           ),
@@ -2492,10 +2606,9 @@ class _AttachChoice extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 label,
-                style: Theme.of(context)
-                    .textTheme
-                    .labelLarge
-                    ?.copyWith(color: color),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: color),
               ),
             ],
           ),
@@ -2542,8 +2655,11 @@ class _AttachPreview extends StatelessWidget {
                 ? ColoredBox(
                     color: scheme.surfaceContainerHighest,
                     child: Center(
-                      child: Icon(Icons.broken_image_outlined,
-                          size: 20, color: scheme.onSurfaceVariant),
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        size: 20,
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   )
                 : SmoothImage(image: provider, fit: BoxFit.cover),
@@ -2736,7 +2852,9 @@ class _ResponderMenu extends StatelessWidget {
       icon: Icon(
         // A filled marker when someone is on auto, so the bar shows at a glance
         // that sends won't wait for a chip tap.
-        current == null ? Icons.record_voice_over_outlined : Icons.record_voice_over,
+        current == null
+            ? Icons.record_voice_over_outlined
+            : Icons.record_voice_over,
         color: current == null ? null : scheme.primary,
       ),
       position: PopupMenuPosition.under,
@@ -2801,9 +2919,7 @@ class _GroupChip extends StatelessWidget {
         ? CharacterAvatar(character: character!, radius: 12)
         : Icon(Icons.person, size: 18, color: scheme.onSecondaryContainer);
     return Material(
-      color: highlight
-          ? scheme.primaryContainer
-          : scheme.secondaryContainer,
+      color: highlight ? scheme.primaryContainer : scheme.secondaryContainer,
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
       shape: responder
@@ -2822,8 +2938,7 @@ class _GroupChip extends StatelessWidget {
             children: [
               leading,
               const SizedBox(width: 6),
-              Text(label,
-                  style: Theme.of(context).textTheme.labelLarge),
+              Text(label, style: Theme.of(context).textTheme.labelLarge),
               if (responder) ...[
                 const SizedBox(width: 6),
                 Icon(Icons.record_voice_over, size: 15, color: scheme.primary),
@@ -2945,8 +3060,9 @@ class _JumpToLatestButton extends StatelessWidget {
             children: [
               FloatingActionButton.small(
                 heroTag: null,
-                tooltip:
-                    live ? 'A reply is coming in — jump to it' : 'Jump to latest',
+                tooltip: live
+                    ? 'A reply is coming in — jump to it'
+                    : 'Jump to latest',
                 elevation: 2,
                 backgroundColor: live
                     ? scheme.primaryContainer
@@ -2964,8 +3080,10 @@ class _JumpToLatestButton extends StatelessWidget {
                   top: -4,
                   right: -4,
                   child: Container(
-                    constraints:
-                        const BoxConstraints(minWidth: 18, minHeight: 18),
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
                     padding: const EdgeInsets.symmetric(horizontal: 5),
                     decoration: BoxDecoration(
                       color: scheme.error,
@@ -2996,6 +3114,7 @@ class _JumpToLatestButton extends StatelessWidget {
 /// live *inside* the drawer. They replace the menu rather than being pushed as
 /// routes, so backing out of one returns to the menu with the drawer still open.
 enum _DrawerPanel { menu, presets, memory }
+
 /// The chat sidebar. Mirrors agnai's chat menu: an editable chat title on top,
 /// jumps to the other sections, provider/model, and a utility row of chat
 /// actions (settings, image gen, export, restart, delete, notifications).
@@ -3050,9 +3169,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
   }
 
   void _show(_DrawerPanel panel) => setState(() {
-        _forward = panel != _DrawerPanel.menu;
-        _panel = panel;
-      });
+    _forward = panel != _DrawerPanel.menu;
+    _panel = panel;
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3083,8 +3202,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             return FadeTransition(
               opacity: animation,
               child: SlideTransition(
-                position: Tween<Offset>(begin: begin, end: Offset.zero)
-                    .animate(animation),
+                position: Tween<Offset>(
+                  begin: begin,
+                  end: Offset.zero,
+                ).animate(animation),
                 child: child,
               ),
             );
@@ -3092,10 +3213,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           layoutBuilder: (currentChild, previousChildren) => Stack(
             fit: StackFit.expand,
             alignment: Alignment.topCenter,
-            children: [
-              ...previousChildren,
-              ?currentChild,
-            ],
+            children: [...previousChildren, ?currentChild],
           ),
           child: KeyedSubtree(key: ValueKey(_panel), child: body),
         ),
@@ -3117,8 +3235,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     // opening the panel. Resolved through AppState so a deleted book is not
     // counted.
     final memoryCount = state.lorebooksFor(conversation).length;
-    final memorySubtitle =
-        memoryCount == 0 ? 'None' : '$memoryCount active';
+    final memorySubtitle = memoryCount == 0 ? 'None' : '$memoryCount active';
     // How many chats are in this one's fork tree, so the drawer says whether
     // there is a graph worth opening before the user taps.
     final treeSize =
@@ -3126,117 +3243,116 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     final graphSubtitle = treeSize <= 1
         ? 'No branches'
         : '$treeSize chats · ${treeSize - 1} '
-            '${treeSize == 2 ? 'branch' : 'branches'}';
+              '${treeSize == 2 ? 'branch' : 'branches'}';
 
     return Column(
-          children: [
-            // Editable chat title, like agnai's "edit character" header.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-              child: InkWell(
-                onTap: () => _close(context, widget.onEditChat),
-                borderRadius: BorderRadius.circular(10),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                  child: Row(
-                    children: [
-                      Icon(Icons.edit_outlined, size: 18, color: scheme.primary),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          conversation.isEmpty ? 'New chat' : conversation.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      children: [
+        // Editable chat title, like agnai's "edit character" header.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: InkWell(
+            onTap: () => _close(context, widget.onEditChat),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              child: Row(
                 children: [
-                  _ChatNavItem(
-                    icon: Icons.person_outline,
-                    label: 'Profile',
-                    onTap: () => _close(context, widget.onProfile),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _BackNavButton(
-                            label: 'Characters',
-                            onTap: () => _close(context, widget.onCharacters),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _BackNavButton(
-                            label: 'Chats',
-                            onTap: () => _close(context, widget.onChats),
-                          ),
-                        ),
-                      ],
+                  Icon(Icons.edit_outlined, size: 18, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      conversation.isEmpty ? 'New chat' : conversation.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  _ChatNavItem(
-                    icon: Icons.photo_library_outlined,
-                    label: 'Gallery',
-                    onTap: () => _close(context, widget.onGallery),
-                  ),
-                  _ChatNavItem(
-                    icon: Icons.edit_note_outlined,
-                    label: 'Edit Chat',
-                    onTap: () => _close(context, widget.onEditChat),
-                  ),
-                  _ChatNavItem(
-                    icon: Icons.tune_outlined,
-                    label: 'Preset',
-                    subtitle: presetName,
-                    onTap: () => _show(_DrawerPanel.presets),
-                  ),
-                  _ChatNavItem(
-                    icon: Icons.book_outlined,
-                    label: 'Memory',
-                    subtitle: memorySubtitle,
-                    onTap: () => _show(_DrawerPanel.memory),
-                  ),
-                  _ChatNavItem(
-                    icon: Icons.account_tree_outlined,
-                    label: 'Chat Graph',
-                    subtitle: graphSubtitle,
-                    onTap: () => _close(context, widget.onChatGraph),
-                  ),
-                  const SizedBox(height: 4),
-                  _ChatNavItem(
-                    icon: Icons.dns_outlined,
-                    label: 'Provider & model',
-                    subtitle: providerSubtitle,
-                    onTap: () => _close(context, widget.onProviderModel),
                   ),
                 ],
               ),
             ),
-            const Divider(height: 1),
-            _ChatDrawerFooter(
-              onSettings: () => _close(context, widget.onSettings),
-              onImageGen: () => _close(context, widget.onImageGen),
-              onExport: () => _close(context, widget.onExport),
-              onRestart: () => _close(context, widget.onRestart),
-              onDelete: () => _close(context, widget.onDelete),
-              onNotifications: () => _close(context, widget.onNotifications),
-            ),
-          ],
-        );
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            children: [
+              _ChatNavItem(
+                icon: Icons.person_outline,
+                label: 'Profile',
+                onTap: () => _close(context, widget.onProfile),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _BackNavButton(
+                        label: 'Characters',
+                        onTap: () => _close(context, widget.onCharacters),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _BackNavButton(
+                        label: 'Chats',
+                        onTap: () => _close(context, widget.onChats),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _ChatNavItem(
+                icon: Icons.photo_library_outlined,
+                label: 'Gallery',
+                onTap: () => _close(context, widget.onGallery),
+              ),
+              _ChatNavItem(
+                icon: Icons.edit_note_outlined,
+                label: 'Edit Chat',
+                onTap: () => _close(context, widget.onEditChat),
+              ),
+              _ChatNavItem(
+                icon: Icons.tune_outlined,
+                label: 'Preset',
+                subtitle: presetName,
+                onTap: () => _show(_DrawerPanel.presets),
+              ),
+              _ChatNavItem(
+                icon: Icons.book_outlined,
+                label: 'Memory',
+                subtitle: memorySubtitle,
+                onTap: () => _show(_DrawerPanel.memory),
+              ),
+              _ChatNavItem(
+                icon: Icons.account_tree_outlined,
+                label: 'Chat Graph',
+                subtitle: graphSubtitle,
+                onTap: () => _close(context, widget.onChatGraph),
+              ),
+              const SizedBox(height: 4),
+              _ChatNavItem(
+                icon: Icons.dns_outlined,
+                label: 'Provider & model',
+                subtitle: providerSubtitle,
+                onTap: () => _close(context, widget.onProviderModel),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        _ChatDrawerFooter(
+          onSettings: () => _close(context, widget.onSettings),
+          onImageGen: () => _close(context, widget.onImageGen),
+          onExport: () => _close(context, widget.onExport),
+          onRestart: () => _close(context, widget.onRestart),
+          onDelete: () => _close(context, widget.onDelete),
+          onNotifications: () => _close(context, widget.onNotifications),
+        ),
+      ],
+    );
   }
 }
 // APPEND-MARKER-3
@@ -3265,10 +3381,10 @@ class _ChatNavItem extends StatelessWidget {
         leading: Icon(icon, color: scheme.onSurfaceVariant),
         title: Text(
           label,
-          style: Theme.of(context)
-              .textTheme
-              .labelLarge
-              ?.copyWith(color: scheme.onSurface, fontWeight: FontWeight.w500),
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            color: scheme.onSurface,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         subtitle: subtitle == null
             ? null
@@ -3295,8 +3411,7 @@ class _BackNavButton extends StatelessWidget {
       label: Text(label, overflow: TextOverflow.ellipsis),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -3391,9 +3506,9 @@ class _EmptyState extends StatelessWidget {
                   ? 'Say something to get started.'
                   : 'Add a provider with a model to start chatting.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             if (!configured) ...[
               const SizedBox(height: 16),
@@ -3429,7 +3544,8 @@ class _QuickSettingsSheetState extends State<_QuickSettingsSheet> {
       context: context,
       title: 'Choose model',
       entries: [
-        for (final m in state.cachedModels(active.id)) PickerEntry(id: m, title: m),
+        for (final m in state.cachedModels(active.id))
+          PickerEntry(id: m, title: m),
       ],
       selectedId: active.model.trim(),
       allowCustom: true,
@@ -3653,8 +3769,11 @@ class _ImpersonateButton extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           child: impersonating
               ? CharacterAvatar(character: persona!, size: diameter)
-              : Icon(Icons.person_outline,
-                  color: scheme.onSurfaceVariant, size: 22),
+              : Icon(
+                  Icons.person_outline,
+                  color: scheme.onSurfaceVariant,
+                  size: 22,
+                ),
         ),
       ),
     );
@@ -3695,16 +3814,19 @@ class _ImpersonatePickerState extends State<_ImpersonatePicker> {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return widget.characters;
     return widget.characters
-        .where((c) =>
-            c.name.toLowerCase().contains(q) ||
-            c.blurb.toLowerCase().contains(q))
+        .where(
+          (c) =>
+              c.name.toLowerCase().contains(q) ||
+              c.blurb.toLowerCase().contains(q),
+        )
         .toList();
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final bottom = MediaQuery.viewInsetsOf(context).bottom +
+    final bottom =
+        MediaQuery.viewInsetsOf(context).bottom +
         MediaQuery.paddingOf(context).bottom;
     final results = _visible;
 
@@ -3719,8 +3841,10 @@ class _ImpersonatePickerState extends State<_ImpersonatePicker> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               child: Row(
                 children: [
-                  Text('Impersonate',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Impersonate',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ],
               ),
             ),
@@ -3746,23 +3870,28 @@ class _ImpersonatePickerState extends State<_ImpersonatePicker> {
                   ListTile(
                     leading: CircleAvatar(
                       backgroundColor: scheme.secondaryContainer,
-                      child: Icon(Icons.person_outline,
-                          color: scheme.onSecondaryContainer),
+                      child: Icon(
+                        Icons.person_outline,
+                        color: scheme.onSecondaryContainer,
+                      ),
                     ),
                     title: const Text('Yourself'),
                     subtitle: const Text('Stop impersonating'),
                     trailing: widget.currentId == null
                         ? Icon(Icons.check, color: scheme.primary)
                         : null,
-                    onTap: () => Navigator.of(context)
-                        .pop(const _ImpersonationChoice(null)),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(const _ImpersonationChoice(null)),
                   ),
                   if (widget.characters.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(24),
                       child: Center(
-                        child: Text('No characters yet — import or create one '
-                            'to impersonate.'),
+                        child: Text(
+                          'No characters yet — import or create one '
+                          'to impersonate.',
+                        ),
                       ),
                     )
                   else if (results.isEmpty)
@@ -3774,17 +3903,23 @@ class _ImpersonatePickerState extends State<_ImpersonatePicker> {
                     for (final c in results)
                       ListTile(
                         leading: CharacterAvatar(character: c, radius: 20),
-                        title: Text(c.displayName,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        title: Text(
+                          c.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         subtitle: c.blurb.isEmpty
                             ? null
-                            : Text(c.blurb,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                            : Text(
+                                c.blurb,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                         trailing: widget.currentId == c.id
                             ? Icon(Icons.check, color: scheme.primary)
                             : null,
-                        onTap: () => Navigator.of(context)
-                            .pop(_ImpersonationChoice(c)),
+                        onTap: () =>
+                            Navigator.of(context).pop(_ImpersonationChoice(c)),
                       ),
                 ],
               ),
@@ -3795,5 +3930,3 @@ class _ImpersonatePickerState extends State<_ImpersonatePicker> {
     );
   }
 }
-
-

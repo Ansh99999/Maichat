@@ -14,6 +14,7 @@ import 'gallery/gallery_picker_sheet.dart';
 import 'library/regex_screen.dart';
 import 'group_add_sheet.dart';
 import 'settings/chat_interface_settings_page.dart';
+import 'settings/chat_tools_page.dart';
 import 'settings/chat_ui_scope.dart';
 
 /// Everything that belongs to one chat rather than to the app: its title, a
@@ -97,8 +98,8 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
   void initState() {
     super.initState();
     final conversation = context.read<AppState>().conversationById(
-          widget.conversationId,
-        );
+      widget.conversationId,
+    );
     _title = TextEditingController(text: conversation?.title ?? '');
     _background = conversation?.backgroundImage;
     _opacity = conversation?.backgroundOpacity ?? 1;
@@ -137,21 +138,25 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       final ghostName = id == conversation.characterId
           ? (conversation.characterName ?? 'Character')
           : 'Character';
-      rows.add(_Participant(
-        role: 'Character',
-        id: id,
-        character: bot,
-        placeholder: bot == null ? '$ghostName (deleted)' : null,
-        removable: true,
-      ));
+      rows.add(
+        _Participant(
+          role: 'Character',
+          id: id,
+          character: bot,
+          placeholder: bot == null ? '$ghostName (deleted)' : null,
+          removable: true,
+        ),
+      );
     }
     final me = _resolved(state, conversation, conversation.impersonateId);
-    rows.add(_Participant(
-      role: 'You',
-      character: me,
-      placeholder: me == null ? 'You' : null,
-      removable: me != null,
-    ));
+    rows.add(
+      _Participant(
+        role: 'You',
+        character: me,
+        placeholder: me == null ? 'You' : null,
+        removable: me != null,
+      ),
+    );
     return rows;
   }
 
@@ -164,10 +169,9 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
 
   void _toast(String message) => ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(
-      content: Text(message),
-      behavior: SnackBarBehavior.floating,
-    ));
+    ..showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
 
   /// Opens the character editor on a draft. What comes back is held here until
   /// Save decides whether it belongs to this chat or to the roster.
@@ -184,7 +188,8 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
   /// Takes a participant out of this chat. The messages stay — only the
   /// definition behind them goes.
   Future<void> _removeParticipant(_Participant participant) async {
-    final name = participant.character?.displayName ??
+    final name =
+        participant.character?.displayName ??
         participant.placeholder ??
         'this participant';
     final ok = await _confirm(
@@ -192,7 +197,7 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       body: participant.isUser
           ? 'Your turns go back to being signed as you. The messages stay.'
           : '$name stops taking part in this chat and its definition is no '
-              'longer sent. The messages stay.',
+                'longer sent. The messages stay.',
       action: 'Remove',
     );
     if (!ok || !mounted) return;
@@ -230,8 +235,10 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       return;
     }
     if (conversation.characterId != null) {
-      _toast('One character per chat — turn on group chats in Chat Interface '
-          'settings to add more.');
+      _toast(
+        'One character per chat — turn on group chats in Chat Interface '
+        'settings to add more.',
+      );
       return;
     }
     final picked = await showModalBottomSheet<Character>(
@@ -267,8 +274,7 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
               leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Gallery'),
               subtitle: const Text('A picture kept in the app'),
-              onTap: () =>
-                  Navigator.of(context).pop(_BackgroundSource.gallery),
+              onTap: () => Navigator.of(context).pop(_BackgroundSource.gallery),
             ),
             ListTile(
               leading: const Icon(Icons.folder_open_outlined),
@@ -304,8 +310,9 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
   /// points at the same file the gallery does, and the sweep's keep-list covers
   /// both.
   Future<void> _pickBackgroundFromGallery() async {
-    final conversation =
-        context.read<AppState>().conversationById(widget.conversationId);
+    final conversation = context.read<AppState>().conversationById(
+      widget.conversationId,
+    );
     final ref = await showGalleryPickerSheet(
       context,
       title: 'Background for this chat',
@@ -345,7 +352,8 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
           scope: ChatUiScope(
             draft: draft,
             title: 'Chat appearance',
-            note: 'These settings apply to this chat only. Saving gives the '
+            note:
+                'These settings apply to this chat only. Saving gives the '
                 'chat a full copy of the app-wide Chat Interface settings, so '
                 'later app-wide changes will not reach it — Reset puts the chat '
                 'back on the shared settings.',
@@ -366,7 +374,10 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
   /// asking twice for the same decision is how a setting ends up half-applied.
   Future<void> _pickScenario(Conversation conversation) async {
     final state = context.read<AppState>();
-    final character = state.characterFor(conversation, conversation.characterId);
+    final character = state.characterFor(
+      conversation,
+      conversation.characterId,
+    );
     final pick = await showScenarioPickerSheet(
       context,
       localLabel: 'this chat',
@@ -381,9 +392,11 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       text: pick.text,
     );
     if (!mounted) return;
-    _toast(pick.isClear
-        ? "This chat is back on the character's own scenario."
-        : 'Scenario set for this chat.');
+    _toast(
+      pick.isClear
+          ? "This chat is back on the character's own scenario."
+          : 'Scenario set for this chat.',
+    );
   }
 
   Future<bool> _confirm({
@@ -449,8 +462,8 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       await state.saveChatInterfaceOverride(conversation.id, _appearance!);
     }
 
-    for (final entry in (targets ?? const <String, CharacterSaveTarget>{})
-        .entries) {
+    for (final entry
+        in (targets ?? const <String, CharacterSaveTarget>{}).entries) {
       final character = _edits[entry.key];
       if (character == null) continue;
       switch (entry.value) {
@@ -540,9 +553,9 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
       title: const Text('Regex rules'),
       subtitle: Text(subtitle),
       trailing: const Icon(Icons.chevron_right),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const RegexScreen()),
-      ),
+      onTap: () => Navigator.of(
+        context,
+      ).push(MaterialPageRoute<void>(builder: (_) => const RegexScreen())),
     );
   }
 
@@ -551,114 +564,131 @@ class _ChatSettingsScreenState extends State<ChatSettingsScreen> {
     AppState state,
     Conversation conversation,
     ColorScheme scheme,
-  ) =>
-      [
-        TextField(
-          controller: _title,
-          autofocus: false,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            labelText: 'Chat title',
-            prefixIcon: Icon(Icons.title_outlined),
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 16),
-        _BackgroundCard(
-          image: _background,
-          opacity: _opacity,
-          onPick: _pickBackground,
-          onOpacity: (v) => setState(() => _opacity = v),
-        ),
-        const SizedBox(height: 4),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.palette_outlined),
-          title: const Text('Custom chat appearance'),
-          subtitle: Text(_appearance == null
-              ? 'Following the app-wide Chat Interface settings'
-              : 'This chat has a style of its own'),
-          trailing: _appearance == null
-              ? const Icon(Icons.chevron_right)
-              : TextButton(
-                  onPressed: () => setState(() => _appearance = null),
-                  child: const Text('Reset'),
-                ),
-          onTap: _editAppearance,
-        ),
-        const SizedBox(height: 4),
-        _ScenarioRow(
-          source: state.scenarioSourceFor(conversation),
-          scenario: state.scenarioFor(
-            conversation,
-            state.characterFor(conversation, conversation.characterId),
-          ),
-          ownScenario: conversation.hasScenarioOfItsOwn,
-          onTap: () => _pickScenario(conversation),
-          onReset: conversation.hasScenarioOfItsOwn
-              ? () => state.clearChatScenario(conversation.id)
-              : null,
-        ),
-        const Divider(height: 32),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Characters involved',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: scheme.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
+  ) => [
+    TextField(
+      controller: _title,
+      autofocus: false,
+      textCapitalization: TextCapitalization.sentences,
+      decoration: const InputDecoration(
+        labelText: 'Chat title',
+        prefixIcon: Icon(Icons.title_outlined),
+      ),
+      onChanged: (_) => setState(() {}),
+    ),
+    const SizedBox(height: 16),
+    _BackgroundCard(
+      image: _background,
+      opacity: _opacity,
+      onPick: _pickBackground,
+      onOpacity: (v) => setState(() => _opacity = v),
+    ),
+    const SizedBox(height: 4),
+    ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.palette_outlined),
+      title: const Text('Custom chat appearance'),
+      subtitle: Text(
+        _appearance == null
+            ? 'Following the app-wide Chat Interface settings'
+            : 'This chat has a style of its own',
+      ),
+      trailing: _appearance == null
+          ? const Icon(Icons.chevron_right)
+          : TextButton(
+              onPressed: () => setState(() => _appearance = null),
+              child: const Text('Reset'),
             ),
-            IconButton.filledTonal(
-              tooltip: 'Add a character',
-              icon: const Icon(Icons.add),
-              onPressed: () => _addParticipant(conversation),
-            ),
-          ],
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          value: _overrideDefinitions,
-          onChanged: (v) => setState(() => _overrideDefinitions = v),
-          secondary: const Icon(Icons.edit_note_outlined),
-          title: const Text('Enable overriding definitions'),
-          subtitle: const Text('Edit a character for this chat alone, leaving '
-              'the saved card as it is'),
-        ),
-        for (final participant in _participants(state, conversation))
-          _ParticipantTile(
-            participant: participant,
-            edited: participant.character != null &&
-                _edits.containsKey(participant.character!.id),
-            overridden: participant.character != null &&
-                conversation.characterOverrides
-                    .containsKey(participant.character!.id),
-            canEdit: _overrideDefinitions && participant.character != null,
-            onEdit: participant.character == null
-                ? null
-                : () => _editCharacter(participant.character!),
-            onRemove: participant.removable
-                ? () => _removeParticipant(participant)
-                : null,
-          ),
-        if (_edits.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              '${_edits.length} character '
-              '${_edits.length == 1 ? 'change' : 'changes'} waiting — Save asks '
-              'where each one goes.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.primary),
+      onTap: _editAppearance,
+    ),
+    const SizedBox(height: 4),
+    _ScenarioRow(
+      source: state.scenarioSourceFor(conversation),
+      scenario: state.scenarioFor(
+        conversation,
+        state.characterFor(conversation, conversation.characterId),
+      ),
+      ownScenario: conversation.hasScenarioOfItsOwn,
+      onTap: () => _pickScenario(conversation),
+      onReset: conversation.hasScenarioOfItsOwn
+          ? () => state.clearChatScenario(conversation.id)
+          : null,
+    ),
+    const Divider(height: 32),
+    Row(
+      children: [
+        Expanded(
+          child: Text(
+            'Characters involved',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: scheme.primary,
+              fontWeight: FontWeight.w600,
             ),
           ),
-        const Divider(height: 32),
-        _regexRow(context, state),
-      ];
+        ),
+        IconButton.filledTonal(
+          tooltip: 'Add a character',
+          icon: const Icon(Icons.add),
+          onPressed: () => _addParticipant(conversation),
+        ),
+      ],
+    ),
+    SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      value: _overrideDefinitions,
+      onChanged: (v) => setState(() => _overrideDefinitions = v),
+      secondary: const Icon(Icons.edit_note_outlined),
+      title: const Text('Enable overriding definitions'),
+      subtitle: const Text(
+        'Edit a character for this chat alone, leaving '
+        'the saved card as it is',
+      ),
+    ),
+    for (final participant in _participants(state, conversation))
+      _ParticipantTile(
+        participant: participant,
+        edited:
+            participant.character != null &&
+            _edits.containsKey(participant.character!.id),
+        overridden:
+            participant.character != null &&
+            conversation.characterOverrides.containsKey(
+              participant.character!.id,
+            ),
+        canEdit: _overrideDefinitions && participant.character != null,
+        onEdit: participant.character == null
+            ? null
+            : () => _editCharacter(participant.character!),
+        onRemove: participant.removable
+            ? () => _removeParticipant(participant)
+            : null,
+      ),
+    if (_edits.isNotEmpty)
+      Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Text(
+          '${_edits.length} character '
+          '${_edits.length == 1 ? 'change' : 'changes'} waiting — Save asks '
+          'where each one goes.',
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: scheme.primary),
+        ),
+      ),
+    const Divider(height: 32),
+    _regexRow(context, state),
+    ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.build_outlined),
+      title: const Text('Tool calls'),
+      subtitle: const Text('Tools and trackers for this chat'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatToolsPage(conversationId: conversation.id),
+        ),
+      ),
+    ),
+  ];
 }
 
 /// Where a background picture can come from.
@@ -757,17 +787,22 @@ class _BackgroundCard extends StatelessWidget {
             ),
           ),
           title: const Text('Custom background'),
-          subtitle: Text(image == null
-              ? 'No picture behind this chat'
-              : 'A picture of its own'),
+          subtitle: Text(
+            image == null
+                ? 'No picture behind this chat'
+                : 'A picture of its own',
+          ),
           trailing: const Icon(Icons.chevron_right),
           onTap: onPick,
         ),
         if (image != null)
           Row(
             children: [
-              Icon(Icons.opacity_outlined,
-                  size: 18, color: scheme.onSurfaceVariant),
+              Icon(
+                Icons.opacity_outlined,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Slider(
@@ -777,10 +812,12 @@ class _BackgroundCard extends StatelessWidget {
                   onChanged: onOpacity,
                 ),
               ),
-              Text('${(opacity * 100).round()}%',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      )),
+              Text(
+                '${(opacity * 100).round()}%',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
             ],
           ),
       ],
@@ -832,9 +869,7 @@ class _ParticipantTile extends StatelessWidget {
           ? CircleAvatar(
               backgroundColor: scheme.secondaryContainer,
               child: Icon(
-                participant.isUser
-                    ? Icons.person_outline
-                    : Icons.help_outline,
+                participant.isUser ? Icons.person_outline : Icons.help_outline,
                 color: scheme.onSecondaryContainer,
               ),
             )
@@ -906,8 +941,11 @@ class _CharacterPickerSheet extends StatelessWidget {
               title: Text(character.displayName),
               subtitle: character.blurb.isEmpty
                   ? null
-                  : Text(character.blurb, maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
+                  : Text(
+                      character.blurb,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
               onTap: () => Navigator.of(context).pop(character),
             ),
         ],
@@ -952,8 +990,10 @@ class _CharacterSaveDialogState extends State<CharacterSaveDialog> {
     final scheme = Theme.of(context).colorScheme;
     final count = widget.edits.length;
     return AlertDialog(
-      title: Text('You have made changes for $count '
-          '${count == 1 ? 'character' : 'characters'}:'),
+      title: Text(
+        'You have made changes for $count '
+        '${count == 1 ? 'character' : 'characters'}:',
+      ),
       content: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -975,10 +1015,9 @@ class _CharacterSaveDialogState extends State<CharacterSaveDialog> {
                 child: Text(
                   'Address the following changes before saving: '
                   '${_unresolved.map((c) => c.displayName).join(', ')}.',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: scheme.error),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: scheme.error),
                 ),
               ),
           ],
@@ -1057,8 +1096,11 @@ class _SaveRow extends StatelessWidget {
                   if (chosen != null)
                     Padding(
                       padding: const EdgeInsets.only(right: 6),
-                      child: Icon(Icons.check,
-                          size: 16, color: scheme.onSurfaceVariant),
+                      child: Icon(
+                        Icons.check,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   Text(
                     chosen?.done ?? 'Save',
@@ -1085,4 +1127,3 @@ class _SaveRow extends StatelessWidget {
     );
   }
 }
-

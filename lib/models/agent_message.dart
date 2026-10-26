@@ -71,24 +71,24 @@ class ToolCall {
   final String? signature;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'arguments': arguments,
-        if (argumentError != null) 'argumentError': argumentError,
-        if (syntheticId) 'syntheticId': true,
-        if (signature != null) 'signature': signature,
-      };
+    'id': id,
+    'name': name,
+    'arguments': arguments,
+    if (argumentError != null) 'argumentError': argumentError,
+    if (syntheticId) 'syntheticId': true,
+    if (signature != null) 'signature': signature,
+  };
 
   factory ToolCall.fromJson(Map<String, dynamic> json) => ToolCall(
-        id: json['id'] as String? ?? '',
-        name: json['name'] as String? ?? '',
-        arguments: json['arguments'] is Map
-            ? Map<String, dynamic>.from(json['arguments'] as Map)
-            : const <String, dynamic>{},
-        argumentError: json['argumentError'] as String?,
-        syntheticId: json['syntheticId'] as bool? ?? false,
-        signature: json['signature'] as String?,
-      );
+    id: json['id'] as String? ?? '',
+    name: json['name'] as String? ?? '',
+    arguments: json['arguments'] is Map
+        ? Map<String, dynamic>.from(json['arguments'] as Map)
+        : const <String, dynamic>{},
+    argumentError: json['argumentError'] as String?,
+    syntheticId: json['syntheticId'] as bool? ?? false,
+    signature: json['signature'] as String?,
+  );
 
   /// Reads a model's raw argument string. An empty string is no arguments (the
   /// shape several hosts use for a tool that takes none); anything that is not
@@ -97,7 +97,9 @@ class ToolCall {
     String raw,
   ) {
     final text = raw.trim();
-    if (text.isEmpty) return (arguments: const <String, dynamic>{}, error: null);
+    if (text.isEmpty) {
+      return (arguments: const <String, dynamic>{}, error: null);
+    }
     try {
       final decoded = jsonDecode(text);
       if (decoded is Map) {
@@ -135,8 +137,9 @@ class AgentMessage {
     this.toolName,
     this.isError = false,
     List<MessageImage>? images,
-  })  : toolCalls = toolCalls ?? const <ToolCall>[],
-        images = images ?? const <MessageImage>[];
+    this.providerData = const <String, dynamic>{},
+  }) : toolCalls = toolCalls ?? const <ToolCall>[],
+       images = images ?? const <MessageImage>[];
 
   factory AgentMessage.system(String text) =>
       AgentMessage(role: AgentRole.system, text: text);
@@ -144,21 +147,19 @@ class AgentMessage {
   factory AgentMessage.user(
     String text, {
     List<MessageImage> images = const <MessageImage>[],
-  }) =>
-      AgentMessage(role: AgentRole.user, text: text, images: images);
+  }) => AgentMessage(role: AgentRole.user, text: text, images: images);
 
   factory AgentMessage.toolResult(
     ToolCall call,
     String text, {
     bool isError = false,
-  }) =>
-      AgentMessage(
-        role: AgentRole.tool,
-        text: text,
-        toolCallId: call.id,
-        toolName: call.name,
-        isError: isError,
-      );
+  }) => AgentMessage(
+    role: AgentRole.tool,
+    text: text,
+    toolCallId: call.id,
+    toolName: call.name,
+    isError: isError,
+  );
 
   final AgentRole role;
   final String text;
@@ -177,61 +178,70 @@ class AgentMessage {
   /// exists on the copy handed to the wire.
   final List<MessageImage> images;
 
+  /// Opaque assistant blocks required when replaying calls on the same host/model.
+  final Map<String, dynamic> providerData;
+
   /// This turn with its [text] replaced — how the chat shows part of a turn.
   AgentMessage withText(String text) => AgentMessage(
-        role: role,
-        text: text,
-        reasoning: reasoning,
-        toolCalls: toolCalls,
-        toolCallId: toolCallId,
-        toolName: toolName,
-        isError: isError,
-        images: images,
-      );
+    role: role,
+    text: text,
+    reasoning: reasoning,
+    toolCalls: toolCalls,
+    toolCallId: toolCallId,
+    toolName: toolName,
+    isError: isError,
+    images: images,
+    providerData: providerData,
+  );
 
   /// This turn with [images] replaced — how the wire copy gets its data.
   AgentMessage withImages(List<MessageImage> images) => AgentMessage(
-        role: role,
-        text: text,
-        reasoning: reasoning,
-        toolCalls: toolCalls,
-        toolCallId: toolCallId,
-        toolName: toolName,
-        isError: isError,
-        images: images,
-      );
+    role: role,
+    text: text,
+    reasoning: reasoning,
+    toolCalls: toolCalls,
+    toolCallId: toolCallId,
+    toolName: toolName,
+    isError: isError,
+    images: images,
+    providerData: providerData,
+  );
 
   Map<String, dynamic> toJson() => {
-        'role': role.name,
-        if (text.isNotEmpty) 'text': text,
-        if (reasoning.isNotEmpty) 'reasoning': reasoning,
-        if (toolCalls.isNotEmpty)
-          'toolCalls': [for (final c in toolCalls) c.toJson()],
-        if (toolCallId != null) 'toolCallId': toolCallId,
-        if (toolName != null) 'toolName': toolName,
-        if (isError) 'isError': true,
-        if (images.isNotEmpty) 'images': [for (final i in images) i.toJson()],
-      };
+    'role': role.name,
+    if (text.isNotEmpty) 'text': text,
+    if (reasoning.isNotEmpty) 'reasoning': reasoning,
+    if (toolCalls.isNotEmpty)
+      'toolCalls': [for (final c in toolCalls) c.toJson()],
+    if (toolCallId != null) 'toolCallId': toolCallId,
+    if (toolName != null) 'toolName': toolName,
+    if (isError) 'isError': true,
+    if (images.isNotEmpty) 'images': [for (final i in images) i.toJson()],
+    if (providerData.isNotEmpty) 'providerData': providerData,
+  };
 
   factory AgentMessage.fromJson(Map<String, dynamic> json) => AgentMessage(
-        role: AgentRole.values.firstWhere(
-          (r) => r.name == json['role'],
-          orElse: () => AgentRole.user,
-        ),
-        text: json['text'] as String? ?? '',
-        reasoning: json['reasoning'] as String? ?? '',
-        toolCalls: [
-          if (json['toolCalls'] is List)
-            for (final c in json['toolCalls'] as List)
-              if (c is Map) ToolCall.fromJson(Map<String, dynamic>.from(c)),
-        ],
-        toolCallId: json['toolCallId'] as String?,
-        toolName: json['toolName'] as String?,
-        isError: json['isError'] as bool? ?? false,
-        images: [
-          if (json['images'] is List)
-            for (final i in json['images'] as List)
-              if (i is Map) MessageImage.fromJson(Map<String, dynamic>.from(i)),
-        ],
-      );
+    role: AgentRole.values.firstWhere(
+      (r) => r.name == json['role'],
+      orElse: () => AgentRole.user,
+    ),
+    text: json['text'] as String? ?? '',
+    reasoning: json['reasoning'] as String? ?? '',
+    toolCalls: [
+      if (json['toolCalls'] is List)
+        for (final c in json['toolCalls'] as List)
+          if (c is Map) ToolCall.fromJson(Map<String, dynamic>.from(c)),
+    ],
+    toolCallId: json['toolCallId'] as String?,
+    toolName: json['toolName'] as String?,
+    isError: json['isError'] as bool? ?? false,
+    images: [
+      if (json['images'] is List)
+        for (final i in json['images'] as List)
+          if (i is Map) MessageImage.fromJson(Map<String, dynamic>.from(i)),
+    ],
+    providerData: json['providerData'] is Map
+        ? Map<String, dynamic>.from(json['providerData'] as Map)
+        : const <String, dynamic>{},
+  );
 }

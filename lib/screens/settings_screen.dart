@@ -13,6 +13,7 @@ import 'settings/appearance_settings_page.dart';
 import 'settings/browse_appearance_settings_page.dart';
 import 'settings/character_settings_page.dart';
 import 'settings/chat_behaviour_page.dart';
+import 'settings/chat_tools_page.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/chat_interface/actions_page.dart';
 import 'settings/chat_interface/avatars_page.dart';
@@ -72,6 +73,12 @@ class SettingsScreen extends StatelessWidget {
             title: 'Chat behaviour',
             subtitle: _chatBehaviourSummary(state),
             onTap: () => _open(context, const ChatBehaviourPage()),
+          ),
+          _SectionTile(
+            icon: Icons.build_outlined,
+            title: 'Tool calls',
+            subtitle: 'Dice, trackers and custom chat actions',
+            onTap: () => _open(context, const ChatToolsPage()),
           ),
           _SectionTile(
             icon: Icons.person_outline,
@@ -435,6 +442,14 @@ const List<_SearchEntry> _searchIndex = [
     builder: _responseHintPage,
   ),
   _SearchEntry(
+    title: 'Tool calls',
+    section: 'Chat behaviour',
+    icon: Icons.build_outlined,
+    keywords:
+        'tools dice random tracker stats custom recipe import export btw ooc',
+    builder: _chatToolsPage,
+  ),
+  _SearchEntry(
     title: 'Character creator',
     section: 'Characters',
     icon: Icons.edit_note_outlined,
@@ -534,6 +549,7 @@ Widget _responseHintPage() =>
 Widget _characterCreatorPage() =>
     const CharacterSettingsPage(highlight: SettingAnchor.characterCreator);
 Widget _storagePage() => const StorageSettingsPage();
+Widget _chatToolsPage() => const ChatToolsPage();
 Widget _backupsPage() => const BackupsScreen();
 Widget _backupImportPage() => const BackupImportScreen();
 Widget _drivePage() => const DriveSettingsPage();

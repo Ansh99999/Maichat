@@ -19,9 +19,13 @@ class AgentParams {
     this.maxTokens,
     this.stream = true,
     this.toolsOff = false,
+    this.generation,
+    this.requireToolCompletion = false,
   });
 
   final double? temperature;
+  final GenParams? generation;
+  final bool requireToolCompletion;
 
   /// The tools are declared but may not be called this turn (`tool_choice`
   /// "none", or Gemini's function-calling mode `NONE`). How a turn asks for
@@ -51,15 +55,21 @@ class AgentDelta {
     this.reasoning = '',
     this.toolCalls = const <ToolCall>[],
     this.usage,
+    this.providerData = const <String, dynamic>{},
   });
 
   final String text;
   final String reasoning;
   final List<ToolCall> toolCalls;
   final TokenUsage? usage;
+  final Map<String, dynamic> providerData;
 
   bool get isEmpty =>
-      text.isEmpty && reasoning.isEmpty && toolCalls.isEmpty && usage == null;
+      text.isEmpty &&
+      reasoning.isEmpty &&
+      toolCalls.isEmpty &&
+      usage == null &&
+      providerData.isEmpty;
 }
 
 /// One agent request, fully assembled but not sent: what [AgentClient.stream]
@@ -102,8 +112,9 @@ class AgentWireRequest {
             ? m
             : m.withImages([for (final i in m.images) i.elided()]),
     ];
-    final text = const JsonEncoder.withIndent('  ')
-        .convert(AgentClient.body(provider, shown, tools, params));
+    final text = const JsonEncoder.withIndent(
+      '  ',
+    ).convert(AgentClient.body(provider, shown, tools, params));
     return 'POST $uri\n'
         '${headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
         '$text';
@@ -122,7 +133,7 @@ class AgentWireRequest {
 /// every agent (and every sub-agent) its own, so they can run side by side.
 class AgentClient {
   AgentClient({http.Client Function()? clientFactory})
-      : _clientFactory = clientFactory ?? http.Client.new;
+    : _clientFactory = clientFactory ?? http.Client.new;
 
   final http.Client Function() _clientFactory;
   http.Client? _active;
@@ -155,13 +166,19 @@ class AgentClient {
       final response = await client.send(request);
       if (response.statusCode != 200) {
         final text = await response.stream.bytesToString();
-        throw ChatApiException(ChatClient.describeFailure(
-          response.statusCode,
-          text,
-        ));
+        throw ChatApiException(
+          ChatClient.describeFailure(response.statusCode, text),
+        );
       }
       if (!params.stream) {
-        final whole = parseWhole(provider.wire, await response.stream.bytesToString());
+        final raw = await response.stream.bytesToString();
+        final whole = parseWhole(provider.wire, raw);
+        if (params.requireToolCompletion &&
+            !_wholeCompleted(provider.wire, jsonDecode(raw) as Map)) {
+          throw ChatApiException(
+            'The model response ended before its tool calls completed. No action was run.',
+          );
+        }
         if (!whole.isEmpty) yield whole;
         return;
       }
@@ -179,6 +196,11 @@ class AgentClient {
         if (reader.done) break;
       }
       final tail = reader.finish();
+      if (params.requireToolCompletion && !reader.successful) {
+        throw ChatApiException(
+          'The model response ended before its tool calls completed. No action was run.',
+        );
+      }
       if (!tail.isEmpty) yield tail;
     } on ChatApiException {
       rethrow;
@@ -200,14 +222,53 @@ class AgentClient {
     List<ToolSpec> tools,
     AgentParams params,
   ) {
+    final result = _toolBody(provider, messages, tools, params);
+    if (params.generation != null) {
+      result.addAll(ChatClient.generationFields(provider, params.generation!));
+    }
+    return result;
+  }
+
+  static bool _wholeCompleted(WireFormat wire, Map json) {
+    final choices = json['choices'];
+    final candidates = json['candidates'];
+    return switch (wire) {
+      WireFormat.openaiChat =>
+        choices is List &&
+            choices.isNotEmpty &&
+            [
+              'stop',
+              'tool_calls',
+              'function_call',
+            ].contains((choices.first as Map)['finish_reason']),
+      WireFormat.openaiResponses => json['status'] == 'completed',
+      WireFormat.anthropic => [
+        'end_turn',
+        'tool_use',
+        'stop_sequence',
+      ].contains(json['stop_reason']),
+      WireFormat.gemini =>
+        candidates is List &&
+            candidates.isNotEmpty &&
+            (candidates.first as Map)['finishReason'] == 'STOP',
+    };
+  }
+
+  static Map<String, dynamic> _toolBody(
+    Provider provider,
+    List<AgentMessage> messages,
+    List<ToolSpec> tools,
+    AgentParams params,
+  ) {
     final model = provider.model.trim();
     final system = messages
         .where((m) => m.role == AgentRole.system)
         .map((m) => m.text)
         .join('\n\n')
         .trim();
-    final turns =
-        messages.where((m) => m.role != AgentRole.system).toList(growable: false);
+    final turns = messages
+        .where((m) => m.role != AgentRole.system)
+        .toList(growable: false);
     switch (provider.wire) {
       case WireFormat.openaiChat:
         return {
@@ -253,7 +314,8 @@ class AgentClient {
             ],
           if (tools.isNotEmpty && params.toolsOff) 'tool_choice': 'none',
           if (params.temperature != null) 'temperature': params.temperature,
-          if ((params.maxTokens ?? 0) > 0) 'max_output_tokens': params.maxTokens,
+          if ((params.maxTokens ?? 0) > 0)
+            'max_output_tokens': params.maxTokens,
         };
       case WireFormat.anthropic:
         return {
@@ -299,7 +361,8 @@ class AgentClient {
                     {
                       'name': t.name,
                       'description': t.description,
-                      if (!t.takesNothing) 'parameters': t.parameters,
+                      if (!t.takesNothing)
+                        'parameters': _geminiSchema(t.parameters),
                     },
                 ],
               },
@@ -327,6 +390,8 @@ class AgentClient {
           // A turn that only calls tools has no content; OpenAI wants null
           // there, and several gateways reject an empty string beside calls.
           'content': m.text.isEmpty && m.toolCalls.isNotEmpty ? null : m.text,
+          if (m.providerData.containsKey('reasoning_content'))
+            'reasoning_content': m.providerData['reasoning_content'],
           if (m.toolCalls.isNotEmpty)
             'tool_calls': [
               for (final c in m.toolCalls)
@@ -362,6 +427,30 @@ class AgentClient {
     }
   }
 
+  static Map<String, dynamic> _geminiSchema(Map<String, dynamic> schema) => {
+    for (final entry in schema.entries)
+      if ([
+        'type',
+        'description',
+        'enum',
+        'required',
+        'items',
+        'properties',
+        'minimum',
+        'maximum',
+      ].contains(entry.key))
+        entry.key: entry.key == 'properties' && entry.value is Map
+            ? {
+                for (final property in (entry.value as Map).entries)
+                  property.key: _geminiSchema(
+                    Map<String, dynamic>.from(property.value as Map),
+                  ),
+              }
+            : entry.key == 'items' && entry.value is Map
+            ? _geminiSchema(Map<String, dynamic>.from(entry.value as Map))
+            : entry.value,
+  };
+
   /// What an OpenAI-shaped image part carries: the picture's own address when
   /// it lives online, a data URL when its bytes were resolved for the wire, and
   /// null when neither (a picture whose file has gone is dropped, not sent
@@ -383,6 +472,12 @@ class AgentClient {
           },
         ];
       case AgentRole.assistant:
+        if (m.providerData['responses'] is List) {
+          return (m.providerData['responses'] as List)
+              .whereType<Map>()
+              .map((v) => Map<String, dynamic>.from(v))
+              .toList();
+        }
         return [
           if (m.text.isNotEmpty)
             {
@@ -409,7 +504,8 @@ class AgentClient {
             'content': [
               {'type': 'input_text', 'text': m.text},
               for (final i in m.images)
-                if (_url(i) != null) {'type': 'input_image', 'image_url': _url(i)},
+                if (_url(i) != null)
+                  {'type': 'input_image', 'image_url': _url(i)},
             ],
           },
         ];
@@ -435,16 +531,18 @@ class AgentClient {
           flushUser();
           out.add({
             'role': 'assistant',
-            'content': [
-              if (m.text.isNotEmpty) {'type': 'text', 'text': m.text},
-              for (final c in m.toolCalls)
-                {
-                  'type': 'tool_use',
-                  'id': c.id,
-                  'name': c.name,
-                  'input': c.arguments,
-                },
-            ],
+            'content':
+                m.providerData['anthropic'] ??
+                [
+                  if (m.text.isNotEmpty) {'type': 'text', 'text': m.text},
+                  for (final c in m.toolCalls)
+                    {
+                      'type': 'tool_use',
+                      'id': c.id,
+                      'name': c.name,
+                      'input': c.arguments,
+                    },
+                ],
           });
         case AgentRole.tool:
           (userBlocks ??= <Map<String, dynamic>>[]).add({
@@ -572,7 +670,9 @@ class AgentClient {
       case WireFormat.openaiChat:
         final choices = json['choices'];
         final usage = ChatClient.openAiUsage(json['usage']);
-        if (choices is! List || choices.isEmpty) return AgentDelta(usage: usage);
+        if (choices is! List || choices.isEmpty) {
+          return AgentDelta(usage: usage);
+        }
         final message = choices.first is Map ? choices.first['message'] : null;
         if (message is! Map) return AgentDelta(usage: usage);
         final calls = <ToolCall>[];
@@ -583,20 +683,27 @@ class AgentClient {
             final fn = c['function'];
             if (fn is! Map) continue;
             final args = fn['arguments'];
-            calls.add(_call(
-              id: c['id'] as String?,
-              name: fn['name'] as String? ?? '',
-              rawArguments: args is String ? args : jsonEncode(args ?? {}),
-              fallbackIndex: calls.length,
-            ));
+            calls.add(
+              _call(
+                id: c['id'] as String?,
+                name: fn['name'] as String? ?? '',
+                rawArguments: args is String ? args : jsonEncode(args ?? {}),
+                fallbackIndex: calls.length,
+              ),
+            );
           }
         }
         final reasoning = message['reasoning_content'] ?? message['reasoning'];
         return AgentDelta(
-          text: message['content'] is String ? message['content'] as String : '',
+          text: message['content'] is String
+              ? message['content'] as String
+              : '',
           reasoning: reasoning is String ? reasoning : '',
           toolCalls: calls,
           usage: usage,
+          providerData: reasoning is String
+              ? {'reasoning_content': reasoning}
+              : const {},
         );
       case WireFormat.openaiResponses:
         final text = StringBuffer();
@@ -614,8 +721,9 @@ class AgentClient {
             if (content is! List) continue;
             for (final part in content) {
               if (part is Map && part['text'] is String) {
-                (item['type'] == 'reasoning' ? thoughts : text)
-                    .write(part['text'] as String);
+                (item['type'] == 'reasoning' ? thoughts : text).write(
+                  part['text'] as String,
+                );
               }
             }
           }
@@ -625,6 +733,7 @@ class AgentClient {
           reasoning: thoughts.toString(),
           toolCalls: calls,
           usage: ChatClient.openAiUsage(json['usage']),
+          providerData: {'responses': output ?? []},
         );
       case WireFormat.anthropic:
         final text = StringBuffer();
@@ -640,13 +749,15 @@ class AgentClient {
               case 'thinking':
                 thoughts.write(b['thinking'] as String? ?? '');
               case 'tool_use':
-                calls.add(ToolCall(
-                  id: b['id'] as String? ?? 'call_${calls.length}',
-                  name: b['name'] as String? ?? '',
-                  arguments: b['input'] is Map
-                      ? Map<String, dynamic>.from(b['input'] as Map)
-                      : const <String, dynamic>{},
-                ));
+                calls.add(
+                  ToolCall(
+                    id: b['id'] as String? ?? 'call_${calls.length}',
+                    name: b['name'] as String? ?? '',
+                    arguments: b['input'] is Map
+                        ? Map<String, dynamic>.from(b['input'] as Map)
+                        : const <String, dynamic>{},
+                  ),
+                );
             }
           }
         }
@@ -655,6 +766,7 @@ class AgentClient {
           reasoning: thoughts.toString(),
           toolCalls: calls,
           usage: ChatClient.openAiUsage(json['usage']),
+          providerData: {'anthropic': blocks ?? []},
         );
       case WireFormat.gemini:
         final reader = _StreamReader(WireFormat.gemini);
@@ -720,6 +832,11 @@ class _StreamReader {
 
   /// Whether the dialect has said it is finished.
   bool done = false;
+  bool successful = false;
+  String? _anthropicStop;
+  final Map<int, Map<String, dynamic>> _anthropicBlocks = {};
+  final Map<int, Map<String, dynamic>> _responsesItems = {};
+  final StringBuffer _chatReasoning = StringBuffer();
 
   /// Calls in the order they started, keyed by the position the dialect uses to
   /// address them (OpenAI's `index`, Anthropic's block `index`, Responses'
@@ -762,25 +879,51 @@ class _StreamReader {
       if (p.name.isEmpty) continue;
       if (p.whole != null) {
         final hasId = p.id != null && p.id!.isNotEmpty;
-        calls.add(ToolCall(
-          id: hasId ? p.id! : 'call_${calls.length}',
-          name: p.name,
-          arguments: p.whole!,
-          syntheticId: !hasId,
-          signature: p.signature,
-        ));
+        calls.add(
+          ToolCall(
+            id: hasId ? p.id! : 'call_${calls.length}',
+            name: p.name,
+            arguments: p.whole!,
+            syntheticId: !hasId,
+            signature: p.signature,
+          ),
+        );
       } else {
-        calls.add(AgentClient._call(
-          id: p.id,
-          name: p.name,
-          rawArguments: p.arguments.toString(),
-          fallbackIndex: calls.length,
-          signature: p.signature,
-        ));
+        calls.add(
+          AgentClient._call(
+            id: p.id,
+            name: p.name,
+            rawArguments: p.arguments.toString(),
+            fallbackIndex: calls.length,
+            signature: p.signature,
+          ),
+        );
       }
     }
     _calls.clear();
-    return AgentDelta(toolCalls: calls);
+    final blocks = <Map<String, dynamic>>[];
+    for (final index in _anthropicBlocks.keys.toList()..sort()) {
+      final block = Map<String, dynamic>.from(_anthropicBlocks[index]!);
+      if (block['type'] == 'tool_use') {
+        for (final call in calls) {
+          if (call.id == block['id']) block['input'] = call.arguments;
+        }
+      }
+      blocks.add(block);
+    }
+    return AgentDelta(
+      toolCalls: calls,
+      providerData: {
+        if (blocks.isNotEmpty) 'anthropic': blocks,
+        if (_responsesItems.isNotEmpty)
+          'responses': [
+            for (final index in _responsesItems.keys.toList()..sort())
+              _responsesItems[index],
+          ],
+        if (_chatReasoning.isNotEmpty)
+          'reasoning_content': _chatReasoning.toString(),
+      },
+    );
   }
 
   static Never _fail(Map<String, dynamic> json) =>
@@ -795,9 +938,15 @@ class _StreamReader {
     }
     final choice = choices.first;
     if (choice is! Map) return null;
+    final finish = choice['finish_reason'];
+    if (finish != null) {
+      successful = ['stop', 'tool_calls', 'function_call'].contains(finish);
+    }
     final delta = choice['delta'] ?? choice['message'];
     if (delta is! Map) return usage == null ? null : AgentDelta(usage: usage);
     final raw = delta['tool_calls'];
+    final reasoningContent = delta['reasoning_content'];
+    if (reasoningContent is String) _chatReasoning.write(reasoningContent);
     if (raw is List) {
       for (final entry in raw) {
         if (entry is! Map) continue;
@@ -814,9 +963,15 @@ class _StreamReader {
             : _byWireIndex[wireIndex];
         final current = currentKey == null ? null : _calls[currentKey];
         final args = fn is Map ? fn['arguments'] : null;
-        final startsNew = current == null ||
-            (id != null && id.isNotEmpty && current.id != null && current.id != id) ||
-            (name != null && name.isNotEmpty && current.name.isNotEmpty &&
+        final startsNew =
+            current == null ||
+            (id != null &&
+                id.isNotEmpty &&
+                current.id != null &&
+                current.id != id) ||
+            (name != null &&
+                name.isNotEmpty &&
+                current.name.isNotEmpty &&
                 current.name != name) ||
             // No id and the same tool: a fresh object opening after the
             // current one is already whole is a second call, not more of it.
@@ -876,8 +1031,15 @@ class _StreamReader {
       case 'response.output_item.added':
       case 'response.output_item.done':
         final item = json['item'];
+        if (type == 'response.output_item.done' && item is Map) {
+          _responsesItems[(json['output_index'] as num?)?.toInt() ??
+              _responsesItems.length] = Map<String, dynamic>.from(
+            item,
+          );
+        }
         if (item is Map && item['type'] == 'function_call') {
-          final index = (json['output_index'] as num?)?.toInt() ?? _calls.length;
+          final index =
+              (json['output_index'] as num?)?.toInt() ?? _calls.length;
           final partial = _calls.putIfAbsent(index, _PartialCall.new);
           partial.id = (item['call_id'] ?? item['id']) as String? ?? partial.id;
           partial.name = item['name'] as String? ?? partial.name;
@@ -899,6 +1061,7 @@ class _StreamReader {
         return null;
       case 'response.completed':
       case 'response.incomplete':
+        successful = type == 'response.completed';
         done = true;
         final response = json['response'];
         return response is Map
@@ -914,12 +1077,16 @@ class _StreamReader {
     switch (type) {
       case 'message_start':
         final message = json['message'];
-        final usage =
-            message is Map ? ChatClient.openAiUsage(message['usage']) : null;
+        final usage = message is Map
+            ? ChatClient.openAiUsage(message['usage'])
+            : null;
         return usage == null ? null : AgentDelta(usage: usage);
       case 'content_block_start':
         final block = json['content_block'];
         final index = (json['index'] as num?)?.toInt() ?? _calls.length;
+        if (block is Map) {
+          _anthropicBlocks[index] = Map<String, dynamic>.from(block);
+        }
         if (block is Map && block['type'] == 'tool_use') {
           _calls[index] = _PartialCall(
             id: block['id'] as String?,
@@ -930,6 +1097,14 @@ class _StreamReader {
       case 'content_block_delta':
         final delta = json['delta'];
         if (delta is! Map) return null;
+        final block = _anthropicBlocks[(json['index'] as num?)?.toInt()];
+        if (block != null) {
+          for (final key in ['text', 'thinking', 'signature']) {
+            if (delta[key] is String) {
+              block[key] = '${block[key] ?? ''}${delta[key]}';
+            }
+          }
+        }
         switch (delta['type']) {
           case 'text_delta':
             return AgentDelta(text: delta['text'] as String? ?? '');
@@ -942,10 +1117,19 @@ class _StreamReader {
         }
         return null;
       case 'message_delta':
+        final d = json['delta'];
+        if (d is Map && d['stop_reason'] is String) {
+          _anthropicStop = d['stop_reason'] as String;
+        }
         final usage = ChatClient.openAiUsage(json['usage']);
         return usage == null ? null : AgentDelta(usage: usage);
       case 'message_stop':
         done = true;
+        successful = [
+          'end_turn',
+          'tool_use',
+          'stop_sequence',
+        ].contains(_anthropicStop);
         return null;
     }
     return null;
@@ -960,7 +1144,12 @@ class _StreamReader {
     if (candidates is! List || candidates.isEmpty) {
       return usage == null ? null : AgentDelta(usage: usage);
     }
-    final content = candidates.first is Map ? candidates.first['content'] : null;
+    final content = candidates.first is Map
+        ? candidates.first['content']
+        : null;
+    if (candidates.first is Map && candidates.first['finishReason'] != null) {
+      successful = candidates.first['finishReason'] == 'STOP';
+    }
     final parts = content is Map ? content['parts'] : null;
     final text = StringBuffer();
     final thoughts = StringBuffer();
@@ -969,18 +1158,21 @@ class _StreamReader {
         if (part is! Map) continue;
         final call = part['functionCall'];
         if (call is Map) {
-          _calls[_calls.length] = _PartialCall(
-            id: call['id'] as String?,
-            name: call['name'] as String? ?? '',
-          )
-            ..whole = call['args'] is Map
-                ? Map<String, dynamic>.from(call['args'] as Map)
-                : <String, dynamic>{}
-            ..signature = part['thoughtSignature'] as String?;
+          _calls[_calls.length] =
+              _PartialCall(
+                  id: call['id'] as String?,
+                  name: call['name'] as String? ?? '',
+                )
+                ..whole = call['args'] is Map
+                    ? Map<String, dynamic>.from(call['args'] as Map)
+                    : <String, dynamic>{}
+                ..signature = part['thoughtSignature'] as String?;
           continue;
         }
         if (part['text'] is String) {
-          (part['thought'] == true ? thoughts : text).write(part['text'] as String);
+          (part['thought'] == true ? thoughts : text).write(
+            part['text'] as String,
+          );
         }
       }
     }
@@ -990,5 +1182,4 @@ class _StreamReader {
       usage: usage,
     );
   }
-
 }
