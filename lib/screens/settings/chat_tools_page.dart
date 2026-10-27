@@ -13,6 +13,7 @@ import '../../widgets/export_sheet.dart';
 import 'chat_tools_edit_screen.dart';
 import 'chat_tools_info_screen.dart';
 import 'chat_tools_options_screen.dart';
+import 'chat_tools_test_screen.dart';
 
 /// Settings ▸ Tools, scoped by route.
 ///
@@ -44,17 +45,25 @@ class _ChatToolsPageState extends State<ChatToolsPage> {
 
   List<ChatToolDefinition> _visible(List<ChatToolDefinition> definitions) {
     final q = _query.trim().toLowerCase();
+    final selectedTags = {for (final tag in _tags) tag.toLowerCase()};
     var shown = definitions.where((tool) {
-      if (_tags.isNotEmpty && !_tags.contains(toolTag(tool))) return false;
+      final tagsMatch =
+          selectedTags.isEmpty ||
+          selectedTags.contains(toolCategory(tool).toLowerCase()) ||
+          tool.tags.any((tag) => selectedTags.contains(tag.toLowerCase()));
+      if (!tagsMatch) return false;
       if (q.isEmpty) return true;
       return tool.name.toLowerCase().contains(q) ||
-          tool.description.toLowerCase().contains(q);
+          tool.description.toLowerCase().contains(q) ||
+          tool.tags.any((tag) => tag.toLowerCase().contains(q));
     }).toList();
     shown.sort((a, b) {
       if (a.builtin != b.builtin) return a.builtin ? -1 : 1;
       if (_sort == 'kind') {
-        final byTag = toolTag(a).compareTo(toolTag(b));
+        final byTag = toolCategory(a).compareTo(toolCategory(b));
         if (byTag != 0) return byTag;
+        final byUserTag = _tagsKey(a).compareTo(_tagsKey(b));
+        if (byUserTag != 0) return byUserTag;
       }
       return readableToolName(
         a.name,
@@ -70,8 +79,20 @@ class _ChatToolsPageState extends State<ChatToolsPage> {
         ? null
         : state.conversationById(widget.conversationId!);
     final config = state.chatToolConfigFor(conversation);
+    // Read definitions once and keep this value alive for navigation, so a
+    // save that changes tags cannot swap the object under the editor.
     final definitions = state.chatToolDefinitionsFor(conversation).toList();
-    final allTags = <String>{for (final t in definitions) toolTag(t)};
+    final uniqueTags = <String, String>{};
+    for (final tool in definitions) {
+      for (final label in [toolCategory(tool), ...tool.tags]) {
+        uniqueTags.putIfAbsent(label.toLowerCase(), () => label);
+      }
+    }
+    // Selected filters are canonical lower-case keys. Prune keys that no
+    // longer exist before building the chip row, so removing the last tool
+    // with a tag cannot leave an invisible active filter behind.
+    _tags.removeWhere((tag) => !uniqueTags.containsKey(tag));
+    final filterLabels = uniqueTags.values.toList();
     final shown = _visible(definitions);
 
     return Scaffold(
@@ -136,18 +157,22 @@ class _ChatToolsPageState extends State<ChatToolsPage> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          for (final tag in allTags)
+                          for (final tag in filterLabels)
                             Padding(
                               padding: const EdgeInsets.only(right: 8),
                               child: FilterChip(
                                 key: Key('chat-tools-tag-$tag'),
-                                label: Text(tag),
-                                selected: _tags.contains(tag),
+                                label: Text(
+                                  tag,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                selected: _tags.contains(tag.toLowerCase()),
                                 onSelected: (on) => setState(() {
                                   if (on) {
-                                    _tags.add(tag);
+                                    _tags.add(tag.toLowerCase());
                                   } else {
-                                    _tags.remove(tag);
+                                    _tags.remove(tag.toLowerCase());
                                   }
                                 }),
                               ),
@@ -503,7 +528,7 @@ class _ToolRowState extends State<_ToolRow> {
 // ---------------------------------------------------------------------------
 
 /// One word describing what a tool is for — the tag row and the Kind sort.
-String toolTag(ChatToolDefinition tool) {
+String toolCategory(ChatToolDefinition tool) {
   if (tool.builtin) {
     return switch (tool.name) {
       'roll_dice' || 'random_integer' => 'Random',
@@ -516,6 +541,9 @@ String toolTag(ChatToolDefinition tool) {
   }
   return 'Custom';
 }
+
+String _tagsKey(ChatToolDefinition tool) =>
+    tool.tags.isEmpty ? '' : tool.tags.join('\u0000');
 
 Future<void> toggleTool(
   BuildContext context,
@@ -557,6 +585,32 @@ Future<void> toggleTool(
 }
 
 /// Toggles follow-up without changing a built-in's executable definition.
+Future<void> saveBuiltInTags(
+  BuildContext context,
+  AppState state,
+  ChatToolConfig config,
+  String toolName,
+  List<String> tags, {
+  String? conversationId,
+}) async {
+  try {
+    await state.saveChatToolConfig(
+      config.copyWith(
+        tagOverrides: {
+          ...config.tagOverrides,
+          toolName: normalizeToolTags(tags),
+        },
+      ),
+      conversationId: conversationId,
+    );
+  } catch (error) {
+    if (context.mounted) {
+      toastToolError(context, 'Could not save tags: ${friendlyError(error)}');
+    }
+    rethrow;
+  }
+}
+
 Future<void> setToolFollowUp(
   BuildContext context,
   AppState state,
@@ -788,11 +842,12 @@ Future<void> testTool(
   ChatToolDefinition tool, {
   String? conversationId,
 }) {
-  return showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) =>
-        ToolTestDialog(tool: tool, conversationId: conversationId),
+  return Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (context) =>
+          ChatToolTestScreen(tool: tool, conversationId: conversationId),
+    ),
   );
 }
 
@@ -970,182 +1025,6 @@ class _ImportPasteDialogState extends State<_ImportPasteDialog> {
         FilledButton(
           onPressed: () => Navigator.of(context).pop(_source.text),
           child: const Text('Import'),
-        ),
-      ],
-    );
-  }
-}
-
-/// The Test dialog, ported unchanged from the old page: arguments in, one
-/// run, readable result or error.
-class ToolTestDialog extends StatefulWidget {
-  const ToolTestDialog({
-    super.key,
-    required this.tool,
-    required this.conversationId,
-  });
-
-  final ChatToolDefinition tool;
-  final String? conversationId;
-
-  @override
-  State<ToolTestDialog> createState() => _ToolTestDialogState();
-}
-
-class _ToolTestDialogState extends State<ToolTestDialog> {
-  final TextEditingController _arguments = TextEditingController();
-  bool _running = false;
-  Object? _result;
-  Object? _error;
-
-  @override
-  void dispose() {
-    _arguments.dispose();
-    super.dispose();
-  }
-
-  Future<void> _run() async {
-    final raw = _arguments.text.trim().isEmpty ? '{}' : _arguments.text;
-    Map<String, dynamic> arguments;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) {
-        throw const FormatException('Arguments must be a JSON object.');
-      }
-      arguments = Map<String, dynamic>.from(decoded);
-    } catch (error) {
-      setState(() {
-        _error = 'Invalid JSON arguments: ${friendlyError(error)}';
-      });
-      return;
-    }
-
-    setState(() {
-      _running = true;
-      _result = null;
-      _error = null;
-    });
-    try {
-      final state = context.read<AppState>();
-      final value = await state.testChatTool(
-        widget.tool.name,
-        arguments,
-        conversationId: widget.conversationId,
-      );
-      if (!mounted) return;
-      setState(() => _result = value);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = error);
-    } finally {
-      if (mounted) setState(() => _running = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return AlertDialog(
-      title: Text('Test ${readableToolName(widget.tool.name)}'),
-      content: SizedBox(
-        width: 560.0,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: _arguments,
-                minLines: 5,
-                maxLines: 8,
-                style: const TextStyle(fontFamily: 'monospace'),
-                decoration: const InputDecoration(
-                  labelText: 'Arguments JSON',
-                  hintText: '{"formula":"2d6+3"}',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'This runs the operation only and does not start a character '
-                'reply.',
-                style: theme.textTheme.bodySmall,
-              ),
-              const SizedBox(height: 10),
-              if (_running)
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                )
-              else if (_error != null)
-                _ResultBlock(
-                  label: 'Error',
-                  text: friendlyError(_error!),
-                  isError: true,
-                )
-              else if (_result != null)
-                _ResultBlock(label: 'Result', text: prettyJson(_result!))
-              else
-                Text(
-                  'Run the tool to see JSON or text it returns.',
-                  style: theme.textTheme.bodySmall,
-                ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _running ? null : () => Navigator.of(context).pop(),
-          child: const Text('Close'),
-        ),
-        FilledButton(
-          onPressed: _running ? null : _run,
-          child: const Text('Run'),
-        ),
-      ],
-    );
-  }
-}
-
-class _ResultBlock extends StatelessWidget {
-  const _ResultBlock({
-    required this.label,
-    required this.text,
-    this.isError = false,
-  });
-
-  final String label;
-  final String text;
-  final bool isError;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.labelMedium?.copyWith(
-            color: isError ? scheme.error : scheme.primary,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: isError
-                ? scheme.errorContainer.withValues(alpha: .7)
-                : scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: SelectableText(text),
         ),
       ],
     );

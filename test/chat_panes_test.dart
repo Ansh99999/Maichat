@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
@@ -117,7 +118,7 @@ void main() {
             findsOneWidget,
           );
         }
-        await tester.tap(find.byKey(const Key('chat-drawer-close')));
+        await tester.tapAt(tester.getCenter(find.byKey(chatMenuButtonKey)));
         await tester.pumpAndSettle();
         final turns = state.active.messages.length;
         await _ask(tester, 'First side question');
@@ -151,7 +152,7 @@ void main() {
             find.byKey(const Key('composer-field')).hitTestable(),
             findsOneWidget,
           );
-          await tester.tap(find.byKey(const Key('chat-drawer-close')));
+          await tester.tapAt(tester.getCenter(find.byKey(chatMenuButtonKey)));
           await tester.pumpAndSettle();
         }
         final side = find.byKey(const Key('btw-thread'));
@@ -182,6 +183,75 @@ void main() {
         state.dispose();
       });
     }
+  }
+
+  for (final width in [720.0, 800.0, 1280.0, 1920.0, 2560.0, 3840.0]) {
+    testWidgets('wide drawer keeps 25% at $width with all panes', (
+      tester,
+    ) async {
+      tester.view
+        ..physicalSize = Size(width, 915)
+        ..devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final state = await _boot(ComposerStyle.expressive);
+      await tester.pumpWidget(_host(state));
+      await tester.pumpAndSettle();
+
+      // Menu + main chat: the pane is proportional on every wide layout,
+      // including ultrawide desktops, and the chat keeps its minimum space.
+      await tester.tap(find.byKey(chatMenuButtonKey));
+      await tester.pumpAndSettle();
+      final expectedDrawer = width * .25;
+      final menu = tester.getRect(find.byKey(const Key('chat-drawer-pane')));
+      expect(menu.width, closeTo(expectedDrawer, .1));
+      expect(
+        tester.getSize(find.byKey(const Key('chat-main-pane'))).width,
+        greaterThanOrEqualTo(280),
+      );
+
+      // Menu + main chat + side thread, including resize clamping.
+      await _ask(tester, 'Check every wide layout');
+      final maximumAside = width - expectedDrawer - 280;
+      final minimumAside = maximumAside.clamp(0.0, 280.0);
+      final expectedAside = 360.0.clamp(minimumAside, maximumAside);
+      final aside = find.byKey(const Key('btw-thread'));
+      // The resize handle occupies 12px at the pane's left edge.
+      expect(tester.getSize(aside).width, closeTo(expectedAside - 12, .1));
+      expect(
+        tester.getSize(find.byKey(const Key('chat-main-pane'))).width,
+        greaterThanOrEqualTo(280),
+      );
+
+      // A mouse drag avoids touch slop so the exact resize delta is asserted.
+      final handleCenter = tester.getCenter(
+        find.byKey(const Key('btw-resize-handle')),
+      );
+      final resize = await tester.startGesture(
+        handleCenter,
+        kind: PointerDeviceKind.mouse,
+      );
+      await resize.moveBy(const Offset(-100, 0));
+      await resize.up();
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSize(aside).width,
+        closeTo(
+          (expectedAside + 100).clamp(minimumAside, maximumAside) - 12,
+          .1,
+        ),
+      );
+
+      await tester.tapAt(tester.getCenter(find.byKey(chatMenuButtonKey)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat-drawer-pane')), findsNothing);
+      expect(aside, findsOneWidget);
+      await tester.tap(find.byKey(const Key('btw-close')));
+      await tester.pumpAndSettle();
+      expect(aside, findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      state.dispose();
+    });
   }
 
   testWidgets('streaming, stop, back and chat switching isolate side answers', (

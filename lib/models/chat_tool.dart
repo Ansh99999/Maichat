@@ -26,6 +26,7 @@ class ChatToolDefinition {
     this.hidden = false,
     this.followUp = true,
     this.builtin = false,
+    this.tags = const <String>[],
   });
 
   final String name;
@@ -36,6 +37,10 @@ class ChatToolDefinition {
   final bool hidden;
   final bool followUp;
   final bool builtin;
+
+  /// User-facing labels for organising the Tools list. They are local UI
+  /// metadata and never enter [spec], which is the shape sent to providers.
+  final List<String> tags;
 
   ToolSpec get spec =>
       ToolSpec(name: name, description: description, parameters: parameters);
@@ -49,6 +54,7 @@ class ChatToolDefinition {
     bool? hidden,
     bool? followUp,
     bool? builtin,
+    List<String>? tags,
   }) => ChatToolDefinition(
     name: name ?? this.name,
     description: description ?? this.description,
@@ -58,6 +64,7 @@ class ChatToolDefinition {
     hidden: hidden ?? this.hidden,
     followUp: followUp ?? this.followUp,
     builtin: builtin ?? this.builtin,
+    tags: tags ?? this.tags,
   );
 
   Map<String, dynamic> toJson() => {
@@ -69,6 +76,7 @@ class ChatToolDefinition {
     if (hidden) 'hidden': true,
     if (!followUp) 'followUp': false,
     if (builtin) 'builtin': true,
+    if (tags.isNotEmpty) 'tags': tags,
   };
 
   factory ChatToolDefinition.fromJson(Map<String, dynamic> json) =>
@@ -84,6 +92,7 @@ class ChatToolDefinition {
         hidden: json['hidden'] as bool? ?? false,
         followUp: json['followUp'] is! bool || json['followUp'] as bool,
         builtin: json['builtin'] as bool? ?? false,
+        tags: normalizeToolTags(json['tags']),
       );
 
   static bool _isDefaultSchema(Map<String, dynamic> schema) {
@@ -107,6 +116,7 @@ class ChatToolConfig {
     this.trackerPlacement = 'message',
     this.hideToolCallsInChat = false,
     this.followUpOverrides = const {},
+    this.tagOverrides = const {},
   });
 
   final bool enabled;
@@ -123,6 +133,10 @@ class ChatToolConfig {
   /// Per-scope runtime choices for built-in operations, whose definitions stay read-only.
   final Map<String, bool> followUpOverrides;
 
+  /// User tags for built-ins. Their executable definitions stay read-only;
+  /// this map carries the editable metadata for the current scope.
+  final Map<String, List<String>> tagOverrides;
+
   ChatToolConfig copyWith({
     bool? enabled,
     List<String>? disabledTools,
@@ -132,6 +146,7 @@ class ChatToolConfig {
     String? trackerPlacement,
     bool? hideToolCallsInChat,
     Map<String, bool>? followUpOverrides,
+    Map<String, List<String>>? tagOverrides,
   }) => ChatToolConfig(
     enabled: enabled ?? this.enabled,
     disabledTools: disabledTools ?? this.disabledTools,
@@ -141,6 +156,7 @@ class ChatToolConfig {
     trackerPlacement: trackerPlacement ?? this.trackerPlacement,
     hideToolCallsInChat: hideToolCallsInChat ?? this.hideToolCallsInChat,
     followUpOverrides: followUpOverrides ?? this.followUpOverrides,
+    tagOverrides: tagOverrides ?? this.tagOverrides,
   );
 
   Map<String, dynamic> toJson() => {
@@ -153,6 +169,7 @@ class ChatToolConfig {
     if (trackerPlacement != 'message') 'trackerPlacement': trackerPlacement,
     if (hideToolCallsInChat) 'hideToolCallsInChat': true,
     if (followUpOverrides.isNotEmpty) 'followUpOverrides': followUpOverrides,
+    if (tagOverrides.isNotEmpty) 'tagOverrides': tagOverrides,
   };
 
   factory ChatToolConfig.fromJson(Map<String, dynamic> json) => ChatToolConfig(
@@ -177,6 +194,12 @@ class ChatToolConfig {
         for (final entry in (json['followUpOverrides'] as Map).entries)
           if (entry.key is String && entry.value is bool)
             entry.key as String: entry.value as bool,
+    },
+    tagOverrides: {
+      if (json['tagOverrides'] is Map)
+        for (final entry in (json['tagOverrides'] as Map).entries)
+          if (entry.key is String && entry.value is List)
+            entry.key as String: normalizeToolTags(entry.value),
     },
   );
 }
@@ -348,6 +371,22 @@ ChatToolProjection projectChatToolRuns(
   }
 
   return ChatToolProjection(values: values, staleRuns: stale);
+}
+
+/// Trims labels, collapses internal whitespace, drops empties and removes
+/// case-insensitive duplicates while preserving the first spelling/order.
+List<String> normalizeToolTags(Object? value) {
+  if (value is! Iterable) return const <String>[];
+  final seen = <String>{};
+  final result = <String>[];
+  for (final raw in value) {
+    if (raw is! String) continue;
+    final tag = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (tag.isEmpty) continue;
+    final key = tag.toLowerCase();
+    if (seen.add(key)) result.add(tag);
+  }
+  return List<String>.unmodifiable(result);
 }
 
 Map<String, dynamic> _jsonMap(

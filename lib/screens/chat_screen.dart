@@ -3,7 +3,9 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart' hide Provider;
@@ -29,6 +31,7 @@ import '../widgets/floating_images_layer.dart';
 import '../widgets/interface_preset_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_info_sheet.dart';
+import '../models/appearance.dart';
 import '../widgets/message_markdown.dart';
 import '../widgets/picture_viewer.dart';
 import '../widgets/smooth_image.dart';
@@ -735,10 +738,36 @@ class _ChatScreenState extends State<ChatScreen> {
   /// transcript is never re-encoded for it.
   bool _asideOpen = false;
 
-  /// Whether the side-menu pane is out beside the chat. The old overlay
-  /// drawer is gone: opening the menu now *pushes* the chat across instead
-  /// of covering it. A view of this screen, never stored.
+  /// Whether the side-menu pane is *aimed* at open. A drag in flight may
+  /// disagree with this for a moment; it is the target, not the geometry.
   bool _drawerOpen = false;
+
+  /// Whether any part of the drawer is on screen. This is what phone focus,
+  /// semantics, hit-testing and Android Back must answer to: a drawer that is
+  /// still animating closed is still in the way.
+  bool _drawerVisible = false;
+
+  /// Stable across streaming updates. Actions read the current chat when
+  /// invoked, and the menu subscribes to changes in its own displayed data.
+  late final Widget _drawer = _ChatDrawer(
+    onProfile: _goHome,
+    onCharacters: _openCharacters,
+    onChats: _goChats,
+    onGallery: () {
+      final state = context.read<AppState>();
+      openChatGallery(context, state.active.id);
+    },
+    onEditChat: () => _editChat(context.read<AppState>()),
+    onChatGraph: () => _openChatGraph(context.read<AppState>().active.id),
+    onProviderModel: _openQuickSettings,
+    onSettings: _openSettings,
+    onImageGen: _openImageStudio,
+    onExport: () => _exportChat(context.read<AppState>()),
+    onRestart: () => _restartChat(context.read<AppState>()),
+    onDelete: () => _deleteChat(context.read<AppState>()),
+    onNotifications: () =>
+        _openSection('Notifications', Icons.notifications_outlined),
+  );
 
   /// The aside pane's width in logical pixels on wide screens, where the chat
   /// and the aside sit side by side. On phones the pane covers the chat and
@@ -847,23 +876,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     // Ordinary chats and the Studio Playground share the same pane layout.
     final hosted = widget.host != null;
-    final drawer = _ChatDrawer(
-      onProfile: _goHome,
-      onCharacters: _openCharacters,
-      onChats: _goChats,
-      onGallery: () => openChatGallery(context, conversation.id),
-      onEditChat: () => _editChat(state),
-      onChatGraph: () => _openChatGraph(conversation.id),
-      onProviderModel: _openQuickSettings,
-      onSettings: _openSettings,
-      onImageGen: _openImageStudio,
-      onExport: () => _exportChat(state),
-      onRestart: () => _restartChat(state),
-      onDelete: () => _deleteChat(state),
-      onNotifications: () =>
-          _openSection('Notifications', Icons.notifications_outlined),
-    );
-
     final chat = Stack(
       children: [
         // This chat's own picture, behind everything and behind nothing else's.
@@ -898,7 +910,7 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Builder(
             builder: (ctx) => _ChatMenuButton(
               opacity: ui.menuButtonOpacity,
-              onTap: _openPane,
+              onTap: _togglePane,
             ),
           ),
         ),
@@ -921,7 +933,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     return PopScope(
-      canPop: !_drawerOpen && !_asideOpen,
+      canPop: !_drawerVisible && !_asideOpen,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_asideOpen) {
@@ -934,10 +946,12 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: bg,
         resizeToAvoidBottomInset: false,
         body: _ChatPanes(
-          drawer: hosted ? widget.host!.drawer(context) : drawer,
+          drawer: hosted ? widget.host!.drawer(context) : _drawer,
           allowDrawer: true,
+          menuStyle: state.appearance.mobileChatMenuStyle,
           drawerOpen: _drawerOpen,
           onDrawerOpen: _setPaneOpen,
+          onDrawerVisible: _setDrawerVisible,
           asideOpen: _asideOpen,
           asideWidth: _asideWidth,
           onAsideResize: (w) => setState(() => _asideWidth = w),
@@ -953,16 +967,26 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Opens the side-menu pane. Replacing the modal drawer: the pane slides
-  /// in beside the chat, pushing it across rather than covering it.
-  void _openPane() {
-    FocusManager.instance.primaryFocus?.unfocus();
-    setState(() => _drawerOpen = true);
-  }
+  /// Toggles the side-menu pane. The menu square is deliberately the primary
+  /// control: with no close chip, it both opens and closes the pane.
+  void _togglePane() => _setPaneOpen(!_drawerOpen);
 
   void _setPaneOpen(bool open) {
     if (open) FocusManager.instance.primaryFocus?.unfocus();
-    if (_drawerOpen != open) setState(() => _drawerOpen = open);
+    if (_drawerOpen == open && (!open || _drawerVisible)) return;
+    setState(() {
+      _drawerOpen = open;
+      // Opening is visible immediately. Closing leaves [_drawerVisible] set
+      // until the pane reports that it has actually left the screen.
+      if (open) _drawerVisible = true;
+    });
+  }
+
+  /// The pane's visibility boundary. Called only when geometry crosses zero or
+  /// a settle finishes — never on every drag or animation frame.
+  void _setDrawerVisible(bool visible) {
+    if (_drawerVisible == visible) return;
+    setState(() => _drawerVisible = visible);
   }
 
   /// The thread, the group bar and the composer, laid out one of two ways.
@@ -3249,267 +3273,21 @@ class _JumpToLatestButton extends StatelessWidget {
   }
 }
 
-/// Which face the chat sidebar is showing: its menu, or one of the panels that
-/// live *inside* the drawer. They replace the menu rather than being pushed as
-/// routes, so backing out of one returns to the menu with the drawer still open.
-enum _DrawerPanel { menu, presets, memory }
-
-/// The chat sidebar. Mirrors agnai's chat menu: an editable chat title on top,
-/// jumps to the other sections, provider/model, and a utility row of chat
-/// actions (settings, image gen, export, restart, delete, notifications).
-/// "Preset" and "Memory" open in-drawer panels rather than navigating away.
-class _ChatDrawer extends StatefulWidget {
-  const _ChatDrawer({
-    required this.onProfile,
-    required this.onCharacters,
-    required this.onChats,
-    required this.onGallery,
-    required this.onEditChat,
-    required this.onChatGraph,
-    required this.onProviderModel,
-    required this.onSettings,
-    required this.onImageGen,
-    required this.onExport,
-    required this.onRestart,
-    required this.onDelete,
-    required this.onNotifications,
-  });
-
-  final VoidCallback onProfile;
-  final VoidCallback onCharacters;
-  final VoidCallback onChats;
-  final VoidCallback onGallery;
-  final VoidCallback onEditChat;
-  final VoidCallback onChatGraph;
-  final VoidCallback onProviderModel;
-  final VoidCallback onSettings;
-  final VoidCallback onImageGen;
-  final VoidCallback onExport;
-  final VoidCallback onRestart;
-  final VoidCallback onDelete;
-  final VoidCallback onNotifications;
-
-  @override
-  State<_ChatDrawer> createState() => _ChatDrawerState();
-}
-
-class _ChatDrawerState extends State<_ChatDrawer> {
-  _DrawerPanel _panel = _DrawerPanel.menu;
-
-  /// Which way the last panel change drilled — into a sub-panel (true) or back
-  /// to the menu (false) — so the switch slides in the matching direction.
-  bool _forward = true;
-
-  /// Runs [action] after the drawer has closed, so the drawer does not sit
-  /// open behind whatever the action pushes or shows. In the pane layout the
-  /// "close" is the pane folding away; the modal drawer (a hosted chat)
-  /// still pops its route.
-  void _close(BuildContext context, VoidCallback action) {
-    final pane = context.getInheritedWidgetOfExactType<_PaneScope>();
-    if (pane != null) {
-      pane.close();
-    } else {
-      Navigator.of(context).pop();
-    }
-    action();
-  }
-
-  void _show(_DrawerPanel panel) => setState(() {
-    _forward = panel != _DrawerPanel.menu;
-    _panel = panel;
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final Widget body;
-    switch (_panel) {
-      case _DrawerPanel.presets:
-        body = ChatPresetPanel(onBack: () => _show(_DrawerPanel.menu));
-      case _DrawerPanel.memory:
-        body = ChatMemoryPanel(onBack: () => _show(_DrawerPanel.menu));
-      case _DrawerPanel.menu:
-        body = _menu(context);
-    }
-
-    // Slide + fade between the menu and a sub-panel so drilling in/out reads as
-    // one fluid movement instead of a hard cut. StackFit.expand hands each child
-    // the drawer's full, bounded size — the panels are Columns with Expanded, so
-    // an unconstrained Stack child would otherwise overflow.
-    return Drawer(
-      child: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 260),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, animation) {
-            final incoming = child.key == ValueKey(_panel);
-            final dir = _forward ? 1.0 : -1.0;
-            final begin = Offset((incoming ? dir : -dir) * 0.12, 0);
-            return FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: begin,
-                  end: Offset.zero,
-                ).animate(animation),
-                child: child,
-              ),
-            );
-          },
-          layoutBuilder: (currentChild, previousChildren) => Stack(
-            fit: StackFit.expand,
-            alignment: Alignment.topCenter,
-            children: [...previousChildren, ?currentChild],
-          ),
-          child: KeyedSubtree(key: ValueKey(_panel), child: body),
-        ),
-      ),
-    );
-  }
-
-  Widget _menu(BuildContext context) {
-    final state = context.watch<AppState>();
-    final scheme = Theme.of(context).colorScheme;
-    final conversation = state.active;
-    final active = state.activeProvider;
-    final model = active?.model.trim() ?? '';
-    final providerSubtitle = active == null
-        ? 'No provider yet'
-        : '${active.displayName}${model.isEmpty ? '' : ' · $model'}';
-    final presetName = state.presetFor(conversation)?.displayName ?? 'Default';
-    // How much memory this chat is carrying, so the user can see it without
-    // opening the panel. Resolved through AppState so a deleted book is not
-    // counted.
-    final memoryCount = state.lorebooksFor(conversation).length;
-    final memorySubtitle = memoryCount == 0 ? 'None' : '$memoryCount active';
-    // How many chats are in this one's fork tree, so the drawer says whether
-    // there is a graph worth opening before the user taps.
-    final treeSize =
-        buildFamilyTree(state.conversations, conversation.id)?.subtreeSize ?? 1;
-    final graphSubtitle = treeSize <= 1
-        ? 'No branches'
-        : '$treeSize chats · ${treeSize - 1} '
-              '${treeSize == 2 ? 'branch' : 'branches'}';
-
-    return Column(
-      children: [
-        // Editable chat title, like agnai's "edit character" header.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: InkWell(
-            onTap: () => _close(context, widget.onEditChat),
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Row(
-                children: [
-                  Icon(Icons.edit_outlined, size: 18, color: scheme.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      conversation.isEmpty ? 'New chat' : conversation.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            children: [
-              _ChatNavItem(
-                icon: Icons.person_outline,
-                label: 'Profile',
-                onTap: () => _close(context, widget.onProfile),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _BackNavButton(
-                        label: 'Characters',
-                        onTap: () => _close(context, widget.onCharacters),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _BackNavButton(
-                        label: 'Chats',
-                        onTap: () => _close(context, widget.onChats),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _ChatNavItem(
-                icon: Icons.photo_library_outlined,
-                label: 'Gallery',
-                onTap: () => _close(context, widget.onGallery),
-              ),
-              _ChatNavItem(
-                icon: Icons.edit_note_outlined,
-                label: 'Edit Chat',
-                onTap: () => _close(context, widget.onEditChat),
-              ),
-              _ChatNavItem(
-                icon: Icons.tune_outlined,
-                label: 'Preset',
-                subtitle: presetName,
-                onTap: () => _show(_DrawerPanel.presets),
-              ),
-              _ChatNavItem(
-                icon: Icons.book_outlined,
-                label: 'Memory',
-                subtitle: memorySubtitle,
-                onTap: () => _show(_DrawerPanel.memory),
-              ),
-              _ChatNavItem(
-                icon: Icons.account_tree_outlined,
-                label: 'Chat Graph',
-                subtitle: graphSubtitle,
-                onTap: () => _close(context, widget.onChatGraph),
-              ),
-              const SizedBox(height: 4),
-              _ChatNavItem(
-                icon: Icons.dns_outlined,
-                label: 'Provider & model',
-                subtitle: providerSubtitle,
-                onTap: () => _close(context, widget.onProviderModel),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        _ChatDrawerFooter(
-          onSettings: () => _close(context, widget.onSettings),
-          onImageGen: () => _close(context, widget.onImageGen),
-          onExport: () => _close(context, widget.onExport),
-          onRestart: () => _close(context, widget.onRestart),
-          onDelete: () => _close(context, widget.onDelete),
-          onNotifications: () => _close(context, widget.onNotifications),
-        ),
-      ],
-    );
-  }
-}
-
 /// On phones the menu translates a full-width chat out of the way. On larger
 /// screens both side panes reserve their space and leave the chat interactive.
-class _ChatPanes extends StatelessWidget {
+///
+/// The drawer has one normalized progress value. A finger assigns that value
+/// directly (no implicit tween chasing each delta); only releases and controls
+/// run a spring settle. This is what lets a drag pause exactly where the finger
+/// pauses, reverse with it, and catch an animation without a jump.
+class _ChatPanes extends StatefulWidget {
   const _ChatPanes({
     required this.drawer,
     required this.allowDrawer,
+    required this.menuStyle,
     required this.drawerOpen,
     required this.onDrawerOpen,
+    required this.onDrawerVisible,
     required this.asideOpen,
     required this.asideWidth,
     required this.onAsideResize,
@@ -3519,258 +3297,491 @@ class _ChatPanes extends StatelessWidget {
 
   final Widget drawer;
   final bool allowDrawer;
+  final MobileChatMenuStyle menuStyle;
   final bool drawerOpen;
   final ValueChanged<bool> onDrawerOpen;
+  final ValueChanged<bool> onDrawerVisible;
   final bool asideOpen;
   final double asideWidth;
   final ValueChanged<double> onAsideResize;
   final Widget aside;
   final Widget child;
+
+  @override
+  State<_ChatPanes> createState() => _ChatPanesState();
+}
+
+class _ChatPanesState extends State<_ChatPanes>
+    with SingleTickerProviderStateMixin {
   static const _duration = Duration(milliseconds: 240);
+  static const _spring = SpringDescription(
+    mass: 1,
+    stiffness: 420,
+    damping: 34,
+  );
+  static const _springTolerance = Tolerance(distance: 0.001, velocity: 0.01);
+  static const _flingVelocity = 400.0;
+
+  late final AnimationController _controller = AnimationController.unbounded(
+    vsync: this,
+    duration: _duration,
+  );
+
+  // A pointer owns progress from its down event until up/cancel, even before
+  // horizontal slop has been crossed. The recognizer is not the owner: losing
+  // a vertical arena cannot take the pane away from a finger that is still on
+  // the glass.
+  int? _ownerPointer;
+  bool _recognizedDrag = false;
+  bool _externalCancel = false;
+  int _motionEpoch = 0;
+  bool _reportedOpen = false;
+  bool _reportedVisible = false;
+  double _drawerWidth = 1;
+  double _rootWidth = 1;
+  bool _rootWide = false;
+
+  double get _progress => _controller.value.clamp(0.0, 1.0);
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.value = widget.drawerOpen ? 1.0 : 0.0;
+    _reportedOpen = widget.drawerOpen;
+    _reportedVisible = widget.drawerOpen;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatPanes oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.drawerOpen == _reportedOpen) return;
+    // Self-reported drag changes already match _reportedOpen. A different
+    // target is an external control, which takes priority over the held touch.
+    _externalCancel = _ownerPointer != null;
+    _reportedOpen = widget.drawerOpen;
+    _settleTo(widget.drawerOpen);
+  }
+
+  void _reportOpen(bool open) {
+    if (_reportedOpen == open) return;
+    _reportedOpen = open;
+    _scheduleNotification(() {
+      if (_reportedOpen == open) widget.onDrawerOpen(open);
+    });
+  }
+
+  void _reportVisible(bool visible) {
+    if (_reportedVisible == visible) return;
+    _reportedVisible = visible;
+    _scheduleNotification(() {
+      if (_reportedVisible == visible) widget.onDrawerVisible(visible);
+    });
+  }
+
+  void _scheduleNotification(VoidCallback callback) {
+    if (!mounted) return;
+    scheduleMicrotask(() {
+      if (mounted) callback();
+    });
+  }
+
+  bool _canStartDrag(PointerDownEvent event) {
+    if (!widget.allowDrawer) return false;
+    if (_ownerPointer != null && _ownerPointer != event.pointer) return false;
+    final local = event.localPosition;
+    if (local.dx < 0 || local.dx > _rootWidth) return false;
+    if (!_rootWide && widget.asideOpen) return false;
+    final shown = _drawerWidth * _progress;
+    if (shown == 0) return local.dx < 20;
+    return !_rootWide || local.dx <= shown;
+  }
+
+  void _pointerPressed(PointerDownEvent event) {
+    if (_ownerPointer != null || !_canStartDrag(event)) return;
+    _ownerPointer = event.pointer;
+    _recognizedDrag = false;
+    _externalCancel = false;
+    _motionEpoch++;
+    _controller.stop();
+    if (_progress > 0) {
+      _reportOpen(true);
+      _reportVisible(true);
+    }
+  }
+
+  void _pointerReleased(PointerEvent event) {
+    if (_ownerPointer != event.pointer) return;
+    if (_recognizedDrag) return;
+    // Do not race the recognizer's velocity callback. If the pointer was never
+    // recognized (a tap or a vertical scroll), settle from the held position.
+    scheduleMicrotask(() {
+      if (_ownerPointer != event.pointer) return;
+      _ownerPointer = null;
+      if (!_externalCancel) _settleTo(_settleToNearest());
+      _externalCancel = false;
+    });
+  }
+
+  void _pointerCancelled(PointerCancelEvent event) {
+    if (_ownerPointer != event.pointer) return;
+    _ownerPointer = null;
+    _recognizedDrag = false;
+    if (!_externalCancel) _settleTo(_settleToNearest());
+    _externalCancel = false;
+  }
+
+  bool _settleToNearest() => _progress >= .5;
+
+  void _dragStarted(DragStartDetails details) {
+    if (_ownerPointer == null || _externalCancel) return;
+    _recognizedDrag = true;
+    _motionEpoch++;
+    _controller.stop();
+  }
+
+  void _dragUpdated(DragUpdateDetails details) {
+    if (_ownerPointer == null || _externalCancel) return;
+    final after = (_progress + details.delta.dx / _drawerWidth).clamp(0.0, 1.0);
+    _controller.value = after;
+    if (after > 0) {
+      _reportOpen(true);
+      _reportVisible(true);
+    }
+  }
+
+  void _dragEnded(DragEndDetails details) {
+    if (_ownerPointer == null) return;
+    _ownerPointer = null;
+    _recognizedDrag = false;
+    if (_externalCancel) {
+      _externalCancel = false;
+      return;
+    }
+    final velocity = details.primaryVelocity ?? 0.0;
+    final bool target;
+    if (velocity > _flingVelocity) {
+      target = true;
+    } else if (velocity < -_flingVelocity) {
+      target = false;
+    } else {
+      target = _settleToNearest();
+    }
+    _settleTo(target, velocity: velocity / _drawerWidth);
+  }
+
+  void _dragCancelled() {
+    // A child can win the vertical/tap arena before the pointer lifts. Keep
+    // its down-hold until the physical up/cancel event releases ownership.
+    _recognizedDrag = false;
+  }
+
+  void _settleTo(bool target, {double velocity = 0}) {
+    final epoch = ++_motionEpoch;
+    _controller.stop();
+    _reportOpen(target);
+    if (target) {
+      _reportVisible(true);
+    } else if (_progress <= _springTolerance.distance &&
+        _ownerPointer == null) {
+      _reportVisible(false);
+    }
+    final end = target ? 1.0 : 0.0;
+    if ((_progress - end).abs() < .00001) {
+      _controller.value = end;
+      _reportVisible(target);
+      return;
+    }
+    _controller
+        .animateWith(
+          SpringSimulation(
+            _spring,
+            _progress,
+            end,
+            velocity,
+            snapToEnd: true,
+            tolerance: _springTolerance,
+          ),
+        )
+        .whenCompleteOrCancel(() {
+          if (!mounted || epoch != _motionEpoch) return;
+          _controller.value = end;
+          _reportVisible(target);
+        });
+  }
+
+  void _close() {
+    _externalCancel = _ownerPointer != null;
+    _settleTo(false);
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final width = constraints.maxWidth;
       final wide = width >= 720;
-      final drawerWidth = wide
-          ? (width * 0.25).clamp(180.0, 360.0)
-          : width * 0.78;
+      final slide = wide || widget.menuStyle == MobileChatMenuStyle.slide;
+      _rootWide = wide;
+      _rootWidth = width;
+      _drawerWidth = wide ? width * .25 : width * .78;
       final scheme = Theme.of(context).colorScheme;
-      double drag = 0;
-      final drawerBody = _PaneScope(
-        close: () => onDrawerOpen(false),
-        child: GestureDetector(
-          onHorizontalDragStart: (_) => drag = 0,
-          onHorizontalDragUpdate: (d) => drag += d.delta.dx,
-          onHorizontalDragEnd: (d) {
-            if (drag < -48 || (d.primaryVelocity ?? 0) < -100) {
-              onDrawerOpen(false);
-            }
-          },
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: Material(
-                  key: const Key('chat-drawer-pane'),
-                  color: scheme.surface,
-                  child: drawer,
-                ),
-              ),
-              Positioned(
-                top: MediaQuery.viewPaddingOf(context).top + 4,
-                right: 4,
-                child: IconButton(
-                  key: const Key('chat-drawer-close'),
-                  tooltip: 'Close menu',
-                  onPressed: () => onDrawerOpen(false),
-                  icon: const Icon(Icons.close),
-                ),
-              ),
-            ],
+
+      final drawerLayer = RepaintBoundary(
+        child: _PaneScope(
+          close: _close,
+          child: Material(
+            key: const Key('chat-drawer-pane'),
+            color: scheme.surface,
+            child: widget.drawer,
           ),
         ),
       );
-      final chat = KeyedSubtree(key: const Key('chat-main-pane'), child: child);
-      final body = wide
-          ? TweenAnimationBuilder<double>(
-              tween: Tween(end: drawerOpen ? drawerWidth : 0),
-              duration: _duration,
-              curve: Curves.easeOutCubic,
-              builder: (context, menuWidth, _) {
-                final maximumAside = width - menuWidth - 280;
-                final minimumAside = maximumAside.clamp(0.0, 280.0);
-                final actualAside = asideWidth.clamp(
-                  minimumAside,
-                  maximumAside,
-                );
-                return Row(
-                  children: [
-                    if (menuWidth > 0)
-                      SizedBox(
-                        width: menuWidth,
-                        child: ClipRect(
-                          child: OverflowBox(
-                            alignment: Alignment.centerLeft,
-                            minWidth: drawerWidth,
-                            maxWidth: drawerWidth,
-                            child: drawerBody,
-                          ),
-                        ),
-                      ),
-                    Expanded(child: chat),
-                    TweenAnimationBuilder<double>(
-                      tween: Tween(end: asideOpen ? 1 : 0),
-                      duration: _duration,
-                      curve: Curves.easeOutCubic,
-                      builder: (context, reveal, pane) => SizedBox(
-                        width: actualAside * reveal,
-                        child: ClipRect(
+      final chat = RepaintBoundary(
+        key: const Key('chat-main-pane'),
+        child: widget.child,
+      );
+
+      final Widget body;
+      if (wide) {
+        body = AnimatedBuilder(
+          animation: _controller,
+          child: chat,
+          builder: (context, chatChild) {
+            final progress = _progress;
+            final menuWidth = _drawerWidth * progress;
+            final maximumAside = width - menuWidth - 280;
+            final minimumAside = maximumAside.clamp(0.0, 280.0);
+            final actualAside = widget.asideWidth.clamp(
+              minimumAside,
+              maximumAside,
+            );
+            return Row(
+              children: [
+                SizedBox(
+                  width: menuWidth,
+                  child: menuWidth > 0
+                      ? ClipRect(
                           child: OverflowBox(
                             alignment: Alignment.centerRight,
-                            minWidth: actualAside,
-                            maxWidth: actualAside,
-                            child: pane,
+                            minWidth: _drawerWidth,
+                            maxWidth: _drawerWidth,
+                            child: drawerLayer,
                           ),
-                        ),
+                        )
+                      : null,
+                ),
+                Expanded(child: chatChild!),
+                TweenAnimationBuilder<double>(
+                  tween: Tween(end: widget.asideOpen ? 1 : 0),
+                  duration: _duration,
+                  curve: Curves.easeOutCubic,
+                  builder: (context, reveal, pane) => SizedBox(
+                    width: actualAside * reveal,
+                    child: ClipRect(
+                      child: OverflowBox(
+                        alignment: Alignment.centerRight,
+                        minWidth: actualAside,
+                        maxWidth: actualAside,
+                        child: pane,
                       ),
-                      child: asideOpen
-                          ? Stack(
-                              children: [
-                                Positioned.fill(left: 12, child: aside),
-                                Positioned(
-                                  left: 0,
-                                  top: 0,
-                                  bottom: 0,
-                                  width: 12,
-                                  child: Semantics(
-                                    label: 'Resize side thread',
-                                    slider: true,
-                                    onIncrease: () => onAsideResize(
-                                      (actualAside + 40).clamp(
-                                        minimumAside,
-                                        maximumAside,
-                                      ),
-                                    ),
-                                    onDecrease: () => onAsideResize(
-                                      (actualAside - 40).clamp(
-                                        minimumAside,
-                                        maximumAside,
-                                      ),
-                                    ),
-                                    child: MouseRegion(
-                                      cursor:
-                                          SystemMouseCursors.resizeLeftRight,
-                                      child: GestureDetector(
-                                        key: const Key('btw-resize-handle'),
-                                        behavior: HitTestBehavior.opaque,
-                                        onHorizontalDragUpdate: (d) =>
-                                            onAsideResize(
-                                              (actualAside - d.delta.dx).clamp(
-                                                minimumAside,
-                                                maximumAside,
-                                              ),
-                                            ),
-                                        child: Center(
-                                          child: Container(
-                                            width: 4,
-                                            height: 40,
-                                            decoration: BoxDecoration(
-                                              color: scheme.outlineVariant,
-                                              borderRadius:
-                                                  BorderRadius.circular(4),
-                                            ),
+                    ),
+                  ),
+                  child: widget.asideOpen
+                      ? Stack(
+                          children: [
+                            Positioned.fill(left: 12, child: widget.aside),
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: 12,
+                              child: Semantics(
+                                label: 'Resize side thread',
+                                slider: true,
+                                onIncrease: () => widget.onAsideResize(
+                                  (actualAside + 40).clamp(
+                                    minimumAside,
+                                    maximumAside,
+                                  ),
+                                ),
+                                onDecrease: () => widget.onAsideResize(
+                                  (actualAside - 40).clamp(
+                                    minimumAside,
+                                    maximumAside,
+                                  ),
+                                ),
+                                child: MouseRegion(
+                                  cursor: SystemMouseCursors.resizeLeftRight,
+                                  child: GestureDetector(
+                                    key: const Key('btw-resize-handle'),
+                                    behavior: HitTestBehavior.opaque,
+                                    onHorizontalDragUpdate: (d) =>
+                                        widget.onAsideResize(
+                                          (actualAside - d.delta.dx).clamp(
+                                            minimumAside,
+                                            maximumAside,
+                                          ),
+                                        ),
+                                    child: Center(
+                                      child: Container(
+                                        width: 4,
+                                        height: 40,
+                                        decoration: BoxDecoration(
+                                          color: scheme.outlineVariant,
+                                          borderRadius: BorderRadius.circular(
+                                            4,
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ],
-                            )
-                          : const SizedBox.expand(),
+                              ),
+                            ),
+                          ],
+                        )
+                      : const SizedBox.expand(),
+                ),
+              ],
+            );
+          },
+        );
+      } else {
+        body = AnimatedBuilder(
+          animation: _controller,
+          child: chat,
+          builder: (context, chatChild) {
+            final progress = _progress;
+            final offset = slide ? _drawerWidth * progress : 0.0;
+            final drawerLeft = slide
+                ? offset - _drawerWidth
+                : -_drawerWidth * (1 - progress);
+            final chatCovered = progress > 0 || widget.asideOpen;
+            return Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: width,
+                  child: ExcludeFocus(
+                    excluding: chatCovered,
+                    child: ExcludeSemantics(
+                      excluding: chatCovered,
+                      child: IgnorePointer(
+                        ignoring: chatCovered,
+                        child: Transform.translate(
+                          offset: Offset(offset, 0),
+                          child: chatChild!,
+                        ),
+                      ),
                     ),
-                  ],
-                );
-              },
-            )
-          : TweenAnimationBuilder<double>(
-              tween: Tween(end: drawerOpen ? drawerWidth : 0),
-              duration: _duration,
-              curve: Curves.easeOutCubic,
-              builder: (context, offset, _) => Stack(
-                clipBehavior: Clip.hardEdge,
-                children: [
+                  ),
+                ),
+                if (progress > 0)
                   Positioned(
-                    left: offset,
+                    left: 0,
                     top: 0,
                     bottom: 0,
-                    width: width,
-                    child: ExcludeFocus(
-                      excluding: drawerOpen || asideOpen,
-                      child: ExcludeSemantics(
-                        excluding: drawerOpen || asideOpen,
-                        child: IgnorePointer(
-                          ignoring: drawerOpen || asideOpen,
-                          child: chat,
-                        ),
+                    width: _drawerWidth,
+                    child: Transform.translate(
+                      offset: Offset(drawerLeft, 0),
+                      child: drawerLayer,
+                    ),
+                  ),
+                if (progress > 0)
+                  Positioned(
+                    left: _drawerWidth * progress,
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    child: GestureDetector(
+                      key: const Key('chat-drawer-scrim'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _close,
+                      child: Semantics(
+                        label: 'Close menu',
+                        button: true,
+                        child: const ColoredBox(color: Color(0x52000000)),
                       ),
                     ),
                   ),
-                  if (offset > 0)
-                    Positioned(
-                      left: offset - drawerWidth,
-                      top: 0,
-                      bottom: 0,
-                      width: drawerWidth,
-                      child: drawerBody,
-                    ),
-                  if (drawerOpen)
-                    Positioned(
-                      left: offset,
-                      top: 0,
-                      bottom: 0,
-                      right: 0,
-                      child: GestureDetector(
-                        key: const Key('chat-drawer-scrim'),
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => onDrawerOpen(false),
-                        onHorizontalDragEnd: (d) {
-                          if ((d.primaryVelocity ?? 0) < 0) onDrawerOpen(false);
-                        },
-                        child: ColoredBox(
-                          color: Colors.black.withValues(alpha: 0.32),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+              ],
             );
-      return Stack(
-        clipBehavior: Clip.hardEdge,
-        children: [
-          Positioned.fill(child: body),
-          if (!wide)
-            Positioned.fill(
-              child: IgnorePointer(
-                ignoring: !asideOpen,
-                child: AnimatedSwitcher(
-                  duration: _duration,
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, animation) => SlideTransition(
-                    position: Tween(
-                      begin: const Offset(1, 0),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  ),
-                  child: asideOpen ? aside : const SizedBox.shrink(),
+          },
+        );
+      }
+
+      return Listener(
+        onPointerDown: _pointerPressed,
+        onPointerUp: _pointerReleased,
+        onPointerCancel: _pointerCancelled,
+        child: RawGestureDetector(
+          behavior: HitTestBehavior.translucent,
+          excludeFromSemantics: true,
+          gestures: {
+            _PaneDragRecognizer:
+                GestureRecognizerFactoryWithHandlers<_PaneDragRecognizer>(
+                  () => _PaneDragRecognizer(canStart: _canStartDrag),
+                  (recognizer) {
+                    recognizer
+                      ..dragStartBehavior = DragStartBehavior.down
+                      ..onStart = _dragStarted
+                      ..onUpdate = _dragUpdated
+                      ..onEnd = _dragEnded
+                      ..onCancel = _dragCancelled;
+                  },
                 ),
-              ),
-            ),
-          if (allowDrawer && !drawerOpen && !(asideOpen && !wide))
-            Positioned(
-              top: 0,
-              bottom: 0,
-              left: 0,
-              width: 20,
-              child: GestureDetector(
-                key: const Key('chat-drawer-edge'),
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragStart: (_) => drag = 0,
-                onHorizontalDragUpdate: (d) => drag += d.delta.dx,
-                onHorizontalDragEnd: (d) {
-                  if (drag > 48 || (d.primaryVelocity ?? 0) > 100) {
-                    onDrawerOpen(true);
-                  }
-                },
-              ),
-            ),
-        ],
+          },
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned.fill(child: body),
+              if (!wide)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    ignoring: !widget.asideOpen,
+                    child: AnimatedSwitcher(
+                      duration: _duration,
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInSine,
+                      transitionBuilder: (child, animation) => SlideTransition(
+                        position: Tween(
+                          begin: const Offset(1, 0),
+                          end: Offset.zero,
+                        ).animate(animation),
+                        child: child,
+                      ),
+                      child: widget.asideOpen
+                          ? widget.aside
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       );
     },
   );
+}
+
+class _PaneDragRecognizer extends HorizontalDragGestureRecognizer {
+  _PaneDragRecognizer({required this.canStart});
+
+  final bool Function(PointerDownEvent event) canStart;
+
+  @override
+  bool isPointerAllowed(PointerEvent event) {
+    if (event is! PointerDownEvent) return false;
+    return canStart(event) && super.isPointerAllowed(event);
+  }
 }
 
 /// Lets widgets inside the pane drawer close the pane itself (the modal
@@ -3846,6 +3857,351 @@ class _BackNavButton extends StatelessWidget {
 
 /// The utility strip pinned to the bottom of the chat sidebar: icon-only chat
 /// actions, echoing agnai's footer row.
+/// Subpages stay inside the drawer, so Back returns to its menu.
+enum _DrawerPanel { menu, presets, memory }
+
+class _ChatDrawer extends StatefulWidget {
+  const _ChatDrawer({
+    required this.onProfile,
+    required this.onCharacters,
+    required this.onChats,
+    required this.onGallery,
+    required this.onEditChat,
+    required this.onChatGraph,
+    required this.onProviderModel,
+    required this.onSettings,
+    required this.onImageGen,
+    required this.onExport,
+    required this.onRestart,
+    required this.onDelete,
+    required this.onNotifications,
+  });
+
+  final VoidCallback onProfile;
+  final VoidCallback onCharacters;
+  final VoidCallback onChats;
+  final VoidCallback onGallery;
+  final VoidCallback onEditChat;
+  final VoidCallback onChatGraph;
+  final VoidCallback onProviderModel;
+  final VoidCallback onSettings;
+  final VoidCallback onImageGen;
+  final VoidCallback onExport;
+  final VoidCallback onRestart;
+  final VoidCallback onDelete;
+  final VoidCallback onNotifications;
+
+  @override
+  State<_ChatDrawer> createState() => _ChatDrawerState();
+}
+
+class _ChatDrawerState extends State<_ChatDrawer> {
+  _DrawerPanel _panel = _DrawerPanel.menu;
+  bool _forward = true;
+
+  void _close(BuildContext context, VoidCallback action) {
+    final pane = context.getInheritedWidgetOfExactType<_PaneScope>();
+    if (pane != null) {
+      pane.close();
+    } else {
+      Navigator.of(context).pop();
+    }
+    action();
+  }
+
+  void _show(_DrawerPanel panel) => setState(() {
+    _forward = panel != _DrawerPanel.menu;
+    _panel = panel;
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget body;
+    switch (_panel) {
+      case _DrawerPanel.presets:
+        body = ChatPresetPanel(onBack: () => _show(_DrawerPanel.menu));
+      case _DrawerPanel.memory:
+        body = ChatMemoryPanel(onBack: () => _show(_DrawerPanel.menu));
+      case _DrawerPanel.menu:
+        body = Selector<AppState, _ChatMenuData>(
+          selector: (context, state) {
+            final conversation = state.active;
+            final provider = state.activeProvider;
+            final books = state.lorebooksFor(conversation);
+            final tree = buildFamilyTree(state.conversations, conversation.id);
+            return _ChatMenuData(
+              conversationId: conversation.id,
+              conversationTitle: conversation.isEmpty
+                  ? 'New chat'
+                  : conversation.title,
+              providerName: provider?.displayName ?? '',
+              providerKind: provider?.kind,
+              providerModel: provider?.model ?? '',
+              presetName: state.presetFor(conversation)?.displayName,
+              memoryCount: books.length,
+              graphSize: tree?.subtreeSize ?? 1,
+            );
+          },
+          builder: (context, data, _) => _ChatMenuBody(
+            data: data,
+            onEditChat: () => _close(context, widget.onEditChat),
+            onProfile: () => _close(context, widget.onProfile),
+            onCharacters: () => _close(context, widget.onCharacters),
+            onChats: () => _close(context, widget.onChats),
+            onGallery: () => _close(context, widget.onGallery),
+            onPreset: () => _show(_DrawerPanel.presets),
+            onMemory: () => _show(_DrawerPanel.memory),
+            onChatGraph: () => _close(context, widget.onChatGraph),
+            onProviderModel: () => _close(context, widget.onProviderModel),
+            onSettings: () => _close(context, widget.onSettings),
+            onImageGen: () => _close(context, widget.onImageGen),
+            onExport: () => _close(context, widget.onExport),
+            onRestart: () => _close(context, widget.onRestart),
+            onDelete: () => _close(context, widget.onDelete),
+            onNotifications: () => _close(context, widget.onNotifications),
+          ),
+        );
+    }
+
+    return Drawer(
+      child: SafeArea(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInSine,
+          transitionBuilder: (child, animation) {
+            final incoming = child.key == ValueKey(_panel);
+            final dir = _forward ? 1.0 : -1.0;
+            final begin = Offset((incoming ? dir : -dir) * 0.12, 0);
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: begin,
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            );
+          },
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.topCenter,
+            children: [...previousChildren, ?currentChild],
+          ),
+          child: KeyedSubtree(key: ValueKey(_panel), child: body),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatMenuData {
+  const _ChatMenuData({
+    required this.conversationId,
+    required this.conversationTitle,
+    required this.providerName,
+    required this.providerKind,
+    required this.providerModel,
+    required this.presetName,
+    required this.memoryCount,
+    required this.graphSize,
+  });
+
+  final String conversationId;
+  final String conversationTitle;
+  final String providerName;
+  final ProviderKind? providerKind;
+  final String providerModel;
+  final String? presetName;
+  final int memoryCount;
+  final int graphSize;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ChatMenuData &&
+      other.conversationId == conversationId &&
+      other.conversationTitle == conversationTitle &&
+      other.providerName == providerName &&
+      other.providerKind == providerKind &&
+      other.providerModel == providerModel &&
+      other.presetName == presetName &&
+      other.memoryCount == memoryCount &&
+      other.graphSize == graphSize;
+
+  @override
+  int get hashCode => Object.hash(
+    conversationId,
+    conversationTitle,
+    providerName,
+    providerKind,
+    providerModel,
+    presetName,
+    memoryCount,
+    graphSize,
+  );
+}
+
+class _ChatMenuBody extends StatelessWidget {
+  const _ChatMenuBody({
+    required this.data,
+    required this.onEditChat,
+    required this.onProfile,
+    required this.onCharacters,
+    required this.onChats,
+    required this.onGallery,
+    required this.onPreset,
+    required this.onMemory,
+    required this.onChatGraph,
+    required this.onProviderModel,
+    required this.onSettings,
+    required this.onImageGen,
+    required this.onExport,
+    required this.onRestart,
+    required this.onDelete,
+    required this.onNotifications,
+  });
+
+  final _ChatMenuData data;
+  final VoidCallback onEditChat;
+  final VoidCallback onProfile;
+  final VoidCallback onCharacters;
+  final VoidCallback onChats;
+  final VoidCallback onGallery;
+  final VoidCallback onPreset;
+  final VoidCallback onMemory;
+  final VoidCallback onChatGraph;
+  final VoidCallback onProviderModel;
+  final VoidCallback onSettings;
+  final VoidCallback onImageGen;
+  final VoidCallback onExport;
+  final VoidCallback onRestart;
+  final VoidCallback onDelete;
+  final VoidCallback onNotifications;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final model = data.providerModel.trim();
+    final providerSubtitle = data.providerKind == null
+        ? 'No provider yet'
+        : '${data.providerName}${model.isEmpty ? '' : ' · $model'}';
+    final presetName = data.presetName ?? 'Default';
+    final memorySubtitle = data.memoryCount == 0
+        ? 'None'
+        : '${data.memoryCount} active';
+    final graphSubtitle = data.graphSize <= 1
+        ? 'No branches'
+        : '${data.graphSize} chats · ${data.graphSize - 1} '
+              '${data.graphSize == 2 ? 'branch' : 'branches'}';
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: InkWell(
+            onTap: onEditChat,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.edit_outlined, size: 18, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      data.conversationTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            children: [
+              _ChatNavItem(
+                icon: Icons.person_outline,
+                label: 'Profile',
+                onTap: onProfile,
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _BackNavButton(
+                        label: 'Characters',
+                        onTap: onCharacters,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _BackNavButton(label: 'Chats', onTap: onChats),
+                    ),
+                  ],
+                ),
+              ),
+              _ChatNavItem(
+                icon: Icons.photo_library_outlined,
+                label: 'Gallery',
+                onTap: onGallery,
+              ),
+              _ChatNavItem(
+                icon: Icons.edit_note_outlined,
+                label: 'Edit Chat',
+                onTap: onEditChat,
+              ),
+              _ChatNavItem(
+                icon: Icons.tune_outlined,
+                label: 'Preset',
+                subtitle: presetName,
+                onTap: onPreset,
+              ),
+              _ChatNavItem(
+                icon: Icons.book_outlined,
+                label: 'Memory',
+                subtitle: memorySubtitle,
+                onTap: onMemory,
+              ),
+              _ChatNavItem(
+                icon: Icons.account_tree_outlined,
+                label: 'Chat Graph',
+                subtitle: graphSubtitle,
+                onTap: onChatGraph,
+              ),
+              const SizedBox(height: 4),
+              _ChatNavItem(
+                icon: Icons.dns_outlined,
+                label: 'Provider & model',
+                subtitle: providerSubtitle,
+                onTap: onProviderModel,
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        _ChatDrawerFooter(
+          onSettings: onSettings,
+          onImageGen: onImageGen,
+          onExport: onExport,
+          onRestart: onRestart,
+          onDelete: onDelete,
+          onNotifications: onNotifications,
+        ),
+      ],
+    );
+  }
+}
+
 class _ChatDrawerFooter extends StatelessWidget {
   const _ChatDrawerFooter({
     required this.onSettings,

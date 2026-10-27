@@ -17,6 +17,7 @@ class Appearance {
     this.fontFamily,
     this.expressive = false,
     this.palette = AppPalette.tonal,
+    this.mobileChatMenuStyle = MobileChatMenuStyle.slide,
   });
 
   /// Prefer the platform's Material You palette over the custom [seedColor].
@@ -41,6 +42,10 @@ class Appearance {
   /// How a palette is drawn out of the wallpaper or the seed colour.
   final AppPalette palette;
 
+  /// How the chat menu occupies a phone while it is open. Tablets and desktops
+  /// keep their side-pane layout whatever this says.
+  final MobileChatMenuStyle mobileChatMenuStyle;
+
   Appearance copyWith({
     bool? dynamicColor,
     AppThemeMode? mode,
@@ -48,42 +53,48 @@ class Appearance {
     Object? fontFamily = _unset,
     bool? expressive,
     AppPalette? palette,
-  }) =>
-      Appearance(
-        dynamicColor: dynamicColor ?? this.dynamicColor,
-        mode: mode ?? this.mode,
-        seedColor: seedColor ?? this.seedColor,
-        fontFamily: identical(fontFamily, _unset)
-            ? this.fontFamily
-            : fontFamily as String?,
-        expressive: expressive ?? this.expressive,
-        palette: palette ?? this.palette,
-      );
+    MobileChatMenuStyle? mobileChatMenuStyle,
+  }) => Appearance(
+    dynamicColor: dynamicColor ?? this.dynamicColor,
+    mode: mode ?? this.mode,
+    seedColor: seedColor ?? this.seedColor,
+    fontFamily: identical(fontFamily, _unset)
+        ? this.fontFamily
+        : fontFamily as String?,
+    expressive: expressive ?? this.expressive,
+    palette: palette ?? this.palette,
+    mobileChatMenuStyle: mobileChatMenuStyle ?? this.mobileChatMenuStyle,
+  );
 
   // Sentinel so copyWith can tell "leave the font" from "clear it to null".
   static const Object _unset = Object();
 
   Map<String, dynamic> toJson() => {
-        'dynamicColor': dynamicColor,
-        'mode': mode.name,
-        'seedColor': seedColor,
-        if (fontFamily != null) 'fontFamily': fontFamily,
-        // Written only when changed, so a store from before these existed and
-        // one that never touched them read — and compare — the same.
-        if (expressive) 'expressive': true,
-        if (palette != AppPalette.tonal) 'palette': palette.name,
-      };
+    'dynamicColor': dynamicColor,
+    'mode': mode.name,
+    'seedColor': seedColor,
+    if (fontFamily != null) 'fontFamily': fontFamily,
+    // Written only when changed, so a store from before these existed and
+    // one that never touched them read — and compare — the same.
+    if (expressive) 'expressive': true,
+    if (palette != AppPalette.tonal) 'palette': palette.name,
+    if (mobileChatMenuStyle != MobileChatMenuStyle.slide)
+      'mobileChatMenuStyle': mobileChatMenuStyle.name,
+  };
 
   factory Appearance.fromJson(Map<String, dynamic> json) => Appearance(
-        dynamicColor: json['dynamicColor'] as bool? ?? true,
-        mode: AppThemeMode.byName(json['mode'] as String?),
-        seedColor: (json['seedColor'] as num?)?.toInt() ?? kDefaultSeedColor,
-        fontFamily: (json['fontFamily'] as String?)?.trim().isEmpty ?? true
-            ? null
-            : (json['fontFamily'] as String).trim(),
-        expressive: json['expressive'] as bool? ?? false,
-        palette: AppPalette.byName(json['palette'] as String?),
-      );
+    dynamicColor: json['dynamicColor'] as bool? ?? true,
+    mode: AppThemeMode.byName(json['mode'] as String?),
+    seedColor: (json['seedColor'] as num?)?.toInt() ?? kDefaultSeedColor,
+    fontFamily: (json['fontFamily'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (json['fontFamily'] as String).trim(),
+    expressive: json['expressive'] as bool? ?? false,
+    palette: AppPalette.byName(json['palette'] as String?),
+    mobileChatMenuStyle: MobileChatMenuStyle.byName(
+      json['mobileChatMenuStyle'] as String?,
+    ),
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -93,11 +104,39 @@ class Appearance {
       other.seedColor == seedColor &&
       other.fontFamily == fontFamily &&
       other.expressive == expressive &&
-      other.palette == palette;
+      other.palette == palette &&
+      other.mobileChatMenuStyle == mobileChatMenuStyle;
 
   @override
   int get hashCode => Object.hash(
-      dynamicColor, mode, seedColor, fontFamily, expressive, palette);
+    dynamicColor,
+    mode,
+    seedColor,
+    fontFamily,
+    expressive,
+    palette,
+    mobileChatMenuStyle,
+  );
+}
+
+/// How the chat menu opens on a phone. [slide] pushes the chat aside; [overlay]
+/// draws the menu over the chat without moving it. Wide layouts always use the
+/// side-pane behaviour and ignore this preference.
+enum MobileChatMenuStyle {
+  slide('Slide chat'),
+  overlay('Overlay chat');
+
+  const MobileChatMenuStyle(this.label);
+
+  final String label;
+
+  /// Unknown or missing names keep the new layout as the default.
+  static MobileChatMenuStyle byName(String? name) {
+    for (final style in values) {
+      if (style.name == name) return style;
+    }
+    return MobileChatMenuStyle.slide;
+  }
 }
 
 /// Mirrors Flutter's ThemeMode without dragging the framework into the model

@@ -12,6 +12,7 @@ enum SettingAnchor {
   expressive,
   palette,
   font,
+  chatMenuStyle,
   charactersFreeSize,
   characterImageOverlay,
   galleryFreeSize,

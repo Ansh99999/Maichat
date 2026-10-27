@@ -40,6 +40,9 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
   late final TextEditingController _action;
   late bool _hidden;
   late bool _followUp;
+  late final TextEditingController _tagField;
+  String? _editingTag;
+  String? _tagError;
   String? _nameError;
   String? _descriptionError;
   String? _parametersError;
@@ -80,15 +83,96 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
     );
     _hidden = initial?.hidden ?? false;
     _followUp = initial?.followUp ?? true;
+    _tags = List<String>.of(initial?.tags ?? const <String>[]);
+    _tagField = TextEditingController();
   }
 
-  @override
-  void dispose() {
-    _name.dispose();
-    _description.dispose();
-    _parameters.dispose();
-    _action.dispose();
-    super.dispose();
+  List<String> get _tagsValue => normalizeToolTags(_tags);
+  List<String> _tags = [];
+
+  String? _validateTagField({bool requireText = false}) {
+    final raw = _tagField.text.trim();
+    if (raw.isEmpty) {
+      return requireText || _editingTag != null ? 'Enter a tag.' : null;
+    }
+    final normalized = normalizeToolTags([raw]);
+    if (normalized.isEmpty) return 'Enter a tag.';
+    final key = normalized.single.toLowerCase();
+    if (_editingTag == null && _tags.any((t) => t.toLowerCase() == key)) {
+      return 'That tag is already added.';
+    }
+    if (_editingTag != null &&
+        _editingTag!.toLowerCase() != key &&
+        _tags.any((t) => t.toLowerCase() == key)) {
+      return 'That tag is already added.';
+    }
+    return null;
+  }
+
+  /// Commits the field so toolbar Save cannot silently drop a pending tag.
+  ///
+  /// Returns false (and shows the inline tag error) when the pending value is
+  /// invalid; unrelated editor errors are deliberately left for [_validate].
+  bool _commitTagField() {
+    final raw = _tagField.text.trim();
+    if (raw.isEmpty && _editingTag != null) {
+      setState(() {
+        _tags.removeWhere((t) => t.toLowerCase() == _editingTag!.toLowerCase());
+        _editingTag = null;
+        _tagError = null;
+        _tagField.clear();
+      });
+      return true;
+    }
+    final error = _validateTagField(requireText: true);
+    if (error != null) {
+      setState(() => _tagError = error);
+      return false;
+    }
+    final normalized = normalizeToolTags([raw]).single;
+    setState(() {
+      if (_editingTag != null) {
+        final index = _tags.indexWhere(
+          (t) => t.toLowerCase() == _editingTag!.toLowerCase(),
+        );
+        if (index >= 0) {
+          _tags[index] = normalized;
+        } else {
+          _tags.add(normalized);
+        }
+      } else {
+        _tags.add(normalized);
+      }
+      _editingTag = null;
+      _tagError = null;
+      _tagField.clear();
+    });
+    return true;
+  }
+
+  void _startEditTag(String tag) {
+    setState(() {
+      _editingTag = _tags.firstWhere(
+        (t) => t.toLowerCase() == tag.toLowerCase(),
+        orElse: () => tag,
+      );
+      _tagField.text = _editingTag!;
+      _tagField.selection = TextSelection.collapsed(
+        offset: _tagField.text.length,
+      );
+      _tagError = null;
+    });
+  }
+
+  void _removeTag(String tag) {
+    setState(() {
+      _tags.removeWhere((t) => t.toLowerCase() == tag.toLowerCase());
+      if (_editingTag?.toLowerCase() == tag.toLowerCase()) {
+        _editingTag = null;
+        _tagField.clear();
+      }
+      _tagError = null;
+    });
   }
 
   ChatToolDefinition? _validate() {
@@ -124,6 +208,7 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
       }
     }
 
+    final tags = _tagsValue;
     final parameters = decode(
       _parameters,
       'JSON parameter schema',
@@ -150,13 +235,45 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
       hidden: _hidden,
       followUp: _followUp,
       builtin: false,
+      tags: tags,
     );
   }
 
   Future<void> _save() async {
+    final hasPendingTag =
+        _tagField.text.trim().isNotEmpty || _editingTag != null;
+    if (hasPendingTag && !_commitTagField()) return;
+    if (_isReadOnly) {
+      final initial = _initial!;
+      final tags = _tagsValue;
+      final state = context.read<AppState>();
+      final config = state.chatToolConfigFor(
+        widget.conversationId == null
+            ? null
+            : state.conversationById(widget.conversationId!),
+      );
+      try {
+        await saveBuiltInTags(
+          context,
+          state,
+          config,
+          initial.name,
+          tags,
+          conversationId: widget.conversationId,
+        );
+      } catch (_) {
+        // The helper has already surfaced the save error.
+        return;
+      }
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
     final tool = _validate();
     if (tool == null) return;
     final state = context.read<AppState>();
+    // Read the config after state changed while the editor was open;
+    // otherwise another screen's toggle can be silently reverted by this
+    // stale copy.
     final config = state.chatToolConfigFor(
       widget.conversationId == null
           ? null
@@ -262,6 +379,78 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
     if (mounted) Navigator.of(context).pop(true);
   }
 
+  Widget _buildTagSection(ThemeData theme) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Tags',
+        style: theme.textTheme.labelLarge?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      const SizedBox(height: 4),
+      LayoutBuilder(
+        builder: (context, constraints) => ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+          child: TextField(
+            key: const Key('chat-tool-tags-field'),
+            controller: _tagField,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _commitTagField(),
+            decoration: InputDecoration(
+              hintText: _editingTag == null ? 'Add a tag' : 'Rename tag',
+              helperText: 'Labels used only to organise this list',
+              errorText: _tagError,
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: 6),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: FilledButton.tonalIcon(
+          key: Key(
+            _editingTag == null ? 'chat-tool-tags-add' : 'chat-tool-tags-save',
+          ),
+          onPressed: _commitTagField,
+          icon: Icon(_editingTag == null ? Icons.add : Icons.check),
+          label: Text(_editingTag == null ? 'Add tag' : 'Save tag'),
+        ),
+      ),
+      if (_tags.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Wrap(
+          key: const Key('chat-tool-tag-chips'),
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final tag in _tags)
+              KeyedSubtree(
+                key: Key('chat-tool-tag-chip-$tag'),
+                child: InputChip(
+                  deleteIcon: KeyedSubtree(
+                    key: Key('chat-tool-tag-delete-$tag'),
+                    child: const Icon(Icons.cancel),
+                  ),
+                  label: Text(
+                    tag,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onPressed: () => _startEditTag(tag),
+                  onDeleted: () => _removeTag(tag),
+                  deleteButtonTooltipMessage: 'Delete tag',
+                ),
+              ),
+          ],
+        ),
+      ],
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
     final readOnly = _isReadOnly;
@@ -275,12 +464,11 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
       appBar: AppBar(
         title: Text(title),
         actions: [
-          if (!readOnly)
-            TextButton(
-              key: const Key('chat-tool-editor-save'),
-              onPressed: _save,
-              child: const Text('Save'),
-            ),
+          TextButton(
+            key: const Key('chat-tool-editor-save'),
+            onPressed: _save,
+            child: const Text('Save'),
+          ),
         ],
       ),
       body: ListView(
@@ -292,6 +480,8 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
               _initial!.description,
               style: theme.textTheme.bodyMedium?.copyWith(height: 1.4),
             ),
+            const SizedBox(height: 16),
+            _buildTagSection(theme),
             const SizedBox(height: 16),
             _JsonBlock(label: 'Parameters', value: _initial!.parameters),
             const SizedBox(height: 8),
@@ -342,6 +532,8 @@ class _ChatToolEditScreenState extends State<ChatToolEditScreen> {
                 border: const OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 10),
+            _buildTagSection(theme),
             const SizedBox(height: 10),
             SwitchListTile(
               dense: true,

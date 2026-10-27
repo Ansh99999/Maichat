@@ -77,11 +77,18 @@ extension ChatToolsState on AppState {
         byName[d.name] = d;
       }
     }
-    final overrides = chatToolConfigFor(conversation).followUpOverrides;
+    final cfg = chatToolConfigFor(conversation);
+    final overrides = cfg.followUpOverrides;
+    final tagOverrides = cfg.tagOverrides;
     return [
       for (final definition in byName.values)
-        if (definition.builtin && overrides.containsKey(definition.name))
-          definition.copyWith(followUp: overrides[definition.name])
+        if (definition.builtin &&
+            (overrides.containsKey(definition.name) ||
+                tagOverrides.containsKey(definition.name)))
+          definition.copyWith(
+            followUp: overrides[definition.name] ?? definition.followUp,
+            tags: tagOverrides[definition.name] ?? definition.tags,
+          )
         else
           definition,
     ];

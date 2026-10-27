@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -318,6 +319,15 @@ const List<_SearchEntry> _searchIndex = [
     builder: _fontPage,
   ),
   _SearchEntry(
+    title: 'Chat menu style',
+    section: 'Appearance',
+    icon: Icons.view_sidebar_outlined,
+    keywords:
+        'menu drawer sidebar slide overlay push cover phone mobile chat '
+        'style layout',
+    builder: _chatMenuStylePage,
+  ),
+  _SearchEntry(
     title: 'Characters free-size cards',
     section: 'Browse appearance',
     icon: Icons.people_outline,
@@ -516,6 +526,8 @@ Widget _palettePage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.palette);
 Widget _fontPage() =>
     const AppearanceSettingsPage(highlight: SettingAnchor.font);
+Widget _chatMenuStylePage() =>
+    const AppearanceSettingsPage(highlight: SettingAnchor.chatMenuStyle);
 Widget _charactersFreeSizePage() => const BrowseAppearanceSettingsPage(
   highlight: SettingAnchor.charactersFreeSize,
 );
@@ -568,9 +580,21 @@ class _SettingsSearch extends StatelessWidget {
       barLeading: const Icon(Icons.search),
       suggestionsBuilder: (context, controller) {
         final needle = controller.text.trim().toLowerCase();
-        final results = needle.isEmpty
+        // The chat-menu row is a phone-only setting, so its search entry is too.
+        final platform = Theme.of(context).platform;
+        final mobilePhone =
+            !kIsWeb &&
+            (platform == TargetPlatform.android ||
+                platform == TargetPlatform.iOS) &&
+            MediaQuery.sizeOf(context).width < 720;
+        final candidates = mobilePhone
             ? _searchIndex
-            : _searchIndex.where((e) => e.matches(needle)).toList();
+            : _searchIndex
+                  .where((e) => e.title != 'Chat menu style')
+                  .toList(growable: false);
+        final results = needle.isEmpty
+            ? candidates
+            : candidates.where((e) => e.matches(needle)).toList();
         if (results.isEmpty) {
           return const [
             Padding(
