@@ -486,6 +486,13 @@ class _GeneratedImagesNote extends StatelessWidget {
 class ChatTrackerPanel extends StatelessWidget {
   const ChatTrackerPanel({super.key, required this.values});
 
+  ChatTrackerPanel.fromRun(ChatToolRun run, {super.key})
+    : values = ChatToolResults._trackerValuesFromEffects(
+        run.effects
+            .where((effect) => effect.key.startsWith('tracker:'))
+            .toList(),
+      );
+
   final Map<String, dynamic> values;
 
   @override
@@ -501,8 +508,10 @@ class ChatTrackerPanel extends StatelessWidget {
     final scheme = theme.colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           for (final entry in entries)
             _TrackerChip(
@@ -515,7 +524,6 @@ class ChatTrackerPanel extends StatelessWidget {
                   : null,
               scheme: scheme,
             ),
-          const SizedBox(height: 4),
         ],
       ),
     );
@@ -551,33 +559,35 @@ class _TrackerChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(10),
+    // A compact rectangle — `| Excitement: 50% |` — sized to its label, not a
+    // full-width bar. Ergonomic inside the roleplay transcript: several
+    // trackers sit side by side in a Wrap and wrap onto more lines as needed.
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: ShapeDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: scheme.outlineVariant),
         ),
-        child: Text.rich(
-          TextSpan(
-            text: label,
-            style: theme.textTheme.labelMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-            children: [
-              TextSpan(
-                text: '  ${_formatValue(value, unit)}',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
+      ),
+      child: Text.rich(
+        TextSpan(
+          text: '$label: ',
+          style: theme.textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w600,
           ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+          children: [
+            TextSpan(
+              text: _formatValue(value, unit),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

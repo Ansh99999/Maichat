@@ -77,7 +77,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Health  72%'), findsOneWidget);
+    // Compact ergonomic chip: "Health: 72%" in one tight pill, not a full-width
+    // bar. The label and value are separate spans, so match the whole rich text.
+    expect(find.text('Health: 72%'), findsOneWidget);
     expect(find.text('No tool calls were recorded.'), findsNothing);
   });
 

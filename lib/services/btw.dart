@@ -1,9 +1,10 @@
+import '../models/message.dart';
 import 'studio/studio_commands.dart';
 
-/// `/btw` — a quick side question, Claude Code's `/btw`: asked with the whole
-/// conversation as context, answered in a sheet, and then gone. The question
-/// and its answer never enter the transcript, the swipes, the summaries, the
-/// store, or any later request.
+/// `/btw` asks outside the story using the conversation as context. The chat
+/// keeps a temporary side thread; Studio uses a one-question sheet. Side turns
+/// never enter the saved roleplay transcript, swipes, summaries or later story
+/// requests.
 ///
 /// Both composers understand it: the roleplay chat's (where it is the only
 /// slash command, see [btwQuestion]) and the Studio's (one of its built-ins,
@@ -26,6 +27,20 @@ String chatBtwInstruction(String question) =>
     'and briefly, out of character, using the conversation above. This '
     'exchange is not part of the chat — do not continue the roleplay.]\n\n'
     '${question.trim()}';
+
+/// Only completed text turns from the temporary side conversation are context.
+List<ChatMessage> btwHistory(List<ChatMessage> history) => [
+  for (final message in history)
+    if ((message.role == 'user' || message.role == 'assistant') &&
+        !message.error &&
+        message.content.trim().isNotEmpty)
+      ChatMessage(
+        role: message.role,
+        content: message.isUser
+            ? chatBtwInstruction(message.content)
+            : message.content,
+      ),
+];
 
 /// What the Studio's agent is told, as the last `user` turn of its own next
 /// request.

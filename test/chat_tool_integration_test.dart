@@ -316,6 +316,37 @@ void main() {
     if (pictureDirectory != null) avatarDirectory = null;
   });
 
+  for (final scoped in [false, true]) {
+    test(
+      'built-in follow-up setting stops after recorded result (chat scope: $scoped)',
+      () async {
+        await boot();
+        await state.saveChatToolConfig(
+          const ChatToolConfig(
+            enabled: true,
+            followUpOverrides: {'roll_dice': false},
+          ),
+          conversationId: scoped ? state.active.id : null,
+        );
+        await state.send('Roll a die.');
+        expect(requests, hasLength(1));
+        final run = state.active.messages.last.toolRun!;
+        expect(run.status, 'completed');
+        final result = run.history.singleWhere((m) => m.role == AgentRole.tool);
+        expect(jsonDecode(result.text)['total'], 1);
+        if (scoped) {
+          expect(
+            state
+                .chatToolDefinitionsFor(null)
+                .singleWhere((t) => t.name == 'roll_dice')
+                .followUp,
+            isTrue,
+          );
+        }
+      },
+    );
+  }
+
   for (final providerKind in [
     ProviderKind.openai,
     ProviderKind.openaiResponses,

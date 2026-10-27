@@ -105,6 +105,8 @@ class ChatToolConfig {
     this.maxRounds = 5,
     this.maxCalls = 20,
     this.trackerPlacement = 'message',
+    this.hideToolCallsInChat = false,
+    this.followUpOverrides = const {},
   });
 
   final bool enabled;
@@ -114,6 +116,13 @@ class ChatToolConfig {
   final int maxCalls;
   final String trackerPlacement;
 
+  /// When set, tool calls and results are not shown in the chat transcript at
+  /// all. Tool calling itself keeps working; only the in-chat UI is hidden.
+  final bool hideToolCallsInChat;
+
+  /// Per-scope runtime choices for built-in operations, whose definitions stay read-only.
+  final Map<String, bool> followUpOverrides;
+
   ChatToolConfig copyWith({
     bool? enabled,
     List<String>? disabledTools,
@@ -121,6 +130,8 @@ class ChatToolConfig {
     int? maxRounds,
     int? maxCalls,
     String? trackerPlacement,
+    bool? hideToolCallsInChat,
+    Map<String, bool>? followUpOverrides,
   }) => ChatToolConfig(
     enabled: enabled ?? this.enabled,
     disabledTools: disabledTools ?? this.disabledTools,
@@ -128,6 +139,8 @@ class ChatToolConfig {
     maxRounds: maxRounds ?? this.maxRounds,
     maxCalls: maxCalls ?? this.maxCalls,
     trackerPlacement: trackerPlacement ?? this.trackerPlacement,
+    hideToolCallsInChat: hideToolCallsInChat ?? this.hideToolCallsInChat,
+    followUpOverrides: followUpOverrides ?? this.followUpOverrides,
   );
 
   Map<String, dynamic> toJson() => {
@@ -138,6 +151,8 @@ class ChatToolConfig {
     if (maxRounds != 5) 'maxRounds': maxRounds,
     if (maxCalls != 20) 'maxCalls': maxCalls,
     if (trackerPlacement != 'message') 'trackerPlacement': trackerPlacement,
+    if (hideToolCallsInChat) 'hideToolCallsInChat': true,
+    if (followUpOverrides.isNotEmpty) 'followUpOverrides': followUpOverrides,
   };
 
   factory ChatToolConfig.fromJson(Map<String, dynamic> json) => ChatToolConfig(
@@ -156,6 +171,13 @@ class ChatToolConfig {
     maxRounds: _clamp((json['maxRounds'] as num?)?.toInt() ?? 5, 1, 10),
     maxCalls: _clamp((json['maxCalls'] as num?)?.toInt() ?? 20, 1, 50),
     trackerPlacement: json['trackerPlacement']?.toString() ?? 'message',
+    hideToolCallsInChat: json['hideToolCallsInChat'] as bool? ?? false,
+    followUpOverrides: {
+      if (json['followUpOverrides'] is Map)
+        for (final entry in (json['followUpOverrides'] as Map).entries)
+          if (entry.key is String && entry.value is bool)
+            entry.key as String: entry.value as bool,
+    },
   );
 }
 

@@ -49,10 +49,14 @@ class MessageBubble extends StatelessWidget {
     this.onEditSave,
     this.onEditCancel,
     this.displayTransform,
+    this.belowContent,
   });
 
   final ChatMessage message;
   final ChatInterface ui;
+
+  /// Compact message-owned details, before the swipe selector.
+  final Widget? belowContent;
 
   /// An optional display-only regex pass applied to the text before it is shown,
   /// leaving the stored message untouched. Null (the common case, and the
@@ -279,13 +283,21 @@ class MessageBubble extends StatelessWidget {
           ],
         );
       }
-      if (!message.hasSwipes) return body;
+      if (!message.hasSwipes && belowContent == null) return body;
       return Column(
         mainAxisSize: MainAxisSize.min,
         // Centred under the message, per the spec — the bubble hugs whichever of
         // the two is wider.
         crossAxisAlignment: CrossAxisAlignment.center,
-        children: [body, _swipeBar(context, textColor)],
+        children: [
+          body,
+          if (belowContent != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: belowContent,
+            ),
+          if (message.hasSwipes) _swipeBar(context, textColor),
+        ],
       );
     }
     // APPEND-BUILD
@@ -532,8 +544,8 @@ class MessageBubble extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.only(top: 1, left: 2, right: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           for (final a in inline)
             IconButton(

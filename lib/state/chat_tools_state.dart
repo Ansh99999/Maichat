@@ -77,7 +77,14 @@ extension ChatToolsState on AppState {
         byName[d.name] = d;
       }
     }
-    return byName.values.toList();
+    final overrides = chatToolConfigFor(conversation).followUpOverrides;
+    return [
+      for (final definition in byName.values)
+        if (definition.builtin && overrides.containsKey(definition.name))
+          definition.copyWith(followUp: overrides[definition.name])
+        else
+          definition,
+    ];
   }
 
   Future<void> saveChatToolConfig(
@@ -1022,6 +1029,7 @@ extension ChatToolsState on AppState {
   Future<String> _askAsideWithTools(
     String question,
     Conversation c, {
+    List<ChatMessage> sideHistory = const [],
     BtwRun? run,
     void Function(String)? onProgress,
   }) async {
@@ -1071,7 +1079,9 @@ extension ChatToolsState on AppState {
           ..addAll(globalVariables);
       }
       final source = List<ChatMessage>.of(assembled.messages);
+      final prior = _chatToolPayload(btwHistory(sideHistory), base);
       final messages = _chatToolPayload(source, base)
+        ..addAll(prior)
         ..add(
           AgentMessage.user(
             '${chatBtwInstruction(question)}\n\n'
@@ -1086,7 +1096,7 @@ extension ChatToolsState on AppState {
         );
       final cfg = chatToolConfigFor(c);
       final questionMessage = messages.last;
-      final sideHistory = <AgentMessage>[];
+      final toolHistory = <AgentMessage>[];
       final knownDefinitions = <String, ChatToolDefinition>{};
       for (var round = 0; round < cfg.maxRounds && !stopped; round++) {
         for (final d in _availableChatTools(c, aside: true)) {
@@ -1128,8 +1138,9 @@ extension ChatToolsState on AppState {
           messages
             ..clear()
             ..addAll(_chatToolPayload(source, base))
+            ..addAll(prior)
             ..add(questionMessage)
-            ..addAll(sideHistory);
+            ..addAll(toolHistory);
           cost = _toolRequestCost(provider, messages, offered, params);
         }
         if (cost + (assembled.params.maxTokens ?? 1024) >
@@ -1191,7 +1202,7 @@ extension ChatToolsState on AppState {
           providerData: metadata,
         );
         messages.add(assistant);
-        sideHistory.add(assistant);
+        toolHistory.add(assistant);
         for (final call in calls) {
           String text;
           var failed = false;
@@ -1278,7 +1289,7 @@ extension ChatToolsState on AppState {
             isError: failed,
           );
           messages.add(resultMessage);
-          sideHistory.add(resultMessage);
+          toolHistory.add(resultMessage);
         }
       }
       return answer;

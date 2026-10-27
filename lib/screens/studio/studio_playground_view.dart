@@ -78,22 +78,25 @@ class _PlaygroundDrawerState extends State<PlaygroundDrawer> {
   /// one that outlives the drawer, for whatever the action opens.
   void _closeThen(void Function(BuildContext context) action) {
     final navigator = Navigator.of(context);
-    navigator.pop();
+    closeChatSidebar(context);
     action(navigator.context);
   }
 
-  void _push(Widget page) => _closeThen((context) => Navigator.of(context)
-      .push(MaterialPageRoute<void>(builder: (_) => page)));
+  void _push(Widget page) => _closeThen(
+    (context) => Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => page)),
+  );
 
   void _newChat() {
     final test = _playground.startChat();
     context.read<AppState>().selectConversation(test.chat.id);
-    Navigator.of(context).pop();
+    closeChatSidebar(context);
   }
 
   void _open(StudioPlaytest test) {
     context.read<AppState>().selectConversation(test.chat.id);
-    Navigator.of(context).pop();
+    closeChatSidebar(context);
   }
 
   void _pour(StudioPlaytest test, Offset global) {
@@ -162,15 +165,11 @@ class _PlaygroundDrawerState extends State<PlaygroundDrawer> {
               child: child,
             );
           },
-          layoutBuilder: (current, previous) => Stack(
-            fit: StackFit.expand,
-            children: [...previous, ?current],
-          ),
+          layoutBuilder: (current, previous) =>
+              Stack(fit: StackFit.expand, children: [...previous, ?current]),
           child: KeyedSubtree(
             key: ValueKey<bool>(_presets),
-            child: _presets
-                ? _presetPanel(context)
-                : _menu(context),
+            child: _presets ? _presetPanel(context) : _menu(context),
           ),
         ),
       ),
@@ -251,9 +250,11 @@ class _PlaygroundDrawerState extends State<PlaygroundDrawer> {
                             key: const Key('playground-group'),
                             icon: Icons.groups_outlined,
                             tooltip: 'Group chats',
-                            onPressed: () => _push(const ChatBehaviourPage(
-                              highlight: SettingAnchor.groupChats,
-                            )),
+                            onPressed: () => _push(
+                              const ChatBehaviourPage(
+                                highlight: SettingAnchor.groupChats,
+                              ),
+                            ),
                           ),
                           _Symbol(
                             key: const Key('playground-interface'),
@@ -380,15 +381,15 @@ class _Symbol extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IconButton.filledTonal(
-        tooltip: tooltip,
-        iconSize: 22,
-        style: IconButton.styleFrom(
-          fixedSize: const Size(52, 52),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        ),
-        onPressed: onPressed,
-        icon: Icon(icon),
-      );
+    tooltip: tooltip,
+    iconSize: 22,
+    style: IconButton.styleFrom(
+      fixedSize: const Size(52, 52),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+    ),
+    onPressed: onPressed,
+    icon: Icon(icon),
+  );
 }
 
 class _ChatRow extends StatelessWidget {
@@ -485,15 +486,17 @@ class _AgentMark extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.smart_toy_outlined,
-              size: 13, color: scheme.onTertiaryContainer),
+          Icon(
+            Icons.smart_toy_outlined,
+            size: 13,
+            color: scheme.onTertiaryContainer,
+          ),
           const SizedBox(width: 4),
           Text(
             label,
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: scheme.onTertiaryContainer),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: scheme.onTertiaryContainer),
           ),
         ],
       ),
@@ -516,27 +519,43 @@ class _Options extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    ListTile row(Key key, IconData icon, String label, VoidCallback onTap,
-            {Color? color}) =>
-        ListTile(
-          key: key,
-          leading: Icon(icon, color: color),
-          title: Text(label, style: TextStyle(color: color)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          onTap: onTap,
-        );
+    ListTile row(
+      Key key,
+      IconData icon,
+      String label,
+      VoidCallback onTap, {
+      Color? color,
+    }) => ListTile(
+      key: key,
+      leading: Icon(icon, color: color),
+      title: Text(label, style: TextStyle(color: color)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      onTap: onTap,
+    );
     return Padding(
       padding: const EdgeInsets.all(8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          row(const Key('playground-export'), Icons.ios_share_outlined,
-              'Export', onExport),
-          row(const Key('playground-import'), Icons.download_outlined,
-              'Import', onImport),
-          row(const Key('playground-delete'), Icons.delete_outline, 'Delete',
-              onDelete,
-              color: scheme.error),
+          row(
+            const Key('playground-export'),
+            Icons.ios_share_outlined,
+            'Export',
+            onExport,
+          ),
+          row(
+            const Key('playground-import'),
+            Icons.download_outlined,
+            'Import',
+            onImport,
+          ),
+          row(
+            const Key('playground-delete'),
+            Icons.delete_outline,
+            'Delete',
+            onDelete,
+            color: scheme.error,
+          ),
         ],
       ),
     );

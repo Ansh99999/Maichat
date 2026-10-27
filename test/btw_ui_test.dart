@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/models/studio.dart';
@@ -51,25 +52,25 @@ void main() {
     late BtwRun run;
 
     Widget host() => MaterialApp(
-          home: Builder(
-            builder: (context) => Scaffold(
-              body: Center(
-                child: TextButton(
-                  onPressed: () => showBtwSheet(
-                    context,
-                    question: 'What was her sister called?',
-                    ask: (r, onProgress) {
-                      run = r;
-                      progress = onProgress;
-                      return reply.future;
-                    },
-                  ),
-                  child: const Text('open'),
-                ),
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: TextButton(
+              onPressed: () => showBtwSheet(
+                context,
+                question: 'What was her sister called?',
+                ask: (r, onProgress) {
+                  run = r;
+                  progress = onProgress;
+                  return reply.future;
+                },
               ),
+              child: const Text('open'),
             ),
           ),
-        );
+        ),
+      ),
+    );
 
     Future<void> open(WidgetTester tester) async {
       reply = Completer<String>();
@@ -80,8 +81,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
     }
 
-    testWidgets('shows the question, then the answer as it arrives',
-        (tester) async {
+    testWidgets('shows the question, then the answer as it arrives', (
+      tester,
+    ) async {
       await open(tester);
       expect(find.byKey(const Key('btw-sheet')), findsOneWidget);
       expect(find.text('By the way'), findsOneWidget);
@@ -94,8 +96,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 60));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('btw-answer')), findsOneWidget);
-      expect(find.textContaining('Her sister', findRichText: true),
-          findsOneWidget);
+      expect(
+        find.textContaining('Her sister', findRichText: true),
+        findsOneWidget,
+      );
 
       reply.complete('Her sister was **Wren**.');
       await tester.pumpAndSettle();
@@ -110,8 +114,9 @@ void main() {
       expect(run.cancelled, isFalse);
     });
 
-    testWidgets('putting it away mid-answer cancels the question',
-        (tester) async {
+    testWidgets('putting it away mid-answer cancels the question', (
+      tester,
+    ) async {
       await open(tester);
       expect(run.cancelled, isFalse);
       await tester.tap(find.text('Done'));
@@ -150,16 +155,21 @@ void main() {
     Future<AppState> boot() async {
       final state = AppState(client: client);
       await state.init();
-      await state.addProvider(Provider(
-        id: 'p',
-        name: 'local',
-        kind: ProviderKind.openai,
-        baseUrl: 'https://host.tld/v1',
-        model: 'm',
-        apiKey: 'k',
-      ));
-      final alice =
-          Character(id: 'alice', name: 'Alice', description: 'Curious.');
+      await state.addProvider(
+        Provider(
+          id: 'p',
+          name: 'local',
+          kind: ProviderKind.openai,
+          baseUrl: 'https://host.tld/v1',
+          model: 'm',
+          apiKey: 'k',
+        ),
+      );
+      final alice = Character(
+        id: 'alice',
+        name: 'Alice',
+        description: 'Curious.',
+      );
       await state.addCharacter(alice);
       state.startChatWithCharacter(alice);
       state.active.messages
@@ -170,14 +180,15 @@ void main() {
     }
 
     Widget host(AppState state) => ChangeNotifierProvider<AppState>.value(
-          value: state,
-          child: const MaterialApp(home: ChatScreen()),
-        );
+      value: state,
+      child: const MaterialApp(home: ChatScreen()),
+    );
 
-    Finder composer() => find.byType(TextField).last;
+    Finder composer() => find.byKey(const Key('composer-field'));
 
-    testWidgets('a /btw line turns Send into "Ask on the side"',
-        (tester) async {
+    testWidgets('a /btw line turns Send into "Ask on the side"', (
+      tester,
+    ) async {
       final state = await boot();
       await tester.pumpWidget(host(state));
       await tester.pumpAndSettle();
@@ -197,8 +208,9 @@ void main() {
       expect(find.byTooltip('Send'), findsOneWidget);
     });
 
-    testWidgets('asking opens the sheet and adds nothing to the thread',
-        (tester) async {
+    testWidgets('asking opens the side thread and adds nothing to the thread', (
+      tester,
+    ) async {
       final state = await boot();
       await tester.pumpWidget(host(state));
       await tester.pumpAndSettle();
@@ -210,17 +222,17 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
 
-      expect(find.byKey(const Key('btw-sheet')), findsOneWidget);
+      expect(find.byKey(const Key('btw-thread')), findsOneWidget);
       expect(find.text('where is this harbour?'), findsOneWidget);
       expect(state.active.messages.map((m) => m.content).toList(), before);
       expect(state.streaming, isFalse);
       // The question moved into the sheet; the box is free again.
       expect(tester.widget<TextField>(composer()).controller!.text, isEmpty);
 
-      await tester.tap(find.text('Done'));
+      await tester.tap(find.byKey(const Key('btw-close')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      expect(find.byKey(const Key('btw-sheet')), findsNothing);
+      expect(find.byKey(const Key('btw-thread')), findsNothing);
       expect(state.active.messages.map((m) => m.content).toList(), before);
     });
 
@@ -233,12 +245,13 @@ void main() {
       await tester.tap(find.byKey(const Key('chat-ask-aside')));
       await tester.pump();
       expect(find.text('Say what to ask: /btw <question>.'), findsOneWidget);
-      expect(find.byKey(const Key('btw-sheet')), findsNothing);
+      expect(find.byKey(const Key('btw-thread')), findsNothing);
       await tester.pumpAndSettle(const Duration(seconds: 5));
     });
 
-    testWidgets('while a reply streams, a /btw line can still be asked',
-        (tester) async {
+    testWidgets('while a reply streams, a /btw line can still be asked', (
+      tester,
+    ) async {
       final state = await boot();
       await tester.pumpWidget(host(state));
       await tester.pumpAndSettle();
@@ -256,11 +269,11 @@ void main() {
       await tester.tap(find.byKey(const Key('chat-ask-aside')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      expect(find.byKey(const Key('btw-sheet')), findsOneWidget);
+      expect(find.byKey(const Key('btw-thread')), findsOneWidget);
       expect(state.streaming, isTrue, reason: 'the reply carries on');
       expect(state.active.messages, hasLength(turns));
 
-      await tester.tap(find.text('Done'));
+      await tester.tap(find.byKey(const Key('btw-close')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       // With the box empty again, the button is Stop once more.
@@ -300,14 +313,18 @@ void main() {
       final session = StudioSession(
         id: 'btw-ui',
         title: 'Keeper',
-        workspace: StudioWorkspace(character: Character(id: 'c', name: 'Maren')),
-      );
-      await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
-        value: state,
-        child: MaterialApp(
-          home: StudioScreen(store: StudioStore(dir), session: session),
+        workspace: StudioWorkspace(
+          character: Character(id: 'c', name: 'Maren'),
         ),
-      ));
+      );
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: state,
+          child: MaterialApp(
+            home: StudioScreen(store: StudioStore(dir), session: session),
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
       final field = find.byKey(const Key('studio-composer-field'));
 
@@ -331,5 +348,109 @@ void main() {
       expect(find.byKey(const Key('btw-sheet')), findsNothing);
       expect(session.transcript, isEmpty);
     });
+  });
+
+  /// The chat composer's `/`-command suggestions: the same panel the Studio's
+  /// composer shows, driven by [StudioSlashState] over the chat's own input.
+  /// Typing `/` or `/b` offers `/btw`; completing it fills `/btw ` and the ask
+  /// flows through the existing send interception.
+  group('the chat slash panel', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
+    Future<AppState> boot({
+      ComposerStyle style = ComposerStyle.expressive,
+    }) async {
+      final state = AppState();
+      await state.init();
+      await state.updateChatInterface(
+        state.chatInterface.copyWith(composerStyle: style),
+      );
+      await state.addProvider(
+        Provider(
+          id: 'p',
+          name: 'local',
+          kind: ProviderKind.openai,
+          baseUrl: 'https://host.tld/v1',
+          model: 'm',
+          apiKey: 'k',
+        ),
+      );
+      final alice = Character(
+        id: 'alice',
+        name: 'Alice',
+        description: 'Curious.',
+      );
+      await state.addCharacter(alice);
+      state.startChatWithCharacter(alice);
+      return state;
+    }
+
+    Widget host(AppState state) => ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: const MaterialApp(home: ChatScreen()),
+    );
+
+    Finder composer() => find.byKey(const Key('composer-field'));
+
+    for (final style in [ComposerStyle.expressive, ComposerStyle.legacy]) {
+      testWidgets('$style composer: typing / offers /btw, filtered as typed', (
+        tester,
+      ) async {
+        final state = await boot(style: style);
+        await tester.pumpWidget(host(state));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(composer(), '/');
+        await tester.pump();
+        expect(find.byKey(const Key('studio-slash-panel')), findsOneWidget);
+        expect(find.byKey(const Key('studio-slash-btw')), findsOneWidget);
+
+        await tester.enterText(composer(), '/bt');
+        await tester.pump();
+        expect(find.byKey(const Key('studio-slash-panel')), findsOneWidget);
+
+        await tester.enterText(composer(), '/zz');
+        await tester.pump();
+        // No match: the panel says so rather than vanishing.
+        expect(
+          find.text('No command matches. Keep typing to send it as text.'),
+          findsOneWidget,
+        );
+
+        await tester.enterText(composer(), 'Hello /btw');
+        await tester.pump();
+        // Never mid-sentence: a space after the words ends the query.
+        expect(find.byKey(const Key('studio-slash-panel')), findsNothing);
+        state.dispose();
+      });
+
+      testWidgets(
+        '$style composer: tapping the row completes and asking works',
+        (tester) async {
+          final state = await boot(style: style);
+          await tester.pumpWidget(host(state));
+          await tester.pumpAndSettle();
+
+          await tester.enterText(composer(), '/b');
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('studio-slash-btw')));
+          await tester.pumpAndSettle();
+          expect(
+            tester.widget<TextField>(composer()).controller!.text,
+            '/btw ',
+          );
+          expect(find.byKey(const Key('studio-slash-panel')), findsNothing);
+
+          // enterText replaces; the completed '/btw ' must be carried into the
+          // typed question, exactly as a user typing after a completion would.
+          await tester.enterText(composer(), '/btw where is this?');
+          await tester.pump();
+          expect(find.byKey(const Key('chat-ask-aside')), findsOneWidget);
+          state.dispose();
+        },
+      );
+    }
   });
 }

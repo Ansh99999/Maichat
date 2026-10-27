@@ -5437,6 +5437,7 @@ class AppState extends ChangeNotifier {
   Future<String> askAside(
     String question, {
     Conversation? conversation,
+    List<ChatMessage> sideHistory = const [],
     ChatClient? client,
     BtwRun? run,
     void Function(String text)? onProgress,
@@ -5446,6 +5447,7 @@ class AppState extends ChangeNotifier {
       return _askAsideWithTools(
         question,
         chat,
+        sideHistory: sideHistory,
         run: run,
         onProgress: onProgress,
       );
@@ -5469,10 +5471,29 @@ class AppState extends ChangeNotifier {
       chat,
       historyEnd: generating ? chat.messages.length - 1 : null,
     );
-    final history = _wirePayload(
-      assembled.messages,
-      instruction: chatBtwInstruction(question),
-    );
+    final source = List<ChatMessage>.of(assembled.messages);
+    final side = btwHistory(sideHistory);
+    List<ChatMessage> payload() => _wirePayload([
+      ...source,
+      ...side,
+    ], instruction: chatBtwInstruction(question));
+    var history = payload();
+    int cost() => history.fold<int>(0, (sum, message) => sum + _cost(message));
+    while (cost() + (assembled.params.maxTokens ?? 1024) >
+        assembled.maxContext) {
+      final removable = source.indexWhere(
+        (message) => message.role != 'system' && !message.promptProtected,
+        1,
+      );
+      if (removable < 0) {
+        throw ChatApiException(
+          'The side conversation exceeds this model’s context. Start a new side thread.',
+        );
+      }
+      source.removeAt(removable);
+      history = payload();
+    }
+    final inputTokens = cost();
     final tags = ReasoningTags(
       start: preset?.thinkStartTag.trim() ?? '',
       end: preset?.thinkEndTag.trim() ?? '',
@@ -5517,7 +5538,7 @@ class AppState extends ChangeNotifier {
           base.model,
           reported ??
               TokenUsage(
-                inputTokens: assembled.totalTokens,
+                inputTokens: inputTokens,
                 outputTokens: _tokenizer.estimate(raw.toString()),
                 estimated: true,
               ),

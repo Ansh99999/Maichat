@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/agent_message.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/chat_tool.dart';
+import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
 import 'package:maichat/screens/studio/shell/slash_commands.dart';
 import 'package:maichat/services/btw.dart';
@@ -69,40 +71,53 @@ void main() {
       mainArrived = null;
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((request) async {
-        final body = jsonDecode(await utf8.decoder.bind(request).join())
-            as Map<String, dynamic>;
+        final body =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
         requests.add(body);
         final aside = jsonEncode(body).contains('BTW_Q');
         if (!aside) {
           mainArrived?.complete();
           await gate?.future;
         }
-        request.response.headers.contentType =
-            ContentType('text', 'event-stream');
-        request.response.write('data: ${jsonEncode({
-              'choices': [
-                {
-                  'delta': {'content': aside ? 'SIDE_ANSWER' : 'MAIN_REPLY'}
-                }
-              ]
-            })}\n\n');
+        request.response.headers.contentType = ContentType(
+          'text',
+          'event-stream',
+        );
+        request.response.write(
+          'data: ${jsonEncode({
+            'choices': [
+              {
+                'delta': {'content': aside ? 'SIDE_ANSWER' : 'MAIN_REPLY'},
+                'finish_reason': 'stop',
+              },
+            ],
+          })}\n\n',
+        );
         request.response.write('data: [DONE]\n\n');
         await request.response.close();
       });
       final state = AppState();
       await state.init();
-      await state.addProvider(Provider(
-        id: 'p',
-        name: 'local',
-        kind: ProviderKind.openai,
-        baseUrl: 'http://127.0.0.1:${server.port}/v1',
-        model: 'test-model',
-        apiKey: 'k',
-      ));
+      await state.addProvider(
+        Provider(
+          id: 'p',
+          name: 'local',
+          kind: ProviderKind.openai,
+          baseUrl: 'http://127.0.0.1:${server.port}/v1',
+          model: 'test-model',
+          apiKey: 'k',
+        ),
+      );
       if (preset) {
-        final p = importPreset(jsonDecode(
-          File('test/fixtures/marinara_spaghetti.json').readAsStringSync(),
-        ) as Map<String, dynamic>);
+        final p = importPreset(
+          jsonDecode(
+                File(
+                  'test/fixtures/marinara_spaghetti.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>,
+        );
         await state.addPreset(p);
         await state.setDefaultPreset(p.id);
       }
@@ -135,56 +150,62 @@ void main() {
 
     for (final withPreset in [true, false]) {
       test(
-          'the side question is the chat\'s own request plus one last user '
-          'turn, and leaves nothing behind (${withPreset ? 'preset' : 'no preset'})',
-          () async {
-        final state = await boot(preset: withPreset);
-        await state.send('TURN_ONE my name is Ansh.');
-        final turns = jsonEncode(state.active.messages);
-        final before = await store();
-        requests.clear();
+        'the side question is the chat\'s own request plus one last user '
+        'turn, and leaves nothing behind (${withPreset ? 'preset' : 'no preset'})',
+        () async {
+          final state = await boot(preset: withPreset);
+          await state.send('TURN_ONE my name is Ansh.');
+          final turns = jsonEncode(state.active.messages);
+          final before = await store();
+          requests.clear();
 
-        final progress = <String>[];
-        final answer = await state.askAside(
-          'BTW_Q what did I say my name was?',
-          onProgress: progress.add,
-        );
-        expect(answer, 'SIDE_ANSWER');
-        expect(progress.last, 'SIDE_ANSWER');
+          final progress = <String>[];
+          final answer = await state.askAside(
+            'BTW_Q what did I say my name was?',
+            onProgress: progress.add,
+          );
+          expect(answer, 'SIDE_ANSWER');
+          expect(progress.last, 'SIDE_ANSWER');
 
-        final msgs = wire(requests.single);
-        // Exactly one system message, at the front, carrying the character.
-        expect(msgs.first['role'], 'system');
-        expect(msgs.where((m) => m['role'] == 'system'), hasLength(1));
-        expect(msgs.first['content'], contains('DESC_TOKEN'));
-        // The conversation is context…
-        expect(jsonEncode(msgs), contains('TURN_ONE'));
-        expect(jsonEncode(msgs), contains('MAIN_REPLY'));
-        // …and the question is the very last user turn.
-        expect(msgs.last['role'], 'user');
-        final last = msgs.last['content'] as String;
-        expect(last.trim(), endsWith('BTW_Q what did I say my name was?'));
-        expect(last, contains('side question'));
-        for (var i = 1; i < msgs.length; i++) {
-          expect(msgs[i]['role'], isNot(msgs[i - 1]['role']),
-              reason: 'adjacent wire turns at $i share a role');
-        }
+          final msgs = wire(requests.single);
+          // Exactly one system message, at the front, carrying the character.
+          expect(msgs.first['role'], 'system');
+          expect(msgs.where((m) => m['role'] == 'system'), hasLength(1));
+          expect(msgs.first['content'], contains('DESC_TOKEN'));
+          // The conversation is context…
+          expect(jsonEncode(msgs), contains('TURN_ONE'));
+          expect(jsonEncode(msgs), contains('MAIN_REPLY'));
+          // …and the question is the very last user turn.
+          expect(msgs.last['role'], 'user');
+          final last = msgs.last['content'] as String;
+          expect(last.trim(), endsWith('BTW_Q what did I say my name was?'));
+          expect(last, contains('side question'));
+          for (var i = 1; i < msgs.length; i++) {
+            expect(
+              msgs[i]['role'],
+              isNot(msgs[i - 1]['role']),
+              reason: 'adjacent wire turns at $i share a role',
+            );
+          }
 
-        // Nothing landed in the chat or the store.
-        expect(jsonEncode(state.active.messages), turns);
-        expect(await store(), before);
+          // Nothing landed in the chat or the store.
+          expect(jsonEncode(state.active.messages), turns);
+          expect(await store(), before);
 
-        // And the next real send knows nothing of it.
-        requests.clear();
-        await state.send('TURN_TWO carry on.');
-        final next = jsonEncode(requests.single);
-        expect(next, isNot(contains('BTW_Q')));
-        expect(next, isNot(contains('SIDE_ANSWER')));
-        expect(next, isNot(contains('side question')));
-        expect(next, contains('TURN_ONE'));
-        expect(state.active.messages.map((m) => m.content).join('\n'),
-            isNot(contains('SIDE_ANSWER')));
-      });
+          // And the next real send knows nothing of it.
+          requests.clear();
+          await state.send('TURN_TWO carry on.');
+          final next = jsonEncode(requests.single);
+          expect(next, isNot(contains('BTW_Q')));
+          expect(next, isNot(contains('SIDE_ANSWER')));
+          expect(next, isNot(contains('side question')));
+          expect(next, contains('TURN_ONE'));
+          expect(
+            state.active.messages.map((m) => m.content).join('\n'),
+            isNot(contains('SIDE_ANSWER')),
+          );
+        },
+      );
     }
 
     test('asked while a reply streams, it leaves that reply alone', () async {
@@ -208,17 +229,60 @@ void main() {
       expect(last, contains('TURN_ONE'));
       expect(last.indexOf('TURN_ONE'), lessThan(last.indexOf('BTW_Q')));
       expect(
-        side.where((m) =>
-            m['role'] == 'assistant' && '${m['content']}'.trim().isEmpty),
+        side.where(
+          (m) => m['role'] == 'assistant' && '${m['content']}'.trim().isEmpty,
+        ),
         isEmpty,
       );
 
       gate!.complete();
       await sending;
       expect(state.active.messages.last.content, 'MAIN_REPLY');
-      expect(state.active.messages.where((m) => m.content.contains('SIDE')),
-          isEmpty);
+      expect(
+        state.active.messages.where((m) => m.content.contains('SIDE')),
+        isEmpty,
+      );
     });
+
+    for (final tools in [false, true]) {
+      test(
+        'side follow-ups carry only their temporary history (tools: $tools)',
+        () async {
+          final state = await boot(preset: false);
+          await state.saveChatToolConfig(ChatToolConfig(enabled: tools));
+          final before = jsonEncode(state.active.messages);
+          await state.askAside('BTW_Q first question');
+          requests.clear();
+          await state.askAside(
+            'BTW_Q follow-up question',
+            sideHistory: [
+              ChatMessage(role: 'system', content: 'REJECTED_SYSTEM'),
+              ChatMessage(role: 'tool', content: 'REJECTED_TOOL'),
+              ChatMessage(role: 'user', content: 'BTW_Q first question'),
+              ChatMessage(role: 'assistant', content: 'SIDE_ANSWER'),
+            ],
+          );
+          final messages = wire(requests.single);
+          final text = jsonEncode(messages);
+          expect(text, contains('BTW_Q first question'));
+          expect(text, contains('SIDE_ANSWER'));
+          expect(text, isNot(contains('REJECTED_')));
+          expect(messages.where((m) => m['role'] == 'system'), hasLength(1));
+          expect(messages.first['role'], 'system');
+          expect(messages.last['role'], 'user');
+          expect(
+            messages.last['content'],
+            contains('BTW_Q follow-up question'),
+          );
+          expect(jsonEncode(state.active.messages), before);
+          requests.clear();
+          await state.send('Continue the story.');
+          expect(jsonEncode(requests.single), isNot(contains('BTW_Q')));
+          expect(jsonEncode(requests.single), isNot(contains('SIDE_ANSWER')));
+          state.dispose();
+        },
+      );
+    }
 
     test('a cancelled question returns quietly and records no error', () async {
       final state = await boot();
@@ -235,12 +299,12 @@ void main() {
     late List<Map<String, dynamic>> requests;
 
     Map<String, dynamic> words(String text) => {
-          'choices': [
-            {
-              'delta': {'content': text},
-            },
-          ],
-        };
+      'choices': [
+        {
+          'delta': {'content': text},
+        },
+      ],
+    };
 
     Future<(AppState, StudioController)> boot() async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -251,27 +315,33 @@ void main() {
       dir = await Directory.systemTemp.createTemp('studio_btw');
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((request) async {
-        final body = jsonDecode(await utf8.decoder.bind(request).join())
-            as Map<String, dynamic>;
+        final body =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
         requests.add(body);
         final aside = jsonEncode(body).contains('BTW_Q');
-        request.response.headers.contentType =
-            ContentType('text', 'event-stream');
+        request.response.headers.contentType = ContentType(
+          'text',
+          'event-stream',
+        );
         request.response.write(
-            'data: ${jsonEncode(words(aside ? 'SIDE_ANSWER' : 'Done.'))}\n\n');
+          'data: ${jsonEncode(words(aside ? 'SIDE_ANSWER' : 'Done.'))}\n\n',
+        );
         request.response.write('data: [DONE]\n\n');
         await request.response.close();
       });
       final state = AppState();
       await state.init();
-      await state.addProvider(Provider(
-        id: 'p',
-        name: 'local',
-        kind: ProviderKind.openai,
-        baseUrl: 'http://127.0.0.1:${server.port}/v1',
-        model: 'builder',
-        apiKey: 'k',
-      ));
+      await state.addProvider(
+        Provider(
+          id: 'p',
+          name: 'local',
+          kind: ProviderKind.openai,
+          baseUrl: 'http://127.0.0.1:${server.port}/v1',
+          model: 'builder',
+          apiKey: 'k',
+        ),
+      );
       await StudioSkillLibrary.forDirectory(dir, starters: _NoStarters());
       await StudioCommandStore.forDirectory(dir);
       final controller = StudioController(
@@ -294,34 +364,36 @@ void main() {
     List<Map> wire(Map<String, dynamic> body) =>
         (body['messages'] as List).cast<Map>();
 
-    test('/btw is a built-in, routed to the sheet, and never sent as a turn',
-        () async {
-      final (_, controller) = await boot();
-      final asked = <String>[];
-      final toasts = <String>[];
-      final runner = StudioSlashCommands(
-        controller: controller,
-        onHelp: () {},
-        onSkills: () {},
-        onContext: () {},
-        onAgents: () {},
-        onNewSession: () async {},
-        onToast: toasts.add,
-        onUnknown: (_, _, name) => fail('/$name was not known'),
-        onBtw: (q, _) => asked.add(q),
-      );
-      controller.onSlashCommand = runner.handle;
-      expect(runner.commands.map((c) => c.name), contains('btw'));
-      expect(matchCommands(runner.commands, 'bt').first.name, 'btw');
+    test(
+      '/btw is a built-in, routed to the sheet, and never sent as a turn',
+      () async {
+        final (_, controller) = await boot();
+        final asked = <String>[];
+        final toasts = <String>[];
+        final runner = StudioSlashCommands(
+          controller: controller,
+          onHelp: () {},
+          onSkills: () {},
+          onContext: () {},
+          onAgents: () {},
+          onNewSession: () async {},
+          onToast: toasts.add,
+          onUnknown: (_, _, name) => fail('/$name was not known'),
+          onBtw: (q, _) => asked.add(q),
+        );
+        controller.onSlashCommand = runner.handle;
+        expect(runner.commands.map((c) => c.name), contains('btw'));
+        expect(matchCommands(runner.commands, 'bt').first.name, 'btw');
 
-      await controller.send('/btw BTW_Q how long is the description?');
-      await controller.send('/btw');
-      expect(asked, ['BTW_Q how long is the description?']);
-      expect(toasts.single, contains('/btw <question>'));
-      expect(requests, isEmpty);
-      expect(controller.session.transcript, isEmpty);
-      expect(controller.session.queued, isEmpty);
-    });
+        await controller.send('/btw BTW_Q how long is the description?');
+        await controller.send('/btw');
+        expect(asked, ['BTW_Q how long is the description?']);
+        expect(toasts.single, contains('/btw <question>'));
+        expect(requests, isEmpty);
+        expect(controller.session.transcript, isEmpty);
+        expect(controller.session.queued, isEmpty);
+      },
+    );
 
     test('the side question is the agent\'s next request plus one user turn, '
         'tools off, and leaves the session untouched', () async {
@@ -329,9 +401,13 @@ void main() {
       await controller.send('STUDIO_ONE a lighthouse keeper.');
       await controller.flush();
       final saved = jsonEncode(controller.session.toJson());
-      final next = jsonEncode(controller.nextRequestFor(kMainAgent)!.messages
-          .map((m) => m.toJson())
-          .toList());
+      final next = jsonEncode(
+        controller
+            .nextRequestFor(kMainAgent)!
+            .messages
+            .map((m) => m.toJson())
+            .toList(),
+      );
       requests.clear();
 
       final answer = await controller.askAside('BTW_Q what have we got?');
@@ -344,8 +420,10 @@ void main() {
       expect(msgs.where((m) => m['role'] == 'system'), hasLength(1));
       expect(jsonEncode(msgs), contains('STUDIO_ONE'));
       expect(msgs.last['role'], 'user');
-      expect((msgs.last['content'] as String).trim(),
-          endsWith('BTW_Q what have we got?'));
+      expect(
+        (msgs.last['content'] as String).trim(),
+        endsWith('BTW_Q what have we got?'),
+      );
       // Tools stay declared (the history may hold calls) but cannot be used.
       expect(body['tools'], isNotEmpty);
       expect(body['tool_choice'], 'none');
@@ -353,9 +431,13 @@ void main() {
       await controller.flush();
       expect(jsonEncode(controller.session.toJson()), saved);
       expect(
-        jsonEncode(controller.nextRequestFor(kMainAgent)!.messages
-            .map((m) => m.toJson())
-            .toList()),
+        jsonEncode(
+          controller
+              .nextRequestFor(kMainAgent)!
+              .messages
+              .map((m) => m.toJson())
+              .toList(),
+        ),
         next,
       );
 

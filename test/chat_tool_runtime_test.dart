@@ -132,6 +132,8 @@ void main() {
         maxRounds: 7,
         maxCalls: 33,
         trackerPlacement: 'panel',
+        hideToolCallsInChat: true,
+        followUpOverrides: {'roll_dice': false},
       );
       final restored = ChatToolConfig.fromJson(
         jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>,
@@ -142,6 +144,8 @@ void main() {
       expect(restored.maxRounds, 7);
       expect(restored.maxCalls, 33);
       expect(restored.trackerPlacement, 'panel');
+      expect(restored.hideToolCallsInChat, isTrue);
+      expect(restored.followUpOverrides, {'roll_dice': false});
 
       final clamped = ChatToolConfig.fromJson({
         'maxRounds': 0,
@@ -153,6 +157,8 @@ void main() {
       final copied = config.copyWith(maxRounds: 2, maxCalls: 3);
       expect(copied.maxRounds, 2);
       expect(copied.maxCalls, 3);
+      expect(copied.hideToolCallsInChat, isTrue);
+      expect(copied.followUpOverrides, {'roll_dice': false});
     });
 
     test('round-trips a run with protocol history, effects and images', () {
