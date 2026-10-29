@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/appearance.dart';
 import '../models/backup.dart';
+import '../models/btw_conversation.dart';
 import '../models/character.dart';
 import '../models/chat_interface.dart';
 import '../models/chat_tool.dart';
@@ -78,6 +79,8 @@ class Storage {
   static const _imageRatiosKey = 'imageRatios';
   static const _homeLayoutKey = 'homeLayout';
   static const _homeNotesKey = 'homeNotes';
+  static const _btwThreadsKey = 'btwThreads';
+  static const _btwSettingsKey = 'btwSettings';
 
   /// The usage/cost ledger. Its own entry, kept apart from `providers`, because
   /// it is written after every reply where a provider is written almost never —
@@ -85,6 +88,59 @@ class Storage {
   static const _usageKey = 'usage';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
+
+  Future<List<BtwConversation>> loadBtwThreads() async {
+    final raw = (await _prefs).getString(_btwThreadsKey);
+    if (raw == null) return [];
+    // Authored side conversations must not be overwritten after a corrupt
+    // read. Let AppState's startup guard make that session read-only.
+    final values = jsonDecode(raw);
+    if (values is! List) {
+      throw const FormatException('Invalid side conversations.');
+    }
+    final threads = <BtwConversation>[];
+    final ids = <String>{};
+    for (final value in values) {
+      final thread = BtwConversation.fromJson(value);
+      if (thread == null || !ids.add(thread.id)) {
+        throw const FormatException('Invalid side conversation.');
+      }
+      threads.add(thread);
+    }
+    return threads;
+  }
+
+  Future<void> saveBtwThreads(List<BtwConversation> threads) async {
+    final encoded = jsonEncode([for (final thread in threads) thread.toJson()]);
+    await saveBtwThreadsJson(encoded);
+  }
+
+  Future<void> saveBtwThreadsJson(String encoded) async {
+    if (!await (await _prefs).setString(_btwThreadsKey, encoded)) {
+      throw StateError('Could not save side conversations.');
+    }
+  }
+
+  Future<BtwSettings> loadBtwSettings() async {
+    final raw = (await _prefs).getString(_btwSettingsKey);
+    if (raw == null) return const BtwSettings();
+    try {
+      return BtwSettings.fromJson(
+        Map<String, dynamic>.from(jsonDecode(raw) as Map),
+      );
+    } catch (_) {
+      return const BtwSettings();
+    }
+  }
+
+  Future<void> saveBtwSettings(BtwSettings settings) async {
+    if (!await (await _prefs).setString(
+      _btwSettingsKey,
+      jsonEncode(settings.toJson()),
+    )) {
+      throw StateError('Could not save side conversation settings.');
+    }
+  }
 
   Future<ChatToolConfig> loadChatTools() async {
     final raw = (await _prefs).getString('chatTools');

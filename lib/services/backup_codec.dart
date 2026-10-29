@@ -679,6 +679,7 @@ List<dynamic> _nestedList(StoreEntry? entry, String field) {
 const List<String> kBackupIdLists = <String>[
   'characters',
   'conversations',
+  'btwThreads',
   'lorebooks',
   'scenarios',
   'folders',

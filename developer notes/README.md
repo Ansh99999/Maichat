@@ -22,6 +22,8 @@ learned this / do not regress this" layer underneath it.
   user-created tools/settings design, staged integration and verification limits.
 - [chat-tool-calling-plan.md](chat-tool-calling-plan.md) — authorized points 1–5,
   implementation ownership, delivered behavior and verification results.
+- [chat-ui-panes.md](chat-ui-panes.md) — pane gestures, saved `/btw` threads,
+  per-thread settings, request budgeting, exports and verification limits.
 - [discover-source-contracts.md](discover-source-contracts.md) — reverse-engineered
   API contracts for every Discover source, the Cloudflare-clearance replay, and
   what can't be verified from the dev host.

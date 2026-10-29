@@ -2,7 +2,7 @@ import '../models/message.dart';
 import 'studio/studio_commands.dart';
 
 /// `/btw` asks outside the story using the conversation as context. The chat
-/// keeps a temporary side thread; Studio uses a one-question sheet. Side turns
+/// keeps saved side threads; Studio uses a one-question sheet. Side turns
 /// never enter the saved roleplay transcript, swipes, summaries or later story
 /// requests.
 ///
@@ -28,7 +28,7 @@ String chatBtwInstruction(String question) =>
     'exchange is not part of the chat — do not continue the roleplay.]\n\n'
     '${question.trim()}';
 
-/// Only completed text turns from the temporary side conversation are context.
+/// Only completed text turns from the side conversation are context.
 List<ChatMessage> btwHistory(List<ChatMessage> history) => [
   for (final message in history)
     if ((message.role == 'user' || message.role == 'assistant') &&

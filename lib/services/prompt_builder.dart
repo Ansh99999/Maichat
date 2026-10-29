@@ -74,7 +74,9 @@ class PromptBuilder {
     String hintText = '',
     int hintDepth = 0,
     List<({String text, int depth})> controlInjections = const [],
+    String? leadingSystemOverride,
   }) {
+    final customSystem = leadingSystemOverride?.trim() ?? '';
     final charName = character?.displayName ?? '';
     // The caller may resolve a different window than the preset carries (the
     // "use the model's own limit" case); the preset's value is the fallback.
@@ -378,11 +380,18 @@ class PromptBuilder {
     var remaining = (budget - fixedTokens).clamp(0, 1 << 30).toInt();
     if (remaining < floor) remaining = floor;
     final chosen = <ChatMessage>[];
-    for (final msg in resolvedHistory.reversed) {
-      final c = cost(msg);
-      if (c > remaining) break;
-      remaining -= c;
-      chosen.add(msg);
+    if (customSystem.isNotEmpty) {
+      // A side prompt replaces the leading frame. Build its complete candidate
+      // first: pricing that discarded frame here would lose history before
+      // the replacement has had a chance to free its context space.
+      chosen.addAll(resolvedHistory.reversed);
+    } else {
+      for (final msg in resolvedHistory.reversed) {
+        final c = cost(msg);
+        if (c > remaining) break;
+        remaining -= c;
+        chosen.add(msg);
+      }
     }
     final history0 = chosen.reversed
         .map((m) => _Part('Chat history', m))
@@ -416,11 +425,52 @@ class PromptBuilder {
       }
     }
 
-    final parts = _oneSystemBlock(<_Part>[
-      ...leading,
-      ...history0,
-      ...trailing,
-    ]);
+    var parts = _oneSystemBlock(<_Part>[...leading, ...history0, ...trailing]);
+    if (customSystem.isNotEmpty) {
+      parts = [
+        _Part(
+          'Side system prompt',
+          ChatMessage(
+            role: 'system',
+            content: customSystem,
+            promptProtected: true,
+          ),
+        ),
+        for (final part in parts)
+          if (part.msg.role != 'system') part,
+      ];
+      // Fit the prompt that will actually be sent. Protected depth/trailing
+      // instructions survive; each removable history item keeps its complete
+      // tool call/result group together.
+      bool removable(_Part part) =>
+          part.label == 'Chat history' && !part.msg.promptProtected;
+      int promptCost(List<_Part> candidate) => mergeSameRole(
+        candidate.map((part) => part.msg).toList(),
+      ).fold(0, (sum, message) => sum + cost(message));
+      List<_Part> withoutOldest(int count) {
+        var skipped = 0;
+        return [
+          for (final part in parts)
+            if (!removable(part) || skipped++ >= count) part,
+        ];
+      }
+
+      if (promptCost(parts) > budget) {
+        var low = 0;
+        var high = parts.where(removable).length;
+        // Search the oldest history prefix to remove. Rebuilding and pricing
+        // once per removed turn would become quadratic in a long side chat.
+        while (low < high) {
+          final middle = (low + high) ~/ 2;
+          if (promptCost(withoutOldest(middle)) > budget) {
+            low = middle + 1;
+          } else {
+            high = middle;
+          }
+        }
+        parts = withoutOldest(low);
+      }
+    }
     // Collapse consecutive same-role turns into one. This is not cosmetic:
     //
     //  * Presets that frame the prompt with many small blocks (tags, headings,

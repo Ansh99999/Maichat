@@ -57,22 +57,31 @@ class LiquidPanel extends StatefulWidget {
 
 class _LiquidPanelState extends State<LiquidPanel>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _t =
-      AnimationController.unbounded(vsync: this, value: widget.open ? 1 : 0);
+  late final AnimationController _t = AnimationController.unbounded(
+    vsync: this,
+    value: widget.open ? 1 : 0,
+  );
 
   /// Pours out: a loose spring, so it overshoots and settles like a liquid.
-  static const SpringDescription _openSpring =
-      SpringDescription(mass: 1, stiffness: 320, damping: 19);
+  static const SpringDescription _openSpring = SpringDescription(
+    mass: 1,
+    stiffness: 320,
+    damping: 19,
+  );
 
   /// Drains back: stiffer and near critical, so it snaps home without bouncing
   /// past the button.
-  static const SpringDescription _closeSpring =
-      SpringDescription(mass: 1, stiffness: 420, damping: 38);
+  static const SpringDescription _closeSpring = SpringDescription(
+    mass: 1,
+    stiffness: 420,
+    damping: 38,
+  );
 
   /// Drawn while open or while the spring is still moving. Not while merely
   /// near zero: a spring settles *within* its tolerance of the target, and a
   /// sliver of panel left over from that would still take taps.
   bool get _visible => widget.open || _t.isAnimating;
+  bool _reduceMotion = false;
 
   @override
   void initState() {
@@ -85,17 +94,34 @@ class _LiquidPanelState extends State<LiquidPanel>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _reduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (_reduceMotion) {
+      _t.stop();
+      _t.value = widget.open ? 1 : 0;
+    }
+  }
+
+  @override
   void didUpdateWidget(LiquidPanel old) {
     super.didUpdateWidget(old);
     if (old.open == widget.open) return;
     final target = widget.open ? 1.0 : 0.0;
-    _t.animateWith(SpringSimulation(
-      widget.open ? _openSpring : _closeSpring,
-      _t.value,
-      target,
-      _t.velocity,
-      tolerance: const Tolerance(distance: 0.001, velocity: 0.01),
-    ));
+    if (_reduceMotion) {
+      _t.stop();
+      _t.value = target;
+      return;
+    }
+    _t.animateWith(
+      SpringSimulation(
+        widget.open ? _openSpring : _closeSpring,
+        _t.value,
+        target,
+        _t.velocity,
+        tolerance: const Tolerance(distance: 0.001, velocity: 0.01),
+      ),
+    );
   }
 
   @override
@@ -136,7 +162,16 @@ class _LiquidPanelState extends State<LiquidPanel>
                 clipper: _BlobClipper(animation: _t, geometry: geometry),
                 child: Stack(
                   children: [
-                    Positioned.fromRect(rect: widget.panel, child: widget.child),
+                    Positioned.fromRect(
+                      rect: widget.panel,
+                      child: IgnorePointer(
+                        ignoring: !widget.open,
+                        child: ExcludeSemantics(
+                          excluding: !widget.open,
+                          child: widget.child,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -178,14 +213,16 @@ class _BlobGeometry {
     final sx = _interval(g, 0.0, 0.62, Curves.easeOutCubic);
     final sy = _interval(g, 0.18, 1.0, Easing.emphasizedDecelerate);
 
-    final left = lerpDouble(anchor.dx - r0, panel.left, sx)! -
+    final left =
+        lerpDouble(anchor.dx - r0, panel.left, sx)! -
         overshoot * panel.width * 0.08;
     final right = math.min(
       lerpDouble(anchor.dx + r0, panel.right, math.min(1.0, sx * 1.7))!,
       panel.right + overshoot * 12,
     );
     final top = lerpDouble(anchor.dy - r0, panel.top, sy)!;
-    final bottom = lerpDouble(anchor.dy + r0, panel.bottom, sy)! +
+    final bottom =
+        lerpDouble(anchor.dy + r0, panel.bottom, sy)! +
         overshoot * panel.height * 0.35;
     final width = math.max(0.0, right - left);
     final height = math.max(0.0, bottom - top);
@@ -196,7 +233,8 @@ class _BlobGeometry {
 
     // The bulges: the leading (left) edge swells outward and the bottom sags
     // while the spring is moving, and both relax as it settles.
-    final belly = (surge * 26 + overshoot * 60).clamp(-18.0, 34.0) *
+    final belly =
+        (surge * 26 + overshoot * 60).clamp(-18.0, 34.0) *
         math.sin(math.pi * math.max(g, 0.15));
     final swell = (surge * 22 + overshoot * 40).clamp(-14.0, 26.0);
 
@@ -205,22 +243,21 @@ class _BlobGeometry {
       ..lineTo(right - radius, top)
       ..arcToPoint(Offset(right, top + radius), radius: Radius.circular(radius))
       ..lineTo(right, bottom - radius)
-      ..arcToPoint(Offset(right - radius, bottom),
-          radius: Radius.circular(radius))
+      ..arcToPoint(
+        Offset(right - radius, bottom),
+        radius: Radius.circular(radius),
+      )
       ..quadraticBezierTo(
         (left + right) / 2,
         bottom + belly,
         left + radius,
         bottom,
       )
-      ..arcToPoint(Offset(left, bottom - radius),
-          radius: Radius.circular(radius))
-      ..quadraticBezierTo(
-        left - swell,
-        (top + bottom) / 2,
-        left,
-        top + radius,
+      ..arcToPoint(
+        Offset(left, bottom - radius),
+        radius: Radius.circular(radius),
       )
+      ..quadraticBezierTo(left - swell, (top + bottom) / 2, left, top + radius)
       ..arcToPoint(Offset(left + radius, top), radius: Radius.circular(radius))
       ..close();
 
@@ -264,7 +301,7 @@ class _BlobGeometry {
 
 class _BlobClipper extends CustomClipper<Path> {
   _BlobClipper({required this.animation, required this.geometry})
-      : super(reclip: animation);
+    : super(reclip: animation);
 
   final AnimationController animation;
   final _BlobGeometry geometry;

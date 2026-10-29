@@ -9,6 +9,7 @@ import 'package:flutter/scheduler.dart';
 import '../app_info.dart';
 import '../models/appearance.dart';
 import '../models/backup.dart';
+import '../models/btw_conversation.dart';
 import '../models/budget.dart';
 import '../models/character.dart';
 import '../models/character_scenario.dart';
@@ -32,6 +33,7 @@ import '../models/prompt_block.dart';
 import '../models/provider.dart';
 import '../models/regex_rule.dart';
 import '../models/scenario.dart';
+import '../models/settings.dart';
 import '../models/studio.dart';
 import '../models/summary.dart';
 import '../models/usage.dart';
@@ -74,9 +76,14 @@ import '../services/chat_tools/definitions.dart';
 export 'chat_host.dart' show ChatHost, ChatPresetHost, kHostedChatPrefix;
 
 part 'chat_tools_state.dart';
+part 'btw_state.dart';
 
 /// Single source of truth for providers, threads and the in-flight reply.
 class AppState extends ChangeNotifier {
+  void _notifyBtw() {
+    if (!_btwDisposed) notifyListeners();
+  }
+
   void _notifyChatTools({bool stateChanged = true}) {
     if (stateChanged) _toolProjectionCache.clear();
     notifyListeners();
@@ -159,6 +166,15 @@ class AppState extends ChangeNotifier {
   final List<BackupRecord> _backupRecords = <BackupRecord>[];
 
   final List<Conversation> _conversations = <Conversation>[];
+  final List<BtwConversation> _btwThreads = <BtwConversation>[];
+  BtwSettings _btwSettings = const BtwSettings();
+  Future<void> _btwSaves = Future<void>.value();
+  int _btwPendingWrites = 0;
+  final Map<String, BtwRun> _btwTitleRuns = {};
+  final Map<String, BtwRun> _btwRequests = {};
+  bool _btwDisposed = false;
+  bool _btwRestoring = false;
+  int _btwGeneration = 0;
   final List<Provider> _providers = <Provider>[];
   final List<Character> _characters = <Character>[];
   final List<Lorebook> _lorebooks = <Lorebook>[];
@@ -319,6 +335,7 @@ class AppState extends ChangeNotifier {
   /// Writes any debounced state straight away — for tests, backups, and for the
   /// app being backgrounded before a timer fires.
   Future<void> flushPendingSaves() async {
+    if (_btwPendingWrites > 0) await _btwSaves;
     if (_floatPersist?.isActive ?? false) {
       _floatPersist!.cancel();
       _floatPersist = null;
@@ -600,6 +617,10 @@ class AppState extends ChangeNotifier {
     _appearance = await _storage.loadAppearance();
     _chatInterface = await _storage.loadChatInterface();
     _chatTools = await _storage.loadChatTools();
+    _btwSettings = await _storage.loadBtwSettings();
+    _btwThreads
+      ..clear()
+      ..addAll(await _storage.loadBtwThreads());
     _characters
       ..clear()
       ..addAll(await _storage.loadCharacters());
@@ -2339,51 +2360,67 @@ class AppState extends ChangeNotifier {
         'Restart the app and try again.',
       );
     }
-    await _startupAvatarSweep;
-    await archive.extractFiles(
-      pictures: imageDirectory,
-      vectors: _vectors?.directory,
-      onProgress: onProgress,
-    );
-
-    final current = <String, StoreEntry>{};
-    for (final entry in (await _storage.dump()).entries) {
-      if (kBackupExcludedKeys.contains(entry.key)) continue;
-      current[entry.key] = StoreEntry.of(entry.value);
-    }
-    var incoming = preserveSecrets(current: current, incoming: archive.store);
-    if (!replace) incoming = mergeStores(current, incoming);
-
-    var pictureStore = _avatars;
-    if (pictureStore == null && imageDirectory != null) {
-      pictureStore = AvatarStore(imageDirectory!);
-    }
-    pictureStore ??= await AvatarStore.open();
-    if (pictureStore != null) {
-      incoming = await sanitizeStorePictures(
-        incoming,
-        adoptPicture: pictureStore.adopt,
+    if (_btwRestoring) {
+      throw const BackupFormatException(
+        'Another backup is already being restored.',
       );
     }
+    _btwRestoring = true;
+    _btwGeneration++;
+    try {
+      // Fence off callbacks from the former side threads before any await.
+      // Existing snapshots drain before the merge reads current data and before
+      // replacement writes the archive, so none can land over restored data.
+      _cancelBtwForRestore();
+      await _btwSaves;
+      await _startupAvatarSweep;
+      await archive.extractFiles(
+        pictures: imageDirectory,
+        vectors: _vectors?.directory,
+        onProgress: onProgress,
+      );
 
-    await _storage.writeEntries(
-      <String, Object?>{
-        for (final entry in incoming.entries) entry.key: entry.value.stored,
-      },
-      replace: replace,
-      protect: kBackupExcludedKeys,
-    );
-    // Ratios describe files from the pre-restore store. Even though the entry is
-    // excluded/protected, keeping it would let a reused local name inherit stale
-    // geometry. Rebuild this derived cache from decoded restored images instead.
-    _imageRatioPersist?.cancel();
-    _imageRatioPersist = null;
-    imageRatioCache.clear();
-    await _clearStoredImageRatios();
-    await reloadFromStore();
-    // Anything on disk the restored store does not reference is a leftover.
-    await _sweepAvatars();
-    return archive.counts;
+      final current = <String, StoreEntry>{};
+      for (final entry in (await _storage.dump()).entries) {
+        if (kBackupExcludedKeys.contains(entry.key)) continue;
+        current[entry.key] = StoreEntry.of(entry.value);
+      }
+      var incoming = preserveSecrets(current: current, incoming: archive.store);
+      if (!replace) incoming = mergeStores(current, incoming);
+
+      var pictureStore = _avatars;
+      if (pictureStore == null && imageDirectory != null) {
+        pictureStore = AvatarStore(imageDirectory!);
+      }
+      pictureStore ??= await AvatarStore.open();
+      if (pictureStore != null) {
+        incoming = await sanitizeStorePictures(
+          incoming,
+          adoptPicture: pictureStore.adopt,
+        );
+      }
+
+      await _storage.writeEntries(
+        <String, Object?>{
+          for (final entry in incoming.entries) entry.key: entry.value.stored,
+        },
+        replace: replace,
+        protect: kBackupExcludedKeys,
+      );
+      // Ratios describe files from the pre-restore store. Even though the entry is
+      // excluded/protected, keeping it would let a reused local name inherit stale
+      // geometry. Rebuild this derived cache from decoded restored images instead.
+      _imageRatioPersist?.cancel();
+      _imageRatioPersist = null;
+      imageRatioCache.clear();
+      await _clearStoredImageRatios();
+      await reloadFromStore();
+      // Anything on disk the restored store does not reference is a leftover.
+      await _sweepAvatars();
+      return archive.counts;
+    } finally {
+      _btwRestoring = false;
+    }
   }
 
   /// Re-reads every store entry into memory. A restore writes the store from
@@ -5134,6 +5171,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> deleteConversation(String id) async {
     if (id == active.id && _streaming) stop();
+    await _deleteBtwThreadsFor(id);
     final host = _host;
     if (host != null && _hostedChat(host, id) != null) {
       // A hosted chat goes from its host, and the host always has one to show.
@@ -5418,8 +5456,9 @@ class AppState extends ChangeNotifier {
 
   /// `/btw`: answers a side [question] about [conversation] (the active chat
   /// when null) and returns the answer — **without** it ever becoming part of
-  /// the chat. Nothing is added to the thread, nothing is written to the store
-  /// but the usage ledger, and the next send knows nothing of it.
+  /// the roleplay chat. The caller saves side exchanges separately; the next
+  /// story send knows nothing of their text. Requested tool actions and usage
+  /// are persisted through their own stores.
   ///
   /// The request is the chat's own: [_assemble] builds it exactly as a reply's
   /// (preset, character, lore, summary, hint, regex — and so its single leading
@@ -5437,23 +5476,69 @@ class AppState extends ChangeNotifier {
   Future<String> askAside(
     String question, {
     Conversation? conversation,
+    BtwConversation? thread,
     List<ChatMessage> sideHistory = const [],
     ChatClient? client,
     BtwRun? run,
     void Function(String text)? onProgress,
   }) async {
+    if (_btwRestoring) {
+      throw ChatApiException(
+        'Wait for the backup restore to finish before asking a side question.',
+      );
+    }
     final chat = conversation ?? active;
-    if (chatToolConfigFor(chat).enabled) {
+    if (thread != null && thread.conversationId != chat.id) {
+      throw ChatApiException('This side conversation belongs to another chat.');
+    }
+    final requestRun = thread == null ? run : (run ?? BtwRun());
+    if (thread != null) {
+      _btwRequests.remove(thread.id)?.cancel();
+      _btwRequests[thread.id] = requestRun!;
+    }
+    try {
+      return await _askAsideRequest(
+        question,
+        conversation: chat,
+        thread: thread,
+        sideHistory: sideHistory,
+        client: client,
+        run: requestRun,
+        onProgress: onProgress,
+      );
+    } finally {
+      if (thread != null && identical(_btwRequests[thread.id], requestRun)) {
+        _btwRequests.remove(thread.id);
+      }
+    }
+  }
+
+  Future<String> _askAsideRequest(
+    String question, {
+    Conversation? conversation,
+    BtwConversation? thread,
+    List<ChatMessage> sideHistory = const [],
+    ChatClient? client,
+    BtwRun? run,
+    void Function(String text)? onProgress,
+  }) async {
+    final requestGeneration = _btwGeneration;
+    final chat = conversation ?? active;
+    if (thread != null && thread.conversationId != chat.id) {
+      throw ChatApiException('This side conversation belongs to another chat.');
+    }
+    if (btwToolsEnabledFor(thread, conversation: chat)) {
       return _askAsideWithTools(
         question,
         chat,
+        thread: thread,
         sideHistory: sideHistory,
         run: run,
         onProgress: onProgress,
       );
     }
     final preset = presetFor(chat);
-    final base = _resolveProvider(preset, conversation: chat);
+    final base = btwProviderFor(thread, conversation: chat);
     if (base == null) {
       throw ChatApiException('Set up a provider in Settings first.');
     }
@@ -5470,9 +5555,12 @@ class AppState extends ChangeNotifier {
     final assembled = _assemble(
       chat,
       historyEnd: generating ? chat.messages.length - 1 : null,
+      providerOverride: thread == null ? null : base,
+      toolsEnabled: thread?.toolsEnabled,
+      leadingSystemOverride: thread?.systemPrompt,
     );
-    final source = List<ChatMessage>.of(assembled.messages);
-    final side = btwHistory(sideHistory);
+    final source = _btwSource(assembled.messages, thread);
+    final side = btwHistory(_btwPriorTurns(thread, sideHistory));
     List<ChatMessage> payload() => _wirePayload([
       ...source,
       ...side,
@@ -5532,7 +5620,7 @@ class AppState extends ChangeNotifier {
       _advanceKeyOnError(base);
       rethrow;
     } finally {
-      if (sent) {
+      if (sent && requestGeneration == _btwGeneration) {
         recordUsage(
           base,
           base.model,
@@ -5543,7 +5631,7 @@ class AppState extends ChangeNotifier {
                 estimated: true,
               ),
         );
-        await _persistUsage();
+        await _persistBtwUsage(requestGeneration);
       }
     }
   }
@@ -7038,10 +7126,18 @@ class AppState extends ChangeNotifier {
     int? historyEnd,
     Character? responder,
     bool commitMacroEffects = false,
+    Provider? providerOverride,
+    bool? toolsEnabled,
+    String? leadingSystemOverride,
   }) {
+    final customSystem = leadingSystemOverride?.trim() ?? '';
     final preset = presetFor(conversation);
     final model =
-        _resolveProvider(preset, conversation: conversation)?.model ?? '';
+        (providerOverride ??
+                _resolveProvider(preset, conversation: conversation))
+            ?.model ??
+        '';
+    final useTools = toolsEnabled ?? chatToolConfigFor(conversation).enabled;
 
     final considered = historyEnd == null
         ? conversation.messages
@@ -7063,7 +7159,7 @@ class AppState extends ChangeNotifier {
                   '[Earlier outcome changed; recorded tool effects are stale.]\n${m.content}',
             );
           }
-          if (!chatToolConfigFor(conversation).enabled && m.toolRun != null) {
+          if (!useTools && m.toolRun != null) {
             return m.copyWith(
               clearToolRun: true,
               content:
@@ -7102,7 +7198,7 @@ class AppState extends ChangeNotifier {
         : impersonation.userPersona(
             charName: character?.displayName ?? 'the character',
           );
-    final toolReserve = chatToolConfigFor(conversation).enabled
+    final toolReserve = useTools
         ? _tokenizer.estimate(
                 jsonEncode(
                   _availableChatTools(
@@ -7151,6 +7247,7 @@ class AppState extends ChangeNotifier {
     final prefix = <ChatMessage>[];
     final sections = <PromptSection>[];
     void addPrefix(String label, String content) {
+      if (customSystem.isNotEmpty) return;
       final trimmed = content.trim();
       if (trimmed.isEmpty) return;
       final m = ChatMessage(
@@ -7234,7 +7331,7 @@ class AppState extends ChangeNotifier {
       conversation,
       historyEnd: historyEnd,
     ).values;
-    if (chatToolConfigFor(conversation).enabled) {
+    if (useTools) {
       addPrefix(
         'Chat tools',
         'Use the available function tools for dice and tracker changes. '
@@ -7285,6 +7382,7 @@ class AppState extends ChangeNotifier {
         hintText: hintText,
         hintDepth: responseHintDepth,
         controlInjections: corrections,
+        leadingSystemOverride: customSystem,
       );
       // Robustness: the preset fills the character definition from the *live*
       // character via its marker blocks. Two ways that definition can silently
@@ -7451,6 +7549,27 @@ class AppState extends ChangeNotifier {
       }
     }
 
+    if (customSystem.isNotEmpty && preset == null) {
+      final system = ChatMessage(
+        role: 'system',
+        content: customSystem,
+        promptProtected: true,
+      );
+      messages = [
+        system,
+        for (final message in messages)
+          if (message.role != 'system') message,
+      ];
+      sections.insert(
+        0,
+        PromptSection(
+          label: 'Side system prompt',
+          role: 'system',
+          tokens: _cost(system),
+          messageCount: 1,
+        ),
+      );
+    }
     final total = sections.fold<int>(0, (s, x) => s + x.tokens);
     return AssembledPrompt(
       // Merge again after the prefix is prepended, so an injected leading system
@@ -7910,6 +8029,13 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _btwDisposed = true;
+    for (final run in _btwRequests.values.toList()) {
+      run.cancel();
+    }
+    for (final run in _btwTitleRuns.values.toList()) {
+      run.cancel();
+    }
     _client.cancel();
     _cancelChatToolRun?.call();
     _chatToolClient?.cancel();

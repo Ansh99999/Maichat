@@ -1036,12 +1036,14 @@ extension ChatToolsState on AppState {
   Future<String> _askAsideWithTools(
     String question,
     Conversation c, {
+    BtwConversation? thread,
     List<ChatMessage> sideHistory = const [],
     BtwRun? run,
     void Function(String)? onProgress,
   }) async {
+    final requestGeneration = _btwGeneration;
     final preset = presetFor(c);
-    final base = _resolveProvider(preset, conversation: c);
+    final base = btwProviderFor(thread, conversation: c);
     if (base == null) {
       throw ChatApiException('Set up a provider in Settings first.');
     }
@@ -1076,7 +1078,13 @@ extension ChatToolsState on AppState {
       final globalVariables = Map<String, String>.of(_globalVars);
       late AssembledPrompt assembled;
       try {
-        assembled = _assemble(c, historyEnd: end);
+        assembled = _assemble(
+          c,
+          historyEnd: end,
+          providerOverride: thread == null ? null : base,
+          toolsEnabled: thread?.toolsEnabled,
+          leadingSystemOverride: thread?.systemPrompt,
+        );
       } finally {
         c.variables
           ..clear()
@@ -1085,8 +1093,11 @@ extension ChatToolsState on AppState {
           ..clear()
           ..addAll(globalVariables);
       }
-      final source = List<ChatMessage>.of(assembled.messages);
-      final prior = _chatToolPayload(btwHistory(sideHistory), base);
+      final source = _btwSource(assembled.messages, thread);
+      final prior = _chatToolPayload(
+        btwHistory(_btwPriorTurns(thread, sideHistory)),
+        base,
+      );
       final messages = _chatToolPayload(source, base)
         ..addAll(prior)
         ..add(
@@ -1187,17 +1198,19 @@ extension ChatToolsState on AppState {
         } on ChatApiException {
           if (!stopped) rethrow;
         } finally {
-          recordUsage(
-            base,
-            base.model,
-            usage ??
-                TokenUsage(
-                  inputTokens: cost,
-                  outputTokens: _tokenizer.estimate(raw.toString()),
-                  estimated: true,
-                ),
-          );
-          await _persistUsage();
+          if (requestGeneration == _btwGeneration) {
+            recordUsage(
+              base,
+              base.model,
+              usage ??
+                  TokenUsage(
+                    inputTokens: cost,
+                    outputTokens: _tokenizer.estimate(raw.toString()),
+                    estimated: true,
+                  ),
+            );
+            await _persistBtwUsage(requestGeneration);
+          }
         }
         if (stopped || calls.isEmpty) break;
         _deduplicateChatCalls(calls);

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/main.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/btw_conversation.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/screens/chat_screen.dart';
@@ -22,6 +23,7 @@ class _PreviewState extends AppState {
   Future<String> askAside(
     String question, {
     Conversation? conversation,
+    BtwConversation? thread,
     List<ChatMessage> sideHistory = const [],
     ChatClient? client,
     BtwRun? run,
@@ -34,7 +36,12 @@ class _PreviewState extends AppState {
 
 void main() {
   setUpAll(loadShotFonts);
-  for (final view in ['btw-thread', 'chat-panes-wide', 'chat-menu-pane']) {
+  for (final view in [
+    'btw-thread',
+    'btw-reopen',
+    'chat-panes-wide',
+    'chat-menu-pane',
+  ]) {
     testWidgets(view, (tester) async {
       usePhone(tester);
       addTearDown(() => debugDisableShadows = true);
@@ -94,6 +101,10 @@ void main() {
         );
         await tester.pump();
         await tester.tap(find.byKey(const Key('chat-ask-aside')));
+        await tester.pumpAndSettle();
+      }
+      if (view == 'btw-reopen') {
+        await tester.tap(find.byKey(const Key('btw-close')));
         await tester.pumpAndSettle();
       }
       FocusManager.instance.primaryFocus?.unfocus();

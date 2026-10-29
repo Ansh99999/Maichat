@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maichat/models/character.dart';
+import 'package:maichat/models/btw_conversation.dart';
 import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
@@ -32,6 +33,7 @@ class _State extends AppState {
   Future<String> askAside(
     String question, {
     Conversation? conversation,
+    BtwConversation? thread,
     List<ChatMessage> sideHistory = const [],
     ChatClient? client,
     BtwRun? run,

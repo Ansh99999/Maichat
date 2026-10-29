@@ -15,6 +15,7 @@ import 'settings/browse_appearance_settings_page.dart';
 import 'settings/character_settings_page.dart';
 import 'settings/chat_behaviour_page.dart';
 import 'settings/chat_tools_page.dart';
+import 'settings/btw_settings_page.dart';
 import 'settings/chat_interface_settings_page.dart';
 import 'settings/chat_interface/actions_page.dart';
 import 'settings/chat_interface/avatars_page.dart';
@@ -80,6 +81,12 @@ class SettingsScreen extends StatelessWidget {
             title: 'Tool calls',
             subtitle: 'Dice, trackers and custom chat actions',
             onTap: () => _open(context, const ChatToolsPage()),
+          ),
+          _SectionTile(
+            icon: Icons.forum_outlined,
+            title: 'Side conversations',
+            subtitle: '${state.btwSettings.titleMode.label} titles · /btw',
+            onTap: () => _open(context, const BtwSettingsPage()),
           ),
           _SectionTile(
             icon: Icons.person_outline,
@@ -460,6 +467,13 @@ const List<_SearchEntry> _searchIndex = [
     builder: _chatToolsPage,
   ),
   _SearchEntry(
+    title: 'Side conversation titles',
+    section: 'Side conversations',
+    icon: Icons.forum_outlined,
+    keywords: 'btw side ooc title first line ai generated saved thread',
+    builder: _btwSettingsPage,
+  ),
+  _SearchEntry(
     title: 'Character creator',
     section: 'Characters',
     icon: Icons.edit_note_outlined,
@@ -562,6 +576,7 @@ Widget _characterCreatorPage() =>
     const CharacterSettingsPage(highlight: SettingAnchor.characterCreator);
 Widget _storagePage() => const StorageSettingsPage();
 Widget _chatToolsPage() => const ChatToolsPage();
+Widget _btwSettingsPage() => const BtwSettingsPage();
 Widget _backupsPage() => const BackupsScreen();
 Widget _backupImportPage() => const BackupImportScreen();
 Widget _drivePage() => const DriveSettingsPage();

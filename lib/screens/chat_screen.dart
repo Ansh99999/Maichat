@@ -160,6 +160,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return state.askAside(
         question,
         conversation: state.active,
+        thread: _aside.activeThread,
         sideHistory: history,
         run: run,
         onProgress: onProgress,
@@ -435,11 +436,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Opens a side conversation without adding a turn to the story.
   void _askAside(AppState state, String question) {
-    if (question.isEmpty) {
-      _toast('Say what to ask: /btw <question>.');
-      return;
-    }
-    if (!state.isConfigured) {
+    if (question.isNotEmpty && !state.isConfigured) {
       _openSettings();
       return;
     }
@@ -449,17 +446,31 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _input.clear();
     FocusManager.instance.primaryFocus?.unfocus();
+    _aside.startThread();
     setState(() {
       if (MediaQuery.sizeOf(context).width < 720) _drawerOpen = false;
       _asideOpen = true;
     });
-    unawaited(_aside.submit(question));
+    if (question.isNotEmpty) unawaited(_aside.submit(question));
   }
 
   void _closeAside() {
     FocusManager.instance.primaryFocus?.unfocus();
     _aside.stop();
     setState(() => _asideOpen = false);
+  }
+
+  void _setAsideOpen(bool open) {
+    if (_asideOpen == open) return;
+    if (!open) {
+      _closeAside();
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      if (MediaQuery.sizeOf(context).width < 720) _drawerOpen = false;
+      _asideOpen = true;
+    });
   }
 
   /// Picks a picture out of the app's own gallery for the next send.
@@ -737,6 +748,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// is a view of this screen, like the ops strip, and the conversation's
   /// transcript is never re-encoded for it.
   bool _asideOpen = false;
+  bool _asideVisible = false;
 
   /// Whether the side-menu pane is *aimed* at open. A drag in flight may
   /// disagree with this for a moment; it is the target, not the geometry.
@@ -807,8 +819,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _editingIndex = null;
     }
     if (conversation.id != _lastConvId) {
-      _aside.reset();
       _asideOpen = false;
+      _asideVisible = false;
       _lastConvId = conversation.id;
       _lastMessageCount = count;
       _unread = 0;
@@ -832,6 +844,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _unread = 0;
       }
     }
+    _aside.bind(state, conversation.id);
     // Keep pinned to the newest text as a reply streams in — but only while the
     // reader is at the bottom, so scrolling up during a stream is never undone.
     if (state.streaming && _stick) _scrollToEnd();
@@ -933,11 +946,11 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     return PopScope(
-      canPop: !_drawerVisible && !_asideOpen,
+      canPop: !_drawerVisible && !_asideVisible && !_asideOpen,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (_asideOpen) {
-          _closeAside();
+        if (_asideVisible || _asideOpen) {
+          if (!_aside.dismissTransientUi()) _closeAside();
         } else {
           _setPaneOpen(false);
         }
@@ -946,6 +959,7 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: bg,
         resizeToAvoidBottomInset: false,
         body: _ChatPanes(
+          key: ValueKey('chat-panes-${conversation.id}'),
           drawer: hosted ? widget.host!.drawer(context) : _drawer,
           allowDrawer: true,
           menuStyle: state.appearance.mobileChatMenuStyle,
@@ -953,12 +967,22 @@ class _ChatScreenState extends State<ChatScreen> {
           onDrawerOpen: _setPaneOpen,
           onDrawerVisible: _setDrawerVisible,
           asideOpen: _asideOpen,
+          hasAside: _aside.activeThread != null,
+          onAsideOpen: _setAsideOpen,
+          onAsideVisible: (visible) {
+            if (_asideVisible != visible) {
+              setState(() => _asideVisible = visible);
+            }
+          },
           asideWidth: _asideWidth,
           onAsideResize: (w) => setState(() => _asideWidth = w),
           aside: BtwThread(
             controller: _aside,
             ui: ui,
-            actionsEnabled: state.chatToolConfigFor(conversation).enabled,
+            actionsEnabled: state.btwToolsEnabledFor(
+              _aside.activeThread,
+              conversation: conversation,
+            ),
             onClose: _closeAside,
           ),
           child: chat,
@@ -3282,6 +3306,7 @@ class _JumpToLatestButton extends StatelessWidget {
 /// pauses, reverse with it, and catch an animation without a jump.
 class _ChatPanes extends StatefulWidget {
   const _ChatPanes({
+    super.key,
     required this.drawer,
     required this.allowDrawer,
     required this.menuStyle,
@@ -3289,6 +3314,9 @@ class _ChatPanes extends StatefulWidget {
     required this.onDrawerOpen,
     required this.onDrawerVisible,
     required this.asideOpen,
+    required this.hasAside,
+    required this.onAsideOpen,
+    required this.onAsideVisible,
     required this.asideWidth,
     required this.onAsideResize,
     required this.aside,
@@ -3302,6 +3330,9 @@ class _ChatPanes extends StatefulWidget {
   final ValueChanged<bool> onDrawerOpen;
   final ValueChanged<bool> onDrawerVisible;
   final bool asideOpen;
+  final bool hasAside;
+  final ValueChanged<bool> onAsideOpen;
+  final ValueChanged<bool> onAsideVisible;
   final double asideWidth;
   final ValueChanged<double> onAsideResize;
   final Widget aside;
@@ -3311,8 +3342,7 @@ class _ChatPanes extends StatefulWidget {
   State<_ChatPanes> createState() => _ChatPanesState();
 }
 
-class _ChatPanesState extends State<_ChatPanes>
-    with SingleTickerProviderStateMixin {
+class _ChatPanesState extends State<_ChatPanes> with TickerProviderStateMixin {
   static const _duration = Duration(milliseconds: 240);
   static const _spring = SpringDescription(
     mass: 1,
@@ -3326,6 +3356,21 @@ class _ChatPanesState extends State<_ChatPanes>
     vsync: this,
     duration: _duration,
   );
+  late final AnimationController _asideController =
+      AnimationController.unbounded(vsync: this, duration: _duration);
+  int? _asidePointer;
+  bool _asideRecognized = false;
+  bool _asideExternalCancel = false;
+  int _asideEpoch = 0;
+  bool _asideReportedOpen = false;
+  bool _asideReportedVisible = false;
+  double _actualAsideWidth = 1;
+  double _asideHandleTop = 56;
+
+  double get _asideProgress => _asideController.value.clamp(0.0, 1.0);
+  bool get _asidePresent =>
+      widget.hasAside &&
+      (_asideProgress > 0 || _asideController.isAnimating || widget.asideOpen);
 
   // A pointer owns progress from its down event until up/cancel, even before
   // horizontal slop has been crossed. The recognizer is not the owner: losing
@@ -3349,17 +3394,33 @@ class _ChatPanesState extends State<_ChatPanes>
     _controller.value = widget.drawerOpen ? 1.0 : 0.0;
     _reportedOpen = widget.drawerOpen;
     _reportedVisible = widget.drawerOpen;
+    _asideController.value = widget.asideOpen ? 1.0 : 0.0;
+    _asideReportedOpen = widget.asideOpen;
+    _asideReportedVisible = widget.asideOpen;
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _asideController.dispose();
     super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant _ChatPanes oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!widget.hasAside && oldWidget.hasAside) {
+      _asideEpoch++;
+      _asidePointer = null;
+      _asideController.stop();
+      _asideController.value = 0;
+      _reportAsideOpen(false);
+      _reportAsideVisible(false);
+    } else if (widget.asideOpen != _asideReportedOpen) {
+      _asideExternalCancel = _asidePointer != null;
+      _asideReportedOpen = widget.asideOpen;
+      _settleAside(widget.asideOpen);
+    }
     if (widget.drawerOpen == _reportedOpen) return;
     // Self-reported drag changes already match _reportedOpen. A different
     // target is an external control, which takes priority over the held touch.
@@ -3391,12 +3452,141 @@ class _ChatPanesState extends State<_ChatPanes>
     });
   }
 
+  void _reportAsideOpen(bool open) {
+    if (_asideReportedOpen == open) return;
+    _asideReportedOpen = open;
+    _scheduleNotification(() {
+      if (_asideReportedOpen == open) widget.onAsideOpen(open);
+    });
+  }
+
+  void _reportAsideVisible(bool visible) {
+    if (_asideReportedVisible == visible) return;
+    _asideReportedVisible = visible;
+    _scheduleNotification(() {
+      if (_asideReportedVisible == visible) widget.onAsideVisible(visible);
+    });
+  }
+
+  bool _canStartAsideDrag(PointerDownEvent event) {
+    if (!widget.hasAside ||
+        (_asidePointer != null && _asidePointer != event.pointer) ||
+        _ownerPointer != null) {
+      return false;
+    }
+    if (!_rootWide && (_progress > 0 || widget.drawerOpen)) return false;
+    final point = event.localPosition;
+    if (point.dy < _asideHandleTop || point.dy > _asideHandleTop + 48) {
+      return false;
+    }
+    final left = _asidePresent
+        ? _rootWidth - _actualAsideWidth * _asideProgress + (_rootWide ? 12 : 0)
+        : _rootWidth - 48;
+    return point.dx >= left && point.dx <= left + 48;
+  }
+
+  void _asidePressed(PointerDownEvent event) {
+    if (!_canStartAsideDrag(event)) return;
+    _asidePointer = event.pointer;
+    _asideRecognized = false;
+    _asideExternalCancel = false;
+    _asideEpoch++;
+    _asideController.stop();
+    if (_asideProgress > 0) {
+      _reportAsideOpen(true);
+      _reportAsideVisible(true);
+    }
+  }
+
+  void _asideReleased(PointerEvent event) {
+    if (_asidePointer != event.pointer || _asideRecognized) return;
+    scheduleMicrotask(() {
+      if (_asidePointer != event.pointer) return;
+      _asidePointer = null;
+      if (!_asideExternalCancel) _settleAside(_asideProgress >= .5);
+      _asideExternalCancel = false;
+    });
+  }
+
+  void _asideCancelled(PointerCancelEvent event) {
+    if (_asidePointer != event.pointer) return;
+    _asidePointer = null;
+    _asideRecognized = false;
+    if (!_asideExternalCancel) _settleAside(_asideProgress >= .5);
+    _asideExternalCancel = false;
+  }
+
+  void _asideDragStarted(DragStartDetails details) {
+    if (_asidePointer == null || _asideExternalCancel) return;
+    _asideRecognized = true;
+    _asideEpoch++;
+    _asideController.stop();
+  }
+
+  void _asideDragUpdated(DragUpdateDetails details) {
+    if (_asidePointer == null || _asideExternalCancel) return;
+    final after = (_asideProgress - details.delta.dx / _actualAsideWidth).clamp(
+      0.0,
+      1.0,
+    );
+    _asideController.value = after;
+    if (after > 0) {
+      _reportAsideOpen(true);
+      _reportAsideVisible(true);
+    }
+  }
+
+  void _asideDragEnded(DragEndDetails details) {
+    if (_asidePointer == null) return;
+    _asidePointer = null;
+    _asideRecognized = false;
+    if (_asideExternalCancel) {
+      _asideExternalCancel = false;
+      return;
+    }
+    final velocity = details.primaryVelocity ?? 0;
+    final target = velocity.abs() > _flingVelocity
+        ? velocity < 0
+        : _asideProgress >= .5;
+    _settleAside(target, velocity: -velocity / _actualAsideWidth);
+  }
+
+  void _settleAside(bool target, {double velocity = 0}) {
+    final epoch = ++_asideEpoch;
+    _asideController.stop();
+    _reportAsideOpen(target);
+    if (target) _reportAsideVisible(true);
+    final end = target ? 1.0 : 0.0;
+    if (MediaQuery.disableAnimationsOf(context) ||
+        (_asideProgress - end).abs() < .00001) {
+      _asideController.value = end;
+      _reportAsideVisible(target);
+      return;
+    }
+    _asideController
+        .animateWith(
+          SpringSimulation(
+            _spring,
+            _asideProgress,
+            end,
+            velocity,
+            snapToEnd: true,
+            tolerance: _springTolerance,
+          ),
+        )
+        .whenCompleteOrCancel(() {
+          if (!mounted || epoch != _asideEpoch) return;
+          _asideController.value = end;
+          _reportAsideVisible(target);
+        });
+  }
+
   bool _canStartDrag(PointerDownEvent event) {
     if (!widget.allowDrawer) return false;
     if (_ownerPointer != null && _ownerPointer != event.pointer) return false;
     final local = event.localPosition;
     if (local.dx < 0 || local.dx > _rootWidth) return false;
-    if (!_rootWide && widget.asideOpen) return false;
+    if (!_rootWide && _asidePresent) return false;
     final shown = _drawerWidth * _progress;
     if (shown == 0) return local.dx < 20;
     return !_rootWide || local.dx <= shown;
@@ -3492,7 +3682,8 @@ class _ChatPanesState extends State<_ChatPanes>
       _reportVisible(false);
     }
     final end = target ? 1.0 : 0.0;
-    if ((_progress - end).abs() < .00001) {
+    if (MediaQuery.disableAnimationsOf(context) ||
+        (_progress - end).abs() < .00001) {
       _controller.value = end;
       _reportVisible(target);
       return;
@@ -3528,6 +3719,7 @@ class _ChatPanesState extends State<_ChatPanes>
       final slide = wide || widget.menuStyle == MobileChatMenuStyle.slide;
       _rootWide = wide;
       _rootWidth = width;
+      _asideHandleTop = MediaQuery.viewPaddingOf(context).top + 56;
       _drawerWidth = wide ? width * .25 : width * .78;
       final scheme = Theme.of(context).colorScheme;
 
@@ -3543,13 +3735,56 @@ class _ChatPanesState extends State<_ChatPanes>
       );
       final chat = RepaintBoundary(
         key: const Key('chat-main-pane'),
-        child: widget.child,
+        child: Stack(
+          children: [
+            Positioned.fill(child: widget.child),
+            if (widget.hasAside && !widget.asideOpen)
+              Positioned(
+                top: _asideHandleTop,
+                right: 0,
+                child: Semantics(
+                  hint: 'Drag left to reopen the side thread',
+                  child: Material(
+                    color: scheme.surfaceContainerHigh,
+                    elevation: 2,
+                    borderRadius: const BorderRadius.horizontal(
+                      left: Radius.circular(12),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: IconButton(
+                      key: const Key('btw-reopen'),
+                      constraints: const BoxConstraints.tightFor(
+                        width: 48,
+                        height: 48,
+                      ),
+                      tooltip: 'Reopen /btw thread',
+                      onPressed: () => widget.onAsideOpen(true),
+                      icon: const Icon(Icons.chevron_left),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+      final motion = Listenable.merge([_controller, _asideController]);
+      final asideLayer = RepaintBoundary(
+        child: ExcludeFocus(
+          excluding: !_asideReportedOpen,
+          child: ExcludeSemantics(
+            excluding: !_asideReportedOpen,
+            child: IgnorePointer(
+              ignoring: !_asideReportedOpen,
+              child: widget.aside,
+            ),
+          ),
+        ),
       );
 
       final Widget body;
       if (wide) {
         body = AnimatedBuilder(
-          animation: _controller,
+          animation: motion,
           child: chat,
           builder: (context, chatChild) {
             final progress = _progress;
@@ -3560,6 +3795,7 @@ class _ChatPanesState extends State<_ChatPanes>
               minimumAside,
               maximumAside,
             );
+            _actualAsideWidth = actualAside;
             return Row(
               children: [
                 SizedBox(
@@ -3576,92 +3812,89 @@ class _ChatPanesState extends State<_ChatPanes>
                       : null,
                 ),
                 Expanded(child: chatChild!),
-                TweenAnimationBuilder<double>(
-                  tween: Tween(end: widget.asideOpen ? 1 : 0),
-                  duration: _duration,
-                  curve: Curves.easeOutCubic,
-                  builder: (context, reveal, pane) => SizedBox(
-                    width: actualAside * reveal,
-                    child: ClipRect(
-                      child: OverflowBox(
-                        alignment: Alignment.centerRight,
-                        minWidth: actualAside,
-                        maxWidth: actualAside,
-                        child: pane,
-                      ),
-                    ),
-                  ),
-                  child: widget.asideOpen
-                      ? Stack(
-                          children: [
-                            Positioned.fill(left: 12, child: widget.aside),
-                            Positioned(
-                              left: 0,
-                              top: 0,
-                              bottom: 0,
-                              width: 12,
-                              child: Semantics(
-                                label: 'Resize side thread',
-                                slider: true,
-                                onIncrease: () => widget.onAsideResize(
-                                  (actualAside + 40).clamp(
-                                    minimumAside,
-                                    maximumAside,
-                                  ),
-                                ),
-                                onDecrease: () => widget.onAsideResize(
-                                  (actualAside - 40).clamp(
-                                    minimumAside,
-                                    maximumAside,
-                                  ),
-                                ),
-                                child: MouseRegion(
-                                  cursor: SystemMouseCursors.resizeLeftRight,
-                                  child: GestureDetector(
-                                    key: const Key('btw-resize-handle'),
-                                    behavior: HitTestBehavior.opaque,
-                                    onHorizontalDragUpdate: (d) =>
-                                        widget.onAsideResize(
-                                          (actualAside - d.delta.dx).clamp(
-                                            minimumAside,
-                                            maximumAside,
-                                          ),
-                                        ),
-                                    child: Center(
-                                      child: Container(
-                                        width: 4,
-                                        height: 40,
-                                        decoration: BoxDecoration(
-                                          color: scheme.outlineVariant,
-                                          borderRadius: BorderRadius.circular(
-                                            4,
+                SizedBox(
+                  width: actualAside * _asideProgress,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      minWidth: actualAside,
+                      maxWidth: actualAside,
+                      child: _asidePresent
+                          ? Stack(
+                              children: [
+                                Positioned.fill(left: 12, child: asideLayer),
+                                Positioned(
+                                  left: 0,
+                                  top: 0,
+                                  bottom: 0,
+                                  width: 12,
+                                  child: Semantics(
+                                    label: 'Resize side thread',
+                                    slider: true,
+                                    onIncrease: () => widget.onAsideResize(
+                                      (actualAside + 40).clamp(
+                                        minimumAside,
+                                        maximumAside,
+                                      ),
+                                    ),
+                                    onDecrease: () => widget.onAsideResize(
+                                      (actualAside - 40).clamp(
+                                        minimumAside,
+                                        maximumAside,
+                                      ),
+                                    ),
+                                    child: MouseRegion(
+                                      cursor:
+                                          SystemMouseCursors.resizeLeftRight,
+                                      child: GestureDetector(
+                                        key: const Key('btw-resize-handle'),
+                                        behavior: HitTestBehavior.opaque,
+                                        onHorizontalDragUpdate: (d) =>
+                                            widget.onAsideResize(
+                                              (actualAside - d.delta.dx).clamp(
+                                                minimumAside,
+                                                maximumAside,
+                                              ),
+                                            ),
+                                        child: Center(
+                                          child: Container(
+                                            width: 4,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              color: scheme.outlineVariant,
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ],
-                        )
-                      : const SizedBox.expand(),
+                              ],
+                            )
+                          : null,
+                    ),
+                  ),
                 ),
               ],
             );
           },
         );
       } else {
+        _actualAsideWidth = width;
         body = AnimatedBuilder(
-          animation: _controller,
+          animation: motion,
           child: chat,
           builder: (context, chatChild) {
             final progress = _progress;
-            final offset = slide ? _drawerWidth * progress : 0.0;
+            final offset =
+                (slide ? _drawerWidth * progress : 0.0) -
+                width * _asideProgress;
             final drawerLeft = slide
                 ? offset - _drawerWidth
                 : -_drawerWidth * (1 - progress);
-            final chatCovered = progress > 0 || widget.asideOpen;
+            final chatCovered = progress > 0 || _asidePresent;
             return Stack(
               clipBehavior: Clip.hardEdge,
               children: [
@@ -3719,9 +3952,19 @@ class _ChatPanesState extends State<_ChatPanes>
       }
 
       return Listener(
-        onPointerDown: _pointerPressed,
-        onPointerUp: _pointerReleased,
-        onPointerCancel: _pointerCancelled,
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (event) {
+          _pointerPressed(event);
+          _asidePressed(event);
+        },
+        onPointerUp: (event) {
+          _pointerReleased(event);
+          _asideReleased(event);
+        },
+        onPointerCancel: (event) {
+          _pointerCancelled(event);
+          _asideCancelled(event);
+        },
         child: RawGestureDetector(
           behavior: HitTestBehavior.translucent,
           excludeFromSemantics: true,
@@ -3738,6 +3981,18 @@ class _ChatPanesState extends State<_ChatPanes>
                       ..onCancel = _dragCancelled;
                   },
                 ),
+            _AsideDragRecognizer:
+                GestureRecognizerFactoryWithHandlers<_AsideDragRecognizer>(
+                  () => _AsideDragRecognizer(canStart: _canStartAsideDrag),
+                  (recognizer) {
+                    recognizer
+                      ..dragStartBehavior = DragStartBehavior.down
+                      ..onStart = _asideDragStarted
+                      ..onUpdate = _asideDragUpdated
+                      ..onEnd = _asideDragEnded
+                      ..onCancel = () => _asideRecognized = false;
+                  },
+                ),
           },
           child: Stack(
             clipBehavior: Clip.hardEdge,
@@ -3745,23 +4000,15 @@ class _ChatPanesState extends State<_ChatPanes>
               Positioned.fill(child: body),
               if (!wide)
                 Positioned.fill(
-                  child: IgnorePointer(
-                    ignoring: !widget.asideOpen,
-                    child: AnimatedSwitcher(
-                      duration: _duration,
-                      switchInCurve: Curves.easeOutCubic,
-                      switchOutCurve: Curves.easeInSine,
-                      transitionBuilder: (child, animation) => SlideTransition(
-                        position: Tween(
-                          begin: const Offset(1, 0),
-                          end: Offset.zero,
-                        ).animate(animation),
-                        child: child,
-                      ),
-                      child: widget.asideOpen
-                          ? widget.aside
-                          : const SizedBox.shrink(),
-                    ),
+                  child: AnimatedBuilder(
+                    animation: _asideController,
+                    child: asideLayer,
+                    builder: (context, pane) => _asidePresent
+                        ? Transform.translate(
+                            offset: Offset(width * (1 - _asideProgress), 0),
+                            child: pane,
+                          )
+                        : const SizedBox.shrink(),
                   ),
                 ),
             ],
@@ -3782,6 +4029,10 @@ class _PaneDragRecognizer extends HorizontalDragGestureRecognizer {
     if (event is! PointerDownEvent) return false;
     return canStart(event) && super.isPointerAllowed(event);
   }
+}
+
+class _AsideDragRecognizer extends _PaneDragRecognizer {
+  _AsideDragRecognizer({required super.canStart});
 }
 
 /// Lets widgets inside the pane drawer close the pane itself (the modal

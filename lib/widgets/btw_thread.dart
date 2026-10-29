@@ -1,118 +1,18 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/chat_interface.dart';
-import '../models/message.dart';
-import '../services/btw.dart';
-import '../services/chat_client.dart';
+import '../screens/studio/shell/liquid_panel.dart';
+import '../models/btw_conversation.dart';
+import 'btw_settings_panel.dart';
+import 'btw_thread_controller.dart';
 import 'message_markdown.dart';
 
-typedef BtwThreadAsk =
-    Future<String> Function(
-      String question,
-      List<ChatMessage> history,
-      BtwRun run,
-      void Function(String) onProgress,
-    );
-
-class BtwExchange {
-  BtwExchange(this.question);
-
-  final String question;
-  String answer = '';
-  String? error;
-  bool done = false;
-  bool stopped = false;
-}
-
-/// Screen-local side conversation. Nothing here enters the saved RP transcript.
-class BtwThreadController extends ChangeNotifier {
-  BtwThreadController({required this.ask});
-
-  final BtwThreadAsk ask;
-  final List<BtwExchange> _exchanges = [];
-  List<BtwExchange> get exchanges => List.unmodifiable(_exchanges);
-  BtwRun? _run;
-  Timer? _paint;
-  String _pending = '';
-  bool _disposed = false;
-
-  bool get busy => _run != null;
-
-  Future<void> submit(String text) async {
-    final question = text.trim();
-    if (question.isEmpty || busy || _disposed) return;
-    final history = <ChatMessage>[
-      for (final exchange in _exchanges)
-        if (exchange.done && exchange.error == null && !exchange.stopped) ...[
-          ChatMessage(role: 'user', content: exchange.question),
-          ChatMessage(role: 'assistant', content: exchange.answer),
-        ],
-    ];
-    final exchange = BtwExchange(question);
-    final run = _run = BtwRun();
-    _pending = '';
-    _exchanges.add(exchange);
-    notifyListeners();
-    try {
-      final answer = await ask(question, history, run, (text) {
-        if (_disposed || _run != run) return;
-        _pending = text;
-        _paint ??= Timer(const Duration(milliseconds: 50), () {
-          _paint = null;
-          if (_disposed || _run != run) return;
-          exchange.answer = _pending;
-          notifyListeners();
-        });
-      });
-      if (_disposed || _run != run) return;
-      exchange.answer = answer;
-    } catch (error) {
-      if (_disposed || _run != run) return;
-      exchange.answer = _pending;
-      exchange.error = error is ChatApiException ? error.message : '$error';
-    } finally {
-      if (!_disposed && _run == run) {
-        _paint?.cancel();
-        _paint = null;
-        _run = null;
-        exchange.done = true;
-        notifyListeners();
-      }
-    }
-  }
-
-  void stop({bool notify = true}) {
-    final run = _run;
-    if (run == null) return;
-    _run = null;
-    _paint?.cancel();
-    _paint = null;
-    final exchange = _exchanges.last;
-    exchange
-      ..answer = _pending
-      ..done = true
-      ..stopped = true;
-    run.cancel();
-    if (notify && !_disposed) notifyListeners();
-  }
-
-  void reset({bool notify = false}) {
-    stop(notify: false);
-    _exchanges.clear();
-    _pending = '';
-    if (notify && !_disposed) notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    _disposed = true;
-    stop(notify: false);
-    super.dispose();
-  }
-}
+export '../models/btw_conversation.dart' show BtwExchange;
+export 'btw_thread_controller.dart' show BtwThreadController, BtwThreadAsk;
 
 /// Flat Document-style transcript with the Studio's simple composer shape.
 class BtwThread extends StatefulWidget {
@@ -136,17 +36,63 @@ class BtwThread extends StatefulWidget {
 class _BtwThreadState extends State<BtwThread> {
   final TextEditingController _input = TextEditingController();
   final FocusNode _focus = FocusNode();
+  bool _settingsOpen = false;
+  late Widget _settingsContent;
+  final Map<BtwExchange, (String, Widget)> _exchangeCache = {};
+  String? _renderThreadId;
+  ThemeData? _renderTheme;
 
   @override
   void initState() {
     super.initState();
     _focus.addListener(_repaint);
+    _makeSettingsContent();
+    widget.controller.addTransientDismissHandler(_dismissSettings);
   }
 
   void _repaint() => setState(() {});
 
+  bool _dismissSettings() {
+    if (!_settingsOpen) return false;
+    setState(() => _settingsOpen = false);
+    return true;
+  }
+
+  void _makeSettingsContent() {
+    _settingsContent = BtwSettingsPanel(
+      controller: widget.controller,
+      onSelected: () {
+        _input.clear();
+        setState(() => _settingsOpen = false);
+      },
+      onClose: () => setState(() => _settingsOpen = false),
+    );
+  }
+
+  @override
+  void didUpdateWidget(BtwThread oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeTransientDismissHandler(_dismissSettings);
+      widget.controller.addTransientDismissHandler(_dismissSettings);
+      _makeSettingsContent();
+    }
+  }
+
+  Widget _cachedExchange(BtwExchange exchange, int index, ThemeData theme) {
+    final signature =
+        '${exchange.answer}\u0000${exchange.error}\u0000'
+        '${exchange.done}\u0000${exchange.stopped}\u0000$index';
+    final cached = _exchangeCache[exchange];
+    if (cached != null && cached.$1 == signature) return cached.$2;
+    final rendered = RepaintBoundary(child: _exchange(exchange, index, theme));
+    _exchangeCache[exchange] = (signature, rendered);
+    return rendered;
+  }
+
   @override
   void dispose() {
+    widget.controller.removeTransientDismissHandler(_dismissSettings);
     _input.dispose();
     _focus
       ..removeListener(_repaint)
@@ -171,89 +117,191 @@ class _BtwThreadState extends State<BtwThread> {
       color: scheme.surface,
       child: ListenableBuilder(
         listenable: widget.controller,
-        builder: (context, _) => Stack(
-          children: [
-            Padding(
-              padding: EdgeInsets.only(
-                top: top,
-                bottom: MediaQuery.viewInsetsOf(context).bottom > 0
-                    ? MediaQuery.viewInsetsOf(context).bottom
-                    : MediaQuery.viewPaddingOf(context).bottom,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+        builder: (context, _) {
+          final threadId = widget.controller.activeThread?.id;
+          if (_renderThreadId != threadId || _renderTheme != theme) {
+            _exchangeCache.clear();
+            _renderThreadId = threadId;
+            _renderTheme = theme;
+          }
+          final exchanges = widget.controller.exchanges;
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final bottom = math.max(
+                MediaQuery.viewInsetsOf(context).bottom,
+                MediaQuery.viewPaddingOf(context).bottom,
+              );
+              final panelWidth = math.min(368.0, constraints.maxWidth - 16);
+              final panelHeight = math.min(
+                520.0,
+                math.max(0.0, constraints.maxHeight - top - bottom - 16),
+              );
+              final panelTop = math.max(
+                top + 8,
+                math.min(
+                  top + 168,
+                  constraints.maxHeight - bottom - panelHeight - 8,
+                ),
+              );
+              return Stack(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-                    child: Row(
+                    padding: EdgeInsets.only(
+                      top: top,
+                      bottom: MediaQuery.viewInsetsOf(context).bottom > 0
+                          ? MediaQuery.viewInsetsOf(context).bottom
+                          : MediaQuery.viewPaddingOf(context).bottom,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: Text(
-                            'By the way',
-                            style: theme.textTheme.titleLarge,
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(60, 16, 20, 12),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  widget
+                                          .controller
+                                          .activeThread
+                                          ?.displayTitle ??
+                                      'By the way',
+                                  key: const Key('btw-thread-title'),
+                                  maxLines:
+                                      constraints.maxHeight - top - bottom < 400
+                                      ? 1
+                                      : 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleLarge,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'New side thread',
+                                onPressed: () {
+                                  widget.controller.startThread();
+                                  _input.clear();
+                                },
+                                key: const Key('btw-new-thread'),
+                                icon: const Icon(Icons.edit_square),
+                              ),
+                            ],
                           ),
                         ),
-                        IconButton(
-                          tooltip: 'New side thread',
-                          onPressed: () {
-                            widget.controller.reset(notify: true);
-                            _input.clear();
-                          },
-                          icon: const Icon(Icons.edit_square),
+                        Expanded(
+                          child: ListView.builder(
+                            key: const Key('btw-transcript'),
+                            reverse: true,
+                            padding: const EdgeInsets.fromLTRB(60, 24, 20, 16),
+                            itemCount: exchanges.length,
+                            itemBuilder: (context, index) {
+                              final i = exchanges.length - index - 1;
+                              return _cachedExchange(exchanges[i], i, theme);
+                            },
+                          ),
+                        ),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: math.max(
+                              48,
+                              math.min(
+                                240,
+                                (constraints.maxHeight - top - bottom) * 0.45,
+                              ),
+                            ),
+                          ),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                  ),
+                                  child: Text(
+                                    widget.actionsEnabled
+                                        ? 'Outside the story. Tool changes are saved.'
+                                        : 'Not added to the conversation',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                                _composer(theme),
+                              ],
+                            ),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  Expanded(
-                    child: ListView.builder(
-                      key: const Key('btw-transcript'),
-                      reverse: true,
-                      padding: const EdgeInsets.fromLTRB(20, 40, 20, 16),
-                      itemCount: widget.controller.exchanges.length,
-                      itemBuilder: (context, index) {
-                        final exchanges = widget.controller.exchanges;
-                        final i = exchanges.length - index - 1;
-                        return _exchange(exchanges[i], i, theme);
+                  Positioned(
+                    top: top + 56,
+                    left: 0,
+                    child: _edgeButton(
+                      theme,
+                      key: const Key('btw-close'),
+                      tooltip: 'Back to chat',
+                      icon: Icons.arrow_back,
+                      onPressed: () {
+                        if (_settingsOpen) {
+                          setState(() => _settingsOpen = false);
+                        }
+                        widget.onClose();
                       },
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      widget.actionsEnabled
-                          ? 'Outside the story. Tool changes are saved.'
-                          : 'Not added to the conversation',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                  Positioned(
+                    top: top + 112,
+                    left: 0,
+                    child: _edgeButton(
+                      theme,
+                      key: const Key('btw-settings'),
+                      tooltip: 'Side thread settings',
+                      icon: Icons.settings_outlined,
+                      onPressed: () {
+                        _focus.unfocus();
+                        setState(() => _settingsOpen = !_settingsOpen);
+                      },
                     ),
                   ),
-                  _composer(theme),
+                  LiquidPanel(
+                    open: _settingsOpen,
+                    anchor: Offset(24, top + 136),
+                    panel: Rect.fromLTWH(8, panelTop, panelWidth, panelHeight),
+                    color: scheme.surfaceContainerHigh,
+                    onDismiss: () => setState(() => _settingsOpen = false),
+                    child: _settingsContent,
+                  ),
                 ],
-              ),
-            ),
-            Positioned(
-              top: top + 56,
-              right: 0,
-              child: Material(
-                elevation: 2,
-                color: scheme.surfaceContainerHigh,
-                borderRadius: const BorderRadius.horizontal(
-                  left: Radius.circular(12),
-                ),
-                child: IconButton(
-                  key: const Key('btw-close'),
-                  tooltip: 'Back to chat',
-                  onPressed: widget.onClose,
-                  icon: const Icon(Icons.arrow_back),
-                ),
-              ),
-            ),
-          ],
-        ),
+              );
+            },
+          );
+        },
       ),
     );
   }
+
+  Widget _edgeButton(
+    ThemeData theme, {
+    required Key key,
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) => Material(
+    elevation: 2,
+    color: theme.colorScheme.surfaceContainerHigh,
+    borderRadius: const BorderRadius.horizontal(right: Radius.circular(12)),
+    child: SizedBox(
+      width: 48,
+      height: 48,
+      child: IconButton(
+        key: key,
+        tooltip: tooltip,
+        onPressed: onPressed,
+        icon: Icon(icon),
+      ),
+    ),
+  );
 
   Widget _exchange(BtwExchange exchange, int index, ThemeData theme) {
     final scheme = theme.colorScheme;

@@ -223,30 +223,35 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
 
       expect(find.byKey(const Key('btw-thread')), findsOneWidget);
-      expect(find.text('where is this harbour?'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('btw-transcript')),
+          matching: find.text('where is this harbour?'),
+        ),
+        findsOneWidget,
+      );
       expect(state.active.messages.map((m) => m.content).toList(), before);
       expect(state.streaming, isFalse);
       // The question moved into the sheet; the box is free again.
       expect(tester.widget<TextField>(composer()).controller!.text, isEmpty);
 
       await tester.tap(find.byKey(const Key('btw-close')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
       expect(find.byKey(const Key('btw-thread')), findsNothing);
       expect(state.active.messages.map((m) => m.content).toList(), before);
     });
 
-    testWidgets('a bare /btw asks for a question instead', (tester) async {
+    testWidgets('a bare /btw opens a blank side thread', (tester) async {
       final state = await boot();
       await tester.pumpWidget(host(state));
       await tester.pumpAndSettle();
       await tester.enterText(composer(), '/btw');
       await tester.pump();
       await tester.tap(find.byKey(const Key('chat-ask-aside')));
-      await tester.pump();
-      expect(find.text('Say what to ask: /btw <question>.'), findsOneWidget);
-      expect(find.byKey(const Key('btw-thread')), findsNothing);
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('btw-thread')), findsOneWidget);
+      expect(find.byKey(const Key('btw-composer-field')), findsOneWidget);
+      expect(state.btwThreadsFor(state.active.id).single.exchanges, isEmpty);
     });
 
     testWidgets('while a reply streams, a /btw line can still be asked', (
