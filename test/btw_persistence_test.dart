@@ -21,6 +21,41 @@ void main() {
   }
 
   test(
+    'arrow opacity defaults, bounds, title edits and reload preserve the setting',
+    () async {
+      expect(BtwSettings.fromJson({}).mainChatArrowOpacity, 1);
+      for (final value in [null, 'invalid', double.nan, double.infinity]) {
+        expect(
+          BtwSettings.fromJson({
+            'mainChatArrowOpacity': value,
+          }).mainChatArrowOpacity,
+          1,
+        );
+      }
+      expect(
+        BtwSettings.fromJson({'mainChatArrowOpacity': -1}).mainChatArrowOpacity,
+        0.1,
+      );
+      expect(
+        BtwSettings.fromJson({'mainChatArrowOpacity': 5}).mainChatArrowOpacity,
+        1,
+      );
+      final state = await boot();
+      await state.updateBtwSettings(
+        const BtwSettings(mainChatArrowOpacity: 0.35),
+      );
+      await state.updateBtwSettings(
+        state.btwSettings.copyWith(titleMode: BtwTitleMode.generated),
+      );
+      final restored = await boot();
+      expect(restored.btwSettings.mainChatArrowOpacity, 0.35);
+      expect(restored.btwSettings.titleMode, BtwTitleMode.generated);
+      state.dispose();
+      restored.dispose();
+    },
+  );
+
+  test(
     'threads and overrides survive reload separately from RP and other threads',
     () async {
       final state = await boot();

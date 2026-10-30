@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/settings.dart';
 import '../../state/app_state.dart';
+import '../../widgets/btw_arrow_opacity_setting.dart';
 import 'chat_interface/controls.dart';
 
 /// Global preferences for durable side conversations.
@@ -23,6 +24,9 @@ class BtwSettingsPage extends StatelessWidget {
           16 + MediaQuery.paddingOf(context).bottom,
         ),
         children: [
+          settingHeader(context, 'Main chat'),
+          BtwArrowOpacitySetting(state: state),
+          const Divider(height: 24),
           settingHeader(context, 'New thread titles'),
           SettingEnumRow<BtwTitleMode>(
             key: const Key('btw-title-mode'),

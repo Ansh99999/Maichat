@@ -7,6 +7,7 @@ import '../models/btw_conversation.dart';
 import '../models/settings.dart';
 import '../screens/studio/shell/liquid_panel.dart';
 import '../state/app_state.dart';
+import 'btw_arrow_opacity_setting.dart';
 import 'btw_thread_controller.dart';
 import 'export_sheet.dart';
 
@@ -315,37 +316,42 @@ class _BtwSettingsPanelState extends State<BtwSettingsPanel> {
       itemCount: _filtered.isEmpty ? 2 : _filtered.length + 1,
       itemBuilder: (context, index) {
         if (index == 0) {
-          return Row(
+          return Column(
             children: [
-              Expanded(
-                child: Text(
-                  'Saved threads',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
+              if (state != null) BtwArrowOpacitySetting(state: state),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Saved threads',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ),
+                  if (state != null)
+                    PopupMenuButton<BtwTitleMode>(
+                      key: const Key('btw-title-mode'),
+                      tooltip: 'Title new side threads',
+                      icon: const Icon(Icons.title),
+                      initialValue: state.btwSettings.titleMode,
+                      onSelected: (mode) async {
+                        await state.updateBtwSettings(
+                          state.btwSettings.copyWith(titleMode: mode),
+                        );
+                        if (mounted) setState(_refresh);
+                      },
+                      itemBuilder: (context) => [
+                        for (final mode in BtwTitleMode.values)
+                          CheckedPopupMenuItem(
+                            value: mode,
+                            checked: state.btwSettings.titleMode == mode,
+                            child: Text(mode.label),
+                          ),
+                      ],
+                    ),
+                ],
               ),
-              if (state != null)
-                PopupMenuButton<BtwTitleMode>(
-                  key: const Key('btw-title-mode'),
-                  tooltip: 'Title new side threads',
-                  icon: const Icon(Icons.title),
-                  initialValue: state.btwSettings.titleMode,
-                  onSelected: (mode) async {
-                    await state.updateBtwSettings(
-                      state.btwSettings.copyWith(titleMode: mode),
-                    );
-                    if (mounted) setState(_refresh);
-                  },
-                  itemBuilder: (context) => [
-                    for (final mode in BtwTitleMode.values)
-                      CheckedPopupMenuItem(
-                        value: mode,
-                        checked: state.btwSettings.titleMode == mode,
-                        child: Text(mode.label),
-                      ),
-                  ],
-                ),
             ],
           );
         }

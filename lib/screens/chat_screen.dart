@@ -968,6 +968,7 @@ class _ChatScreenState extends State<ChatScreen> {
           onDrawerVisible: _setDrawerVisible,
           asideOpen: _asideOpen,
           hasAside: _aside.activeThread != null,
+          asideArrowOpacity: state.btwSettings.mainChatArrowOpacity,
           onAsideOpen: _setAsideOpen,
           onAsideVisible: (visible) {
             if (_asideVisible != visible) {
@@ -3315,6 +3316,7 @@ class _ChatPanes extends StatefulWidget {
     required this.onDrawerVisible,
     required this.asideOpen,
     required this.hasAside,
+    required this.asideArrowOpacity,
     required this.onAsideOpen,
     required this.onAsideVisible,
     required this.asideWidth,
@@ -3331,6 +3333,7 @@ class _ChatPanes extends StatefulWidget {
   final ValueChanged<bool> onDrawerVisible;
   final bool asideOpen;
   final bool hasAside;
+  final double asideArrowOpacity;
   final ValueChanged<bool> onAsideOpen;
   final ValueChanged<bool> onAsideVisible;
   final double asideWidth;
@@ -3722,6 +3725,7 @@ class _ChatPanesState extends State<_ChatPanes> with TickerProviderStateMixin {
       _asideHandleTop = MediaQuery.viewPaddingOf(context).top + 56;
       _drawerWidth = wide ? width * .25 : width * .78;
       final scheme = Theme.of(context).colorScheme;
+      final arrowAlpha = widget.asideArrowOpacity.clamp(0.1, 1.0);
 
       final drawerLayer = RepaintBoundary(
         child: _PaneScope(
@@ -3745,7 +3749,11 @@ class _ChatPanesState extends State<_ChatPanes> with TickerProviderStateMixin {
                 child: Semantics(
                   hint: 'Drag left to reopen the side thread',
                   child: Material(
-                    color: scheme.surfaceContainerHigh,
+                    color: scheme.surfaceContainerHigh.withValues(
+                      alpha: arrowAlpha,
+                    ),
+                    surfaceTintColor: Colors.transparent,
+                    shadowColor: scheme.shadow.withValues(alpha: arrowAlpha),
                     elevation: 2,
                     borderRadius: const BorderRadius.horizontal(
                       left: Radius.circular(12),
@@ -3759,7 +3767,10 @@ class _ChatPanesState extends State<_ChatPanes> with TickerProviderStateMixin {
                       ),
                       tooltip: 'Reopen /btw thread',
                       onPressed: () => widget.onAsideOpen(true),
-                      icon: const Icon(Icons.chevron_left),
+                      icon: Icon(
+                        Icons.chevron_left,
+                        color: scheme.onSurface.withValues(alpha: arrowAlpha),
+                      ),
                     ),
                   ),
                 ),

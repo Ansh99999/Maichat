@@ -43,6 +43,10 @@ selecting a symbol expands its name and editor. Long press or the accessible
 row action opens anchored Delete/Export controls. Export saves only that thread
 as native JSON or text. Android Back closes actions, then settings, then the
 thread. Short keyboard layouts retain 48 dp controls and scroll their content.
+The side settings window and Settings → Side conversations both offer
+Main-chat arrow opacity, from 10–100%, defaulting to fully visible for older
+settings. The global preference persists on slider release. Fill, icon and
+shadow alpha are painted directly; the 48 dp tap/drag target stays usable.
 
 Settings → Side conversations chooses first-line or AI-generated titles. AI
 titles use one separately metered, tool-free request after the first answer;

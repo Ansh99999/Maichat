@@ -42,21 +42,42 @@ enum BtwTitleMode {
   final String label;
 }
 
-/// Preferences for new side conversations. Kept outside the legacy provider
-/// settings so changing a title preference never rewrites credentials.
+/// Side conversation preferences, kept apart from provider credentials.
 class BtwSettings {
-  const BtwSettings({this.titleMode = BtwTitleMode.firstLine});
+  const BtwSettings({
+    this.titleMode = BtwTitleMode.firstLine,
+    this.mainChatArrowOpacity = 1,
+  });
+
+  static const minArrowOpacity = 0.1;
+  static const maxArrowOpacity = 1.0;
 
   final BtwTitleMode titleMode;
+  final double mainChatArrowOpacity;
 
-  BtwSettings copyWith({BtwTitleMode? titleMode}) =>
-      BtwSettings(titleMode: titleMode ?? this.titleMode);
+  BtwSettings copyWith({
+    BtwTitleMode? titleMode,
+    double? mainChatArrowOpacity,
+  }) => BtwSettings(
+    titleMode: titleMode ?? this.titleMode,
+    mainChatArrowOpacity: mainChatArrowOpacity ?? this.mainChatArrowOpacity,
+  );
 
-  Map<String, dynamic> toJson() => {'titleMode': titleMode.name};
+  Map<String, dynamic> toJson() => {
+    'titleMode': titleMode.name,
+    'mainChatArrowOpacity': mainChatArrowOpacity,
+  };
 
   factory BtwSettings.fromJson(Map<String, dynamic> json) => BtwSettings(
     titleMode: json['titleMode'] == BtwTitleMode.generated.name
         ? BtwTitleMode.generated
         : BtwTitleMode.firstLine,
+    mainChatArrowOpacity: switch (json['mainChatArrowOpacity']) {
+      num value when value.isFinite => value.toDouble().clamp(
+        minArrowOpacity,
+        maxArrowOpacity,
+      ),
+      _ => 1,
+    },
   );
 }

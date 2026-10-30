@@ -6,6 +6,7 @@ import 'package:maichat/models/chat_interface.dart';
 import 'package:maichat/models/conversation.dart';
 import 'package:maichat/models/message.dart';
 import 'package:maichat/models/provider.dart';
+import 'package:maichat/models/settings.dart';
 import 'package:maichat/screens/chat_screen.dart';
 import 'package:maichat/services/chat_client.dart';
 import 'package:maichat/services/btw.dart';
@@ -121,6 +122,41 @@ void _expectOffset(WidgetTester tester, double width, double left) {
 }
 
 void main() {
+  for (final width in [412.0, 1280.0]) {
+    for (final style in ComposerStyle.values) {
+      testWidgets('faint arrow retains tap and drag at $width with $style', (
+        tester,
+      ) async {
+        final state = await _boot(tester, width: width, style: style);
+        await _ask(tester);
+        await state.updateBtwSettings(
+          const BtwSettings(mainChatArrowOpacity: 0.1),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(_close);
+        await tester.pumpAndSettle();
+        final material = tester.widget<Material>(
+          find.ancestor(of: _reopen, matching: find.byType(Material)).first,
+        );
+        final icon = tester.widget<Icon>(
+          find.descendant(of: _reopen, matching: find.byType(Icon)),
+        );
+        expect(material.color!.a, closeTo(0.1, .001));
+        expect(material.shadowColor!.a, closeTo(0.1, .001));
+        expect(icon.color!.a, closeTo(0.1, .001));
+        expect(tester.getSize(_reopen), const Size(48, 48));
+        await tester.tap(_reopen);
+        await tester.pumpAndSettle();
+        expect(_side, findsOneWidget);
+        await tester.tap(_close);
+        await tester.pumpAndSettle();
+        await tester.drag(_reopen, Offset(-width, 0));
+        await tester.pumpAndSettle();
+        expect(_side, findsOneWidget);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
   for (final width in [320.0, 412.0, 719.0]) {
     for (final style in ComposerStyle.values) {
       testWidgets('side cutouts and tap slides at $width with $style', (
